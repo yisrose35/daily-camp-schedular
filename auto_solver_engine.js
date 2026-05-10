@@ -103,17 +103,24 @@
             }).filter(r => r.startMin != null && r.endMin != null && (r.available || r.unavailable));
         }
 
+        // ★ Sport meta (maxPlayers per sport) — looked up by candidate so the
+        //   solver's per-bunk capacity check can reject placements that would
+        //   exceed the sport's player cap (mirrors manual isFieldAvailable).
+        const sportMeta = (config.sportMetaData || window.sportMetaData || {});
+
         const fieldsBySport = {};
         fields.forEach(f => {
             if (disabled.has(f.name)) return;
             const rawType = f.sharableWith?.type || 'same_division';
             const divs = f.sharableWith?.divisions || [];
+            const allowedPairs = f.sharableWith?.allowedPairs || {};
             let shareType = rawType;
             if (shareType === 'custom' && divs.length === 0) shareType = 'same_division';
             // ★ Per-field rule data — same source the manual builder's
             //   isFieldAvailable consumes, so the auto solver finally agrees
             //   with the manual one on grade access + grade-scoped time rules.
-            const accessRestrictions = (f.accessRestrictions && f.accessRestrictions.enabled === true)
+            // ★ Loosen `enabled` to truthy (configs may persist as 1/"true").
+            const accessRestrictions = (f.accessRestrictions && f.accessRestrictions.enabled)
                 ? {
                     enabled: true,
                     divisions: (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
@@ -126,6 +133,9 @@
             const fieldDisabledSports = new Set(
                 (dailyDisabledSports[f.name] || []).map(s => normName(s))
             );
+            // Per-grade sharing override map (preserved verbatim — consumers
+            // resolve effective shareType/capacity per grade at check time).
+            const gradeShareRules = f.gradeShareRules || {};
 
             (f.activities || []).forEach(sportName => {
                 if (!fieldsBySport[sportName]) fieldsBySport[sportName] = [];
@@ -134,6 +144,8 @@
                     capacity: parseInt(f.sharableWith?.capacity) || parseInt(f.capacity) || 2,
                     shareType,
                     allowedDivisions: shareType === 'custom' ? divs : [],
+                    allowedPairs,
+                    gradeShareRules,
                     isIndoor: !!f.isIndoor,
                     accessRestrictions,
                     timeRules,
@@ -143,6 +155,8 @@
         });
 
         Object.entries(fieldsBySport).forEach(([sport, fieldList]) => {
+            const meta = sportMeta[sport] || {};
+            const maxPlayers = parseInt(meta.maxPlayers) || null;
             fieldList.forEach(field => {
                 candidates.push({
                     sport: sport,
@@ -152,10 +166,13 @@
                     capacity: field.capacity,
                     shareType: field.shareType,
                     allowedDivisions: field.allowedDivisions,
+                    allowedPairs: field.allowedPairs,
+                    gradeShareRules: field.gradeShareRules,
                     isIndoor: field.isIndoor,
                     accessRestrictions: field.accessRestrictions,
                     timeRules: field.timeRules,
                     disabledSports: field.disabledSports,
+                    maxPlayers,
                     _activity: sport  // for scheduleAssignments compatibility
                 });
             });
@@ -241,10 +258,12 @@
         //     up front.
         if (candidate?.accessRestrictions?.enabled) {
             const divRules = candidate.accessRestrictions.divisions || {};
-            if (!(grade in divRules)) return false;
+            // ★ Dual-key lookup — divisions may be keyed by string or numeric grade
+            const gradeKey = String(grade);
+            if (!(gradeKey in divRules) && !(grade in divRules)) return false;
             // Per-bunk filter inside the grade entry: empty array = "all bunks
             // in this grade", non-empty = only the listed bunks.
-            const bunkList = divRules[grade];
+            const bunkList = divRules[gradeKey] || divRules[grade];
             if (Array.isArray(bunkList) && bunkList.length > 0
                 && !bunkList.map(String).includes(String(bunk))) {
                 return false;
@@ -286,8 +305,15 @@
         const fn = normName(fieldName);
         const entries = fieldIndex.get(fn) || [];
         const overlapping = entries.filter(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk);
-        const st = candidate?.shareType || 'same_division';
-        const cap = candidate?.capacity || 2;
+        // ★ Per-grade sharing override resolves effective shareType/capacity
+        //   (e.g. "Field A is not_sharable for grade 1, same_division for others").
+        const _gradeOverride = candidate?.gradeShareRules?.[grade];
+        const st = _gradeOverride
+            ? (_gradeOverride.type || 'not_sharable')
+            : (candidate?.shareType || 'same_division');
+        const cap = _gradeOverride
+            ? (parseInt(_gradeOverride.capacity) || (_gradeOverride.type === 'not_sharable' ? 1 : 2))
+            : (candidate?.capacity || 2);
         // ★ FIX: Sharing-type-aware capacity check — only count relevant bunks
         if (st === 'not_sharable') {
             if (overlapping.length > 0) return false;
@@ -295,6 +321,14 @@
             if (overlapping.some(e => e.grade !== grade)) return false;
             const sameGrade = overlapping.filter(e => e.grade === grade);
             if (sameGrade.length >= cap) return false;
+        } else if (st === 'cross_division') {
+            const pairs = candidate?.allowedPairs || {};
+            for (const e of overlapping) {
+                if (e.grade === grade) continue;
+                const key = [grade, e.grade].sort().join('|');
+                if (pairs[key] !== true) return false;
+            }
+            if (overlapping.length >= cap) return false;
         } else if (st === 'custom') {
             const allowed = candidate?.allowedDivisions || [];
             if (allowed.length > 0) {
@@ -306,6 +340,26 @@
             if (overlapping.length >= cap) return false;
         } else {
             if (overlapping.length >= cap) return false;
+        }
+        // ★ Sport-level player cap (rules.js sportMetaData.maxPlayers).
+        //   When two same-grade bunks share a field, each contributes its
+        //   bunk size; summed roster must not exceed the sport's maxPlayers.
+        if (candidate?.maxPlayers && candidate.maxPlayers > 0) {
+            const divs = window.divisions || {};
+            const bunkSize = (b) => {
+                for (const g in divs) {
+                    const dd = divs[g];
+                    if (!dd || !Array.isArray(dd.bunks)) continue;
+                    if (dd.bunks.map(String).includes(String(b))) {
+                        const sizeMap = dd.bunkSizes || {};
+                        return parseInt(sizeMap[b]) || parseInt(dd.defaultBunkSize) || parseInt(dd.bunkSize) || 0;
+                    }
+                }
+                return 0;
+            };
+            let total = bunkSize(bunk);
+            for (const e of overlapping) total += bunkSize(e.bunk);
+            if (total > candidate.maxPlayers) return false;
         }
         // 4. Exact time alignment — MANDATORY for shared slots.
         //    When two or more bunks use the same field at the same time (sharing),
@@ -900,6 +954,13 @@
     // timeRules array no longer contained the rules the safety net sees.
     function commitWriteIfLegal(bunk, slotIdx, fieldName, sport, grade, startMin, endMin, entry) {
         if (!window.scheduleAssignments) return false;
+        // Hoisted so cooldown / special-access blocks below can reuse the
+        // resolved start/end (falling back to entry._startMin/_endMin).
+        let sMin = startMin, eMin = endMin;
+        if ((sMin == null || eMin == null) && entry) {
+            if (entry._startMin != null) sMin = entry._startMin;
+            if (entry._endMin != null) eMin = entry._endMin;
+        }
         if (fieldName && fieldName !== 'Free') {
             // Always read live — safe and cheap (small array, runs only on writes)
             const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
@@ -921,14 +982,7 @@
                         return false;
                     }
                 }
-                // Field-level grade-scoped time rules — REQUIRE valid times.
-                // If startMin/endMin are missing we fall back to the entry's
-                // _startMin/_endMin so we never silently skip the check.
-                let sMin = startMin, eMin = endMin;
-                if ((sMin == null || eMin == null) && entry) {
-                    if (entry._startMin != null) sMin = entry._startMin;
-                    if (entry._endMin != null) eMin = entry._endMin;
-                }
+                // Field-level grade-scoped time rules (sMin/eMin hoisted above)
                 if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0
                     && sMin != null && eMin != null) {
                     const myG = grade != null ? String(grade) : null;
@@ -960,7 +1014,71 @@
                     }
                 }
             }
+
+            // ★ Special-level access restriction — when the activity matches
+            //   a configured special, enforce its accessRestrictions too.
+            //   Without this, a sport whose name collides with a special, or
+            //   a special drafted via a non-2.7 path, slips past Step 4.95
+            //   and gets cleared post-hoc.
+            if (sport) {
+                const specials = gs.app1?.specialActivities || [];
+                const sp = specials.find(s => s && s.name === sport);
+                if (sp?.accessRestrictions?.enabled) {
+                    const sDivs = sp.accessRestrictions.divisions || {};
+                    const gKey = String(grade);
+                    if (!(gKey in sDivs) && !(grade in sDivs)) {
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') special "' + sport + '" — access');
+                        return false;
+                    }
+                    const sBunkAllow = sDivs[gKey] || sDivs[grade];
+                    if (Array.isArray(sBunkAllow) && sBunkAllow.length > 0
+                        && !sBunkAllow.map(String).includes(String(bunk))) {
+                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') special "' + sport + '" — bunk-access');
+                        return false;
+                    }
+                }
+            }
         }
+
+        // ★ Cooldown rules from rules.js — applies whether or not this is a
+        //   field write (specials placed at named locations also have type
+        //   constraints e.g. "no Sport 30 min after Lunch"). Without this,
+        //   solver/repair phases happily violate cooldowns and Step 4.95
+        //   doesn't re-check them, so violations persist into the saved day.
+        try {
+            if (window.SchedulingRules?.isCandidateAllowed && entry && sMin != null && eMin != null) {
+                const cand = {
+                    startMin: sMin,
+                    endMin: eMin,
+                    type: entry.type || (entry._assignedSpecial ? 'special' : 'sport'),
+                    event: entry.event || entry._activity || sport || '',
+                    field: fieldName,
+                    _assignedSpecial: entry._assignedSpecial,
+                    _specialLocation: entry._specialLocation
+                };
+                const existing = window.scheduleAssignments[bunk] || [];
+                const template = [];
+                for (let ti = 0; ti < existing.length; ti++) {
+                    if (ti === slotIdx) continue;
+                    const w = existing[ti];
+                    if (!w || w.continuation) continue;
+                    const ws = w._startMin, we = w._endMin;
+                    if (ws == null || we == null) continue;
+                    template.push({
+                        startMin: ws, endMin: we,
+                        type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                        event: w.event || w._activity || w.sport || '',
+                        field: w.field, _assignedSpecial: w._assignedSpecial,
+                        _specialLocation: w._specialLocation
+                    });
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'auto' })) {
+                    log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + (fieldName || '?') + ' — cooldown rule');
+                    return false;
+                }
+            }
+        } catch (e) { /* never let a rule lookup error block legal writes */ }
+
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
         window.scheduleAssignments[bunk][slotIdx] = entry;
         return true;
@@ -1143,10 +1261,18 @@
 
                     if (blocked) continue;
 
-                    sa[bunk][idx] = {
+                    // ★ Route through hard guard so accessRestrictions /
+                    //   timeRules / Unavailable windows reject illegal fills.
+                    //   Direct writes here were the dominant source of
+                    //   Step 4.95 rescues / cleared-to-Free placements.
+                    const fbEntry = {
                         field: cand.field, sport: cand.sport, _activity: cand.sport,
-                        _autoMode: true, _autoSolved: true, _fallbackFill: true, continuation: false
+                        _autoMode: true, _autoSolved: true, _fallbackFill: true,
+                        _startMin: startMin, _endMin: endMin, continuation: false
                     };
+                    if (!commitWriteIfLegal(bunk, idx, cand.field, cand.sport, grade, startMin, endMin, fbEntry)) {
+                        continue;
+                    }
 
                     if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                     fieldIndex.get(fn).push({ startMin, endMin, bunk, grade, activity: cand.sportNorm });
@@ -1539,7 +1665,7 @@
         //   Unavailable window, or for a sport the field has disabled today.
         //   Without this the chain happily evicted occupants and dropped fb
         //   into a forbidden slot — the failure surfaced later in Step 4.95.
-        if (!bfsRulesPass(fbCand, fb.grade, fb.startMin, fb.endMin)) return null;
+        if (!bfsRulesPass(fbCand, fb.grade, fb.startMin, fb.endMin, fb.bunk)) return null;
 
         // Only attempt when field is exactly at capacity (single-eviction chains)
         const initialOverlap = (fieldIndex.get(fbFn) || []).filter(e =>
@@ -1853,11 +1979,15 @@
     // them slip past the accessRestrictions / per-grade timeRules / disabled-
     // sport gates that isFieldAvailableByTime applies during the main solve.
     // That's how grade-restricted fields ended up filled by BFS repair.
-    function bfsRulesPass(cand, grade, startMin, endMin) {
-        // Grade access restriction
+    function bfsRulesPass(cand, grade, startMin, endMin, bunk) {
+        // Grade access restriction (dual-key + per-bunk allow-list)
         if (cand?.accessRestrictions?.enabled) {
             const divRules = cand.accessRestrictions.divisions || {};
-            if (!(grade in divRules)) return false;
+            const gradeKey = String(grade);
+            if (!(gradeKey in divRules) && !(grade in divRules)) return false;
+            const bunkAllow = divRules[gradeKey] || divRules[grade];
+            if (bunk != null && Array.isArray(bunkAllow) && bunkAllow.length > 0
+                && !bunkAllow.map(String).includes(String(bunk))) return false;
         }
         // Per-grade time rules
         const rules = cand?.timeRules;
@@ -1882,41 +2012,60 @@
     }
 
     function bfsCanPlace(fb, cand, fieldIndex, evictedBunks) {
-        if (!bfsRulesPass(cand, fb.grade, fb.startMin, fb.endMin)) return false;
+        if (!bfsRulesPass(cand, fb.grade, fb.startMin, fb.endMin, fb.bunk)) return false;
         const fn = cand.fieldNorm;
         const entries = (fieldIndex.get(fn) || []).filter(e =>
             e.bunk !== fb.bunk &&
             !evictedBunks.has(e.bunk) &&
             e.startMin < fb.endMin && e.endMin > fb.startMin
         );
+        return _bfsShareLegal(entries, cand, fb.grade);
+    }
+
+    // ★ Shared BFS share-legality helper: mirrors the share-type semantics
+    //   used by isFieldAvailableByTime so BFS-augmenting and ejection-chain
+    //   repairs cannot land a placement that violates cross_division pairs
+    //   or a custom field's allowedDivisions list.
+    function _bfsShareLegal(entries, cand, grade) {
         const cap = cand.capacity || 2;
         const st = cand.shareType || 'same_division';
         if (st === 'not_sharable') return entries.length === 0;
         if (st === 'same_division') {
-            if (entries.some(e => e.grade !== fb.grade)) return false; // cross-grade blocks it
-            return entries.filter(e => e.grade === fb.grade).length < cap;
+            if (entries.some(e => e.grade !== grade)) return false;
+            return entries.filter(e => e.grade === grade).length < cap;
         }
-        // custom / all / other sharable
+        if (st === 'cross_division') {
+            const allowedPairs = cand.allowedPairs || {};
+            for (const e of entries) {
+                if (e.grade === grade) continue;
+                const key = [grade, e.grade].sort().join('|');
+                if (allowedPairs[key] !== true) return false;
+            }
+            return entries.length < cap;
+        }
+        if (st === 'custom') {
+            const allowed = cand.allowedDivisions || [];
+            if (allowed.length > 0) {
+                if (entries.some(e => e.grade !== grade && !allowed.includes(e.grade))) return false;
+                if (entries.length > 0 && !allowed.includes(grade)) return false;
+            } else {
+                if (entries.some(e => e.grade !== grade)) return false;
+            }
+            return entries.length < cap;
+        }
         return entries.length < cap;
     }
 
     // Returns true if victim can move to newCand's field (cross-grade + cap check)
     function bfsCanMoveTo(victim, newCand, fieldIndex, evictedBunks) {
-        if (!bfsRulesPass(newCand, victim.grade, victim.startMin, victim.endMin)) return false;
+        if (!bfsRulesPass(newCand, victim.grade, victim.startMin, victim.endMin, victim.bunk)) return false;
         const nfn = newCand.fieldNorm;
         const entries = (fieldIndex.get(nfn) || []).filter(e =>
             e.bunk !== victim.bunk &&
             !evictedBunks.has(e.bunk) &&
             e.startMin < victim.endMin && e.endMin > victim.startMin
         );
-        const ncap = newCand.capacity || 2;
-        const nst = newCand.shareType || 'same_division';
-        if (nst === 'not_sharable') return entries.length === 0;
-        if (nst === 'same_division') {
-            if (entries.some(e => e.grade !== victim.grade)) return false;
-            return entries.filter(e => e.grade === victim.grade).length < ncap;
-        }
-        return entries.length < ncap;
+        return _bfsShareLegal(entries, newCand, victim.grade);
     }
 
     function bfsAugmentingRepair(config) {

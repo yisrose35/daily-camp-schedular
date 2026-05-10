@@ -1299,9 +1299,17 @@
             if (!timeOk) return false;
 
             // ★ GRADE ACCESS RESTRICTION (accessRestrictions)
+            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+            //   the original grade type. Also enforce per-bunk allow-list
+            //   when divisions[grade] is a non-empty bunk array, mirroring
+            //   commitWriteIfLegal / _validateWritePlacement / safety net.
             if (ledger.accessRestrictions?.enabled) {
                 const divRules = ledger.accessRestrictions.divisions || {};
-                if (!(grade in divRules)) return false;
+                const gradeKey = String(grade);
+                if (!(gradeKey in divRules) && !(grade in divRules)) return false;
+                const bunkAllow = divRules[gradeKey] || divRules[grade];
+                if (Array.isArray(bunkAllow) && bunkAllow.length > 0
+                    && !bunkAllow.map(String).includes(String(bunk))) return false;
             }
 
             // Capacity
@@ -13271,22 +13279,23 @@
         //   reason string. Mirrors the Step 4.95 safety net so the same
         //   rules apply at write time too — bad placements never reach
         //   scheduleAssignments in the first place.
-        const _stepRules_gs = getGlobalSettings();
-        const _stepRules_fields = (_stepRules_gs.app1?.fields || []);
-        const _stepRules_specials = (_stepRules_gs.app1?.specialActivities || []);
-        const _stepRules_byField = {};
-        _stepRules_fields.forEach(f => { if (f && f.name) _stepRules_byField[f.name] = f; });
-        const _stepRules_bySpecial = {};
-        _stepRules_specials.forEach(s => { if (s && s.name) _stepRules_bySpecial[s.name] = s; });
+        // ★ Live-read on every call. The previous snapshot at the top of
+        //   Step 2.7 could go stale if anything between the snapshot and a
+        //   later write mutated app1.fields / specialActivities (cloud sync,
+        //   late facility edits). commitWriteIfLegal already reads live for
+        //   the same reason — this validator now matches.
         function _validateWritePlacement(fieldName, activityName, grade, bunk, startMin, endMin) {
             if (!fieldName || fieldName === 'Free') return null;
-
-            // Field-level access restriction
-            const fld = _stepRules_byField[fieldName];
-            if (fld?.accessRestrictions?.enabled === true) {
+            const _gs = getGlobalSettings();
+            const _fields = _gs.app1?.fields || [];
+            const _specials = _gs.app1?.specialActivities || [];
+            const fld = _fields.find(f => f && f.name === fieldName);
+            const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
+            if (fld?.accessRestrictions?.enabled) {
                 const divs = fld.accessRestrictions.divisions || {};
-                if (!(grade in divs)) return 'field access: grade not allowed';
-                const bunkList = divs[grade];
+                const gradeKey = String(grade);
+                if (!(gradeKey in divs) && !(grade in divs)) return 'field access: grade not allowed';
+                const bunkList = divs[gradeKey] || divs[grade];
                 if (Array.isArray(bunkList) && bunkList.length > 0
                     && !bunkList.map(String).includes(String(bunk))) return 'field access: bunk not in allowed list';
             }
@@ -13315,15 +13324,13 @@
             }
 
             // Special-level access restriction
-            if (activityName && _stepRules_bySpecial[activityName]) {
-                const sp = _stepRules_bySpecial[activityName];
-                if (sp?.accessRestrictions?.enabled === true) {
-                    const divs = sp.accessRestrictions.divisions || {};
-                    if (!(grade in divs)) return 'special access: grade not allowed';
-                    const bunkList = divs[grade];
-                    if (Array.isArray(bunkList) && bunkList.length > 0
-                        && !bunkList.map(String).includes(String(bunk))) return 'special access: bunk not in allowed list';
-                }
+            if (spByName?.accessRestrictions?.enabled) {
+                const divs = spByName.accessRestrictions.divisions || {};
+                const gradeKey = String(grade);
+                if (!(gradeKey in divs) && !(grade in divs)) return 'special access: grade not allowed';
+                const bunkList = divs[gradeKey] || divs[grade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunk))) return 'special access: bunk not in allowed list';
             }
 
             return null;
@@ -13342,17 +13349,22 @@
             const sa = window.scheduleAssignments || {};
             const wantLower = String(activityName).toLowerCase();
             const candidates = [];
-            for (const f of _stepRules_fields) {
+            // Live read — same rationale as _validateWritePlacement
+            const _altGs = getGlobalSettings();
+            const _altFields = _altGs.app1?.fields || [];
+            for (const f of _altFields) {
                 if (!f || !f.name) continue;
                 if (excludeField && f.name === excludeField) continue;
                 if (!Array.isArray(f.activities)) continue;
                 if (!f.activities.some(a => String(a).toLowerCase() === wantLower)) continue;
                 if (_validateWritePlacement(f.name, activityName, grade, bunk, startMin, endMin)) continue;
 
-                // Capacity check against current scheduleAssignments
+                // Capacity check against current scheduleAssignments —
+                // collect overlap details for share-rule evaluation below.
                 let overlapCount = 0;
                 let crossGradeOverlap = false;
                 let misalignedShare = false;
+                const overlapGrades = [];
                 for (const [otherBunk, otherSlots] of Object.entries(sa)) {
                     if (String(otherBunk) === String(bunk)) continue;
                     if (!Array.isArray(otherSlots)) continue;
@@ -13371,21 +13383,44 @@
                         if (oStart == null || oEnd == null) continue;
                         if (oEnd <= startMin || oStart >= endMin) continue;
                         overlapCount++;
+                        overlapGrades.push(otherGrade);
                         if (otherGrade !== grade) crossGradeOverlap = true;
                         if (oStart !== startMin || oEnd !== endMin) misalignedShare = true;
                     }
                 }
 
-                const sharing = f.sharableWith?.type || 'not_sharable';
-                const cap = parseInt(f.sharableWith?.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                let sharing = f.sharableWith?.type || 'not_sharable';
+                let cap = parseInt(f.sharableWith?.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                // ★ Per-grade override resolves effective shareType/capacity
+                const _override = f.gradeShareRules?.[grade];
+                if (_override) {
+                    sharing = _override.type || 'not_sharable';
+                    cap = parseInt(_override.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                }
                 if (sharing === 'not_sharable' && overlapCount >= 1) continue;
                 if (sharing === 'same_division' && crossGradeOverlap) continue;
                 if (sharing === 'custom') {
                     const allowed = f.sharableWith?.divisions || [];
                     if (allowed.length > 0 && !allowed.includes(grade)) continue;
+                    // Cross-grade occupants must also be in allowed list
+                    if (allowed.length > 0
+                        && overlapGrades.some(og => og !== grade && !allowed.includes(og))) continue;
+                }
+                if (sharing === 'cross_division') {
+                    // Every existing claim grade must be pair-compatible with new grade
+                    const pairs = f.sharableWith?.allowedPairs || {};
+                    let pairsOk = true;
+                    for (const og of overlapGrades) {
+                        if (og === grade) continue;
+                        const key = [grade, og].sort().join('|');
+                        if (pairs[key] !== true) { pairsOk = false; break; }
+                    }
+                    if (!pairsOk) continue;
                 }
                 if (overlapCount >= cap) continue;
-                if (overlapCount > 0 && misalignedShare) continue; // shared field needs exact time match
+                // Shared field needs exact time match — strictTiming honors the
+                // field-level opt-in (default behavior allows misaligned shares).
+                if (overlapCount > 0 && misalignedShare && f.strictTiming === true) continue;
 
                 candidates.push({ name: f.name, used: overlapCount });
             }
@@ -13591,15 +13626,15 @@
                                 ))
                                 .map(f => f.name);
 
-                            // Pick first court not already claimed at this time across the day
-                            let pickedCourt = null;
-                            for (const court of courts) {
-                                let inUse = false;
-                                // Check existing scheduleAssignments for cross-bunk conflicts at this time
+                            // ★ Prefer courts that pass _validateWritePlacement
+                            //   (accessRestrictions + timeRules) AND aren't double-booked.
+                            //   Previously we only filtered on double-booking; if the
+                            //   first matching court was rule-incompatible the override
+                            //   silently failed even when later courts were legal.
+                            const courtIsBusy = (court) => {
                                 for (const [otherBunk, otherSlots] of Object.entries(window.scheduleAssignments || {})) {
                                     if (String(otherBunk) === String(bunk)) continue;
                                     if (!Array.isArray(otherSlots)) continue;
-                                    // Find that bunk's grade + per-bunk slots to resolve times
                                     const otherGrade = Object.entries(divisions).find(([g, d]) =>
                                         (d.bunks || []).map(String).includes(String(otherBunk))
                                     )?.[0];
@@ -13612,18 +13647,33 @@
                                         if (oslot.endMin <= block.startMin || oslot.startMin >= block.endMin) continue;
                                         const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
                                         if (oField && String(oField).toLowerCase() === String(court).toLowerCase()) {
-                                            inUse = true; break;
+                                            return true;
                                         }
                                     }
-                                    if (inUse) break;
                                 }
-                                if (!inUse) { pickedCourt = court; break; }
-                            }
+                                return false;
+                            };
 
-                            // Last resort: take first court even if "in use" — override is user-mandated
+                            let pickedCourt = null;
+                            // Pass 1: rule-passing AND not double-booked
+                            for (const court of courts) {
+                                if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
+                                if (courtIsBusy(court)) continue;
+                                pickedCourt = court; break;
+                            }
+                            // Pass 2: rule-passing even if busy — better than rule-violating
+                            if (!pickedCourt) {
+                                for (const court of courts) {
+                                    if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
+                                    pickedCourt = court;
+                                    console.warn(`[Override] All clean courts busy; forcing rule-passing ${pickedCourt} for ${bunk}`);
+                                    break;
+                                }
+                            }
+                            // Pass 3 (last resort): any court — original behavior
                             if (!pickedCourt && courts.length > 0) {
                                 pickedCourt = courts[0];
-                                console.warn(`[Override] No clean court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
+                                console.warn(`[Override] No rule-passing court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
                             }
 
                             if (pickedCourt) {
@@ -14560,9 +14610,11 @@
                 if (sMin == null || eMin == null) return true;
 
                 // Field-level access restriction
-                if (fld.accessRestrictions && fld.accessRestrictions.enabled === true) {
+                // ★ Loosen `enabled` to truthy + dual-key divisions lookup
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
                     var divs = fld.accessRestrictions.divisions || {};
-                    if (!(grade in divs)) return false;
+                    var gradeKey = String(grade);
+                    if (!(gradeKey in divs) && !(grade in divs)) return false;
                 }
                 // Field-level grade-scoped time rules
                 if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0) {
@@ -14768,10 +14820,12 @@
                 const violations = [];
 
                 function checkAccess(rules, grade, bunk) {
-                    if (!rules || rules.enabled !== true) return null;
+                    // ★ Loosen `enabled` to truthy + dual-key divisions lookup
+                    if (!rules || !rules.enabled) return null;
                     const divs = rules.divisions || {};
-                    if (!(grade in divs)) return 'grade not allowed';
-                    const bunkList = divs[grade];
+                    const gradeKey = String(grade);
+                    if (!(gradeKey in divs) && !(grade in divs)) return 'grade not allowed';
+                    const bunkList = divs[gradeKey] || divs[grade];
                     if (Array.isArray(bunkList) && bunkList.length > 0
                         && !bunkList.map(String).includes(String(bunk))) return 'bunk not in allowed list';
                     return null;
