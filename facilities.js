@@ -424,11 +424,12 @@ function deleteFacility(fac) {
     }
 
     if (fac.usedFor.includes('general')) {
-        const pinned = window.getPinnedTileDefaults?.() || {};
+        // Full purge per general activity so schedules / activityProperties /
+        // pinned tiles / rotation tracking all forget the names.
         (fac.generalActivities || []).forEach(ga => {
-            delete pinned[ga.name];
+            const name = (ga && ga.name) || ga;
+            cleanupDeletedGeneral(name);
         });
-        window.savePinnedTileDefaults?.(pinned);
     }
 
     // Remove from zones
@@ -1126,7 +1127,9 @@ function renderGeneralConfig(container, fac) {
             removeBtn.textContent = "✕";
             removeBtn.style.cssText = "border:none; background:transparent; color:#9CA3AF; cursor:pointer; font-size:1rem;";
             removeBtn.onclick = () => {
+                const removedName = ga.name;
                 fac.generalActivities = fac.generalActivities.filter(g => g !== ga);
+                cleanupDeletedGeneral(removedName);
                 saveData();
                 renderDetailPane();
             };
@@ -3503,8 +3506,146 @@ function cleanupDeletedSpecial(specialName) {
         let pinnedChanged = false;
         Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
         if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // Rotation footprint (analytics counts + cloud rotation_counts)
+        cleanupRotationTracking(specialName);
     } catch (e) {
         console.error('[FACILITIES] Cleanup error (special):', e);
+    }
+}
+
+// ★ NEW: Comprehensive purge for a deleted general activity (Beis Medrash,
+//   custom block names, etc.). Mirrors cleanupDeletedSpecial — wipes
+//   schedule assignments, manual skeletons, pinned-tile defaults,
+//   activityProperties, and the rotation footprint so the activity name
+//   is fully forgotten everywhere (local + cloud).
+function cleanupDeletedGeneral(activityName) {
+    if (!activityName) return;
+    console.log(`[FACILITIES] Cleaning up deleted general: "${activityName}"`);
+    const norm = String(activityName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        let cleanupCount = 0;
+
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (dayData?.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                    const slots = dayData.scheduleAssignments[bunkKey];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot, idx) => {
+                        if (!slot) return;
+                        if (matches(slot._activity) || matches(slot.event) || matches(slot.sport)) {
+                            dayData.scheduleAssignments[bunkKey][idx] = null;
+                            cleanupCount++;
+                        }
+                    });
+                });
+            }
+            ['manualSkeleton', 'skeletonAssignments'].forEach(key => {
+                const items = dayData?.[key];
+                if (!Array.isArray(items)) return;
+                for (let i = items.length - 1; i >= 0; i--) {
+                    const it = items[i];
+                    if (matches(it?.event) || matches(it?._activity)) {
+                        items.splice(i, 1); cleanupCount++;
+                    }
+                }
+            });
+        });
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`[FACILITIES]   Cleaned ${cleanupCount} stale references in daily_schedules`);
+        }
+
+        // Pinned-tile defaults — general activities live here
+        const pinned = window.getPinnedTileDefaults?.() || {};
+        let pinnedChanged = false;
+        Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
+        if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // Activity properties
+        if (window.activityProperties) {
+            Object.keys(window.activityProperties).forEach(k => { if (matches(k)) delete window.activityProperties[k]; });
+        }
+
+        // Rotation footprint (analytics counts + cloud rotation_counts)
+        cleanupRotationTracking(activityName);
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (general):', e);
+    }
+}
+
+// ★ NEW: Purge a deleted activity's rotation footprint. Removes the
+//   activity from in-memory + on-disk historicalCounts, rotationHistory.bunks,
+//   manualUsageOffsets, and the cloud rotation_counts table. Without this,
+//   the analytics tab and the auto builder's "least-recent" picker keep
+//   reading rows for an activity the user just deleted.
+function cleanupRotationTracking(activityName) {
+    if (!activityName) return;
+    const norm = String(activityName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // historicalCounts: { bunkName: { activityName: number } }
+        const hist = settings.historicalCounts || {};
+        let histChanged = false;
+        Object.keys(hist).forEach(bunk => {
+            const row = hist[bunk];
+            if (!row || typeof row !== 'object') return;
+            Object.keys(row).forEach(act => {
+                if (matches(act)) { delete row[act]; histChanged = true; }
+            });
+        });
+        if (histChanged) window.saveGlobalSettings?.('historicalCounts', hist);
+
+        // manualUsageOffsets: { bunkName: { activityName: number } }
+        const offsets = settings.manualUsageOffsets || {};
+        let offsetsChanged = false;
+        Object.keys(offsets).forEach(bunk => {
+            const row = offsets[bunk];
+            if (!row || typeof row !== 'object') return;
+            Object.keys(row).forEach(act => {
+                if (matches(act)) { delete row[act]; offsetsChanged = true; }
+            });
+        });
+        if (offsetsChanged) window.saveGlobalSettings?.('manualUsageOffsets', offsets);
+
+        // rotationHistory.bunks: { bunkName: { activityName: [timestamps] } }
+        const rotHist = (typeof window.loadRotationHistory === 'function')
+            ? window.loadRotationHistory()
+            : (settings.rotationHistory || { bunks: {} });
+        let rotChanged = false;
+        if (rotHist && rotHist.bunks) {
+            Object.keys(rotHist.bunks).forEach(bunk => {
+                const row = rotHist.bunks[bunk];
+                if (!row || typeof row !== 'object') return;
+                Object.keys(row).forEach(act => {
+                    if (matches(act)) { delete row[act]; rotChanged = true; }
+                });
+            });
+        }
+        if (rotChanged) {
+            if (typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rotHist);
+            } else {
+                window.saveGlobalSettings?.('rotationHistory', rotHist);
+            }
+        }
+
+        // Cloud rotation_counts: drop every row referencing this activity name
+        if (window.RotationCloud?.deleteActivity) {
+            window.RotationCloud.deleteActivity(activityName);
+        }
+
+        if (histChanged || offsetsChanged || rotChanged) {
+            console.log(`[FACILITIES]   Cleared rotation tracking for "${activityName}"`);
+        }
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (rotation tracking):', e);
     }
 }
 
@@ -3563,6 +3704,8 @@ function sweepOrphanedReferences(opts) {
 // clean-up pass from the console or before a build.
 window.cleanupDeletedField = cleanupDeletedField;
 window.cleanupDeletedSpecial = cleanupDeletedSpecial;
+window.cleanupDeletedGeneral = cleanupDeletedGeneral;
+window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
 function propagateFieldRename(oldName, newName) {

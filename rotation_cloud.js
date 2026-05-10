@@ -192,6 +192,35 @@
     }
 
     // =====================================================================
+    // DELETE ACTIVITY: Remove all counts for a named activity across all dates
+    // (used when an activity is deleted from the facility/special/general list)
+    // =====================================================================
+    function deleteActivityCounts(activityName) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !activityName) return Promise.resolve(false);
+
+        return client
+            .from(TABLE)
+            .delete()
+            .eq('camp_id', campId)
+            .eq('activity', activityName)
+            .then(function(result) {
+                if (result.error) {
+                    console.error('[RotationCloud] Delete-activity error:', result.error.message);
+                    return false;
+                }
+                _cache = null;
+                console.log('[RotationCloud] Cleared rotation rows for activity:', activityName);
+                return true;
+            })
+            .catch(function(e) {
+                console.error('[RotationCloud] Delete-activity failed:', e);
+                return false;
+            });
+    }
+
+    // =====================================================================
     // CLEAR ALL: Remove all rotation data for this camp (used on half reset)
     // =====================================================================
     function clearAllRotationCounts() {
@@ -229,6 +258,7 @@
         save: saveRotationCounts,
         load: loadRotationCounts,
         deleteDate: deleteRotationCounts,
+        deleteActivity: deleteActivityCounts,
         clearAll: clearAllRotationCounts,
         invalidateCache: invalidateCache
     };
