@@ -13416,13 +13416,32 @@
         // This helper builds the candidate + template the same way
         // commitWriteIfLegal does and routes through SchedulingRules so
         // every direct-write site enforces the full rule set.
+        // Anchor event types — these are not sports and must not be passed
+        // to SchedulingRules with type='sport', or a generic "no Sport
+        // within 30 min of Lunch" cooldown rule would spuriously block
+        // the camp's own Lunch / Swim / Snack anchor writes at Step 2.7.
+        const _ANCHOR_TYPE_BY_EVENT = {
+            lunch: 'lunch', swim: 'swim', pool: 'swim',
+            snack: 'snack', snacks: 'snack',
+            dismissal: 'dismissal', arrival: 'arrival',
+            lineup: 'lineup', regroup: 'regroup', bus: 'bus',
+            'transition/buffer': 'transition', transition: 'transition', buffer: 'transition'
+        };
         function _runRulesCheck(fieldName, activityName, isSpecial, grade, bunk, startMin, endMin) {
             try {
                 if (!window.SchedulingRules?.isCandidateAllowed) return null;
                 if (startMin == null || endMin == null) return null;
+                // Resolve the candidate type. Special > anchor > sport.
+                let candType = 'sport';
+                if (isSpecial) {
+                    candType = 'special';
+                } else if (activityName) {
+                    const lc = String(activityName).toLowerCase().trim();
+                    if (_ANCHOR_TYPE_BY_EVENT[lc]) candType = _ANCHOR_TYPE_BY_EVENT[lc];
+                }
                 const cand = {
                     startMin, endMin,
-                    type: isSpecial ? 'special' : 'sport',
+                    type: candType,
                     event: activityName || '',
                     field: fieldName,
                     _assignedSpecial: isSpecial ? activityName : undefined,
@@ -15204,9 +15223,19 @@
                         }
                     });
                     log('[STEP 4.95] Iter ' + (_safetyNetIter + 1) + ': rescued ' + rescuedCount + ', cleared ' + clearedCount);
-                    if (_safetyNetIter === 0) {
-                        warnings.push({ type: 'rule_violations', count: violations.length, rescued: rescuedCount, cleared: clearedCount, items: violations });
-                    }
+                    // Cumulative reporting across all iters: iter-1 / iter-2
+                    // violations come from rescues introduced by iter-0. The
+                    // user-visible warnings collection must show the union,
+                    // not just iter 0, otherwise the count under-reports
+                    // what the engine actually saw.
+                    warnings.push({
+                        type: 'rule_violations',
+                        iter: _safetyNetIter,
+                        count: violations.length,
+                        rescued: rescuedCount,
+                        cleared: clearedCount,
+                        items: violations
+                    });
                     // Force a render so the user sees the cleaned grid right away
                     try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (_e) {}
                     // If we cleared (or rescued) anything, loop again so any

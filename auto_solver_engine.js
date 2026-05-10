@@ -1159,7 +1159,12 @@
             if (window.RotationEngine?.invalidateBunkTodayCache) {
                 window.RotationEngine.invalidateBunkTodayCache(bunk);
             }
-        } catch (_) {}
+        } catch (e) {
+            // Log so the regression that N12 fixed (rotation cache staleness
+            // after commits) isn't silently re-introduced by a signature
+            // change in RotationEngine.
+            console.warn('[commitWriteIfLegal] invalidate rotation cache failed:', e?.message || e);
+        }
         return true;
     }
 
@@ -1200,11 +1205,23 @@
         // first-class block. Earlier these were missing and any code
         // that built a rule template from `scheduleAssignments` skipped
         // Free slots entirely.
+        //
+        // The solver's primary input blocks (built by scheduler_core_auto)
+        // carry `startTime` / `endTime` as strings, not `startMin` /
+        // `endMin`. Fall through to `parseTimeMin` so the primary solve
+        // pass also benefits — earlier this fix only landed for the
+        // repair-phase `collectFreeBlocks` callers and silently emitted
+        // null on the main path.
+        let _sMin = block.startMin;
+        let _eMin = block.endMin;
+        const _ptm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        if (_sMin == null && block.startTime && _ptm) _sMin = _ptm(block.startTime);
+        if (_eMin == null && block.endTime && _ptm) _eMin = _ptm(block.endTime);
         window.scheduleAssignments[bunk][slotIdx] = {
             field: 'Free', sport: null, _activity: 'Free',
             _autoMode: true, _autoSolved: true, continuation: false,
-            _startMin: block.startMin ?? null,
-            _endMin: block.endMin ?? null
+            _startMin: _sMin ?? null,
+            _endMin: _eMin ?? null
         };
     }
 
@@ -2026,9 +2043,14 @@
                     const chain = findEjectionChain(fb, fbCand, candidates, fieldIndex, tabuSet, CHAIN_DEPTH);
                     if (!chain || chain.length === 0) continue;
 
-                    // Snapshot state before commit so we can roll back if validation fails
-                    const saSnapshot = {};
+                    // Snapshot PRE-commit state so we can roll back if
+                    // isChainValid finds a capacity / cross-grade violation
+                    // that slipped past commitWriteIfLegal. executeChain's
+                    // OWN rollback handles the rule-guard-rejection path:
+                    // when it returns false, state is already unchanged
+                    // and we just skip without restoring.
                     const allBunksInChain = [fb, ...chain.map(m => m.victim)];
+                    const saSnapshot = {};
                     allBunksInChain.forEach(({bunk, slotIdx}) => {
                         saSnapshot[bunk + '|' + slotIdx] = (window.scheduleAssignments[bunk] || [])[slotIdx];
                     });
@@ -2037,17 +2059,17 @@
                     fieldsTouched.forEach(fn => { fiSnapshot[fn] = (fieldIndex.get(fn) || []).slice(); });
 
                     const chainOk = executeChain(chain, fb, fbCand, fieldIndex);
+                    if (!chainOk) continue; // already rolled back by executeChain itself
 
-                    // Validate — roll back if executeChain rejected mid-flight
-                    // OR if a capacity/cross-grade violation slipped through.
-                    if (!chainOk || !isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
+                    if (!isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
+                        // Post-commit validation failed — restore pre-commit snapshot.
                         allBunksInChain.forEach(({bunk, slotIdx}) => {
                             if (window.scheduleAssignments[bunk]) {
                                 window.scheduleAssignments[bunk][slotIdx] = saSnapshot[bunk + '|' + slotIdx];
                             }
                         });
                         fieldsTouched.forEach(fn => { fieldIndex.set(fn, fiSnapshot[fn]); });
-                        continue; // try next candidate for this FB
+                        continue;
                     }
 
                     // Register evicted victims in tabu — don't immediately move them back
