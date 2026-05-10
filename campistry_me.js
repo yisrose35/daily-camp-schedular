@@ -3009,7 +3009,16 @@ function removeBroadcast(idx){
 // ═══════════════════════════════════════════════════════════════
 var campForms=[];
 function loadForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campForms=(s.campistryMe&&s.campistryMe.forms)||[]}
-function saveForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.forms=campForms;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveForms(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.forms=campForms;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Route through saveGlobalSettings so the value reaches IDB + cloud.
+    // Writing localStorage alone left forms cloud-orphaned.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 
 function renderForms(){
     loadForms();
@@ -3227,6 +3236,11 @@ function saveSettings(){
     s.camp_name=document.getElementById('settCampName').value.trim();
     s.campName=s.camp_name;
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Fan out to cloud — localStorage alone never reached Supabase.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+        window.saveGlobalSettings('camp_name',s.camp_name);
+        window.saveGlobalSettings('campName',s.camp_name);
+    }
     save();toast('Settings saved');
 }
 function saveLocaleSettings(){
@@ -3239,6 +3253,8 @@ function saveLocaleSettings(){
         rtl:document.getElementById('settRTL').checked
     };
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     // Apply RTL immediately
     if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
     else document.documentElement.removeAttribute('dir');
@@ -3249,6 +3265,8 @@ function saveStripeKey(){
     if(!s.campistryMe)s.campistryMe={};
     s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     save();toast('Stripe key saved');
 }
 function exportAllData(){
@@ -3265,6 +3283,15 @@ function importAllData(){
                 var data=JSON.parse(e.target.result);
                 if(!confirm('This will replace ALL your data. Are you sure?'))return;
                 localStorage.setItem('campGlobalSettings_v1',JSON.stringify(data));
+                // Fan out every imported top-level key to cloud — without
+                // this, importing on Device A leaves Device B reading the
+                // pre-import cloud state on next hydration.
+                if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+                    Object.keys(data||{}).forEach(function(k){
+                        if(k==='updated_at')return;
+                        try{window.saveGlobalSettings(k,data[k]);}catch(e){console.warn('Import sync failed for',k,e);}
+                    });
+                }
                 loadData();render(curPage);toast('Data imported');
             }catch(err){alert('Invalid file: '+err.message)}
         };r.readAsText(inp.files[0]);
@@ -3362,7 +3389,14 @@ function reEnrollCamper(camperName){
 // ═══════════════════════════════════════════════════════════════
 var customFields=[];
 function loadCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');customFields=(s.campistryMe&&s.campistryMe.customFields)||[]}
-function saveCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.customFields=customFields;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveCustomFields(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.customFields=customFields;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 function manageCustomFields(){
     loadCustomFields();
     var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Define custom fields that appear on every camper profile.</p><div id="cfList">';
@@ -3584,6 +3618,13 @@ function importRows(rows){
         g.campistryMe.bunkAssignments={};
         g.campistryMe.nextCamperId=1;
         localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        // Fan the wipe out to cloud — otherwise the next hydration
+        // re-pulls the pre-wipe roster/families and undoes the reset.
+        if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campStructure',g.campStructure);
+            window.saveGlobalSettings('app1',g.app1);
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }
     }catch(e){}
 
     // ═══ PASS 1: Build camp structure from CSV data ═══

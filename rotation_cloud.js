@@ -11,6 +11,12 @@
     var _cache = null;
     var _cacheTime = 0;
     var CACHE_TTL = 30000;
+    // Monotonic generation counter incremented on every cache-invalidating
+    // operation. An in-flight load that started before an invalidation
+    // resolves with stale data — checking gen at resolve time lets us
+    // discard that result instead of repopulating the cache with rows the
+    // caller knows are stale.
+    var _loadGen = 0;
 
     function getClient() {
         return window.CampistryDB?.getClient?.();
@@ -100,6 +106,7 @@
                 }
                 console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey);
                 _cache = null;
+                _loadGen++;
                 return true;
             })
             .catch(function(e) {
@@ -122,6 +129,11 @@
         if (!client || !campId) {
             return Promise.resolve({ counts: {}, lastDone: {} });
         }
+
+        // Capture the generation at call start. If any cache-invalidating op
+        // (save / delete / clearAll / deleteActivity) runs while the fetch
+        // is in flight, _loadGen will diverge and we'll discard the result.
+        var startGen = _loadGen;
 
         return client
             .from(TABLE)
@@ -153,7 +165,14 @@
                         (countsByDate[dateStr][row.bunk][row.activity] || 0) + row.count;
                 });
 
-                _cache = { counts: counts, lastDone: lastDone, countsByDate: countsByDate };
+                var fresh = { counts: counts, lastDone: lastDone, countsByDate: countsByDate };
+                if (startGen !== _loadGen) {
+                    // Cache was invalidated mid-flight — return the data to
+                    // this caller but do not poison the shared cache.
+                    console.log('[RotationCloud] Load result discarded (stale generation)');
+                    return fresh;
+                }
+                _cache = fresh;
                 _cacheTime = Date.now();
                 console.log('[RotationCloud] Loaded rotation data:', (result.data || []).length, 'rows');
                 return _cache;
@@ -183,6 +202,7 @@
                     return false;
                 }
                 _cache = null;
+                _loadGen++;
                 return true;
             })
             .catch(function(e) {
@@ -211,6 +231,7 @@
                     return false;
                 }
                 _cache = null;
+                _loadGen++;
                 console.log('[RotationCloud] Cleared rotation rows for activity:', activityName);
                 return true;
             })
@@ -238,6 +259,7 @@
                     return false;
                 }
                 _cache = null;
+                _loadGen++;
                 console.log('[RotationCloud] Cleared all rotation data');
                 return true;
             })
@@ -249,6 +271,7 @@
 
     function invalidateCache() {
         _cache = null;
+        _loadGen++;
     }
 
     // =====================================================================
