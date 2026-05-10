@@ -135,6 +135,29 @@ function loadData() {
         if (legacyFields.length > 0 || legacySpecials.length > 0 || Object.keys(legacyZones).length > 0) {
             migrateLegacyToFacilities(legacyFields, legacySpecials, legacyZones, legacyPinned);
         }
+    } else {
+        // Incremental: auto-create facilities for legacy fields not yet covered
+        const legacyFields = app1.fields || [];
+        const facNames = new Set(facilities.map(f => f.name));
+        let added = 0;
+        legacyFields.forEach(f => {
+            if (f.name && !facNames.has(f.name)) {
+                facilities.push({
+                    id: 'fac_' + Date.now() + '_' + (added++),
+                    name: f.name,
+                    usedFor: ['sports'],
+                    specialActivityNames: [],
+                    generalActivities: [],
+                    swimConfig: { preSwimMin: 5, postSwimMin: 5 },
+                    order: facilities.length
+                });
+                facNames.add(f.name);
+            }
+        });
+        if (added > 0) {
+            console.log('[FACILITIES] Auto-migrated', added, 'legacy fields into facilities');
+            saveFacilitiesMetadata();
+        }
     }
 }
 
@@ -256,9 +279,10 @@ function syncAllToLegacy() {
     const newFields = [];
     const existingFields = app1.fields || [];
 
+    const facSportsNames = new Set();
     facilities.forEach(fac => {
         if (fac.usedFor.includes('sports')) {
-            // Find existing field data or create new
+            facSportsNames.add(fac.name);
             let fieldData = existingFields.find(f => f.name === fac.name);
             if (!fieldData) {
                 fieldData = {
@@ -272,6 +296,13 @@ function syncAllToLegacy() {
                 };
             }
             newFields.push(fieldData);
+        }
+    });
+
+    // Preserve legacy fields that have no matching facility yet
+    existingFields.forEach(f => {
+        if (f.name && !facSportsNames.has(f.name) && !newFields.some(nf => nf.name === f.name)) {
+            newFields.push(f);
         }
     });
 
