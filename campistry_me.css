@@ -111,6 +111,18 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .me-scroll{overflow-y:auto}
 .me-modal-footer{padding:14px 22px;border-top:1px solid var(--s100);display:flex;justify-content:flex-end;gap:8px;flex-shrink:0}
 
+/* ── DRAG-AND-DROP REORDERING ─────────────── */
+.me-dragging{opacity:0.45;cursor:grabbing!important;}
+.me-grip{cursor:grab;}
+.me-grip:active{cursor:grabbing;}
+.me-bunk-list{display:flex;flex-wrap:wrap;gap:6px;min-height:32px;padding:6px;border:1px dashed var(--s200);border-radius:var(--r);background:#fff;}
+.me-bunk-chip{display:inline-flex;align-items:center;gap:4px;padding:4px 6px 4px 10px;background:var(--s50);border:1px solid var(--s200);border-radius:999px;font-size:.78rem;color:var(--s700);cursor:grab;user-select:none;}
+.me-bunk-chip:active{cursor:grabbing;}
+.me-bunk-x{background:none;border:none;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;cursor:pointer;border-radius:50%;}
+.me-bunk-x:hover{background:var(--s200);color:var(--s700);}
+.me-div-card[draggable="true"]{cursor:grab;}
+.me-div-card[draggable="true"]:active{cursor:grabbing;}
+
 /* ── FORMS ──────────────────────────── */
 .fg{margin-bottom:10px}
 .fl{display:block;font-size:.78rem;font-weight:500;color:var(--s600);margin-bottom:3px}
