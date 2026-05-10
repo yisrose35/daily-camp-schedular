@@ -229,22 +229,62 @@ if(params.get('status')){
     return;
 }
 
-function showStatus(id){
+function renderStatus(e){
+    if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
+    var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
+    var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
+    h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
+    h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
+    h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
+    h+='<div>Session: <strong>'+esc(e.session||'—')+'</strong></div>';
+    h+='<div>Applied: '+esc(e.appliedDate)+'</div>';
+    h+='<div>Payment: '+esc(e.paymentStatus||'pending')+'</div>';
+    h+='<div>Forms: '+(e.formsCompleted||0)+'/'+(e.formsRequired||0)+' completed</div>';
+    h+='</div>';
+    document.getElementById('statusContent').innerHTML=h;
+}
+
+async function showStatus(id){
     try{
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-        var e=(g.campistryMe?.enrollments||{})[id];
-        if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
-        var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
-        var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
-        h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
-        h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
-        h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
-        h+='<div>Session: <strong>'+esc(e.session||'—')+'</strong></div>';
-        h+='<div>Applied: '+esc(e.appliedDate)+'</div>';
-        h+='<div>Payment: '+esc(e.paymentStatus||'pending')+'</div>';
-        h+='<div>Forms: '+(e.formsCompleted||0)+'/'+(e.formsRequired||0)+' completed</div>';
-        h+='</div>';
-        document.getElementById('statusContent').innerHTML=h;
+        // The localStorage snapshot strips campistryMe.enrollments to keep
+        // the lite cache under quota — so this read is intentionally a
+        // fast-path that often misses on a freshly opened tab. Fall back
+        // through loadGlobalSettings (IDB-backed full state) and finally
+        // a direct Supabase query so the status link works on any device.
+        var enrollments=null;
+        try{
+            var ls=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            enrollments=ls.campistryMe?.enrollments;
+        }catch(_){}
+        if(!enrollments||!enrollments[id]){
+            try{
+                if(typeof window.loadGlobalSettings==='function'){
+                    var full=window.loadGlobalSettings();
+                    if(full?.campistryMe?.enrollments) enrollments=full.campistryMe.enrollments;
+                }
+            }catch(_){}
+        }
+        if(!enrollments||!enrollments[id]){
+            // Final fallback: query Supabase directly. CampistryDB resolves
+            // a campId from the URL / session; if it's not available yet
+            // the status panel surfaces the original "Not Found".
+            try{
+                var client=window.CampistryDB?.getClient?.();
+                var campId=window.CampistryDB?.getCampId?.();
+                if(client&&campId){
+                    var res=await client
+                        .from('camp_state_kv')
+                        .select('value')
+                        .eq('camp_id',campId)
+                        .eq('key','campistryMe')
+                        .maybeSingle();
+                    if(!res?.error&&res?.data?.value?.enrollments){
+                        enrollments=res.data.value.enrollments;
+                    }
+                }
+            }catch(_){}
+        }
+        renderStatus(enrollments&&enrollments[id]);
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
 }
 

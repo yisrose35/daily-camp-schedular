@@ -86,6 +86,12 @@
     let _saveInProgress = false;
     const SAVE_DEDUP_MS = 3000; // Ignore duplicate saves within 3 seconds
 
+    // Cached after each successful executeBatchSync so the beforeunload
+    // handler can build a fetch-keepalive request synchronously. Without
+    // this, the supabase-js upsert in beforeunload dies with the tab on
+    // slow networks because supabase-js doesn't set keepalive: true.
+    let _cachedAccessToken = null;
+
     // Store the TRUE original saveGlobalSettings before ANY patches
     const _trueOriginalSaveGlobalSettings = window.saveGlobalSettings;
 
@@ -752,6 +758,18 @@
             // client gets the response, causing the echo-suppression check
             // to miss and triggering a redundant re-hydrate.
             _lastSelfWriteAt = Date.now();
+
+            // Cache the access token while we have a fresh async context.
+            // The beforeunload handler (which runs synchronously) needs a
+            // token to send a fetch-keepalive upsert; without this it can
+            // only fire-and-forget through supabase-js, which doesn't set
+            // keepalive: true and so dies with the tab.
+            try {
+                const sess = await client.auth.getSession();
+                if (sess?.data?.session?.access_token) {
+                    _cachedAccessToken = sess.data.session.access_token;
+                }
+            } catch (_) {}
 
             const { error: upsertError } = await client
                 .from('camp_state_kv')
@@ -1736,6 +1754,7 @@
     let _campStateSubscribed = false;
     let _campStateReconnectTimer = null;
     let _campStateReconnectAttempts = 0;
+    let _campStateStableTimer = null;
 
     async function subscribeToCampState() {
         if (_campStateSubscribed) return;
@@ -1779,6 +1798,16 @@
                     log('camp_state subscription status:', status);
                     if (status === 'SUBSCRIBED') {
                         _campStateReconnectAttempts = 0;
+                        // Schedule a decay timer — even if connectivity flaps
+                        // and SUBSCRIBED never fires again as a clean reset,
+                        // 60s of stable subscription resets the backoff so
+                        // the next flap doesn't start at the previous (high)
+                        // attempt count.
+                        if (_campStateStableTimer) clearTimeout(_campStateStableTimer);
+                        _campStateStableTimer = setTimeout(function () {
+                            _campStateReconnectAttempts = 0;
+                            _campStateStableTimer = null;
+                        }, 60000);
                     } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
                         // Schedule a reconnect with capped exponential backoff.
                         // Without this, a transient network blip kills the
@@ -2419,12 +2448,47 @@
                 window.ScheduleDB?.saveSchedule?.(dateKey, payload).catch(() => {});
             }
 
-            // Also flush _pendingChanges (camp_state_kv batch). The 500ms
-            // debounce window otherwise loses any setting edited within
-            // that window if the user closes the tab. We can't await here,
-            // but firing executeBatchSync gives Postgres a chance to
-            // accept the upsert before the tab dies.
+            // Flush _pendingChanges (camp_state_kv batch) via fetch with
+            // keepalive: true so the request survives tab close. The
+            // supabase-js upsert path doesn't set keepalive, so it dies
+            // with the tab on slow networks. We send the request manually
+            // to the Supabase REST endpoint with the cached access token.
             try {
+                const pending = (typeof _pendingChanges === 'object' && _pendingChanges) ? _pendingChanges : {};
+                const pendingKeys = Object.keys(pending).filter(k => k !== 'updated_at');
+                const cfg = window.CampistryDB?.config;
+                const campId = window.CampistryDB?.getCampId?.();
+                if (pendingKeys.length > 0 && _cachedAccessToken && cfg?.SUPABASE_URL && cfg?.SUPABASE_ANON_KEY && campId) {
+                    const nowIso = new Date().toISOString();
+                    const rows = pendingKeys.map(k => ({
+                        camp_id: campId,
+                        key: k,
+                        value: pending[k] ?? null,
+                        updated_at: nowIso
+                    }));
+                    // Body cap: fetch keepalive limits total in-flight body
+                    // size to ~64KB. Anything bigger we let the regular
+                    // executeBatchSync attempt fire-and-forget.
+                    const body = JSON.stringify(rows);
+                    if (body.length < 60000) {
+                        fetch(`${cfg.SUPABASE_URL}/rest/v1/camp_state_kv?on_conflict=camp_id,key`, {
+                            method: 'POST',
+                            keepalive: true,
+                            headers: {
+                                'apikey': cfg.SUPABASE_ANON_KEY,
+                                'Authorization': `Bearer ${_cachedAccessToken}`,
+                                'Content-Type': 'application/json',
+                                'Prefer': 'resolution=merge-duplicates,return=minimal'
+                            },
+                            body
+                        }).catch(() => {});
+                        // Optimistically clear so a regular executeBatchSync
+                        // call right after doesn't race-double-submit.
+                        pendingKeys.forEach(k => delete _pendingChanges[k]);
+                    }
+                }
+                // Belt-and-suspenders fallback for over-cap payloads or
+                // when no cached token is available.
                 if (typeof executeBatchSync === 'function') executeBatchSync();
             } catch (_) {}
         });
