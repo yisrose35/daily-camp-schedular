@@ -1931,6 +1931,24 @@
         return !(end1 <= start2 || start1 >= end2);
     };
 
+    // Slice 3 audit fix (N16): dual-key divisions lookup. The auto pipeline
+    // has ~40 sites that read `divisions[grade]?.startTime` directly. If
+    // `grade` ever arrives as a number when `divisions` is keyed by
+    // string (or vice versa), the optional chain returns undefined, the
+    // parse returns null, and the `|| 540 / || 960` literal default
+    // silently kicks in — schedule uses the wrong day-window hours.
+    // Use this helper at any time-lookup site to be type-tolerant.
+    Utils.getDivisionRecord = function(grade) {
+        const divs = window.divisions || {};
+        if (grade == null) return null;
+        return divs[grade] || divs[String(grade)] || null;
+    };
+    Utils.getDivisionTimes = function(grade) {
+        const dt = window.divisionTimes || {};
+        if (grade == null) return null;
+        return dt[grade] || dt[String(grade)] || null;
+    };
+
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================

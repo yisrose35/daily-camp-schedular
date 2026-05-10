@@ -963,6 +963,59 @@
     // WRITE HELPERS
     // =========================================================================
 
+    // ── Cross-grade pressure helper (Slice 3 audit, N18) ──────────────
+    // Repair phases used to pick the first matching candidate. That
+    // could land a free block on a field other grades urgently need
+    // (no spare capacity), while a less-contested alternative sat
+    // unused. We can't access the main solver's full scarcityMap from
+    // here (it's a closure local), but the fieldIndex passed into each
+    // repair helper has everything we need to compute a simple cross-
+    // grade pressure score: count distinct other grades already using
+    // the candidate field in the FB's time window. Higher = more
+    // contested = should be deprioritized.
+    function _crossGradePressure(cand, fb, fieldIndex) {
+        try {
+            const fn = cand?.fieldNorm || (cand?.field ? normName(cand.field) : null);
+            if (!fn || !fieldIndex?.get) return 0;
+            const entries = fieldIndex.get(fn) || [];
+            const otherGrades = new Set();
+            for (const e of entries) {
+                if (!e || e.bunk === fb.bunk) continue;
+                if (e.endMin <= fb.startMin || e.startMin >= fb.endMin) continue;
+                if (e.grade != null && e.grade !== fb.grade) otherGrades.add(e.grade);
+            }
+            return otherGrades.size;
+        } catch (_) { return 0; }
+    }
+    function _sortCandidatesByPressure(candidates, fb, fieldIndex) {
+        // Stable: lower pressure first; preserves caller's prior ordering.
+        const indexed = candidates.map((c, i) => ({ c, i, p: _crossGradePressure(c, fb, fieldIndex) }));
+        indexed.sort((a, b) => a.p !== b.p ? a.p - b.p : a.i - b.i);
+        return indexed.map(x => x.c);
+    }
+
+    // ── Bunk-done-today helper (shared) ────────────────────────────────
+    // Slice 3 audit fix (Deferred-2): centralized so the three repair
+    // phases (tryDirectFill, colocateFreeBlocks, ejection chain) all
+    // share the same definition. Previously each rebuilt its own from
+    // scratch; if a future caller forgets the optional `extraSports`
+    // arg (used by chain construction to inject in-flight commits not
+    // yet in scheduleAssignments), the helpers disagree about what
+    // the bunk has placed.
+    function getBunkDoneToday(bunk, excludeSlotIdx, extraSports) {
+        const done = new Set();
+        const slots = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+        for (let i = 0; i < slots.length; i++) {
+            if (i === excludeSlotIdx) continue;
+            const e = slots[i];
+            if (!e || e.continuation) continue;
+            const act = normName(e._activity || e.sport || e.field);
+            if (act && act !== 'free' && act !== 'free play') done.add(act);
+        }
+        if (extraSports) extraSports.forEach(s => done.add(s));
+        return done;
+    }
+
     // ── HARD WRITE GUARD ────────────────────────────────────────────────
     // Reads field rules from live globalSettings on every call — no
     // caching. Caching kept producing stale data because gs.app1.fields
@@ -1384,15 +1437,15 @@
         // freed up between the main solve and now.
         const sa = window.scheduleAssignments || {};
 
-        // Build what this bunk has today (excluding its own Free slot)
-        const doneToday = new Set();
-        (sa[fb.bunk] || []).forEach((e, i) => {
-            if (i === fb.slotIdx || !e || e.continuation) return;
-            const act = normName(e._activity || e.sport || e.field);
-            if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
-        });
+        // Centralized helper — same source-of-truth the ejection chain uses.
+        const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
 
-        for (const cand of candidates) {
+        // Scarcity-aware ordering: prefer candidates with fewer other-grade
+        // overlaps in this window. Earlier the first matching candidate
+        // won, which could land FB on a field other grades urgently need.
+        const sortedCandidates = _sortCandidatesByPressure(candidates, fb, fieldIndex);
+
+        for (const cand of sortedCandidates) {
             if (window.isRainyDay && !cand.isIndoor) continue;
             if (doneToday.has(cand.sportNorm)) continue;
             if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
@@ -1421,15 +1474,12 @@
         // assignment to a different field, then place FB in the vacated spot.
         const sa = window.scheduleAssignments || {};
 
-        // What does FB's bunk have today?
-        const fbDoneToday = new Set();
-        (sa[fb.bunk] || []).forEach((e, i) => {
-            if (i === fb.slotIdx || !e || e.continuation) return;
-            const act = normName(e._activity || e.sport || e.field);
-            if (act && act !== 'free' && act !== 'free play') fbDoneToday.add(act);
-        });
+        // What does FB's bunk have today? Centralized helper.
+        const fbDoneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
 
-        for (const cand of candidates) {
+        // Scarcity-aware ordering (N18): least-contested fields first.
+        const sortedCandidates = _sortCandidatesByPressure(candidates, fb, fieldIndex);
+        for (const cand of sortedCandidates) {
             if (window.isRainyDay && !cand.isIndoor) continue;
             if (fbDoneToday.has(cand.sportNorm)) continue;
 
@@ -1449,13 +1499,9 @@
                 if (!victimEntry || victimEntry._fixed || victimEntry._pinned || victimEntry._league) continue;
                 if (!victimEntry._autoSolved && !victimEntry._autoMode) continue;
 
-                // Build victim's doneToday (excluding its own current slot)
-                const victimDoneToday = new Set();
-                (sa[victim.bunk] || []).forEach((e, i) => {
-                    if (i === victim.slotIdx || !e || e.continuation) return;
-                    const act = normName(e._activity || e.sport || e.field);
-                    if (act && act !== 'free' && act !== 'free play') victimDoneToday.add(act);
-                });
+                // Build victim's doneToday (excluding its own current slot).
+                // Centralized helper — single source of truth.
+                const victimDoneToday = getBunkDoneToday(victim.bunk, victim.slotIdx);
 
                 // Temporarily remove the victim from the field index so we can
                 // search for its alternative without false capacity blocks.
@@ -1607,13 +1653,9 @@
                 // Check sharing rules and capacity
                 if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
 
-                // Don't repeat same activity this bunk already has today
-                const doneToday = new Set();
-                (sa[fb.bunk] || []).forEach((e, i) => {
-                    if (i === fb.slotIdx || !e || e.continuation) return;
-                    const act = normName(e._activity || e.sport || e.field);
-                    if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
-                });
+                // Don't repeat same activity this bunk already has today.
+                // Centralized helper — same source-of-truth the chain uses.
+                const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
                 if (doneToday.has(cand.sportNorm)) continue;
 
                 // Place it — co-locate with the existing occupant(s)
@@ -1732,16 +1774,9 @@
         // chain: [{victim, newCand, sourceFn}] built up during DFS
         const chain = [];
 
-        function getBunkDoneToday(bunk, excludeSlotIdx, extraSports) {
-            const done = new Set();
-            (sa[bunk] || []).forEach((e, i) => {
-                if (i === excludeSlotIdx || !e || e.continuation) return;
-                const act = normName(e._activity || e.sport || e.field);
-                if (act && act !== 'free' && act !== 'free play') done.add(act);
-            });
-            if (extraSports) extraSports.forEach(s => done.add(s));
-            return done;
-        }
+        // getBunkDoneToday is module-scoped (defined near the top of this
+        // file) so tryDirectFill / colocateFreeBlocks / chain construction
+        // share one definition.
 
         function dfs(targetFn, overlapOnTarget, depth) {
             if (depth > maxDepth) return false;

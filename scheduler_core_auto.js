@@ -1094,8 +1094,8 @@
                 // ★ fullGrade swim is already placed grade-wide in Phase 0 — skip MRC staggering
                 if (swimLayer.fullGrade === true) return;
                 if (computeRatio(swimLayer) >= 1) return;
-                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 const c = resolveConstraints(swimLayer, 'swim');
                 swimGrades.push({
                     grade, swimLayer, dMin: c.dMin, dMax: c.dMax,
@@ -1142,7 +1142,7 @@
                 bunks.forEach(bunk => {
                     const tl = timelines[bunk] || [];
                     const sorted = [...tl].sort((a, b) => a.startMin - b.startMin);
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
                     if (sorted.length > 0 && sorted[0].startMin > gs) gradeScore += (sorted[0].startMin - gs) * 15;
                     for (let i = 0; i < sorted.length - 1; i++) {
                         const gap = sorted[i + 1].startMin - sorted[i].endMin;
@@ -1534,8 +1534,8 @@
                 const sliceEnd = Math.min(t + CONTENTION_SLICE, endMin);
                 let demand = 0;
                 for (const grade of allGrades) {
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 660;
+                    const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 990;
                     if (t >= ge || sliceEnd <= gs) continue;
                     for (const bk of getBunksForGrade(grade, divisions)) {
                         if (bk === excludeBunk) continue;
@@ -2349,7 +2349,7 @@
                         if (b.startMin > start && b.startMin < nextWall) nextWall = b.startMin;
                     });
                 });
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 if (ge < nextWall) nextWall = ge;
                 let d = Math.max(dMin, Math.min(dMax, nextWall - start));
                 d = snapTo5(d) < dMin ? dMin : snapTo5(d);
@@ -2417,11 +2417,11 @@
                 const _minFill = getMinFillable(grade);
                 bunks.forEach(bk => {
                     const tl = bunkTimelines[bk] || [];
-                    let prevEnd = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    let prevEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
                     tl.forEach(b => { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
                     const gapBefore = ts - prevEnd;
                     if (gapBefore > 0 && gapBefore < _minFill) score += 5000;
-                    let nextStart = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    let nextStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     tl.forEach(b => { if (b.startMin >= leagueEnd && b.startMin < nextStart) nextStart = b.startMin; });
                     const gapAfter = nextStart - leagueEnd;
                     if (gapAfter > 0 && gapAfter < _minFill) score += 5000;
@@ -2443,8 +2443,8 @@
                     });
 
                     // Check EACH bunk — after league, does it still have a gap >= maxSpecialDur?
-                    var gs2Start = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    var gs2End = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    var gs2Start = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    var gs2End = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     var bunksWithNoRoom = 0;
                     bunks.forEach(function(bk) {
                         var bkWalls = (bunkTimelines[bk] || []).map(function(b) { return { s: b.startMin, e: b.endMin }; });
@@ -2506,8 +2506,8 @@
                 if (_lp_fixedNeedDurs.length > 0) {
                     bunks.forEach(function(bk) {
                         var tl = bunkTimelines[bk] || [];
-                        var gs3 = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
-                        var ge3 = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime) || 960;
+                        var gs3 = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
+                        var ge3 = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime) || 960;
                         // Gap before the proposed league
                         var prevEnd = gs3;
                         tl.forEach(function(b) { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
@@ -2568,8 +2568,8 @@
         // =====================================================================
 
         function buildBunkShoppingList(bunk, grade) {
-            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
             const bunkSize = (window.getBunkMetaData?.() || window.bunkMetaData || {})[bunk]?.size || 20;
 
             const timeline = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
@@ -3824,8 +3824,8 @@
                         const queue = gradeQueues[grade];
                         if (!queue || queue.length === 0) return;
 
-                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                        const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                        const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                         // Find next bunk that still needs a special
                         while (queue.length > 0) {
@@ -4028,8 +4028,8 @@
                     return;
                 }
 
-                const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                 // ── Step A: Build per-bunk gap map ───────────────────
                 const bunkGaps = {};
@@ -5084,8 +5084,8 @@
                         var _tmp = bunks[si]; bunks[si] = bunks[sj]; bunks[sj] = _tmp;
                     }
                 }
-                var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                var gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                var gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                 for (var bi = 0; bi < bunks.length; bi++) {
                     var bunk = bunks[bi];
@@ -9927,8 +9927,8 @@
             const gradeInfo = {};
             let maxOffField = 0;
             shuffled.forEach(grade => {
-                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 const layers = layersByGrade[grade] || [];
                 const offField = [];
                 if (layers.some(l => (l.type || '').toLowerCase() === 'swim')) offField.push('swim');
@@ -10362,8 +10362,8 @@
 
                     var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
                     var _p23SwimDur = _p23SC.dMin || 40;
-                    var _p23GradeStart = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
-                    var _p23GradeEnd   = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime)   || 960;
+                    var _p23GradeStart = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
+                    var _p23GradeEnd   = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime)   || 960;
                     var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
                     var _p23WinEnd   = Math.min(_p23SwimLayer.endMin   || 1440, _p23GradeEnd);
 
@@ -11401,8 +11401,8 @@
                 gradesByConstraint.forEach(grade => {
                     preplacedByGrade[grade] = 0;
                     var gradeLayers = layersByGrade[grade] || [];
-                    var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    var gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    var gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                     // Sort bunks: most constrained first, with seeded shuffle
                     // inside equal-slack bands (±15) so different iterations try
@@ -12377,8 +12377,8 @@
 
         let validationPassed = true;
         allGrades.forEach(grade => {
-            const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+            const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk] || [];
                 for (let i = 0; i < tl.length - 1; i++) {
@@ -15765,8 +15765,8 @@
             for (let t = campStart; t < campEnd; t += 30) {
                 let onFields = 0;
                 const doing = allGrades.map(grade => {
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     if (t < gs || t >= ge) return null;
                     const p = staggerPlan[grade] || {};
                     const tb = p.typeBands || {};
