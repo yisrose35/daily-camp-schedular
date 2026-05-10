@@ -2243,8 +2243,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     // division has identical content there (Lunch, league, full-grade swim,
     // etc.). When true, the renderer merges those cells into a single cell
     // spanning rowspan = bunks.length so the activity is shown once.
-    function _slotIsFullDivisionMerge(slotIdx, bunks) {
+    function _slotIsFullDivisionMerge(slotIdx, bunks, divSlots) {
         if (!bunks || bunks.length < 2) return false;
+        // League slots: matchup data lives in leagueAssignments and applies to
+        // the whole grade, so always merge regardless of per-bunk entries.
+        var slot = divSlots && divSlots[slotIdx];
+        if (slot && isLeagueBlockType(slot.event, slot.type)) return true;
         var firstSig = null;
         for (var i = 0; i < bunks.length; i++) {
             var entry = (window.scheduleAssignments && window.scheduleAssignments[bunks[i]]) ? window.scheduleAssignments[bunks[i]][slotIdx] : null;
@@ -2413,7 +2417,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             // for every bunk — those will merge into a single rowspan cell.
             var mergeSlots = {}; // slotIdx -> true
             for (var msi = 0; msi < divSlots.length; msi++) {
-                if (_slotIsFullDivisionMerge(msi, bunks)) mergeSlots[msi] = true;
+                if (_slotIsFullDivisionMerge(msi, bunks, divSlots)) mergeSlots[msi] = true;
             }
 
             bunks.forEach(function (bunk, bi) {
