@@ -2233,6 +2233,50 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return -1;
     }
 
+    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
+        var td = document.createElement('td');
+        td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
+
+        var leagueInfo = (typeof getLeagueMatchups === 'function') ? getLeagueMatchups(divName, slotIdx) : null;
+        if (!leagueInfo) leagueInfo = {};
+
+        var title = leagueInfo.gameLabel || block.event || 'League';
+        if (leagueInfo.sport && title.toLowerCase().indexOf(String(leagueInfo.sport).toLowerCase()) < 0) {
+            title += ' - ' + leagueInfo.sport;
+        }
+
+        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">🏆 ' + escapeHtml(title) + '</div>';
+
+        var matchups = leagueInfo.matchups || [];
+        if (matchups.length > 0) {
+            html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
+            matchups.forEach(function (m) {
+                var line;
+                if (typeof m === 'string') {
+                    line = m;
+                } else if (m && (m.teamA || m.team1)) {
+                    var a = m.teamA || m.team1 || '';
+                    var b = m.teamB || m.team2 || '';
+                    var sport = m.sport || leagueInfo.sport || '';
+                    var field = m.field || '';
+                    line = a + ' vs ' + b;
+                    if (sport) line += ' — ' + (sport.charAt(0).toUpperCase() + sport.slice(1));
+                    if (field) line += ' (' + field + ')';
+                } else if (m && m.display) {
+                    line = m.display;
+                } else {
+                    line = JSON.stringify(m);
+                }
+                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+            });
+            html += '</div>';
+        } else {
+            html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
+        }
+        td.innerHTML = html;
+        return td;
+    }
+
     function renderTransposedView(container) {
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
         var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -2311,7 +2355,9 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         timeColumns.forEach(function (col) {
             var th = document.createElement('th');
             th.textContent = minutesToTimeLabel(col.startMin);
-            th.style.cssText = 'padding: 8px 6px; font-weight: 600; color: #374151; border-bottom: 2px solid #e5e7eb; border-left: 1px solid #e5e7eb; white-space: nowrap; min-width: 78px; font-size: 0.78rem;';
+            var isHour = (col.startMin % 60) === 0;
+            var leftBorder = isHour ? '2px solid #cbd5e1' : '1px solid #f1f5f9';
+            th.style.cssText = 'padding: 8px 6px; font-weight: ' + (isHour ? '700' : '500') + '; color: ' + (isHour ? '#111827' : '#6b7280') + '; border-bottom: 2px solid #e5e7eb; border-left: ' + leftBorder + '; white-space: nowrap; min-width: 78px; font-size: 0.78rem;';
             thr.appendChild(th);
         });
         thead.appendChild(thr);
@@ -2354,11 +2400,15 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 var ci = 0;
                 while (ci < timeColumns.length) {
                     var col = timeColumns[ci];
+                    var isHourMark = (col.startMin % 60) === 0;
+                    var leftBorder = isHourMark ? '2px solid #cbd5e1' : '1px solid #f1f5f9';
+
                     var slotIdx = _findSlotIndexAtTime(divSlots, col.startMin);
                     if (slotIdx < 0) {
-                        // No slot in this division at this time — empty cell.
+                        // No slot — division hasn't started yet or has ended.
+                        // Render a greyed-out striped cell so the timeline gap is obvious.
                         var emptyTd = document.createElement('td');
-                        emptyTd.style.cssText = 'padding: 6px; border: 1px solid #f1f5f9; background: #fafafa;';
+                        emptyTd.style.cssText = 'padding: 6px; border-left: ' + leftBorder + '; border-bottom: 1px solid #f1f5f9; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 5px, #e5e7eb 5px, #e5e7eb 10px); color: #9ca3af;';
                         emptyTd.textContent = '';
                         tr.appendChild(emptyTd);
                         ci++;
@@ -2389,15 +2439,14 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                         _postChangeMin: slot._postChangeMin
                     };
                     var td;
-                    // For league blocks, just show the league name in the bunk's cell —
-                    // the full matchup list can still be seen via the league panel.
                     if (isLeagueBlockType(blockObj.event, blockObj.type)) {
-                        td = document.createElement('td');
-                        td.style.cssText = 'padding: 8px 10px; text-align: center; border: 1px solid #e5e7eb; background: #FEF3C7; font-weight: 600; color: #92400E; font-size: 0.82rem;';
-                        td.innerHTML = '🏆 ' + escapeHtml(blockObj.event || 'League');
+                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx);
                     } else {
                         td = renderBunkCell(blockObj, bunk, divName, isEditable);
                     }
+                    // Apply the hour-mark left border so the timeline guide
+                    // shows up regardless of which renderer produced the cell.
+                    td.style.borderLeft = leftBorder;
                     if (span > 1) td.colSpan = span;
                     tr.appendChild(td);
                     ci += span;
