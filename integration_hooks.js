@@ -764,10 +764,19 @@
             // token to send a fetch-keepalive upsert; without this it can
             // only fire-and-forget through supabase-js, which doesn't set
             // keepalive: true and so dies with the tab.
+            //
+            // Slice 2 audit fix: only cache tokens that won't expire in
+            // the next 60s. Earlier the cached token could be ~1h stale
+            // by the time beforeunload fired, returning 401 silently
+            // while the optimistic _pendingChanges clear ran anyway.
             try {
                 const sess = await client.auth.getSession();
-                if (sess?.data?.session?.access_token) {
-                    _cachedAccessToken = sess.data.session.access_token;
+                const tok = sess?.data?.session?.access_token;
+                const expSec = sess?.data?.session?.expires_at;
+                if (tok && (!expSec || (expSec * 1000 - Date.now()) > 60000)) {
+                    _cachedAccessToken = tok;
+                } else {
+                    _cachedAccessToken = null;
                 }
             } catch (_) {}
 
@@ -2458,6 +2467,9 @@
                 const pendingKeys = Object.keys(pending).filter(k => k !== 'updated_at');
                 const cfg = window.CampistryDB?.config;
                 const campId = window.CampistryDB?.getCampId?.();
+                // Skip if we have no fresh cached token — sending without
+                // one would 401, then the optimistic clear below would
+                // drop the pending edits with no chance to retry.
                 if (pendingKeys.length > 0 && _cachedAccessToken && cfg?.SUPABASE_URL && cfg?.SUPABASE_ANON_KEY && campId) {
                     const nowIso = new Date().toISOString();
                     const rows = pendingKeys.map(k => ({

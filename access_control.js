@@ -285,21 +285,19 @@
             return true;
         }
 
-        // ★★★ v3.12 FIX: Owner/Admin fast-path — don't block on background verify ★★★
-        // If we have a role from cache or localStorage and it's owner/admin,
-        // allow the write immediately. The background verify will catch any
-        // escalation (viewer pretending to be owner) by downgrading _currentRole,
-        // but a legitimate owner should NEVER be blocked waiting for a network call.
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            debugLog("verifyBeforeWrite: fast-path for", _currentRole, "— allowing while verify runs");
-            // Still kick off verification in background if not already running
-            if (!_verifyPromise) {
-                _verifyPromise = verifyRoleFromDB().finally(() => { _verifyPromise = null; });
-            }
-            return true;
-        }
-
-        // For non-owner/admin (scheduler, viewer, unknown): block until verified
+        // ★★★ Slice 2 audit fix: removed the owner/admin fast-path. ★★★
+        // Earlier this allowed writes to proceed BEFORE the DB verified the
+        // role, on the basis that "RLS will block escalation at the cloud
+        // layer". But localStorage writes (campGlobalSettings_v1) and every
+        // local UI mutation still went through, polluting cache with
+        // attacker-chosen state. On a shared kiosk, an attacker could pre-
+        // seed `localStorage.campistry_role = 'owner'` and execute one round
+        // of writes before the background verify downgraded them.
+        //
+        // We now ALWAYS wait for the verify to resolve before allowing a
+        // write. The cost is one network round-trip on first write per
+        // session — acceptable for the safety improvement. Subsequent
+        // writes hit the `_roleVerifiedFromDB` short-circuit above.
         if (!_verifyPromise) {
             _verifyPromise = verifyRoleFromDB().finally(() => { _verifyPromise = null; });
         }
@@ -471,12 +469,16 @@
         // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
         // =====================================================================
         try {
-            const { data: memberData, error } = await window.supabase
+            // Multi-camp users: pick the most-recently-joined accepted
+            // membership rather than crashing on >1 rows.
+            const { data: memberRows, error } = await window.supabase
                 .from('camp_users')
                 .select('*')
                 .eq('user_id', _currentUser.id)
                 .not('accepted_at', 'is', null)
-                .maybeSingle();
+                .order('accepted_at', { ascending: false })
+                .limit(1);
+            const memberData = (Array.isArray(memberRows) && memberRows.length > 0) ? memberRows[0] : null;
             
             console.log("🔐 Team member check result:", { 
                 found: !!memberData, 
@@ -600,7 +602,13 @@
         if (_campId) return _campId;
         const cached = localStorage.getItem('campistry_user_id');
         if (cached && cached !== 'demo_camp_001') return cached;
-        return _currentUser?.id || 'demo_camp_001';
+        // Slice 2 audit fix: removed `_currentUser?.id || 'demo_camp_001'`
+        // fallback. Returning the user's own UUID as the camp_id (or the
+        // literal demo string) caused IDB / localStorage to be keyed
+        // against bogus values when detection failed; subsequent reads
+        // happily rendered demo data, and writes were RLS-rejected.
+        // Callers must now handle null explicitly.
+        return null;
     }
 
     async function loadSubdivisions() {
