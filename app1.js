@@ -986,14 +986,33 @@
                     validDivisions[divName] = {
                         startTime: div.startTime || "",
                         endTime: div.endTime || "",
-                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
-                        color: div.color || getNextUniqueDivisionColor(validDivisions)
+                        bunks: Array.isArray(div.bunks) ? div.bunks.slice() : [],
+                        color: div.color || getNextUniqueDivisionColor(validDivisions),
+                        // Preserve legacy grouping fields so divisionGroups stays intact.
+                        parentDivision: div.parentDivision || null
                     };
-                    sortBunksInPlace(validDivisions[divName].bunks);
                 });
                 state.divisions = validDivisions;
-                
-                state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+
+                // Preserve the user's existing groupings if present in the cloud
+                // payload (legacy app1.divisionGroups). Otherwise reconstruct
+                // groups from parentDivision references, and finally fall back
+                // to a single "All" bucket.
+                if (data.divisionGroups && typeof data.divisionGroups === 'object' && Object.keys(data.divisionGroups).length > 0) {
+                    state.divisionGroups = deepClone(data.divisionGroups);
+                } else {
+                    const reconstructedGroups = {};
+                    Object.entries(state.divisions).forEach(([divName, div]) => {
+                        const parent = div.parentDivision || 'All';
+                        if (!reconstructedGroups[parent]) {
+                            reconstructedGroups[parent] = { color: div.color || '#6B7280', grades: [] };
+                        }
+                        reconstructedGroups[parent].grades.push(divName);
+                    });
+                    state.divisionGroups = Object.keys(reconstructedGroups).length > 0
+                        ? reconstructedGroups
+                        : { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+                }
             }
             
            // Rebuild divisions object honoring user-defined order:
