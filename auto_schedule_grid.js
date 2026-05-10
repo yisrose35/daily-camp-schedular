@@ -833,30 +833,22 @@
                     'color:' + style.text
                 ].join(';');
 
-                // Show what fits — gauge against pixel width approximation
-                var blockW = act.duration * PX_PER_MIN;
-                if (blockW >= 60) {
-                    var nameEl = document.createElement('div');
-                    nameEl.className = 'asg-tx-block-name';
-                    nameEl.style.color = style.text;
-                    nameEl.textContent = name;
-                    blk.appendChild(nameEl);
-                    if (sub && sub !== name) {
-                        var subEl = document.createElement('div');
-                        subEl.className = 'asg-tx-block-sub';
-                        subEl.style.color = style.text;
-                        subEl.textContent = sub;
-                        blk.appendChild(subEl);
-                    }
-                } else if (blockW >= 28) {
-                    var nameEl2 = document.createElement('div');
-                    nameEl2.className = 'asg-tx-block-name';
-                    nameEl2.style.color = style.text;
-                    nameEl2.style.fontSize = '0.65rem';
-                    nameEl2.textContent = name;
-                    blk.appendChild(nameEl2);
-                } else {
-                    blk.title = name;
+                // Always show the activity name. CSS handles overflow with
+                // an ellipsis when the block is too narrow to fit the full
+                // text — the hover title still shows the full name + time.
+                var blockW = act.duration * PX_PER_MIN; // legacy heuristic for sub/time
+                var nameEl = document.createElement('div');
+                nameEl.className = 'asg-tx-block-name';
+                nameEl.style.color = style.text;
+                if (blockW < 60) nameEl.style.fontSize = '0.62rem';
+                nameEl.textContent = name;
+                blk.appendChild(nameEl);
+                if (blockW >= 60 && sub && sub !== name) {
+                    var subEl = document.createElement('div');
+                    subEl.className = 'asg-tx-block-sub';
+                    subEl.style.color = style.text;
+                    subEl.textContent = sub;
+                    blk.appendChild(subEl);
                 }
                 blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
 
