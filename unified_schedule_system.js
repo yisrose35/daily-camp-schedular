@@ -2233,6 +2233,29 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return -1;
     }
 
+    function _entrySignatureForMerge(entry) {
+        if (!entry) return '__empty__';
+        var keys = ['field', 'sport', '_activity', 'event', 'location', 'swimLocation', 'reservedLocation', '_gameLabel', '_leagueName'];
+        return keys.map(function (k) { return entry[k] == null ? '' : String(entry[k]); }).join('|');
+    }
+
+    // For a given division slot index, decide whether every bunk in the
+    // division has identical content there (Lunch, league, full-grade swim,
+    // etc.). When true, the renderer merges those cells into a single cell
+    // spanning rowspan = bunks.length so the activity is shown once.
+    function _slotIsFullDivisionMerge(slotIdx, bunks) {
+        if (!bunks || bunks.length < 2) return false;
+        var firstSig = null;
+        for (var i = 0; i < bunks.length; i++) {
+            var entry = (window.scheduleAssignments && window.scheduleAssignments[bunks[i]]) ? window.scheduleAssignments[bunks[i]][slotIdx] : null;
+            var sig = _entrySignatureForMerge(entry);
+            if (sig === '__empty__') return false;
+            if (firstSig === null) firstSig = sig;
+            else if (sig !== firstSig) return false;
+        }
+        return true;
+    }
+
     function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
         var td = document.createElement('td');
         td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
@@ -2386,6 +2409,13 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             ghTr.appendChild(ghTd);
             tbody.appendChild(ghTr);
 
+            // Pre-compute which slots in this division have identical content
+            // for every bunk — those will merge into a single rowspan cell.
+            var mergeSlots = {}; // slotIdx -> true
+            for (var msi = 0; msi < divSlots.length; msi++) {
+                if (_slotIsFullDivisionMerge(msi, bunks)) mergeSlots[msi] = true;
+            }
+
             bunks.forEach(function (bunk, bi) {
                 var tr = document.createElement('tr');
                 tr.style.background = bi % 2 === 0 ? '#fff' : '#fafafa';
@@ -2404,6 +2434,20 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     var leftBorder = isHourMark ? '2px solid #cbd5e1' : '1px solid #f1f5f9';
 
                     var slotIdx = _findSlotIndexAtTime(divSlots, col.startMin);
+
+                    // Full-division merge: if this slot merges and we're not the
+                    // first bunk, skip the cell — it's covered by the rowspan
+                    // from the first bunk's cell above.
+                    if (slotIdx >= 0 && mergeSlots[slotIdx] && bi > 0) {
+                        var slotForSkip = divSlots[slotIdx];
+                        var skipSpan = 1;
+                        while (ci + skipSpan < timeColumns.length && timeColumns[ci + skipSpan].startMin < slotForSkip.endMin && timeColumns[ci + skipSpan].startMin >= slotForSkip.startMin) {
+                            skipSpan++;
+                        }
+                        ci += skipSpan;
+                        continue;
+                    }
+
                     if (slotIdx < 0) {
                         // No slot — division hasn't started yet or has ended.
                         // Render a greyed-out striped cell so the timeline gap is obvious.
@@ -2448,6 +2492,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                     // shows up regardless of which renderer produced the cell.
                     td.style.borderLeft = leftBorder;
                     if (span > 1) td.colSpan = span;
+                    // Full-division merge: this cell on the first bunk's row
+                    // covers all bunks in the division for this slot.
+                    if (mergeSlots[slotIdx] && bi === 0 && bunks.length > 1) {
+                        td.rowSpan = bunks.length;
+                        td.style.verticalAlign = 'middle';
+                    }
                     tr.appendChild(td);
                     ci += span;
                 }
