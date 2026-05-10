@@ -156,6 +156,16 @@ function blockMatchesDescriptor(block, desc) {
 // candidate : { startMin, endMin, type, event, field, _assignedSpecial, _specialLocation }
 // template  : array of blocks already placed on the bunk
 // opts      : { mode: 'auto' | 'manual' }  — filters rules by their `mode` field
+//
+// LIMITATION (Slice 3 audit, N13): cooldowns are evaluated only against the
+// `template` blocks the caller passes in. Today every caller builds `template`
+// from a single day's scheduleAssignments — there is no cross-day awareness.
+// A user-configured rule like "no Soccer within 12h of Soccer" is therefore
+// silently a within-today rule. To support multi-day cooldowns the caller
+// would need to inject yesterday's last-block-of-day (or all of yesterday's
+// blocks) into `template` with appropriate negative startMin offsets, or
+// this engine would need a `previousDayBlocks` opt. Documented here so the
+// limitation isn't a surprise to future contributors.
 function isCandidateAllowed(candidate, template, opts) {
     const mode = (opts && opts.mode) || 'auto';
     const rules = getCooldownRules();

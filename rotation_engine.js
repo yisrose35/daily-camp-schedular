@@ -1088,21 +1088,36 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Sort by score (lowest first)
         scored.sort(function(a, b) { return a.score - b.score; });
 
-        // ★★★ TIE-BREAKING: Add controlled randomness when scores are close ★★★
+        // ★★★ TIE-BREAKING: deterministic, not Math.random(). ★★★
+        // Earlier this used Math.random() which made every regenerate
+        // produce a different schedule even with identical inputs —
+        // impossible to reproduce a bad run for debugging, and the
+        // user-visible "regenerate" reshuffled work the user had
+        // implicitly accepted. Now we hash (bunk + activity + day) so
+        // ties resolve identically across runs while still varying
+        // across (bunk, activity) pairs to avoid alphabetic bias.
         if (scored.length >= 2) {
             var bestScore = scored[0].score;
             var tieGroup = scored.filter(function(p) {
                 return p.score <= bestScore + CONFIG.TIE_BREAKER_RANGE && p.allowed;
             });
-            
+
             if (tieGroup.length > 1) {
+                var dayKey = (typeof window !== 'undefined' && window.currentScheduleDate) || '';
+                function _detTieHash(s) {
+                    var h = 5381;
+                    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+                    // Map to [0, TIE_BREAKER_RANDOMNESS).
+                    var u = (h >>> 0) / 4294967296;
+                    return u * CONFIG.TIE_BREAKER_RANDOMNESS;
+                }
                 tieGroup.forEach(function(p) {
-                    p._tieBreaker = Math.random() * CONFIG.TIE_BREAKER_RANDOMNESS;
+                    p._tieBreaker = _detTieHash(bunkName + '|' + p.activityName + '|' + dayKey);
                     p._finalScore = p.score + p._tieBreaker;
                 });
-                
+
                 tieGroup.sort(function(a, b) { return a._finalScore - b._finalScore; });
-                
+
                 scored.splice(0, tieGroup.length);
                 for (var i = 0; i < tieGroup.length; i++) {
                     scored.unshift(tieGroup[tieGroup.length - 1 - i]);

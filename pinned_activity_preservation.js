@@ -109,22 +109,35 @@
             // smart-logic-adapter's canBunkAccessSpecial check, so a
             // schedule-time edit pinned BEFORE you tightened a restriction
             // does not get carried forward into the new build.
+            // Slice 3 audit fix (N6): every divisions lookup tries both the
+            // string and raw forms of the bunk's grade key. Earlier this used
+            // single-key access only, which silently dropped pins when the
+            // type-mismatch occurred between the access-restrictions store
+            // (often string keys) and the divisions resolution (sometimes
+            // numeric). Mirrors the dual-key pattern in commitWriteIfLegal.
+            const _gradeKey = String(_bunkGrade);
+            const _accessAllowsBunk = (rules) => {
+                const divRules = rules.divisions || {};
+                if (!(_gradeKey in divRules) && !(_bunkGrade in divRules)) return false;
+                const bunkList = divRules[_gradeKey] || divRules[_bunkGrade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunkName))) return false;
+                return true;
+            };
+
             const _isPinnedEntryStillAllowed = (entry) => {
                 if (!_bunkGrade) return true;
                 const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
                 const actName = entry._activity || entry.event || '';
+                const sMin = entry._startMin;
+                const eMin = entry._endMin;
 
                 // 1. Field-level access restriction
+                let fld = null;
                 if (fieldName && fieldName !== 'Free') {
-                    const fld = _allFields.find(f => f && f.name === fieldName);
-                    if (fld?.accessRestrictions?.enabled) {
-                        const divRules = fld.accessRestrictions.divisions || {};
-                        if (!(_bunkGrade in divRules)) return false;
-                        const bunkList = divRules[_bunkGrade];
-                        if (Array.isArray(bunkList) && bunkList.length > 0
-                            && !bunkList.map(String).includes(String(bunkName))) {
-                            return false;
-                        }
+                    fld = _allFields.find(f => f && f.name === fieldName);
+                    if (fld?.accessRestrictions?.enabled && !_accessAllowsBunk(fld.accessRestrictions)) {
+                        return false;
                     }
                 }
 
@@ -132,15 +145,45 @@
                 //    activity is a configured special)
                 if (actName) {
                     const sp = _allSpecials.find(s => s && s.name === actName);
-                    if (sp?.accessRestrictions?.enabled) {
-                        const divRules = sp.accessRestrictions.divisions || {};
-                        if (!(_bunkGrade in divRules)) return false;
-                        const bunkList = divRules[_bunkGrade];
-                        if (Array.isArray(bunkList) && bunkList.length > 0
-                            && !bunkList.map(String).includes(String(bunkName))) {
-                            return false;
+                    if (sp?.accessRestrictions?.enabled && !_accessAllowsBunk(sp.accessRestrictions)) {
+                        return false;
+                    }
+                }
+
+                // 3. Slice 3 audit fix (N7): also drop pins that violate the
+                //    field's per-grade timeRules, today's disabledFields, or
+                //    today's per-field disabledSports. Earlier the gate
+                //    checked access only; a pin set yesterday would survive
+                //    even after the user explicitly added a rule that
+                //    blocks it for today.
+                if (fld && Array.isArray(fld.timeRules) && fld.timeRules.length > 0
+                    && sMin != null && eMin != null) {
+                    const myG = _gradeKey;
+                    let hasGradeAvail = false, insideAvail = false;
+                    for (const r of fld.timeRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        const isAvail = t === 'available' || r.available === true;
+                        const rs = r.startMin;
+                        const re = r.endMin;
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && !rDivs.includes(myG)) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return false;
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
                         }
                     }
+                    if (hasGradeAvail && !insideAvail) return false;
+                }
+
+                if (fieldName) {
+                    const dailyDisabled = window.dailyDisabledFields || window.currentDayOverrides?.disabledFields || [];
+                    if (Array.isArray(dailyDisabled) && dailyDisabled.map(String).includes(String(fieldName))) return false;
+                    const dsByField = window.dailyDisabledSportsByField || {};
+                    const ds = dsByField[fieldName];
+                    if (ds && actName && (ds.has?.(actName) || (Array.isArray(ds) && ds.includes(actName)))) return false;
                 }
 
                 return true;

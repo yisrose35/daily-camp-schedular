@@ -98,7 +98,14 @@
                     unavailable: isUnavail,
                     startMin: sMin,
                     endMin: eMin,
-                    divisions: Array.isArray(r.divisions) ? r.divisions.map(String) : []
+                    // Slice 3 audit fix (N11): tolerate divisions stored as a
+                    // single string/number (e.g. "5" or 5). Earlier non-array
+                    // values fell through to [] which silently re-scoped the
+                    // rule to "all grades" — a per-grade Unavailable rule
+                    // becoming a global one would block other grades.
+                    divisions: Array.isArray(r.divisions)
+                        ? r.divisions.map(String)
+                        : (r.divisions != null && r.divisions !== '' ? [String(r.divisions)] : [])
                 };
             }).filter(r => r.startMin != null && r.endMin != null && (r.available || r.unavailable));
         }
@@ -872,8 +879,18 @@
                 continue;
             }
 
-            // Pick best
-            scored.sort((a, b) => a.score - b.score);
+            // Pick best.
+            // Slice 3 audit fix (Deferred-5): tie-break by field qualityRank
+            // (lower = higher quality). rules.js's Field Quality Group ranks
+            // were defined but never consumed — when two candidates tied on
+            // rotation score, we picked by Object insertion order, which
+            // could deprioritize a higher-quality field.
+            scored.sort((a, b) => {
+                if (a.score !== b.score) return a.score - b.score;
+                const aq = (a.cand?.qualityRank ?? a.cand?.field?.qualityRank ?? 999);
+                const bq = (b.cand?.qualityRank ?? b.cand?.field?.qualityRank ?? 999);
+                return aq - bq;
+            });
             const pick = scored[0].cand;
 
             // Write assignment
@@ -1081,6 +1098,15 @@
 
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
         window.scheduleAssignments[bunk][slotIdx] = entry;
+        // Invalidate rotation caches for this bunk so any later score
+        // (in repair phases or other modules) reflects the just-placed
+        // activity. Earlier this was only done from the main solver
+        // loop; repair-phase commits left stale scores around.
+        try {
+            if (window.RotationEngine?.invalidateBunkTodayCache) {
+                window.RotationEngine.invalidateBunkTodayCache(bunk);
+            }
+        } catch (_) {}
         return true;
     }
 
@@ -1115,9 +1141,17 @@
         const bunk = block.bunk;
         const slotIdx = block.slots?.[0];
         if (!window.scheduleAssignments?.[bunk]) return;
+        // Slice 3 audit fix (N14): stamp time bounds even on Free entries
+        // so downstream consumers (rule-template builders, descriptor
+        // matchers, capacity readers) can reason about Free as a
+        // first-class block. Earlier these were missing and any code
+        // that built a rule template from `scheduleAssignments` skipped
+        // Free slots entirely.
         window.scheduleAssignments[bunk][slotIdx] = {
             field: 'Free', sport: null, _activity: 'Free',
-            _autoMode: true, _autoSolved: true, continuation: false
+            _autoMode: true, _autoSolved: true, continuation: false,
+            _startMin: block.startMin ?? null,
+            _endMin: block.endMin ?? null
         };
     }
 
@@ -1454,6 +1488,13 @@
                     }
 
                     // ── Commit the swap ──────────────────────────────────────
+                    // Snapshot the victim's pre-swap cell so we can fully roll
+                    // back if the FB write rejects. Earlier the rollback only
+                    // restored fieldIndex but left scheduleAssignments[victim]
+                    // mutated — a hard divergence between the index's view and
+                    // actual placements.
+                    const _victimSaPrev = window.scheduleAssignments?.[victim.bunk]?.[victim.slotIdx];
+
                     // 1. Move victim to its new field/sport
                     const _vEntry = {
                         field: victimNewCand.field, sport: victimNewCand.sport,
@@ -1480,7 +1521,17 @@
                         _startMin: fb.startMin, _endMin: fb.endMin
                     };
                     if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry)) {
-                        // Roll back victim move (unlikely path — both sides validated upstream)
+                        // Full rollback: restore victim's prior assignment AND
+                        // pop its newly-pushed fieldIndex entry, then restore
+                        // the source field's pre-swap entries.
+                        if (window.scheduleAssignments?.[victim.bunk]) {
+                            window.scheduleAssignments[victim.bunk][victim.slotIdx] = _victimSaPrev;
+                        }
+                        const vcEntries = fieldIndex.get(vcFn);
+                        if (Array.isArray(vcEntries) && vcEntries.length > 0) {
+                            // Drop the most recently pushed entry (the one we just added).
+                            vcEntries.pop();
+                        }
                         fieldIndex.set(fn, origEntries);
                         continue;
                     }
@@ -1778,32 +1829,59 @@
 
     // ── Atomic chain commit ───────────────────────────────────────────────
     // Executes a chain deepest-first so each move sees the field freed by
-    // the one before it.
+    // the one before it. Earlier this discarded the boolean returned by
+    // commitWriteIfLegal — when a step was rejected (cooldown, etc.) the
+    // schedule wasn't updated but the fieldIndex was, leaving the index's
+    // view of "what's placed" out of sync with reality. We now snapshot
+    // pre-write cells, run the chain, and roll back atomically if any
+    // step rejects.
     function executeChain(chain, fb, fbCand, fieldIndex) {
         const sa = window.scheduleAssignments || {};
+        // Stack of per-step undos in reverse application order.
+        const undoStack = [];
+
+        function rollback() {
+            for (let u = undoStack.length - 1; u >= 0; u--) {
+                const op = undoStack[u];
+                if (op.kind === 'sa') {
+                    if (sa[op.bunk]) sa[op.bunk][op.slotIdx] = op.prev;
+                } else if (op.kind === 'idxRestore') {
+                    fieldIndex.set(op.fn, op.prev);
+                }
+            }
+        }
 
         for (let i = chain.length - 1; i >= 0; i--) {
             const { victim, newCand, sourceFn } = chain[i];
 
             if (sa[victim.bunk]) {
+                const prevCell = sa[victim.bunk][victim.slotIdx];
                 const _vEntry = {
                     field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
                     _autoMode: true, _autoSolved: true, _ejected: true, continuation: false,
                     _startMin: victim.startMin, _endMin: victim.endMin
                 };
-                commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry);
+                const ok = commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry);
+                if (!ok) {
+                    log('executeChain: step rejected by rule guard — rolling back chain');
+                    rollback();
+                    return false;
+                }
+                undoStack.push({ kind: 'sa', bunk: victim.bunk, slotIdx: victim.slotIdx, prev: prevCell });
             }
 
-            // Remove victim from source field in index
+            // Remove victim from source field in index (snapshot first).
             if (fieldIndex.has(sourceFn)) {
+                undoStack.push({ kind: 'idxRestore', fn: sourceFn, prev: fieldIndex.get(sourceFn) });
                 fieldIndex.set(sourceFn, fieldIndex.get(sourceFn).filter(e =>
                     !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)
                 ));
             }
 
-            // Add victim to destination field in index
+            // Add victim to destination field in index (snapshot first).
             const dstFn = normName(newCand.field);
             if (!fieldIndex.has(dstFn)) fieldIndex.set(dstFn, []);
+            undoStack.push({ kind: 'idxRestore', fn: dstFn, prev: [...fieldIndex.get(dstFn)] });
             fieldIndex.get(dstFn).push({
                 startMin: victim.startMin, endMin: victim.endMin,
                 bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx,
@@ -1811,14 +1889,21 @@
             });
         }
 
-        // Place FB in the now-vacated field
+        // Place FB in the now-vacated field.
         if (sa[fb.bunk]) {
+            const prevFbCell = sa[fb.bunk][fb.slotIdx];
             const _fbEntry = {
                 field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
                 _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false,
                 _startMin: fb.startMin, _endMin: fb.endMin
             };
-            commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry);
+            const ok = commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry);
+            if (!ok) {
+                log('executeChain: FB write rejected — rolling back chain');
+                rollback();
+                return false;
+            }
+            undoStack.push({ kind: 'sa', bunk: fb.bunk, slotIdx: fb.slotIdx, prev: prevFbCell });
         }
         const fbFn = fbCand.fieldNorm;
         if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
@@ -1827,6 +1912,7 @@
             bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
             activity: fbCand.sportNorm
         });
+        return true;
     }
 
     // ── Post-chain validity check ─────────────────────────────────────────
@@ -1915,10 +2001,11 @@
                     const fiSnapshot = {};
                     fieldsTouched.forEach(fn => { fiSnapshot[fn] = (fieldIndex.get(fn) || []).slice(); });
 
-                    executeChain(chain, fb, fbCand, fieldIndex);
+                    const chainOk = executeChain(chain, fb, fbCand, fieldIndex);
 
-                    // Validate — roll back if any capacity or cross-grade violation
-                    if (!isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
+                    // Validate — roll back if executeChain rejected mid-flight
+                    // OR if a capacity/cross-grade violation slipped through.
+                    if (!chainOk || !isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
                         allBunksInChain.forEach(({bunk, slotIdx}) => {
                             if (window.scheduleAssignments[bunk]) {
                                 window.scheduleAssignments[bunk][slotIdx] = saSnapshot[bunk + '|' + slotIdx];
@@ -2008,6 +2095,41 @@
         // Daily disabled sport for this field
         if (cand?.disabledSports && cand.sportNorm
             && cand.disabledSports.has(cand.sportNorm)) return false;
+
+        // Cooldown / FieldCombos / generic SchedulingRules. Earlier this
+        // helper checked only access + timeRules + disabledSports, so a
+        // BFS chain endpoint that satisfied all three but violated a
+        // cooldown was deemed legal. commitWriteIfLegal would then reject
+        // it during executeChain, leaving the rest of the chain partially
+        // committed. Pre-screen here so rejected endpoints are filtered
+        // out before any state mutates.
+        try {
+            if (window.SchedulingRules?.isCandidateAllowed && startMin != null && endMin != null) {
+                const candCheck = {
+                    startMin, endMin,
+                    type: 'sport',
+                    event: cand?.sport || cand?.sportNorm || '',
+                    field: cand?.field || cand?.name || ''
+                };
+                const existing = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+                const template = [];
+                for (let ti = 0; ti < existing.length; ti++) {
+                    const w = existing[ti];
+                    if (!w || w.continuation) continue;
+                    if (w._startMin === startMin && w._endMin === endMin) continue;
+                    if (w._startMin == null || w._endMin == null) continue;
+                    template.push({
+                        startMin: w._startMin, endMin: w._endMin,
+                        type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                        event: w.event || w._activity || w.sport || '',
+                        field: w.field, _assignedSpecial: w._assignedSpecial,
+                        _specialLocation: w._specialLocation
+                    });
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(candCheck, template, { mode: 'auto' })) return false;
+            }
+        } catch (_) { /* never let rule-engine bug hide legal moves */ }
+
         return true;
     }
 
@@ -2370,6 +2492,14 @@
         bfsAugmentingRepair,     // ★ v11.0: Hopcroft-Karp BFS shortest augmenting paths
         colocateFreeBlocks,      // ★ v12.1: Aggressive sharing — piggyback on placed fields
         report,
+        // Expose the hard-write guard so scheduler_core_auto.js Step 2.7
+        // direct-write paths (special / sport-override / capacity-checked
+        // / anchor) can route through the same access + timeRules +
+        // sharing + cooldown / FieldCombos rule check the main solver
+        // uses. Earlier those sites called only _validateWritePlacement
+        // (which doesn't consult SchedulingRules) and silently violated
+        // cooldowns + FieldCombos.
+        commitWriteIfLegal,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {
             return solve(activityBlocks, config);
