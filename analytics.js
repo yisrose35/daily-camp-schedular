@@ -283,7 +283,13 @@
                 document.querySelectorAll('.league-content-pane').forEach(el => el.style.display = 'none');
                 document.getElementById(`report-${val}-content`).style.display = 'block';
                 if (val === 'availability') renderGantt();
-                else if (val === 'rotation') renderBunkRotationUI();
+                else if (val === 'rotation') {
+                    // Don't rebuild the rotation shell — that wipes the user's
+                    // selected division and table. Just refresh the table if
+                    // a division is already picked.
+                    const div = document.getElementById('rotation-div-select')?.value || '';
+                    if (div) renderRotationTable(div);
+                }
             };
         }
     }
@@ -1133,6 +1139,10 @@
             const cur = divSelect.value;
             if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
         };
+
+        // Show the "Select a division" placeholder so the report area isn't
+        // a blank empty box on first open.
+        renderRotationTable('');
     }
 
     function populateRotationBunkFilter(divName) {
