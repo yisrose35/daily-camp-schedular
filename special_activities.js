@@ -394,12 +394,45 @@ function renderMasterList() {
     if (!specialsListEl) return; specialsListEl.innerHTML = "";
     if (specialActivities.length === 0) { specialsListEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>'; return; }
     specialActivities.forEach(item => specialsListEl.appendChild(createMasterListItem(item, false)));
+    _saReorderInit(specialsListEl, specialActivities);
 }
 
 function renderRainyDayList() {
     if (!rainyDayListEl) return; rainyDayListEl.innerHTML = "";
     if (rainyDayActivities.length === 0) { rainyDayListEl.innerHTML = '<div style="padding:16px; text-align:center; color:#0369a1; font-size:0.85rem;">No rainy day activities yet.</div>'; return; }
     rainyDayActivities.forEach(item => rainyDayListEl.appendChild(createMasterListItem(item, true)));
+    _saReorderInit(rainyDayListEl, rainyDayActivities);
+}
+
+function _saReorderInit(listEl, sourceArr) {
+    if (!listEl || listEl._saDragInit) return;
+    listEl._saDragInit = true;
+    listEl.addEventListener('dragover', function (e) {
+        const dragging = listEl.querySelector(':scope > .sa-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const siblings = Array.prototype.slice.call(listEl.children).filter(el => el !== dragging);
+        const next = siblings.find(sib => {
+            const r = sib.getBoundingClientRect();
+            return e.clientY < r.top + r.height / 2;
+        });
+        listEl.insertBefore(dragging, next || null);
+    });
+    listEl._saSourceArr = sourceArr;
+}
+
+function _saCommitOrder(listEl, sourceArr) {
+    if (!listEl || !Array.isArray(sourceArr)) return;
+    const names = Array.prototype.map.call(listEl.children, el => el.getAttribute('data-sa-name')).filter(Boolean);
+    const byName = {};
+    sourceArr.forEach(item => { if (item && item.name) byName[item.name] = item; });
+    const reordered = names.map(n => byName[n]).filter(Boolean);
+    // Append any items that weren't in the DOM (defensive)
+    sourceArr.forEach(item => { if (item && item.name && reordered.indexOf(item) < 0) reordered.push(item); });
+    sourceArr.length = 0;
+    reordered.forEach(it => sourceArr.push(it));
+    if (typeof saveData === 'function') saveData();
 }
 
 function createMasterListItem(item, isRainyDay) {
@@ -407,7 +440,21 @@ function createMasterListItem(item, isRainyDay) {
     const id = 'special-' + item.name;
     const el = document.createElement("div");
     el.className = "list-item" + (id === selectedItemId ? " selected" : "");
+    el.setAttribute('data-sa-name', item.name);
+    el.draggable = true;
+    el.style.cursor = 'grab';
     el.onclick = () => { selectedItemId = id; renderMasterList(); renderRainyDayList(); renderDetailPane(); };
+    el.addEventListener('dragstart', (e) => { el.classList.add('sa-dragging'); el.style.opacity = '0.45'; e.stopPropagation(); });
+    el.addEventListener('dragend', (e) => {
+        el.classList.remove('sa-dragging'); el.style.opacity = '1'; e.stopPropagation();
+        const parent = el.parentElement;
+        if (parent && parent._saSourceArr) _saCommitOrder(parent, parent._saSourceArr);
+    });
+    const grip = document.createElement('span');
+    grip.textContent = '⋮⋮';
+    grip.title = 'Drag to reorder';
+    grip.style.cssText = 'color:#9CA3AF; font-size:0.95rem; line-height:1; padding-right:6px; user-select:none; cursor:grab;';
+    el.appendChild(grip);
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
     // ★ v3.5: Show multi-part badge in master list

@@ -484,6 +484,8 @@ function renderMasterList() {
         return;
     }
 
+    // Stable order: existing .order if set, otherwise current array index.
+    facilities.forEach((f, i) => { if (typeof f.order !== 'number') f.order = i; });
     facilities.sort((a, b) => (a.order || 0) - (b.order || 0));
     const visible = facilities.filter(fac => facilityMatchesQuery(fac, _facilitySearchQuery));
 
@@ -493,14 +495,49 @@ function renderMasterList() {
     }
 
     visible.forEach(fac => facilitiesListEl.appendChild(masterListItem(fac)));
+
+    // Wire drag-and-drop reorder on the list container.
+    _facReorderInit(facilitiesListEl);
+}
+
+function _facReorderInit(listEl) {
+    if (!listEl || listEl._facDragInit) return;
+    listEl._facDragInit = true;
+    listEl.addEventListener('dragover', function (e) {
+        const dragging = listEl.querySelector(':scope > .fac-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const siblings = Array.prototype.slice.call(listEl.children).filter(el => el !== dragging);
+        const next = siblings.find(sib => {
+            const r = sib.getBoundingClientRect();
+            return e.clientY < r.top + r.height / 2;
+        });
+        listEl.insertBefore(dragging, next || null);
+    });
+    listEl.addEventListener('drop', function (e) { e.preventDefault(); });
+}
+
+function _facCommitOrder() {
+    const ids = Array.prototype.map.call(facilitiesListEl.children, el => el.getAttribute('data-fac-name'));
+    let pos = 0;
+    ids.forEach(name => {
+        if (!name) return;
+        const f = facilities.find(x => x.name === name);
+        if (f) f.order = pos++;
+    });
+    if (typeof saveData === 'function') saveData();
+    else if (typeof saveFacilities === 'function') saveFacilities();
 }
 
 function masterListItem(fac) {
     const id = `fac-${fac.name}`;
     const isSelected = id === selectedFacilityId;
     const el = document.createElement("div");
+    el.setAttribute('data-fac-name', fac.name);
+    el.draggable = true;
     el.style.cssText = `
-        padding:12px 16px; margin:4px 0; border-radius:12px; cursor:pointer;
+        padding:12px 16px; margin:4px 0; border-radius:12px; cursor:grab;
         display:flex; align-items:center; justify-content:space-between;
         transition:all 0.15s ease;
         background:${isSelected ? 'rgba(20,125,145,0.08)' : '#F9FAFB'};
@@ -510,9 +547,17 @@ function masterListItem(fac) {
     el.onmouseenter = () => { if (!isSelected) { el.style.background = '#F3F4F6'; el.style.borderColor = 'rgba(20,125,145,0.4)'; } };
     el.onmouseleave = () => { if (!isSelected) { el.style.background = '#F9FAFB'; el.style.borderColor = '#E5E7EB'; } };
     el.onclick = () => { selectedFacilityId = id; renderMasterList(); renderDetailPane(); };
+    el.addEventListener('dragstart', () => { el.classList.add('fac-dragging'); el.style.opacity = '0.45'; });
+    el.addEventListener('dragend', () => { el.classList.remove('fac-dragging'); el.style.opacity = '1'; _facCommitOrder(); });
+
+    const grip = document.createElement('span');
+    grip.textContent = '⋮⋮';
+    grip.title = 'Drag to reorder';
+    grip.style.cssText = 'color:#9CA3AF; font-size:0.95rem; line-height:1; padding-right:6px; user-select:none; cursor:grab;';
+    el.appendChild(grip);
 
     const name = document.createElement("div");
-    name.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937;";
+    name.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937; flex:1;";
     name.textContent = fac.name;
     el.appendChild(name);
 
