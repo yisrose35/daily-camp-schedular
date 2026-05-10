@@ -109,11 +109,27 @@
     // very first save after page load fans out one cloud save per hydrated
     // past date.
     // =========================================================================
+    // Single source of truth for daily-data content hashes. Used both by
+    // _seedSecondarySaveHashes (to baseline hydrated dates) and by
+    // saveGlobalSettings's secondary-save dedup. The two used to drift —
+    // the seeder hashed only sa+la, while the saveGlobalSettings copy was
+    // upgraded to also include rainy/divisionTimes meta. Result: every
+    // hydrated past date fired a spurious cloud save on the first
+    // post-hydration write because the seeded hash never matched.
     function _hashDateDataModule(d) {
         try {
             const sa = d?.scheduleAssignments || {};
             const la = d?.leagueAssignments || {};
-            const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
+            const dt = d?.divisionTimes || {};
+            const dtSerialized = Object.keys(dt).sort()
+                .map(k => k + ':' + JSON.stringify(dt[k]))
+                .join('|');
+            const meta = JSON.stringify({
+                r: !!d?.isRainyDay,
+                rt: d?.rainyDayStartTime || '',
+                dt: dtSerialized
+            });
+            const s = JSON.stringify(sa) + '|' + JSON.stringify(la) + '|' + meta;
             let h = 0;
             for (let i = 0; i < s.length; i++) {
                 h = ((h << 5) - h + s.charCodeAt(i)) | 0;
@@ -690,22 +706,31 @@
             // ═══════════════════════════════════════════════════════════════
             const nowIso = new Date().toISOString();
 
-            if (keys.includes('app1') &&
-                changesToSync.app1 &&
-                typeof changesToSync.app1 === 'object' &&
-                !Array.isArray(changesToSync.app1)) {
-                try {
-                    const { data: cur, error: curErr } = await client
-                        .from('camp_state_kv')
-                        .select('value')
-                        .eq('camp_id', campId)
-                        .eq('key', 'app1')
-                        .maybeSingle();
-                    if (!curErr && cur && cur.value && typeof cur.value === 'object') {
-                        changesToSync.app1 = { ...cur.value, ...changesToSync.app1 };
+            // Fetch-merge for keys with multi-writer sub-key ownership.
+            // The lite localStorage snapshot strips heavy sub-keys
+            // (camperRoster on app1; families/enrollments/payments/finance/
+            // bunkAssignments on campistryMe) so a writer reading from
+            // localStorage and pushing the result wholesale would
+            // silently delete those sub-keys from cloud.
+            const FETCH_MERGE_KEYS = ['app1', 'campistryMe'];
+            for (const mergeKey of FETCH_MERGE_KEYS) {
+                if (keys.includes(mergeKey) &&
+                    changesToSync[mergeKey] &&
+                    typeof changesToSync[mergeKey] === 'object' &&
+                    !Array.isArray(changesToSync[mergeKey])) {
+                    try {
+                        const { data: cur, error: curErr } = await client
+                            .from('camp_state_kv')
+                            .select('value')
+                            .eq('camp_id', campId)
+                            .eq('key', mergeKey)
+                            .maybeSingle();
+                        if (!curErr && cur && cur.value && typeof cur.value === 'object') {
+                            changesToSync[mergeKey] = { ...cur.value, ...changesToSync[mergeKey] };
+                        }
+                    } catch (mergeErr) {
+                        log(`${mergeKey} fetch-merge failed (will replace wholesale):`, mergeErr?.message || mergeErr);
                     }
-                } catch (mergeErr) {
-                    log('app1 fetch-merge failed (will replace wholesale):', mergeErr?.message || mergeErr);
                 }
             }
 
@@ -1007,7 +1032,10 @@
                 });
             } catch (_) {}
             // System slot types — never treat as orphans.
-            ['Free', 'Lunch', 'Snack', 'Snacks', 'Dismissal', 'Swim', 'Pool', 'League Game'].forEach(n => validNames.add(n));
+            ['Free', 'Lunch', 'Snack', 'Snacks', 'Dismissal',
+             'Swim', 'Pool', 'League Game',
+             'Transition/Buffer', 'Transition', 'Buffer',
+             'Lineup', 'Regroup', 'Bus'].forEach(n => validNames.add(n));
 
             // Empty registry -> bail rather than nuke everything (registry
             // probably hasn't loaded yet).
@@ -1019,7 +1047,12 @@
                 if (!Array.isArray(slots)) return;
                 slots.forEach((slot, i) => {
                     if (!slot || typeof slot !== 'object') return;
+                    // Skip legitimate non-registry slot types — leagues
+                    // write `_activity: 'League: <name>'`; transitions and
+                    // continuation cells carry their own type markers.
+                    if (slot._isTransition || slot._league || slot.continuation) return;
                     const name = slot._activity || slot.activity || slot.event;
+                    if (typeof name === 'string' && name.startsWith('League:')) return;
                     if (name && !validNames.has(name)) {
                         slots[i] = null;
                         nulled++;
@@ -1096,14 +1129,17 @@
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                 } catch (e) { /* ignore */ }
 
+                // Strip orphan-activity references that another device may
+                // have saved to cloud after this device deleted the activity.
+                // Run BEFORE updateTable so the render reflects the cleaned
+                // state — running after leaves stale "+ Add" cells visible
+                // until the next user-triggered re-render.
+                reconcileOrphanActivities();
+
                 // Refresh UI
                 if (window.updateTable) {
                     window.updateTable();
                 }
-
-                // Strip orphan-activity references that another device may
-                // have saved to cloud after this device deleted the activity.
-                reconcileOrphanActivities();
 
                 console.log('🔗 ✅ Schedule loaded from cloud:', bunkCount, 'bunks');
                 if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
@@ -1272,34 +1308,10 @@
             // hydrated rotation history that hadn't actually changed.
             // ═══════════════════════════════════════════════════════════════
             if (!window._secondarySaveHash) window._secondarySaveHash = {};
-            function _hashDateData(d) {
-                try {
-                    const sa = d?.scheduleAssignments || {};
-                    const la = d?.leagueAssignments || {};
-                    // Include rainy/division-time fields so toggling rainy
-                    // mode (or editing division times) on a secondary date
-                    // doesn't collide with the prior hash and skip the save.
-                    // Use a stable-ordered serialization of divisionTimes
-                    // (full content, not just keys) so editing slot
-                    // duration / start time inside an existing division
-                    // changes the hash.
-                    const dt = d?.divisionTimes || {};
-                    const dtSerialized = Object.keys(dt).sort()
-                        .map(k => k + ':' + JSON.stringify(dt[k]))
-                        .join('|');
-                    const meta = JSON.stringify({
-                        r: !!d?.isRainyDay,
-                        rt: d?.rainyDayStartTime || '',
-                        dt: dtSerialized
-                    });
-                    const s = JSON.stringify(sa) + '|' + JSON.stringify(la) + '|' + meta;
-                    let h = 0;
-                    for (let i = 0; i < s.length; i++) {
-                        h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-                    }
-                    return h;
-                } catch (_) { return Math.random(); }
-            }
+            // Delegate to the module-scoped hasher so seeded baselines
+            // (set by _seedSecondarySaveHashes during hydration) are
+            // comparable with the hashes computed here.
+            const _hashDateData = _hashDateDataModule;
 
             const secondaryDateKeys = allDateKeys.filter(k =>
                 k !== primaryDateKey &&

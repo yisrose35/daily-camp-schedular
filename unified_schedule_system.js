@@ -1467,7 +1467,12 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     window._postEditInProgress = true;
     window._postEditTimestamp = Date.now();
-    
+    if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+    window._postEditClearTimer = setTimeout(() => {
+        window._postEditInProgress = false;
+        window._postEditClearTimer = null;
+    }, 8000);
+
     await bypassSaveAllBunks(modifiedBunks);
 
     // ★ Update rotation counts (historicalCounts + rotationHistory + cloud) for
@@ -3613,8 +3618,13 @@ if (bypassStatus.highlight) {
             if (_coolCheck?.blocked) { if (!confirm('Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
         }
 
-        window._postEditInProgress = true; 
+        window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
@@ -5485,6 +5495,15 @@ if (softBlocks.length > 0) {
 
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        // Auto-clear after 8s — without this, an exception in the surrounding
+        // flow would leave the flag set forever, silently disabling realtime
+        // sync (hookCloudHydration / hookRemoteChanges both early-return
+        // while it's true). Mirrors post_edit_system.js's pattern.
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
@@ -6004,6 +6023,15 @@ if (softBlocks.length > 0) {
 
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        // Auto-clear after 8s — without this, an exception in the surrounding
+        // flow would leave the flag set forever, silently disabling realtime
+        // sync (hookCloudHydration / hookRemoteChanges both early-return
+        // while it's true). Mirrors post_edit_system.js's pattern.
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {

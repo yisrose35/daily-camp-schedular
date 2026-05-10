@@ -146,9 +146,19 @@
     function scheduleCloudSync() {
         clearTimeout(_syncTimeout);
         _syncTimeout = setTimeout(() => {
-            if (typeof window.forceSyncToCloud === 'function') {
-                console.log('[SubdivisionScheduler] ☁️ Syncing to cloud...');
-                window.forceSyncToCloud();
+            // Route the daily_schedules edit through saveGlobalSettings so
+            // it reaches the cloud daily_schedules pipeline (per-date fan-
+            // out via verifiedScheduleSave + secondary saves). The previous
+            // forceSyncToCloud() call only flushed _pendingChanges for
+            // camp_state_kv — it never propagated subdivisionSchedules.
+            if (typeof window.saveGlobalSettings === 'function') {
+                try {
+                    const dailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                    console.log('[SubdivisionScheduler] ☁️ Syncing daily_schedules to cloud...');
+                    window.saveGlobalSettings('daily_schedules', dailyData);
+                } catch (e) {
+                    console.error('[SubdivisionScheduler] Cloud sync failed:', e);
+                }
             }
         }, 500);
     }
