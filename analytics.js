@@ -355,7 +355,9 @@
 
             </div>
 
-            <div id="gantt-chart-area"></div>
+            <div id="gantt-chart-area">
+                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.85rem;">Loading report…</div>
+            </div>
         `;
 
         document.getElementById('gantt-date-select').onchange = e => { selectedDate = e.target.value; renderGantt(); };
@@ -409,26 +411,35 @@
         const area = document.getElementById('gantt-chart-area');
         if (!area) return;
 
-        const items = buildUsageData(selectedDate);
-        const { startMin, endMin } = getCampTimes();
+        try {
+            const items = buildUsageData(selectedDate);
+            const { startMin, endMin } = getCampTimes();
 
-        if (!items.length) {
+            if (!items.length) {
+                area.innerHTML = `
+                    <div style="padding:48px 32px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
+                        <div style="font-size:0.95rem;font-weight:600;color:#64748b;margin-bottom:4px;">No schedule data for ${formatDateDisplay(selectedDate)}</div>
+                        <div style="font-size:0.8rem;">Build or load a schedule first.</div>
+                    </div>`;
+                return;
+            }
+
+            const today = new Date().toLocaleDateString('en-CA');
+            const showNow = selectedDate === today;
+
+            if (currentView === 'field') {
+                renderFieldGantt(area, items, startMin, endMin, showNow);
+            } else {
+                const divFilter = document.getElementById('gantt-div-select')?.value || '';
+                renderBunkGantt(area, items, startMin, endMin, divFilter, showNow);
+            }
+        } catch (err) {
+            console.error('[Analytics] renderGantt failed:', err);
             area.innerHTML = `
-                <div style="padding:48px 32px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
-                    <div style="font-size:0.95rem;font-weight:600;color:#64748b;margin-bottom:4px;">No schedule data for ${formatDateDisplay(selectedDate)}</div>
-                    <div style="font-size:0.8rem;">Build or load a schedule first.</div>
+                <div style="padding:24px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:0.85rem;">
+                    <div style="font-weight:700;margin-bottom:6px;">Could not render the report.</div>
+                    <div style="font-family:ui-monospace,monospace;white-space:pre-wrap;font-size:0.78rem;">${(err && err.message) || err}</div>
                 </div>`;
-            return;
-        }
-
-        const today = new Date().toLocaleDateString('en-CA');
-        const showNow = selectedDate === today;
-
-        if (currentView === 'field') {
-            renderFieldGantt(area, items, startMin, endMin, showNow);
-        } else {
-            const divFilter = document.getElementById('gantt-div-select')?.value || '';
-            renderBunkGantt(area, items, startMin, endMin, divFilter, showNow);
         }
     }
 
