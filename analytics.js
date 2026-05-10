@@ -228,7 +228,8 @@
 
                 const leagueName = entry.leagueName || entry.gameLabel || 'League';
                 entry.matchups.forEach(m => {
-                    const atMatch = m.match(/@\s*(.+?)\s*\(/);
+                    const raw = typeof m === 'string' ? m : m?.display || '';
+                    const atMatch = raw.match(/@\s*(.+?)\s*\(/);
                     if (!atMatch) return;
                     const fieldName = atMatch[1].trim();
                     if (!fieldName || fieldName === 'Free') return;
