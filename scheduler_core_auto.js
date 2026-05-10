@@ -13427,13 +13427,22 @@
             lineup: 'lineup', regroup: 'regroup', bus: 'bus',
             'transition/buffer': 'transition', transition: 'transition', buffer: 'transition'
         };
-        function _runRulesCheck(fieldName, activityName, isSpecial, grade, bunk, startMin, endMin) {
+        function _runRulesCheck(fieldName, activityName, isSpecial, grade, bunk, startMin, endMin, blockType) {
             try {
                 if (!window.SchedulingRules?.isCandidateAllowed) return null;
                 if (startMin == null || endMin == null) return null;
-                // Resolve the candidate type. Special > anchor > sport.
+                // Resolve the candidate type. Priority: explicit blockType
+                // from the caller (authoritative — the block already knows
+                // it's 'swim' / 'lunch' / 'snack' regardless of display
+                // name) > special flag > anchor-event-name lookup > sport.
+                // Earlier the lookup-by-event-name was the only path, so
+                // a camp renaming its Swim layer to "Pool Time" silently
+                // fell back to type='sport' and a "no Sport within 30 min
+                // of Lunch" cooldown blocked the swim anchor write.
                 let candType = 'sport';
-                if (isSpecial) {
+                if (blockType && typeof blockType === 'string' && blockType !== 'sport' && blockType !== 'slot') {
+                    candType = blockType.toLowerCase();
+                } else if (isSpecial) {
                     candType = 'special';
                 } else if (activityName) {
                     const lc = String(activityName).toLowerCase().trim();
@@ -13645,7 +13654,7 @@
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _why });
                         return;
                     }
-                    const _rulesWhy = _runRulesCheck(fn, block._assignedSpecial, true, grade, bunk, block.startMin, block.endMin);
+                    const _rulesWhy = _runRulesCheck(fn, block._assignedSpecial, true, grade, bunk, block.startMin, block.endMin, block.type);
                     if (_rulesWhy) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _rulesWhy });
                         return;
@@ -13893,7 +13902,7 @@
                             _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcWhy });
                             return;
                         }
-                        const _pcRulesWhy = _runRulesCheck(resolvedField, _pcAct, false, grade, bunk, block.startMin, block.endMin);
+                        const _pcRulesWhy = _runRulesCheck(resolvedField, _pcAct, false, grade, bunk, block.startMin, block.endMin, block.type);
                         if (_pcRulesWhy) {
                             _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcRulesWhy });
                             return;
@@ -13962,7 +13971,7 @@
                             return;
                         }
                     }
-                    const _ccRulesWhy = _runRulesCheck(_useField, block._assignedSport, false, grade, bunk, block.startMin, block.endMin);
+                    const _ccRulesWhy = _runRulesCheck(_useField, block._assignedSport, false, grade, bunk, block.startMin, block.endMin, block.type);
                     if (_ccRulesWhy) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _useField, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _ccRulesWhy });
                         return;
@@ -13999,13 +14008,19 @@
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aWhy });
                         return;
                     }
-                    const _aRulesWhy = _runRulesCheck(block.event, block.event, false, grade, bunk, block.startMin, block.endMin);
+                    const _aRulesWhy = _runRulesCheck(block.event, block.event, false, grade, bunk, block.startMin, block.endMin, block.type);
                     if (_aRulesWhy) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aRulesWhy });
                         return;
                     }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.event, sport: null, _activity: block.event,
+                        // Stamp type + event so the rule-template builder
+                        // in _runRulesCheck and elsewhere picks them up
+                        // authoritatively, instead of falling back to
+                        // type='sport' for already-placed anchors.
+                        type: block.type || undefined,
+                        event: block.event || undefined,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
                         _autoMode: true, continuation: false,
                         _startMin: block.startMin, _endMin: block.endMin
@@ -15035,6 +15050,14 @@
             let _safetyNetIter = 0;
           for (_safetyNetIter = 0; _safetyNetIter < MAX_SAFETY_NET_ITERATIONS; _safetyNetIter++) {
             try {
+                // Reset _findValidAlternativeField._idxCache so iter N
+                // sees the mutations iter N-1 made. Without this the
+                // cache (keyed on the sa reference + time window) would
+                // hit a stale snapshot from the previous iter and pick
+                // fields a same-iter rescue already filled.
+                if (typeof _findValidAlternativeField !== 'undefined') {
+                    _findValidAlternativeField._idxCache = null;
+                }
                 const _gs = getGlobalSettings();
                 const _allFields = _gs.app1?.fields || [];
                 const _allSpecials = _gs.app1?.specialActivities || [];
