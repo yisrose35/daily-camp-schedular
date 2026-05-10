@@ -833,14 +833,23 @@
                     'color:' + style.text
                 ].join(';');
 
-                // Always show the activity name. CSS handles overflow with
-                // an ellipsis when the block is too narrow to fit the full
-                // text — the hover title still shows the full name + time.
+                // Always show the FULL activity name. We size the block so
+                // wrapping kicks in when it's narrow (line-clamp keeps it
+                // inside the row height); for very short names a single
+                // line fits comfortably.
                 var blockW = act.duration * PX_PER_MIN; // legacy heuristic for sub/time
+                var nameLen = (name || '').length;
+                // Auto-shrink font for narrow blocks proportional to duration,
+                // so a 10-min block still fits a couple of words readably.
+                var nameFontPx;
+                if (blockW < 18) nameFontPx = 8;
+                else if (blockW < 28) nameFontPx = 9;
+                else if (blockW < 60) nameFontPx = 10;
+                else nameFontPx = nameLen > 18 ? 11 : 12;
                 var nameEl = document.createElement('div');
                 nameEl.className = 'asg-tx-block-name';
                 nameEl.style.color = style.text;
-                if (blockW < 60) nameEl.style.fontSize = '0.62rem';
+                nameEl.style.fontSize = nameFontPx + 'px';
                 nameEl.textContent = name;
                 blk.appendChild(nameEl);
                 if (blockW >= 60 && sub && sub !== name) {
@@ -849,6 +858,12 @@
                     subEl.style.color = style.text;
                     subEl.textContent = sub;
                     blk.appendChild(subEl);
+                }
+                // Reduce padding on narrow blocks so more text fits.
+                if (blockW < 28) {
+                    blk.style.padding = '2px 3px';
+                } else if (blockW < 60) {
+                    blk.style.padding = '3px 4px';
                 }
                 blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
 
@@ -980,7 +995,7 @@
             '.asg-tx-block{position:absolute;top:3px;bottom:3px;border-radius:5px;display:flex;flex-direction:column;justify-content:center;padding:3px 6px;box-sizing:border-box;overflow:hidden;z-index:1;}',
             '.asg-tx-block.asg-editable{cursor:pointer;}',
             '.asg-tx-block.asg-editable:hover{filter:brightness(1.04);}',
-            '.asg-tx-block-name{font-size:0.72rem;font-weight:700;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.asg-tx-block-name{font-size:12px;font-weight:700;line-height:1.1;white-space:normal;overflow:hidden;text-overflow:ellipsis;word-break:break-word;hyphens:auto;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;}',
             '.asg-tx-block-sub{font-size:0.62rem;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.92;}',
             '.asg-tx-free{position:absolute;top:6px;bottom:6px;border:1px dashed #cbd5e1;border-radius:5px;background:rgba(243,244,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.65rem;color:#9ca3af;cursor:pointer;}',
             '.asg-tx-free:hover{border-color:#147D91;color:#147D91;background:rgba(20,125,145,0.05);}',
