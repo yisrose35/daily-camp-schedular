@@ -2330,6 +2330,39 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             return;
         }
 
+        // Auto mode delegates per-division to the AutoScheduleGrid (which has
+        // its own transposed renderer with time-scaled positioning, league
+        // and trip overlays, free-gap clickers, etc.). Manual mode uses the
+        // unified flat table built below.
+        var currentBuilderMode = (window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual';
+        if (currentBuilderMode === 'auto' && window.AutoScheduleGrid && window.AutoScheduleGrid.render) {
+            var divisionsAuto = Object.keys(divisions);
+            if (divisionsAuto.length === 0 && window.availableDivisions) divisionsAuto = window.availableDivisions;
+            divisionsAuto.sort(function (a, b) {
+                var na = parseInt(a), nb = parseInt(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
+            var autoEditable = (window.AccessControl && window.AccessControl.getEditableDivisions && window.AccessControl.getEditableDivisions()) || divisionsAuto;
+            var autoWrapper = document.createElement('div');
+            autoWrapper.style.cssText = 'display:flex;flex-direction:column;gap:24px;';
+            divisionsAuto.forEach(function (divName) {
+                if (!shouldShowDivision(divName)) return;
+                var divInfo = divisions[divName];
+                if (!divInfo) return;
+                var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
+                    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+                });
+                if (bunks.length === 0) return;
+                var isEditable = autoEditable.indexOf(divName) >= 0;
+                var el = window.AutoScheduleGrid.render(divName, divInfo, bunks, isEditable);
+                if (el) autoWrapper.appendChild(el);
+            });
+            container.appendChild(autoWrapper);
+            window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
+            return;
+        }
+
         // Toolbar with increment picker
         container.appendChild(_renderIncrementPicker());
 

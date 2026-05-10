@@ -666,6 +666,332 @@
     // ─────────────────────────────────────────────
     // MAIN RENDER
     // ─────────────────────────────────────────────
+    // -------------------------------------------------------------------------
+    // TRANSPOSED LAYOUT — bunks down Y-axis, time across X-axis
+    // -------------------------------------------------------------------------
+    var ROW_HEIGHT_TX = 56;        // Per-bunk row height in transposed view
+    var BUNK_LABEL_W_TX = 110;     // Width of the sticky bunk-name column
+
+    function renderDivisionGridTransposed(divName, divInfo, bunks, isEditable) {
+        injectStyles();
+        injectStylesTransposed();
+
+        var wrap = document.createElement('div');
+        wrap.className = 'asg-wrap asg-tx-wrap';
+
+        var divConfig = (window.divisions || {})[divName] || divInfo || {};
+        var divColor  = divConfig.color || '#147D91';
+        var increment = getIncrement();
+
+        function parseTime(v) {
+            if (typeof v === 'number') return v;
+            return window.SchedulerCoreUtils?.parseTimeToMinutes?.(v) ||
+                   window.AutoBuildEngine?.parseTime?.(v) || null;
+        }
+        var dayStart = parseTime(divConfig.startTime) || 540;
+        var dayEnd   = parseTime(divConfig.endTime)   || 960;
+        var totalMin = dayEnd - dayStart;
+        var totalW   = totalMin * PX_PER_MIN;
+
+        // Header (division title + grid increment picker)
+        var hdr = document.createElement('div');
+        hdr.className = 'asg-header';
+        hdr.style.background = divColor;
+        hdr.style.color = '#fff';
+
+        var titleEl = document.createElement('span');
+        titleEl.className = 'asg-header-title';
+        titleEl.textContent = divName;
+        hdr.appendChild(titleEl);
+
+        var incWrap = document.createElement('div');
+        incWrap.className = 'asg-inc-wrap';
+        incWrap.innerHTML = '<span>Grid:</span>';
+        var incSel = document.createElement('select');
+        incSel.className = 'asg-inc-select';
+        [15, 30, 60].forEach(function (v) {
+            var o = document.createElement('option');
+            o.value = v; o.textContent = v + 'min';
+            if (v === increment) o.selected = true;
+            incSel.appendChild(o);
+        });
+        incSel.addEventListener('change', function () {
+            setIncrement(parseInt(this.value));
+            if (window.updateTable) window.updateTable();
+        });
+        incWrap.appendChild(incSel);
+        hdr.appendChild(incWrap);
+        wrap.appendChild(hdr);
+
+        // Scroll container
+        var scroll = document.createElement('div');
+        scroll.className = 'asg-tx-scroll';
+
+        // Inner: rows of [bunk-label | timeline-strip], each row covering one bunk
+        var inner = document.createElement('div');
+        inner.className = 'asg-tx-inner';
+        inner.style.width = (BUNK_LABEL_W_TX + totalW) + 'px';
+
+        // ── HEADER ROW: empty corner + time ruler ──
+        var headRow = document.createElement('div');
+        headRow.className = 'asg-tx-row asg-tx-headrow';
+
+        var corner = document.createElement('div');
+        corner.className = 'asg-tx-corner';
+        corner.textContent = 'Bunk';
+        headRow.appendChild(corner);
+
+        var rulerStrip = document.createElement('div');
+        rulerStrip.className = 'asg-tx-ruler';
+        rulerStrip.style.width = totalW + 'px';
+
+        // Background tick lines + labels in the ruler
+        for (var tm = dayStart; tm <= dayEnd; tm += increment) {
+            var leftPx = (tm - dayStart) * PX_PER_MIN;
+            var isMajor = tm % 60 === 0;
+            var tick = document.createElement('div');
+            tick.className = 'asg-tx-tick' + (isMajor ? ' major' : '');
+            tick.style.left = leftPx + 'px';
+            if (isMajor || increment <= 30) {
+                var lbl = document.createElement('span');
+                lbl.className = 'asg-tx-tick-label';
+                lbl.textContent = toLabel(tm);
+                tick.appendChild(lbl);
+            }
+            rulerStrip.appendChild(tick);
+        }
+        headRow.appendChild(rulerStrip);
+        inner.appendChild(headRow);
+
+        // League slots & trip slots (whole-grade overlays)
+        var leagueSlots = getLeagueSlotsForDiv(divName, bunks);
+        var tripSlots   = getTripSlotsForDiv(divName, bunks);
+
+        // ── BODY: one row per bunk ──
+        var bunkActivities = {};
+        bunks.forEach(function (b) { bunkActivities[b] = getBunkActivities(b, divName); });
+
+        bunks.forEach(function (bunk) {
+            var row = document.createElement('div');
+            row.className = 'asg-tx-row';
+
+            var lbl = document.createElement('div');
+            lbl.className = 'asg-tx-bunk';
+            lbl.textContent = bunk;
+            row.appendChild(lbl);
+
+            var strip = document.createElement('div');
+            strip.className = 'asg-tx-strip';
+            strip.style.width = totalW + 'px';
+            strip.style.height = ROW_HEIGHT_TX + 'px';
+
+            // Background tick lines per bunk row
+            for (var tm2 = dayStart; tm2 <= dayEnd; tm2 += increment) {
+                var leftPx2 = (tm2 - dayStart) * PX_PER_MIN;
+                var isMajor2 = tm2 % 60 === 0;
+                var line = document.createElement('div');
+                line.className = 'asg-tx-vline' + (isMajor2 ? ' major' : '');
+                line.style.left = leftPx2 + 'px';
+                strip.appendChild(line);
+            }
+
+            // Activity blocks (skip league — those render as overlays below)
+            (bunkActivities[bunk] || []).forEach(function (act) {
+                if (act.isLeague) return;
+
+                var blockLeft = (act.startMin - dayStart) * PX_PER_MIN;
+                var blockW    = act.duration * PX_PER_MIN;
+                if (blockW < 2) return;
+
+                var style = blockStyle(act.entry);
+                var name  = act.entry?._activity || act.entry?.field || '';
+                var fieldName = act.entry?.field || '';
+                var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
+
+                var blk = document.createElement('div');
+                blk.className = 'asg-tx-block' + (isEditable ? ' asg-editable' : '');
+                blk.style.cssText = [
+                    'left:' + (blockLeft + 1) + 'px',
+                    'width:' + Math.max(0, blockW - 2) + 'px',
+                    'background:' + style.bg,
+                    'border:1px solid ' + style.border,
+                    'color:' + style.text
+                ].join(';');
+
+                // Show what fits
+                if (blockW >= 60) {
+                    var nameEl = document.createElement('div');
+                    nameEl.className = 'asg-tx-block-name';
+                    nameEl.style.color = style.text;
+                    nameEl.textContent = name;
+                    blk.appendChild(nameEl);
+                    if (sub && sub !== name) {
+                        var subEl = document.createElement('div');
+                        subEl.className = 'asg-tx-block-sub';
+                        subEl.style.color = style.text;
+                        subEl.textContent = sub;
+                        blk.appendChild(subEl);
+                    }
+                } else if (blockW >= 28) {
+                    var nameEl2 = document.createElement('div');
+                    nameEl2.className = 'asg-tx-block-name';
+                    nameEl2.style.color = style.text;
+                    nameEl2.style.fontSize = '0.65rem';
+                    nameEl2.textContent = name;
+                    blk.appendChild(nameEl2);
+                } else {
+                    blk.title = name;
+                }
+                blk.title = name + '\n' + toLabel(act.startMin) + ' – ' + toLabel(act.endMin) + ' (' + act.duration + 'min)';
+
+                if (isEditable) {
+                    (function (bunkName, dName, sMin, eMin, entryRef) {
+                        blk.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            openEditForBlock(bunkName, dName, sMin, eMin, entryRef);
+                        });
+                    })(bunk, divName, act.startMin, act.endMin, act.entry);
+                }
+
+                strip.appendChild(blk);
+            });
+
+            // Free gaps (clickable to add)
+            if (isEditable) {
+                var gaps = computeFreeGaps(bunk, divName, dayStart, dayEnd);
+                gaps.forEach(function (gap) {
+                    var gapLeft = (gap.startMin - dayStart) * PX_PER_MIN;
+                    var gapW = (gap.endMin - gap.startMin) * PX_PER_MIN;
+                    if (gapW < 18) return;
+
+                    var gapEl = document.createElement('div');
+                    gapEl.className = 'asg-tx-free asg-editable';
+                    gapEl.style.cssText = 'left:' + (gapLeft + 1) + 'px;width:' + Math.max(0, gapW - 2) + 'px;';
+                    if (gapW >= 50) {
+                        var gapLabel = document.createElement('span');
+                        gapLabel.textContent = '+ Add';
+                        gapEl.appendChild(gapLabel);
+                    }
+                    gapEl.title = 'Add activity\n' + toLabel(gap.startMin) + ' – ' + toLabel(gap.endMin);
+                    (function (bunkName, dName, sMin, eMin) {
+                        gapEl.addEventListener('click', function (e) {
+                            e.stopPropagation();
+                            openEditForGap(bunkName, dName, sMin, eMin);
+                        });
+                    })(bunk, divName, gap.startMin, gap.endMin);
+                    strip.appendChild(gapEl);
+                });
+            }
+
+            row.appendChild(strip);
+            inner.appendChild(row);
+        });
+
+        // ── LEAGUE OVERLAYS ──
+        leagueSlots.forEach(function (ls) {
+            var leagueLeft = (ls.startMin - dayStart) * PX_PER_MIN;
+            var leagueW    = (ls.endMin - ls.startMin) * PX_PER_MIN;
+            var topPx = ROW_HEIGHT_TX; // start below header row
+            var heightPx = bunks.length * ROW_HEIGHT_TX;
+
+            var overlay = document.createElement('div');
+            overlay.className = 'asg-tx-league';
+            overlay.style.cssText = [
+                'left:' + (BUNK_LABEL_W_TX + leagueLeft) + 'px',
+                'top:' + topPx + 'px',
+                'width:' + leagueW + 'px',
+                'height:' + heightPx + 'px'
+            ].join(';');
+
+            var lHdr = document.createElement('div');
+            lHdr.className = 'asg-tx-league-header';
+            lHdr.innerHTML = '🏆 ' + esc(ls.gameLabel || ls.leagueName || 'League');
+            overlay.appendChild(lHdr);
+
+            var muList = document.createElement('div');
+            muList.className = 'asg-tx-league-matchups';
+            if (!ls.matchups || ls.matchups.length === 0) {
+                muList.innerHTML = '<div class="asg-tx-league-empty">Matchups not yet assigned</div>';
+            } else {
+                ls.matchups.forEach(function (raw) {
+                    var mu = parseMatchup(raw, ls.sport);
+                    var card = document.createElement('div');
+                    card.className = 'asg-tx-matchup-card';
+                    card.innerHTML = '<div class="asg-tx-matchup-teams">' + esc(mu.teams) + '</div>'
+                        + (mu.sport ? '<div class="asg-tx-matchup-sub">' + esc(mu.sport) + (mu.field ? ' • ' + esc(mu.field) : '') + '</div>' : (mu.field ? '<div class="asg-tx-matchup-sub">' + esc(mu.field) + '</div>' : ''));
+                    muList.appendChild(card);
+                });
+            }
+            overlay.appendChild(muList);
+            inner.appendChild(overlay);
+        });
+
+        // ── TRIP OVERLAYS ──
+        tripSlots.forEach(function (ts) {
+            var tripLeft = (ts.startMin - dayStart) * PX_PER_MIN;
+            var tripW    = (ts.endMin - ts.startMin) * PX_PER_MIN;
+            var topPx = ROW_HEIGHT_TX;
+            var heightPx = bunks.length * ROW_HEIGHT_TX;
+
+            var tripOverlay = document.createElement('div');
+            tripOverlay.className = 'asg-tx-trip';
+            tripOverlay.style.cssText = [
+                'left:' + (BUNK_LABEL_W_TX + tripLeft) + 'px',
+                'top:' + topPx + 'px',
+                'width:' + tripW + 'px',
+                'height:' + heightPx + 'px'
+            ].join(';');
+            tripOverlay.innerHTML = '<div class="asg-tx-trip-label">🚌 ' + esc(ts.event) + '</div>'
+                + '<div class="asg-tx-trip-time">' + toLabel(ts.startMin) + ' – ' + toLabel(ts.endMin) + '</div>';
+            inner.appendChild(tripOverlay);
+        });
+
+        scroll.appendChild(inner);
+        wrap.appendChild(scroll);
+        return wrap;
+    }
+
+    function injectStylesTransposed() {
+        if (document.getElementById('asg-tx-styles')) return;
+        var s = document.createElement('style');
+        s.id = 'asg-tx-styles';
+        s.textContent = [
+            '.asg-tx-wrap{position:relative;}',
+            '.asg-tx-scroll{overflow-x:auto;overflow-y:visible;background:#fff;}',
+            '.asg-tx-inner{position:relative;}',
+            '.asg-tx-row{display:flex;flex-direction:row;align-items:stretch;}',
+            '.asg-tx-headrow{height:36px;background:#f9fafb;border-bottom:2px solid #e5e7eb;position:sticky;top:0;z-index:5;}',
+            '.asg-tx-corner{width:' + BUNK_LABEL_W_TX + 'px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:0.72rem;font-weight:700;color:#374151;border-right:2px solid #e5e7eb;background:#f3f4f6;position:sticky;left:0;z-index:6;}',
+            '.asg-tx-ruler{position:relative;height:36px;flex-shrink:0;}',
+            '.asg-tx-tick{position:absolute;top:0;bottom:0;border-left:1px solid #f0f0f0;display:flex;align-items:center;padding-left:4px;pointer-events:none;}',
+            '.asg-tx-tick.major{border-left:1px solid #cbd5e1;}',
+            '.asg-tx-tick-label{font-size:0.65rem;color:#6b7280;white-space:nowrap;}',
+            '.asg-tx-tick.major .asg-tx-tick-label{color:#1f2937;font-weight:600;font-size:0.7rem;}',
+            '.asg-tx-bunk{width:' + BUNK_LABEL_W_TX + 'px;flex-shrink:0;display:flex;align-items:center;justify-content:flex-start;padding:0 12px;font-size:0.78rem;font-weight:600;color:#1f2937;border-right:2px solid #e5e7eb;border-bottom:1px solid #f0f0f0;background:#fff;position:sticky;left:0;z-index:2;}',
+            '.asg-tx-strip{position:relative;flex-shrink:0;border-bottom:1px solid #f0f0f0;background:#fff;}',
+            '.asg-tx-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f3f4f6;pointer-events:none;}',
+            '.asg-tx-vline.major{border-left:1px solid #e5e7eb;}',
+            '.asg-tx-block{position:absolute;top:3px;bottom:3px;border-radius:5px;display:flex;flex-direction:column;justify-content:center;padding:3px 6px;box-sizing:border-box;overflow:hidden;z-index:1;}',
+            '.asg-tx-block.asg-editable{cursor:pointer;}',
+            '.asg-tx-block.asg-editable:hover{filter:brightness(1.04);}',
+            '.asg-tx-block-name{font-size:0.72rem;font-weight:700;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+            '.asg-tx-block-sub{font-size:0.62rem;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.92;}',
+            '.asg-tx-free{position:absolute;top:6px;bottom:6px;border:1px dashed #cbd5e1;border-radius:5px;background:rgba(243,244,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.65rem;color:#9ca3af;cursor:pointer;}',
+            '.asg-tx-free:hover{border-color:#147D91;color:#147D91;background:rgba(20,125,145,0.05);}',
+            '.asg-tx-league{position:absolute;background:linear-gradient(135deg,#e0f2fe 0%,#bae6fd 100%);border:1px solid #0284c7;border-left:3px solid #0284c7;border-radius:6px;z-index:3;display:flex;flex-direction:column;overflow:hidden;}',
+            '.asg-tx-league-header{padding:5px 10px;font-size:0.78rem;font-weight:700;color:#075985;background:rgba(255,255,255,0.55);border-bottom:1px solid #bae6fd;}',
+            '.asg-tx-league-matchups{flex:1;overflow:auto;padding:6px;display:flex;flex-direction:column;gap:4px;}',
+            '.asg-tx-matchup-card{background:#fff;border-radius:5px;padding:5px 8px;box-shadow:0 1px 1px rgba(0,0,0,0.04);}',
+            '.asg-tx-matchup-teams{font-size:0.72rem;font-weight:700;color:#1e3a5f;}',
+            '.asg-tx-matchup-sub{font-size:0.62rem;color:#475569;margin-top:1px;}',
+            '.asg-tx-league-empty{font-size:0.68rem;color:#64748b;font-style:italic;}',
+            '.asg-tx-trip{position:absolute;background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);border:1px solid #6ee7b7;border-left:3px solid #10b981;border-radius:6px;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
+            '.asg-tx-trip-label{font-size:0.82rem;font-weight:700;color:#065f46;}',
+            '.asg-tx-trip-time{font-size:0.62rem;color:#047857;margin-top:2px;}'
+        ].join('\n');
+        document.head.appendChild(s);
+    }
+
     function renderDivisionGrid(divName, divInfo, bunks, isEditable) {
         injectStyles();
 
@@ -1226,7 +1552,8 @@
     // PUBLIC API
     // ─────────────────────────────────────────────
     window.AutoScheduleGrid = {
-        render:          renderDivisionGrid,
+        render:          renderDivisionGridTransposed,
+        renderLegacy:    renderDivisionGrid,
         getIncrement:    getIncrement,
         setIncrement:    setIncrement,
         PIXELS_PER_MINUTE: PX_PER_MIN,
