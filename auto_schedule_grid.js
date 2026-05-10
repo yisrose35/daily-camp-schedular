@@ -691,7 +691,19 @@
         var dayStart = parseTime(divConfig.startTime) || 540;
         var dayEnd   = parseTime(divConfig.endTime)   || 960;
         var totalMin = dayEnd - dayStart;
-        var totalW   = totalMin * PX_PER_MIN;
+        var totalW   = totalMin * PX_PER_MIN; // legacy — used as a min-width floor only
+        // Percentage helpers — make the grid stretch to fill the container so
+        // a short day spreads across the full width instead of stopping early.
+        function pctL(min){ return ((min - dayStart) / totalMin) * 100; }
+        function pctW(min){ return (min / totalMin) * 100; }
+        // Build calc() expressions for league/trip overlays which sit at the
+        // inner-container level (which still has the bunk-label column).
+        function calcLeft(min){
+            return 'calc(' + BUNK_LABEL_W_TX + 'px + (100% - ' + BUNK_LABEL_W_TX + 'px) * ' + (pctL(min) / 100) + ')';
+        }
+        function calcWidth(durationMin){
+            return 'calc((100% - ' + BUNK_LABEL_W_TX + 'px) * ' + (pctW(durationMin) / 100) + ')';
+        }
 
         // Header (division title + grid increment picker)
         var hdr = document.createElement('div');
@@ -727,10 +739,13 @@
         var scroll = document.createElement('div');
         scroll.className = 'asg-tx-scroll';
 
-        // Inner: rows of [bunk-label | timeline-strip], each row covering one bunk
+        // Inner: rows of [bunk-label | timeline-strip], each row covering one bunk.
+        // Width fills the scroll container; min-width keeps blocks readable on
+        // narrow viewports (falls back to scrollbar).
         var inner = document.createElement('div');
         inner.className = 'asg-tx-inner';
-        inner.style.width = (BUNK_LABEL_W_TX + totalW) + 'px';
+        inner.style.width = '100%';
+        inner.style.minWidth = (BUNK_LABEL_W_TX + Math.max(totalW, 600)) + 'px';
 
         // ── HEADER ROW: empty corner + time ruler ──
         var headRow = document.createElement('div');
@@ -743,15 +758,16 @@
 
         var rulerStrip = document.createElement('div');
         rulerStrip.className = 'asg-tx-ruler';
-        rulerStrip.style.width = totalW + 'px';
+        // Ruler fills remaining row width — no fixed px width.
+        rulerStrip.style.flex = '1';
+        rulerStrip.style.minWidth = '0';
 
         // Background tick lines + labels in the ruler
         for (var tm = dayStart; tm <= dayEnd; tm += increment) {
-            var leftPx = (tm - dayStart) * PX_PER_MIN;
             var isMajor = tm % 60 === 0;
             var tick = document.createElement('div');
             tick.className = 'asg-tx-tick' + (isMajor ? ' major' : '');
-            tick.style.left = leftPx + 'px';
+            tick.style.left = pctL(tm) + '%';
             if (isMajor || increment <= 30) {
                 var lbl = document.createElement('span');
                 lbl.className = 'asg-tx-tick-label';
@@ -782,16 +798,17 @@
 
             var strip = document.createElement('div');
             strip.className = 'asg-tx-strip';
-            strip.style.width = totalW + 'px';
+            // Strip fills remaining row width.
+            strip.style.flex = '1';
+            strip.style.minWidth = '0';
             strip.style.height = ROW_HEIGHT_TX + 'px';
 
             // Background tick lines per bunk row
             for (var tm2 = dayStart; tm2 <= dayEnd; tm2 += increment) {
-                var leftPx2 = (tm2 - dayStart) * PX_PER_MIN;
                 var isMajor2 = tm2 % 60 === 0;
                 var line = document.createElement('div');
                 line.className = 'asg-tx-vline' + (isMajor2 ? ' major' : '');
-                line.style.left = leftPx2 + 'px';
+                line.style.left = pctL(tm2) + '%';
                 strip.appendChild(line);
             }
 
@@ -799,9 +816,7 @@
             (bunkActivities[bunk] || []).forEach(function (act) {
                 if (act.isLeague) return;
 
-                var blockLeft = (act.startMin - dayStart) * PX_PER_MIN;
-                var blockW    = act.duration * PX_PER_MIN;
-                if (blockW < 2) return;
+                if (act.duration < 1) return;
 
                 var style = blockStyle(act.entry);
                 var name  = act.entry?._activity || act.entry?.field || '';
@@ -811,14 +826,15 @@
                 var blk = document.createElement('div');
                 blk.className = 'asg-tx-block' + (isEditable ? ' asg-editable' : '');
                 blk.style.cssText = [
-                    'left:' + (blockLeft + 1) + 'px',
-                    'width:' + Math.max(0, blockW - 2) + 'px',
+                    'left:' + pctL(act.startMin) + '%',
+                    'width:calc(' + pctW(act.duration) + '% - 2px)',
                     'background:' + style.bg,
                     'border:1px solid ' + style.border,
                     'color:' + style.text
                 ].join(';');
 
-                // Show what fits
+                // Show what fits — gauge against pixel width approximation
+                var blockW = act.duration * PX_PER_MIN;
                 if (blockW >= 60) {
                     var nameEl = document.createElement('div');
                     nameEl.className = 'asg-tx-block-name';
@@ -860,13 +876,13 @@
             if (isEditable) {
                 var gaps = computeFreeGaps(bunk, divName, dayStart, dayEnd);
                 gaps.forEach(function (gap) {
-                    var gapLeft = (gap.startMin - dayStart) * PX_PER_MIN;
-                    var gapW = (gap.endMin - gap.startMin) * PX_PER_MIN;
-                    if (gapW < 18) return;
+                    var gapDur = gap.endMin - gap.startMin;
+                    if (gapDur < 5) return;
 
                     var gapEl = document.createElement('div');
                     gapEl.className = 'asg-tx-free asg-editable';
-                    gapEl.style.cssText = 'left:' + (gapLeft + 1) + 'px;width:' + Math.max(0, gapW - 2) + 'px;';
+                    gapEl.style.cssText = 'left:' + pctL(gap.startMin) + '%;width:calc(' + pctW(gapDur) + '% - 2px);';
+                    var gapW = gapDur * PX_PER_MIN;
                     if (gapW >= 50) {
                         var gapLabel = document.createElement('span');
                         gapLabel.textContent = '+ Add';
@@ -889,17 +905,16 @@
 
         // ── LEAGUE OVERLAYS ──
         leagueSlots.forEach(function (ls) {
-            var leagueLeft = (ls.startMin - dayStart) * PX_PER_MIN;
-            var leagueW    = (ls.endMin - ls.startMin) * PX_PER_MIN;
+            var leagueDur = ls.endMin - ls.startMin;
             var topPx = ROW_HEIGHT_TX; // start below header row
             var heightPx = bunks.length * ROW_HEIGHT_TX;
 
             var overlay = document.createElement('div');
             overlay.className = 'asg-tx-league';
             overlay.style.cssText = [
-                'left:' + (BUNK_LABEL_W_TX + leagueLeft) + 'px',
+                'left:' + calcLeft(ls.startMin),
                 'top:' + topPx + 'px',
-                'width:' + leagueW + 'px',
+                'width:' + calcWidth(leagueDur),
                 'height:' + heightPx + 'px'
             ].join(';');
 
@@ -928,17 +943,16 @@
 
         // ── TRIP OVERLAYS ──
         tripSlots.forEach(function (ts) {
-            var tripLeft = (ts.startMin - dayStart) * PX_PER_MIN;
-            var tripW    = (ts.endMin - ts.startMin) * PX_PER_MIN;
+            var tripDur = ts.endMin - ts.startMin;
             var topPx = ROW_HEIGHT_TX;
             var heightPx = bunks.length * ROW_HEIGHT_TX;
 
             var tripOverlay = document.createElement('div');
             tripOverlay.className = 'asg-tx-trip';
             tripOverlay.style.cssText = [
-                'left:' + (BUNK_LABEL_W_TX + tripLeft) + 'px',
+                'left:' + calcLeft(ts.startMin),
                 'top:' + topPx + 'px',
-                'width:' + tripW + 'px',
+                'width:' + calcWidth(tripDur),
                 'height:' + heightPx + 'px'
             ].join(';');
             tripOverlay.innerHTML = '<div class="asg-tx-trip-label">🚌 ' + esc(ts.event) + '</div>'
