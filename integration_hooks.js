@@ -828,114 +828,114 @@
                 log('[VERIFIED SAVE] Save already in progress, skipping duplicate');
                 return { success: true, target: 'deduplicated', reason: 'in-progress' };
             }
-            
+
             if (_lastSaveKey === saveKey && (now - _lastSaveTime) < SAVE_DEDUP_MS) {
                 log('[VERIFIED SAVE] Duplicate save detected, skipping (within', SAVE_DEDUP_MS, 'ms)');
                 return { success: true, target: 'deduplicated', reason: 'recent-duplicate' };
             }
-            
+
             _saveInProgress = true;
             _lastSaveKey = saveKey;
             _lastSaveTime = now;
         }
-        
-        log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
 
-        if (bunkCount === 0) {
-            log('[VERIFIED SAVE] No data to save');
-            _saveInProgress = false;
-            return { success: true, target: 'empty' };
-        }
-
-        // ★★★ NEW: Check if online ★★★
-        if (!navigator.onLine) {
-            log('[VERIFIED SAVE] Offline - saved to localStorage only');
-            showNotification('📴 Saved locally (offline)', 'warning');
-            _saveInProgress = false;
-            
-            // Queue for later via ScheduleSync if available
-            if (window.ScheduleSync?.queueSave) {
-                window.ScheduleSync.queueSave(dateKey, data);
-            }
-            
-            return { success: true, target: 'localStorage', offline: true };
-        }
-
-        if (!window.ScheduleDB?.saveSchedule) {
-            log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] ScheduleDB never became available');
-            _saveInProgress = false;
-            return { success: false, error: 'ScheduleDB not available' };
-        }
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const userId = window.CampistryDB?.getUserId?.();
-
-        if (!campId || !userId) {
-            log('[VERIFIED SAVE] Auth not ready, waiting...');
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] Auth never became available');
-            _saveInProgress = false;
-            return { success: false, error: 'Missing authentication' };
-        }
-
+        // try/finally guarantees _saveInProgress is cleared once the outermost
+        // call returns. Earlier code only cleared the flag at retry exhaustion,
+        // so the ScheduleDB-not-ready / auth-not-ready retry paths held the
+        // flag set across the 2s sleep — blocking concurrent saves.
         try {
-            const result = await window.ScheduleDB.saveSchedule(dateKey, data);
-            
-            // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
-            if (result?.target === 'plan-limit') {
-                log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
-                showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
-                _saveInProgress = false;
-                return result;
+            log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
+
+            if (bunkCount === 0) {
+                log('[VERIFIED SAVE] No data to save');
+                return { success: true, target: 'empty' };
             }
 
-            if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
-                log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
-                showNotification(`Saved ${bunkCount} bunks`, 'success');
-                _saveInProgress = false;
-                return result;
-            } else if (result?.target === 'local' || result?.target === 'local-fallback') {
-                console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
+            // ★★★ NEW: Check if online ★★★
+            if (!navigator.onLine) {
+                log('[VERIFIED SAVE] Offline - saved to localStorage only');
+                showNotification('📴 Saved locally (offline)', 'warning');
+
+                // Queue for later via ScheduleSync if available
+                if (window.ScheduleSync?.queueSave) {
+                    window.ScheduleSync.queueSave(dateKey, data);
+                }
+
+                return { success: true, target: 'localStorage', offline: true };
+            }
+
+            if (!window.ScheduleDB?.saveSchedule) {
+                log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
-                showNotification('Saved locally (offline)', 'warning');
-                _saveInProgress = false;
-                return result;
-            } else {
-                logError('[VERIFIED SAVE] Save failed:', result?.error);
+                logError('[VERIFIED SAVE] ScheduleDB never became available');
+                return { success: false, error: 'ScheduleDB not available' };
+            }
+
+            const campId = window.CampistryDB?.getCampId?.();
+            const userId = window.CampistryDB?.getUserId?.();
+
+            if (!campId || !userId) {
+                log('[VERIFIED SAVE] Auth not ready, waiting...');
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
-                showNotification('Save failed', 'error');
-                _saveInProgress = false;
-                return result;
+                logError('[VERIFIED SAVE] Auth never became available');
+                return { success: false, error: 'Missing authentication' };
             }
-        } catch (e) {
-            // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
-            if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
-                showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
-                _saveInProgress = false;
-                return { success: false, error: e.message, target: 'plan-limit' };
+
+            try {
+                const result = await window.ScheduleDB.saveSchedule(dateKey, data);
+
+                // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
+                if (result?.target === 'plan-limit') {
+                    log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
+                    showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
+                    return result;
+                }
+
+                if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
+                    log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
+                    showNotification(`Saved ${bunkCount} bunks`, 'success');
+                    return result;
+                } else if (result?.target === 'local' || result?.target === 'local-fallback') {
+                    console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
+                    if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                        return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                    }
+                    showNotification('Saved locally (offline)', 'warning');
+                    return result;
+                } else {
+                    logError('[VERIFIED SAVE] Save failed:', result?.error);
+                    if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                        return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                    }
+                    showNotification('Save failed', 'error');
+                    return result;
+                }
+            } catch (e) {
+                // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
+                if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
+                    showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
+                    return { success: false, error: e.message, target: 'plan-limit' };
+                }
+                logError('[VERIFIED SAVE] Exception:', e);
+                if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                    await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                }
+                showNotification('Save error', 'error');
+                return { success: false, error: e.message };
             }
-            logError('[VERIFIED SAVE] Exception:', e);
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            showNotification('Save error', 'error');
-            _saveInProgress = false;
-            return { success: false, error: e.message };
+        } finally {
+            // Only the outermost call (attempt === 1) clears the flag —
+            // recursive retries inherit the same flag state.
+            if (attempt === 1) _saveInProgress = false;
         }
     }
 
@@ -1056,8 +1056,18 @@
     let _lastDailySchedulesCallAt = 0;
     let _lastDailySchedulesHash = null;
     function _quickHashAllDaily(d) {
-        try { return JSON.stringify(d).length + '|' + Object.keys(d || {}).length; }
-        catch (_) { return Math.random(); }
+        // djb2 over the full payload. Earlier this was payload-length +
+        // key count, which collided on equal-length edits (e.g. renaming
+        // an activity "Soccer" → "Hockey") and silently dropped the save
+        // inside the 750ms dedupe window.
+        try {
+            const s = JSON.stringify(d || {});
+            let h = 5381;
+            for (let i = 0; i < s.length; i++) {
+                h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+            }
+            return h;
+        } catch (_) { return Math.random(); }
     }
     window.saveGlobalSettings = function(key, data) {
         // For daily_schedules, persist locally AND sync ALL dates to cloud
@@ -1081,10 +1091,24 @@
                     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
                     const lsData = JSON.parse(JSON.stringify(data));
                     const lsDateKeys = Object.keys(lsData).filter(k => DATE_RE.test(k)).sort();
+                    let pruneSucceeded = false;
                     while (lsDateKeys.length > 3) {
                         delete lsData[lsDateKeys.shift()];
-                        try { localStorage.setItem('campDailyData_v1', JSON.stringify(lsData)); break; }
+                        try {
+                            localStorage.setItem('campDailyData_v1', JSON.stringify(lsData));
+                            pruneSucceeded = true;
+                            break;
+                        }
                         catch (_) { /* keep pruning */ }
+                    }
+                    // If even 3 dates couldn't fit (or no prune iterations ran),
+                    // localStorage is silently stale. Set the marker so the
+                    // next hydration prefers cloud over local — without this,
+                    // very large camps could trust a stale local snapshot.
+                    if (!pruneSucceeded) {
+                        try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                        try { localStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                        logError('[saveGlobalSettings] daily_schedules localStorage write exhausted prune budget');
                     }
                 } else {
                     logError('[saveGlobalSettings] localStorage write failed:', e);
@@ -1154,7 +1178,15 @@
                 try {
                     const sa = d?.scheduleAssignments || {};
                     const la = d?.leagueAssignments || {};
-                    const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
+                    // Include rainy/division-time fields so toggling rainy
+                    // mode (or editing division times) on a secondary date
+                    // doesn't collide with the prior hash and skip the save.
+                    const meta = JSON.stringify({
+                        r: !!d?.isRainyDay,
+                        rt: d?.rainyDayStartTime || '',
+                        dt: Object.keys(d?.divisionTimes || {}).sort()
+                    });
+                    const s = JSON.stringify(sa) + '|' + JSON.stringify(la) + '|' + meta;
                     let h = 0;
                     for (let i = 0; i < s.length; i++) {
                         h = ((h << 5) - h + s.charCodeAt(i)) | 0;
@@ -1182,8 +1214,11 @@
 
                 if (unsaved.length > 0) {
                     log(`[saveGlobalSettings] Syncing ${unsaved.length} secondary date(s) to cloud (skipped ${secondaryDateKeys.length - unsaved.length} unchanged)`);
+                    // Stamp hash optimistically so duplicate calls inside the
+                    // same burst dedupe correctly. _secondarySaveLog (the 30s
+                    // suppress-window) is stamped only on success below — so
+                    // a transient failure doesn't block the next retry.
                     unsaved.forEach(dk => {
-                        window._secondarySaveLog[dk] = now;
                         window._secondarySaveHash[dk] = _hashDateData(data[dk]);
                     });
 
@@ -1192,12 +1227,16 @@
                             window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
                                 .then(r => {
                                     if (r?.success) {
+                                        window._secondarySaveLog[dk] = Date.now();
                                         log(`  ✅ Secondary save: ${dk}`);
                                     } else {
+                                        // Drop the hash too — next call should retry.
+                                        delete window._secondarySaveHash[dk];
                                         console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
                                     }
                                 })
                                 .catch(e => {
+                                    delete window._secondarySaveHash[dk];
                                     console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message);
                                 });
                         }, (index + 1) * 500);
@@ -1362,12 +1401,19 @@
                 // Fall through to legacy table fallback
             }
 
+            // Per-key cloud timestamps — used below for fine-grained merge.
+            // Without this, a stale device with a recent overall updated_at
+            // (because it edited any single key) would clobber unrelated
+            // cloud keys whose individual timestamps are newer.
+            let cloudPerKeyTime = null;
             if (Array.isArray(kvRows) && kvRows.length > 0) {
                 cloudState = {};
+                cloudPerKeyTime = {};
                 let maxUpdated = 0;
                 for (const row of kvRows) {
                     cloudState[row.key] = row.value;
                     const t = new Date(row.updated_at || 0).getTime();
+                    cloudPerKeyTime[row.key] = t;
                     if (t > maxUpdated) maxUpdated = t;
                 }
                 if (maxUpdated > 0) {
@@ -1450,8 +1496,26 @@
                     mergedState = cloudState;
                     log('Using cloud state (cloud has more data than local — likely silent local-write loss)');
                 } else if (localTime > cloudTime) {
-                    mergedState = { ...cloudState, ...localState };
-                    log('Using local state (newer)');
+                    // Per-key merge when KV table is available. For each key
+                    // present in cloud, only let local overwrite if local's
+                    // overall updated_at is newer than that key's individual
+                    // cloud timestamp. This protects keys that were updated
+                    // on Device A while Device B's local has a newer overall
+                    // stamp (from editing some unrelated key).
+                    if (cloudPerKeyTime) {
+                        mergedState = { ...cloudState };
+                        for (const k of Object.keys(localState)) {
+                            if (k === 'updated_at') continue;
+                            const cloudKeyTime = cloudPerKeyTime[k] || 0;
+                            if (!(k in cloudState) || localTime > cloudKeyTime) {
+                                mergedState[k] = localState[k];
+                            }
+                        }
+                        log('Using local state (newer, per-key merged)');
+                    } else {
+                        mergedState = { ...cloudState, ...localState };
+                        log('Using local state (newer)');
+                    }
                     trustLocal = true;
                 } else {
                     mergedState = cloudState;
@@ -1595,6 +1659,19 @@
         }
 
         await new Promise(r => setTimeout(r, 200));
+
+        // Register the cloud-hydration listener BEFORE hydration fires.
+        // hydrateFromCloud() dispatches `campistry-cloud-hydrated`
+        // synchronously; if installHooks() runs after, hookCloudHydration's
+        // listener registers too late and the schedule never auto-loads
+        // from cloud on first boot.
+        hookCloudHydration();
+
+        // Pre-warm RotationCloud so the auto-builder's first call hits a
+        // populated 30s TTL cache instead of waiting on a network round-trip
+        // (and falling back to empty if that fetch errors).
+        try { window.RotationCloud?.load?.(); } catch (_) {}
+
         await hydrateFromCloud();
 
         console.log('🔗 All systems ready, installing hooks...');
@@ -2166,7 +2243,14 @@
     // HOOK: AUTO-LOAD FROM CLOUD AFTER HYDRATION
     // =========================================================================
 
+    let _hookCloudHydrationRegistered = false;
     function hookCloudHydration() {
+        // Idempotent: waitForSystems registers this BEFORE hydrateFromCloud
+        // (so the listener catches the first hydration event), and
+        // installHooks also calls it — guard so the listener is bound once.
+        if (_hookCloudHydrationRegistered) return;
+        _hookCloudHydrationRegistered = true;
+
         window.addEventListener('campistry-cloud-hydrated', async () => {
             if (_scheduleCloudLoadDone) return;
             _scheduleCloudLoadDone = true;
@@ -2175,18 +2259,27 @@
 
             await new Promise(r => setTimeout(r, 500));
 
-            const dateKey = window.currentScheduleDate || 
+            const dateKey = window.currentScheduleDate ||
                            document.getElementById('schedule-date-input')?.value ||
                            document.getElementById('datepicker')?.value ||
                            document.getElementById('calendar-date-picker')?.value;
-            
+
             if (!dateKey) {
                 log('[HOOK] No date key available');
                 return;
             }
 
+            // Don't clobber an in-flight generation or post-edit. The
+            // realtime hookRemoteChanges path already gates on these — this
+            // path needs the same guard so a realtime re-hydration mid-edit
+            // doesn't wipe unsaved in-memory work.
+            if (window._postEditInProgress || window._generationInProgress) {
+                log('[HOOK] Skipping cloud reload — generation/edit in progress');
+                return;
+            }
+
             const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-            
+
             if (currentBunks === 0) {
                 log('[HOOK] No local data, fetching from cloud...');
                 await forceLoadScheduleFromCloud(dateKey);

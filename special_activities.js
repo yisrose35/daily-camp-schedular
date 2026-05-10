@@ -2167,7 +2167,80 @@ function propagateMultiPartRename(oldName, newName) {
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
-function cleanupDeletedSpecialActivity(name) { if(!name)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name){dd.scheduleAssignments[bk][i]=null;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.scheduleAssignments){Object.keys(window.scheduleAssignments).forEach(bk=>{const sl=window.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name)window.scheduleAssignments[bk][i]=null;});}); } if(window.activityProperties?.[name])delete window.activityProperties[name]; } catch(e){console.error('[SPECIAL_ACTIVITIES] Cleanup error:',e);} }
+function cleanupDeletedSpecialActivity(name) {
+    if (!name) return;
+    try {
+        const s = window.loadGlobalSettings?.() || {};
+        const ds = s.daily_schedules || {};
+        let c = 0;
+        Object.keys(ds).forEach(dk => {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(bk => {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        dd.scheduleAssignments[bk][i] = null;
+                        c++;
+                    }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bk => {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        window.scheduleAssignments[bk][i] = null;
+                    }
+                });
+            });
+        }
+        if (window.activityProperties?.[name]) delete window.activityProperties[name];
+
+        // Cloud rotation_counts purge — without this, deleted specials
+        // accumulate stale rotation rows that bias the auto-builder's
+        // least-recently-done picker forever. The facilities.js delete
+        // path already routes through cleanupRotationTracking; this UI
+        // path bypassed it.
+        try { window.RotationCloud?.deleteActivity?.(name); } catch (_) {}
+
+        // Local rotation tracking purge — mirror what cleanupRotationTracking
+        // does so this UI path matches the facilities path.
+        try {
+            if (window.historicalCounts) {
+                Object.keys(window.historicalCounts).forEach(bk => {
+                    if (window.historicalCounts[bk] && name in window.historicalCounts[bk]) {
+                        delete window.historicalCounts[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+            }
+            if (window.manualUsageOffsets) {
+                Object.keys(window.manualUsageOffsets).forEach(bk => {
+                    if (window.manualUsageOffsets[bk] && name in window.manualUsageOffsets[bk]) {
+                        delete window.manualUsageOffsets[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+            }
+            const rh = window.loadRotationHistory?.();
+            if (rh?.bunks) {
+                let rhChanged = false;
+                Object.keys(rh.bunks).forEach(bk => {
+                    if (rh.bunks[bk] && name in rh.bunks[bk]) {
+                        delete rh.bunks[bk][name];
+                        rhChanged = true;
+                    }
+                });
+                if (rhChanged) window.saveRotationHistory?.(rh);
+            }
+        } catch (_) {}
+    } catch (e) { console.error('[SPECIAL_ACTIVITIES] Cleanup error:', e); }
+}
 function propagateSpecialActivityRename(oldN,newN) { if(!oldN||!newN||oldN===newN)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===oldN){dd.scheduleAssignments[bk][i]._activity=newN;c++;} if(s?.activity===oldN){dd.scheduleAssignments[bk][i].activity=newN;c++;} if(s?.event===oldN){dd.scheduleAssignments[bk][i].event=newN;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.activityProperties?.[oldN]){window.activityProperties[newN]={...window.activityProperties[oldN]};delete window.activityProperties[oldN];} } catch(e){console.error('[SPECIAL_ACTIVITIES] Rename error:',e);} }
 
 function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
