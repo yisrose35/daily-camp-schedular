@@ -910,7 +910,9 @@
                         gradeBasedDivisions[key] = {
                             startTime: times.startTime || "",
                             endTime: times.endTime || "",
-                            bunks: [...bunks].sort(compareBunks),
+                            // Honor the user-defined bunk order from campStructure
+                            // (set via drag-and-drop in Campistry Me) verbatim.
+                            bunks: [...bunks],
                             color: parentColor,
                             parentDivision: divName
                         };
@@ -921,17 +923,8 @@
                 
                 state.divisions = gradeBasedDivisions;
                 state.bunks = allBunks;
-                // Sort grades numerically within each group so rendering is always consistent
-                for (const groupName in divGroups) {
-                    if (divGroups[groupName].grades) {
-                        divGroups[groupName].grades.sort((a, b) => {
-                            const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                            const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                            if (numA !== numB) return numA - numB;
-                            return String(a).localeCompare(String(b));
-                        });
-                    }
-                }
+                // Preserve user-defined grade order from campStructure
+                // (set via drag-and-drop in Campistry Me).
                 state.divisionGroups = divGroups;
                 
             } else {
@@ -971,8 +964,29 @@
                 state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
             }
             
-           // Rebuild divisions object with numerically sorted keys
-            const sortedDivKeys = Object.keys(state.divisions).sort((a, b) => {
+           // Rebuild divisions object honoring user-defined order:
+            //   1) gs.app1.manualColumnOrder if present (set via drag in Campistry Me)
+            //   2) Otherwise, the natural campStructure key order (also user-defined)
+            //   3) Numeric/alphabetic sort only for keys not in either source
+            const _gs2 = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+            const _manualOrder = (_gs2.app1 && Array.isArray(_gs2.app1.manualColumnOrder)) ? _gs2.app1.manualColumnOrder : null;
+            const _structureOrder = Object.keys(_gs2.campStructure || {});
+            const sortedDivKeys = Object.keys(state.divisions).slice().sort((a, b) => {
+                if (_manualOrder) {
+                    const ai = _manualOrder.indexOf(a);
+                    const bi = _manualOrder.indexOf(b);
+                    if (ai >= 0 && bi >= 0) return ai - bi;
+                    if (ai >= 0) return -1;
+                    if (bi >= 0) return 1;
+                }
+                if (_structureOrder.length > 0) {
+                    // Try matching the parentDivision in structure order
+                    const aParent = (state.divisions[a] && state.divisions[a].parentDivision) || a;
+                    const bParent = (state.divisions[b] && state.divisions[b].parentDivision) || b;
+                    const ai2 = _structureOrder.indexOf(aParent);
+                    const bi2 = _structureOrder.indexOf(bParent);
+                    if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+                }
                 const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
                 const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
                 if (numA !== numB) return numA - numB;

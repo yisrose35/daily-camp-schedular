@@ -2350,9 +2350,8 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 if (!shouldShowDivision(divName)) return;
                 var divInfo = divisions[divName];
                 if (!divInfo) return;
-                var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
-                    return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
-                });
+                // Honor the user-defined bunk order from campStructure verbatim.
+                var bunks = (divInfo.bunks || []).slice();
                 if (bunks.length === 0) return;
                 var isEditable = autoEditable.indexOf(divName) >= 0;
                 var el = window.AutoScheduleGrid.render(divName, divInfo, bunks, isEditable);
@@ -2631,9 +2630,8 @@ const isAutoSchedule = currentBuilderMode === 'auto';
             if (!shouldShowDivision(divName)) return;
             const divInfo = divisions[divName];
             if (!divInfo) return;
-            let bunks = divInfo.bunks || [];
+            let bunks = (divInfo.bunks || []).slice();
             if (bunks.length === 0) return;
-            bunks = bunks.slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
             const isEditable = editableDivisions.includes(divName);
             
             let element;
