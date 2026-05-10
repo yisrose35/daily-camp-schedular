@@ -86,6 +86,12 @@
     let _saveInProgress = false;
     const SAVE_DEDUP_MS = 3000; // Ignore duplicate saves within 3 seconds
 
+    // Cached after each successful executeBatchSync so the beforeunload
+    // handler can build a fetch-keepalive request synchronously. Without
+    // this, the supabase-js upsert in beforeunload dies with the tab on
+    // slow networks because supabase-js doesn't set keepalive: true.
+    let _cachedAccessToken = null;
+
     // Store the TRUE original saveGlobalSettings before ANY patches
     const _trueOriginalSaveGlobalSettings = window.saveGlobalSettings;
 
@@ -109,11 +115,27 @@
     // very first save after page load fans out one cloud save per hydrated
     // past date.
     // =========================================================================
+    // Single source of truth for daily-data content hashes. Used both by
+    // _seedSecondarySaveHashes (to baseline hydrated dates) and by
+    // saveGlobalSettings's secondary-save dedup. The two used to drift —
+    // the seeder hashed only sa+la, while the saveGlobalSettings copy was
+    // upgraded to also include rainy/divisionTimes meta. Result: every
+    // hydrated past date fired a spurious cloud save on the first
+    // post-hydration write because the seeded hash never matched.
     function _hashDateDataModule(d) {
         try {
             const sa = d?.scheduleAssignments || {};
             const la = d?.leagueAssignments || {};
-            const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
+            const dt = d?.divisionTimes || {};
+            const dtSerialized = Object.keys(dt).sort()
+                .map(k => k + ':' + JSON.stringify(dt[k]))
+                .join('|');
+            const meta = JSON.stringify({
+                r: !!d?.isRainyDay,
+                rt: d?.rainyDayStartTime || '',
+                dt: dtSerialized
+            });
+            const s = JSON.stringify(sa) + '|' + JSON.stringify(la) + '|' + meta;
             let h = 0;
             for (let i = 0; i < s.length; i++) {
                 h = ((h << 5) - h + s.charCodeAt(i)) | 0;
@@ -492,12 +514,31 @@
                 delete lite.campistryGo.savedRoutes;
                 delete lite.campistryGo.addresses;
             }
+            // Strip keys that grow unbounded with camp size; localStorage's
+            // ~5MB ceiling otherwise drops the entire write on big camps.
+            // The full state stays in IDB; this snapshot is just the
+            // sync-fast-path fallback for the next page load.
             delete lite.daily_schedules;
             delete lite.rotationHistory;
             delete lite.historicalCounts;
             delete lite.historicalCountedDates;
             delete lite.smartTileHistory;
             delete lite.specialtyLeagueHistory;
+            delete lite.leagueHistory;
+            delete lite.leaguesByName;
+            delete lite.playoffsByLeague;
+            if (lite.app1) {
+                lite.app1 = Object.assign({}, lite.app1);
+                delete lite.app1.camperRoster;
+            }
+            if (lite.campistryMe) {
+                lite.campistryMe = Object.assign({}, lite.campistryMe);
+                delete lite.campistryMe.families;
+                delete lite.campistryMe.enrollments;
+                delete lite.campistryMe.payments;
+                delete lite.campistryMe.finance;
+                delete lite.campistryMe.bunkAssignments;
+            }
 
             try {
                 const json = JSON.stringify(lite);
@@ -671,22 +712,31 @@
             // ═══════════════════════════════════════════════════════════════
             const nowIso = new Date().toISOString();
 
-            if (keys.includes('app1') &&
-                changesToSync.app1 &&
-                typeof changesToSync.app1 === 'object' &&
-                !Array.isArray(changesToSync.app1)) {
-                try {
-                    const { data: cur, error: curErr } = await client
-                        .from('camp_state_kv')
-                        .select('value')
-                        .eq('camp_id', campId)
-                        .eq('key', 'app1')
-                        .maybeSingle();
-                    if (!curErr && cur && cur.value && typeof cur.value === 'object') {
-                        changesToSync.app1 = { ...cur.value, ...changesToSync.app1 };
+            // Fetch-merge for keys with multi-writer sub-key ownership.
+            // The lite localStorage snapshot strips heavy sub-keys
+            // (camperRoster on app1; families/enrollments/payments/finance/
+            // bunkAssignments on campistryMe) so a writer reading from
+            // localStorage and pushing the result wholesale would
+            // silently delete those sub-keys from cloud.
+            const FETCH_MERGE_KEYS = ['app1', 'campistryMe'];
+            for (const mergeKey of FETCH_MERGE_KEYS) {
+                if (keys.includes(mergeKey) &&
+                    changesToSync[mergeKey] &&
+                    typeof changesToSync[mergeKey] === 'object' &&
+                    !Array.isArray(changesToSync[mergeKey])) {
+                    try {
+                        const { data: cur, error: curErr } = await client
+                            .from('camp_state_kv')
+                            .select('value')
+                            .eq('camp_id', campId)
+                            .eq('key', mergeKey)
+                            .maybeSingle();
+                        if (!curErr && cur && cur.value && typeof cur.value === 'object') {
+                            changesToSync[mergeKey] = { ...cur.value, ...changesToSync[mergeKey] };
+                        }
+                    } catch (mergeErr) {
+                        log(`${mergeKey} fetch-merge failed (will replace wholesale):`, mergeErr?.message || mergeErr);
                     }
-                } catch (mergeErr) {
-                    log('app1 fetch-merge failed (will replace wholesale):', mergeErr?.message || mergeErr);
                 }
             }
 
@@ -702,6 +752,34 @@
                 return;
             }
 
+            // Mark self-write BEFORE the upsert resolves. Postgres replicates
+            // the change to the realtime stream as soon as the transaction
+            // commits — sometimes that arrives at our subscriber before the
+            // client gets the response, causing the echo-suppression check
+            // to miss and triggering a redundant re-hydrate.
+            _lastSelfWriteAt = Date.now();
+
+            // Cache the access token while we have a fresh async context.
+            // The beforeunload handler (which runs synchronously) needs a
+            // token to send a fetch-keepalive upsert; without this it can
+            // only fire-and-forget through supabase-js, which doesn't set
+            // keepalive: true and so dies with the tab.
+            //
+            // Slice 2 audit fix: only cache tokens that won't expire in
+            // the next 60s. Earlier the cached token could be ~1h stale
+            // by the time beforeunload fired, returning 401 silently
+            // while the optimistic _pendingChanges clear ran anyway.
+            try {
+                const sess = await client.auth.getSession();
+                const tok = sess?.data?.session?.access_token;
+                const expSec = sess?.data?.session?.expires_at;
+                if (tok && (!expSec || (expSec * 1000 - Date.now()) > 60000)) {
+                    _cachedAccessToken = tok;
+                } else {
+                    _cachedAccessToken = null;
+                }
+            } catch (_) {}
+
             const { error: upsertError } = await client
                 .from('camp_state_kv')
                 .upsert(rows, { onConflict: 'camp_id,key' });
@@ -711,9 +789,8 @@
                 throw upsertError;
             }
 
-            // Mark self-write so our own realtime subscription ignores the
-            // echoes and doesn't trigger a redundant re-hydrate. We get one
-            // change event per row written, all within ms of each other.
+            // Refresh the timestamp post-resolve so the suppression window
+            // covers replication delay both ways.
             _lastSelfWriteAt = Date.now();
 
             _lastSyncTime = Date.now();
@@ -729,7 +806,13 @@
 
         } catch (e) {
             logError('Batch sync failed:', e);
-            Object.assign(_pendingChanges, changesToSync);
+            // Restore failed keys WITHOUT clobbering newer pending values.
+            // Earlier this used Object.assign(_pendingChanges, changesToSync)
+            // which overwrote a fresh edit (queued during the failed sync)
+            // with the older retry value — silent edit loss.
+            for (const k of Object.keys(changesToSync)) {
+                if (!(k in _pendingChanges)) _pendingChanges[k] = changesToSync[k];
+            }
 
             window.dispatchEvent(new CustomEvent('campistry-sync-error', {
                 detail: { error: e.message, keys: Object.keys(changesToSync) }
@@ -781,16 +864,40 @@
     async function verifiedScheduleSave(dateKey, data, attempt = 1) {
         if (!dateKey) dateKey = window.currentScheduleDate;
         if (!data) {
-            // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
+            // ★ FIX: include _perBunkSlotsData + manualSkeleton + _autoGenerated.
+            //   Without these, the auto-build's per-bunk geometry was stripped
+            //   from the cloud row on every post-generation save. On reload,
+            //   cloud hydration overwrote local — fixAllBunkSlotCounts then
+            //   trimmed scheduleAssignments to a smaller skeleton-rebuilt
+            //   length, leaving "+ Add" gaps where Sports/Specials had been
+            //   placed. Earlier commit 7b08216e wrote these keys at Step 5
+            //   but verifiedScheduleSave (called next via the schedule-saved
+            //   hook) silently undid that write.
+            const _spbs = {};
+            const _dt = window.divisionTimes || {};
+            Object.keys(_dt).forEach(g => {
+                if (_dt[g]?._perBunkSlots) _spbs[g] = _dt[g]._perBunkSlots;
+            });
             data = {
                 scheduleAssignments: window.scheduleAssignments || {},
                 leagueAssignments: window.leagueAssignments || {},
                 unifiedTimes: window.unifiedTimes || [],
-                divisionTimes: window.divisionTimes || {},
+                divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || _dt,
                 isRainyDay: window.isRainyDay || false,
                 rainyDayStartTime: window.rainyDayStartTime ?? null,
                 rainyDayMode: window.isRainyDay || false  // backward compatibility
             };
+            if (Object.keys(_spbs).length > 0) data._perBunkSlotsData = _spbs;
+            if (window._autoSkeleton) data.manualSkeleton = window._autoSkeleton;
+            if (window.dailyOverrideSkeleton && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length > 0) {
+                data.manualSkeleton = data.manualSkeleton || window.dailyOverrideSkeleton;
+            }
+            // Forward _autoGenerated flag if present in the localStorage row so
+            //   load path picks the auto-mode rebuild branch.
+            try {
+                const _lsRow = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}')[dateKey];
+                if (_lsRow?._autoGenerated) data._autoGenerated = true;
+            } catch (_) {}
         }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
@@ -804,120 +911,191 @@
                 log('[VERIFIED SAVE] Save already in progress, skipping duplicate');
                 return { success: true, target: 'deduplicated', reason: 'in-progress' };
             }
-            
+
             if (_lastSaveKey === saveKey && (now - _lastSaveTime) < SAVE_DEDUP_MS) {
                 log('[VERIFIED SAVE] Duplicate save detected, skipping (within', SAVE_DEDUP_MS, 'ms)');
                 return { success: true, target: 'deduplicated', reason: 'recent-duplicate' };
             }
-            
+
             _saveInProgress = true;
             _lastSaveKey = saveKey;
             _lastSaveTime = now;
         }
-        
-        log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
 
-        if (bunkCount === 0) {
-            log('[VERIFIED SAVE] No data to save');
-            _saveInProgress = false;
-            return { success: true, target: 'empty' };
-        }
-
-        // ★★★ NEW: Check if online ★★★
-        if (!navigator.onLine) {
-            log('[VERIFIED SAVE] Offline - saved to localStorage only');
-            showNotification('📴 Saved locally (offline)', 'warning');
-            _saveInProgress = false;
-            
-            // Queue for later via ScheduleSync if available
-            if (window.ScheduleSync?.queueSave) {
-                window.ScheduleSync.queueSave(dateKey, data);
-            }
-            
-            return { success: true, target: 'localStorage', offline: true };
-        }
-
-        if (!window.ScheduleDB?.saveSchedule) {
-            log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] ScheduleDB never became available');
-            _saveInProgress = false;
-            return { success: false, error: 'ScheduleDB not available' };
-        }
-
-        const campId = window.CampistryDB?.getCampId?.();
-        const userId = window.CampistryDB?.getUserId?.();
-
-        if (!campId || !userId) {
-            log('[VERIFIED SAVE] Auth not ready, waiting...');
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            logError('[VERIFIED SAVE] Auth never became available');
-            _saveInProgress = false;
-            return { success: false, error: 'Missing authentication' };
-        }
-
+        // try/finally guarantees _saveInProgress is cleared once the outermost
+        // call returns. Earlier code only cleared the flag at retry exhaustion,
+        // so the ScheduleDB-not-ready / auth-not-ready retry paths held the
+        // flag set across the 2s sleep — blocking concurrent saves.
         try {
-            const result = await window.ScheduleDB.saveSchedule(dateKey, data);
-            
-            // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
-            if (result?.target === 'plan-limit') {
-                log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
-                showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
-                _saveInProgress = false;
-                return result;
+            log(`[VERIFIED SAVE] Attempt ${attempt}/${CONFIG.SAVE_MAX_RETRIES} - ${bunkCount} bunks for ${dateKey}`);
+
+            if (bunkCount === 0) {
+                log('[VERIFIED SAVE] No data to save');
+                return { success: true, target: 'empty' };
             }
 
-            if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified')) {
-                log('✅ Schedule saved to cloud:', bunkCount, 'bunks');
-                showNotification(`Saved ${bunkCount} bunks`, 'success');
-                _saveInProgress = false;
-                return result;
-            } else if (result?.target === 'local' || result?.target === 'local-fallback') {
-                console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
+            // ★★★ NEW: Check if online ★★★
+            if (!navigator.onLine) {
+                log('[VERIFIED SAVE] Offline - saved to localStorage only');
+                showNotification('📴 Saved locally (offline)', 'warning');
+
+                // Queue for later via ScheduleSync if available
+                if (window.ScheduleSync?.queueSave) {
+                    window.ScheduleSync.queueSave(dateKey, data);
+                }
+
+                return { success: true, target: 'localStorage', offline: true };
+            }
+
+            if (!window.ScheduleDB?.saveSchedule) {
+                log('[VERIFIED SAVE] ScheduleDB not ready, waiting...');
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
-                showNotification('Saved locally (offline)', 'warning');
-                _saveInProgress = false;
-                return result;
-            } else {
-                logError('[VERIFIED SAVE] Save failed:', result?.error);
+                logError('[VERIFIED SAVE] ScheduleDB never became available');
+                return { success: false, error: 'ScheduleDB not available' };
+            }
+
+            const campId = window.CampistryDB?.getCampId?.();
+            const userId = window.CampistryDB?.getUserId?.();
+
+            if (!campId || !userId) {
+                log('[VERIFIED SAVE] Auth not ready, waiting...');
                 if (attempt < CONFIG.SAVE_MAX_RETRIES) {
                     await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                    return verifiedScheduleSave(dateKey, data, attempt + 1);
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
                 }
-                showNotification('Save failed', 'error');
-                _saveInProgress = false;
-                return result;
+                logError('[VERIFIED SAVE] Auth never became available');
+                return { success: false, error: 'Missing authentication' };
             }
-        } catch (e) {
-            // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
-            if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
-                showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
-                _saveInProgress = false;
-                return { success: false, error: e.message, target: 'plan-limit' };
+
+            try {
+                const result = await window.ScheduleDB.saveSchedule(dateKey, data);
+
+                // ★★★ STARTER PLAN: Do NOT retry plan-limit blocks ★★★
+                if (result?.target === 'plan-limit') {
+                    log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
+                    showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
+                    return result;
+                }
+
+                // 'cloud-unverified' = upsert succeeded but the post-save
+                // SELECT didn't see the row yet (Supabase replication
+                // delay). The data IS in the cloud — retrying would just
+                // re-stamp rotation history / re-rebuild historicalCounts
+                // on every save.
+                if (result?.success && (result?.target === 'cloud' || result?.target === 'cloud-verified' || result?.target === 'cloud-unverified')) {
+                    log('✅ Schedule saved to cloud:', bunkCount, 'bunks', result?.target === 'cloud-unverified' ? '(unverified)' : '');
+                    showNotification(`Saved ${bunkCount} bunks`, 'success');
+                    return result;
+                } else if (result?.target === 'local' || result?.target === 'local-fallback') {
+                    console.warn('🔗 ⚠️ Schedule saved to LOCAL only, retrying cloud...');
+                    if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                        return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                    }
+                    showNotification('Saved locally (offline)', 'warning');
+                    return result;
+                } else {
+                    logError('[VERIFIED SAVE] Save failed:', result?.error);
+                    if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                        await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                        return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                    }
+                    showNotification('Save failed', 'error');
+                    return result;
+                }
+            } catch (e) {
+                // ★★★ STARTER PLAN: Detect trigger rejection — do NOT retry ★★★
+                if ((e.message && e.message.includes('Starter plan limit')) || e.code === 'P0001') {
+                    showNotification('Starter plan limit reached. Upgrade for unlimited access.', 'warning');
+                    return { success: false, error: e.message, target: 'plan-limit' };
+                }
+                logError('[VERIFIED SAVE] Exception:', e);
+                if (attempt < CONFIG.SAVE_MAX_RETRIES) {
+                    await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
+                    return await verifiedScheduleSave(dateKey, data, attempt + 1);
+                }
+                showNotification('Save error', 'error');
+                return { success: false, error: e.message };
             }
-            logError('[VERIFIED SAVE] Exception:', e);
-            if (attempt < CONFIG.SAVE_MAX_RETRIES) {
-                await new Promise(r => setTimeout(r, CONFIG.SAVE_RETRY_DELAY_MS));
-                return verifiedScheduleSave(dateKey, data, attempt + 1);
-            }
-            showNotification('Save error', 'error');
-            _saveInProgress = false;
-            return { success: false, error: e.message };
+        } finally {
+            // Only the outermost call (attempt === 1) clears the flag —
+            // recursive retries inherit the same flag state.
+            if (attempt === 1) _saveInProgress = false;
         }
     }
 
     // =========================================================================
     // FORCE LOAD FROM CLOUD
     // =========================================================================
+
+    // Reconcile scheduleAssignments against the current activity registry.
+    // If Device A deleted "Soccer" while Device B saved a row that still
+    // referenced it, the cloud row brings the orphan name back; without
+    // this, "+ Add" gaps render where the deleted activity used to live.
+    function reconcileOrphanActivities() {
+        try {
+            if (!window.scheduleAssignments) return 0;
+            const validNames = new Set();
+            try {
+                const settings = window.loadGlobalSettings?.() || {};
+                const app1 = settings.app1 || {};
+                (app1.fields || []).forEach(f => (f.activities || []).forEach(a => a && validNames.add(a)));
+                (app1.specialActivities || []).forEach(s => s?.name && validNames.add(s.name));
+                (settings.specialActivities || []).forEach(s => s?.name && validNames.add(s.name));
+                (settings.facilities || []).forEach(fac => {
+                    (fac.activities || []).forEach(a => a && validNames.add(a));
+                    (fac.specialActivityNames || []).forEach(n => n && validNames.add(n));
+                    (fac.generalActivities || []).forEach(ga => {
+                        const n = (ga && ga.name) || ga;
+                        if (n) validNames.add(n);
+                    });
+                });
+                (settings.allSports || []).forEach(s => {
+                    const n = typeof s === 'string' ? s : s?.name;
+                    if (n) validNames.add(n);
+                });
+            } catch (_) {}
+            // System slot types — never treat as orphans.
+            ['Free', 'Lunch', 'Snack', 'Snacks', 'Dismissal',
+             'Swim', 'Pool', 'League Game',
+             'Transition/Buffer', 'Transition', 'Buffer',
+             'Lineup', 'Regroup', 'Bus'].forEach(n => validNames.add(n));
+
+            // Empty registry -> bail rather than nuke everything (registry
+            // probably hasn't loaded yet).
+            if (validNames.size === 0) return 0;
+
+            let nulled = 0;
+            Object.keys(window.scheduleAssignments).forEach(bunk => {
+                const slots = window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots)) return;
+                slots.forEach((slot, i) => {
+                    if (!slot || typeof slot !== 'object') return;
+                    // Skip legitimate non-registry slot types — leagues
+                    // write `_activity: 'League: <name>'`; transitions and
+                    // continuation cells carry their own type markers.
+                    if (slot._isTransition || slot._league || slot.continuation) return;
+                    const name = slot._activity || slot.activity || slot.event;
+                    if (typeof name === 'string' && name.startsWith('League:')) return;
+                    if (name && !validNames.has(name)) {
+                        slots[i] = null;
+                        nulled++;
+                    }
+                });
+            });
+            if (nulled > 0) {
+                console.log('[ORPHAN RECONCILE] Cleared', nulled, 'orphan slot(s) — activity no longer in registry');
+            }
+            return nulled;
+        } catch (e) {
+            logError('[ORPHAN RECONCILE] failed:', e);
+            return 0;
+        }
+    }
+    window.reconcileOrphanActivities = reconcileOrphanActivities;
 
     async function forceLoadScheduleFromCloud(dateKey) {
         if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
@@ -978,6 +1156,13 @@
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                 } catch (e) { /* ignore */ }
 
+                // Strip orphan-activity references that another device may
+                // have saved to cloud after this device deleted the activity.
+                // Run BEFORE updateTable so the render reflects the cleaned
+                // state — running after leaves stale "+ Add" cells visible
+                // until the next user-triggered re-render.
+                reconcileOrphanActivities();
+
                 // Refresh UI
                 if (window.updateTable) {
                     window.updateTable();
@@ -1032,8 +1217,18 @@
     let _lastDailySchedulesCallAt = 0;
     let _lastDailySchedulesHash = null;
     function _quickHashAllDaily(d) {
-        try { return JSON.stringify(d).length + '|' + Object.keys(d || {}).length; }
-        catch (_) { return Math.random(); }
+        // djb2 over the full payload. Earlier this was payload-length +
+        // key count, which collided on equal-length edits (e.g. renaming
+        // an activity "Soccer" → "Hockey") and silently dropped the save
+        // inside the 750ms dedupe window.
+        try {
+            const s = JSON.stringify(d || {});
+            let h = 5381;
+            for (let i = 0; i < s.length; i++) {
+                h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+            }
+            return h;
+        } catch (_) { return Math.random(); }
     }
     window.saveGlobalSettings = function(key, data) {
         // For daily_schedules, persist locally AND sync ALL dates to cloud
@@ -1057,10 +1252,24 @@
                     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
                     const lsData = JSON.parse(JSON.stringify(data));
                     const lsDateKeys = Object.keys(lsData).filter(k => DATE_RE.test(k)).sort();
+                    let pruneSucceeded = false;
                     while (lsDateKeys.length > 3) {
                         delete lsData[lsDateKeys.shift()];
-                        try { localStorage.setItem('campDailyData_v1', JSON.stringify(lsData)); break; }
+                        try {
+                            localStorage.setItem('campDailyData_v1', JSON.stringify(lsData));
+                            pruneSucceeded = true;
+                            break;
+                        }
                         catch (_) { /* keep pruning */ }
+                    }
+                    // If even 3 dates couldn't fit (or no prune iterations ran),
+                    // localStorage is silently stale. Set the marker so the
+                    // next hydration prefers cloud over local — without this,
+                    // very large camps could trust a stale local snapshot.
+                    if (!pruneSucceeded) {
+                        try { sessionStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                        try { localStorage.setItem('_campistry_local_write_failed', '1'); } catch (_) {}
+                        logError('[saveGlobalSettings] daily_schedules localStorage write exhausted prune budget');
                     }
                 } else {
                     logError('[saveGlobalSettings] localStorage write failed:', e);
@@ -1126,18 +1335,10 @@
             // hydrated rotation history that hadn't actually changed.
             // ═══════════════════════════════════════════════════════════════
             if (!window._secondarySaveHash) window._secondarySaveHash = {};
-            function _hashDateData(d) {
-                try {
-                    const sa = d?.scheduleAssignments || {};
-                    const la = d?.leagueAssignments || {};
-                    const s = JSON.stringify(sa) + '|' + JSON.stringify(la);
-                    let h = 0;
-                    for (let i = 0; i < s.length; i++) {
-                        h = ((h << 5) - h + s.charCodeAt(i)) | 0;
-                    }
-                    return h;
-                } catch (_) { return Math.random(); }
-            }
+            // Delegate to the module-scoped hasher so seeded baselines
+            // (set by _seedSecondarySaveHashes during hydration) are
+            // comparable with the hashes computed here.
+            const _hashDateData = _hashDateDataModule;
 
             const secondaryDateKeys = allDateKeys.filter(k =>
                 k !== primaryDateKey &&
@@ -1158,8 +1359,11 @@
 
                 if (unsaved.length > 0) {
                     log(`[saveGlobalSettings] Syncing ${unsaved.length} secondary date(s) to cloud (skipped ${secondaryDateKeys.length - unsaved.length} unchanged)`);
+                    // Stamp hash optimistically so duplicate calls inside the
+                    // same burst dedupe correctly. _secondarySaveLog (the 30s
+                    // suppress-window) is stamped only on success below — so
+                    // a transient failure doesn't block the next retry.
                     unsaved.forEach(dk => {
-                        window._secondarySaveLog[dk] = now;
                         window._secondarySaveHash[dk] = _hashDateData(data[dk]);
                     });
 
@@ -1168,12 +1372,16 @@
                             window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
                                 .then(r => {
                                     if (r?.success) {
+                                        window._secondarySaveLog[dk] = Date.now();
                                         log(`  ✅ Secondary save: ${dk}`);
                                     } else {
+                                        // Drop the hash too — next call should retry.
+                                        delete window._secondarySaveHash[dk];
                                         console.warn(`  ⚠️ Secondary save failed: ${dk}`, r?.error);
                                     }
                                 })
                                 .catch(e => {
+                                    delete window._secondarySaveHash[dk];
                                     console.warn(`  ⚠️ Secondary save error: ${dk}`, e.message);
                                 });
                         }, (index + 1) * 500);
@@ -1272,6 +1480,14 @@
 
         await forceSyncToCloud();
 
+        // Reset listener flags so the post-reset hydration cycle (whether
+        // via explicit reload or programmatic re-hydrate) re-fires the
+        // schedule-load and orphan-reconcile passes. Earlier these flags
+        // stayed true forever, leaving the post-reset state coupled to
+        // the caller doing window.location.reload().
+        _scheduleCloudLoadDone = false;
+        _cloudHydrationDone = false;
+
         return true;
     };
 
@@ -1338,13 +1554,26 @@
                 // Fall through to legacy table fallback
             }
 
+            // Per-key cloud timestamps — used below for fine-grained merge.
+            // Without this, a stale device with a recent overall updated_at
+            // (because it edited any single key) would clobber unrelated
+            // cloud keys whose individual timestamps are newer.
+            let cloudPerKeyTime = null;
             if (Array.isArray(kvRows) && kvRows.length > 0) {
                 cloudState = {};
+                cloudPerKeyTime = {};
                 let maxUpdated = 0;
                 for (const row of kvRows) {
                     cloudState[row.key] = row.value;
-                    const t = new Date(row.updated_at || 0).getTime();
-                    if (t > maxUpdated) maxUpdated = t;
+                    // Treat a missing/null updated_at as Infinity (cloud
+                    // always wins) rather than 0 (local always wins). A
+                    // null timestamp means the row was inserted via a
+                    // backfill / migration path that didn't stamp it —
+                    // we'd rather trust cloud than risk a stale local
+                    // edit clobbering it.
+                    const t = row.updated_at ? new Date(row.updated_at).getTime() : Number.POSITIVE_INFINITY;
+                    cloudPerKeyTime[row.key] = t;
+                    if (Number.isFinite(t) && t > maxUpdated) maxUpdated = t;
                 }
                 if (maxUpdated > 0) {
                     cloudUpdatedAt = new Date(maxUpdated).toISOString();
@@ -1426,8 +1655,26 @@
                     mergedState = cloudState;
                     log('Using cloud state (cloud has more data than local — likely silent local-write loss)');
                 } else if (localTime > cloudTime) {
-                    mergedState = { ...cloudState, ...localState };
-                    log('Using local state (newer)');
+                    // Per-key merge when KV table is available. For each key
+                    // present in cloud, only let local overwrite if local's
+                    // overall updated_at is newer than that key's individual
+                    // cloud timestamp. This protects keys that were updated
+                    // on Device A while Device B's local has a newer overall
+                    // stamp (from editing some unrelated key).
+                    if (cloudPerKeyTime) {
+                        mergedState = { ...cloudState };
+                        for (const k of Object.keys(localState)) {
+                            if (k === 'updated_at') continue;
+                            const cloudKeyTime = cloudPerKeyTime[k] || 0;
+                            if (!(k in cloudState) || localTime > cloudKeyTime) {
+                                mergedState[k] = localState[k];
+                            }
+                        }
+                        log('Using local state (newer, per-key merged)');
+                    } else {
+                        mergedState = { ...cloudState, ...localState };
+                        log('Using local state (newer)');
+                    }
                     trustLocal = true;
                 } else {
                     mergedState = cloudState;
@@ -1438,7 +1685,12 @@
                 // Fill any top-level keys present locally but missing from
                 // cloud — these were saved to IDB but never synced (e.g.
                 // campStructure during prior localStorage quota failures).
-                if (_idbPreloadSucceeded && !trustLocal) {
+                //
+                // Skip when cloudHasMoreData / localWriteFailed: those
+                // paths just decided cloud is more trustworthy than local,
+                // so backfilling local-only keys would partly undo that
+                // decision and re-introduce stale state.
+                if (_idbPreloadSucceeded && !trustLocal && !cloudHasMoreData && !localWriteFailed) {
                     let backfilled = 0;
                     for (const k of Object.keys(localState)) {
                         if (k === 'updated_at') continue;
@@ -1482,6 +1734,18 @@
             // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
             _cloudHydrationDone = true;
             window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+            return;
+        }
+
+        // First-time camp setup: KV table empty AND legacy table empty.
+        // Earlier we'd silently fall out of the function without dispatching
+        // — `_cloudHydrationDone` stayed false forever, so executeBatchSync's
+        // hold-until-hydrated check (line 589) would block every save in
+        // the session. Always finalize.
+        if (!_cloudHydrationDone) {
+            log('Hydration complete with no cloud rows — dispatching anyway so sync system unblocks');
+            _cloudHydrationDone = true;
+            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
         }
     }
 
@@ -1497,6 +1761,9 @@
     let _lastSelfWriteAt = 0;
     let _campStateDebounceTimer = null;
     let _campStateSubscribed = false;
+    let _campStateReconnectTimer = null;
+    let _campStateReconnectAttempts = 0;
+    let _campStateStableTimer = null;
 
     async function subscribeToCampState() {
         if (_campStateSubscribed) return;
@@ -1538,9 +1805,34 @@
                 })
                 .subscribe(function (status) {
                     log('camp_state subscription status:', status);
-                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-                        // Reset so a later hydration retry can re-subscribe.
+                    if (status === 'SUBSCRIBED') {
+                        _campStateReconnectAttempts = 0;
+                        // Schedule a decay timer — even if connectivity flaps
+                        // and SUBSCRIBED never fires again as a clean reset,
+                        // 60s of stable subscription resets the backoff so
+                        // the next flap doesn't start at the previous (high)
+                        // attempt count.
+                        if (_campStateStableTimer) clearTimeout(_campStateStableTimer);
+                        _campStateStableTimer = setTimeout(function () {
+                            _campStateReconnectAttempts = 0;
+                            _campStateStableTimer = null;
+                        }, 60000);
+                    } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                        // Schedule a reconnect with capped exponential backoff.
+                        // Without this, a transient network blip kills the
+                        // realtime feed for the rest of the session — and
+                        // remote edits from another device become invisible.
                         _campStateSubscribed = false;
+                        try { if (_campStateChannel) client.removeChannel(_campStateChannel); } catch (_) {}
+                        _campStateChannel = null;
+                        if (_campStateReconnectTimer) return;
+                        const attempt = ++_campStateReconnectAttempts;
+                        const delay = Math.min(30000, 2000 * Math.pow(2, attempt - 1));
+                        log(`camp_state realtime: reconnect in ${delay}ms (attempt ${attempt})`);
+                        _campStateReconnectTimer = setTimeout(function () {
+                            _campStateReconnectTimer = null;
+                            subscribeToCampState();
+                        }, delay);
                     }
                 });
         } catch (e) {
@@ -1571,6 +1863,19 @@
         }
 
         await new Promise(r => setTimeout(r, 200));
+
+        // Register the cloud-hydration listener BEFORE hydration fires.
+        // hydrateFromCloud() dispatches `campistry-cloud-hydrated`
+        // synchronously; if installHooks() runs after, hookCloudHydration's
+        // listener registers too late and the schedule never auto-loads
+        // from cloud on first boot.
+        hookCloudHydration();
+
+        // Pre-warm RotationCloud so the auto-builder's first call hits a
+        // populated 30s TTL cache instead of waiting on a network round-trip
+        // (and falling back to empty if that fetch errors).
+        try { window.RotationCloud?.load?.(); } catch (_) {}
+
         await hydrateFromCloud();
 
         console.log('🔗 All systems ready, installing hooks...');
@@ -1732,18 +2037,6 @@
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
             console.log('🔗 Generation complete for', dateKey, '-', bunkCount, 'bunks');
 
-            // ★★★ Capture old schedule BEFORE overwriting localStorage ★★★
-            // reIncrementHistoricalCounts needs the pre-generation schedule to subtract old
-            // counts. If we capture it here (while localStorage still has the old data) and
-            // pass it as oldScheduleAssignments, the subtraction step uses correct data even
-            // after localStorage has been overwritten.
-            let oldScheduleSnapshot = null;
-            try {
-                const DAILY_KEY = 'campDailyData_v1';
-                const preSave = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                oldScheduleSnapshot = preSave[dateKey]?.scheduleAssignments || null;
-            } catch (_) {}
-
             // ★★★ v6.9 FIX: Save to localStorage IMMEDIATELY — no delay! ★★★
             // The old 1000ms "wait for data to settle" caused data loss on quick reload.
             // Data is already in window.scheduleAssignments when this event fires.
@@ -1796,18 +2089,20 @@
                 console.error('🔗 Rotation history update failed:', rhErr);
             }
 
-            // ★★★ Update historicalCounts using pre-generation snapshot ★★★
-            // Pass oldScheduleSnapshot so reIncrement subtracts the correct old data
-            // rather than reading from localStorage (which now has the new schedule).
-            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                    dateKey,
-                    window.scheduleAssignments || {},
-                    true,
-                    oldScheduleSnapshot
-                );
-            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+            // ★★★ Rebuild historicalCounts from the freshly-saved allDaily ★★★
+            // The previous reIncrement-with-snapshot approach was unreliable here:
+            // by the time this listener fires, the underlying generators
+            // (scheduler_core_main / scheduler_core_auto) have already written the
+            // new schedule to localStorage, so any "pre-save" snapshot we try to
+            // capture is actually the new data — leading to silent drift on regen.
+            // Rebuild scans allDaily once and is fully deterministic.
+            if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); }
+                catch (e) { console.warn('🔗 historicalCounts rebuild failed:', e); }
+            }
+            if (window.RotationCloud?.save) {
+                try { window.RotationCloud.save(dateKey, window.scheduleAssignments || {}); }
+                catch (e) { console.warn('🔗 RotationCloud sync failed:', e); }
             }
         }, { once: false });
         // Intercept generateSchedule if it exists
@@ -2110,39 +2405,104 @@
             const dateKey = window.currentScheduleDate;
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
 
+            // Build the same full payload verifiedScheduleSave uses so the
+            // beforeunload save doesn't drop _perBunkSlotsData / manualSkeleton
+            // / _autoGenerated and silently regress the auto-mode geometry.
+            // (The minimal payload that used to live here was the exact bug
+            // verifiedScheduleSave was added to prevent.)
+            const buildFullPayload = () => {
+                const _spbs = {};
+                const _dt = window.divisionTimes || {};
+                Object.keys(_dt).forEach(g => {
+                    if (_dt[g]?._perBunkSlots) _spbs[g] = _dt[g]._perBunkSlots;
+                });
+                const payload = {
+                    scheduleAssignments: window.scheduleAssignments || {},
+                    leagueAssignments: window.leagueAssignments || {},
+                    unifiedTimes: window.unifiedTimes || [],
+                    divisionTimes: window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || _dt,
+                    isRainyDay: window.isRainyDay || false,
+                    rainyDayStartTime: window.rainyDayStartTime ?? null,
+                    rainyDayMode: window.isRainyDay || false,
+                    savedAt: new Date().toISOString()
+                };
+                if (Object.keys(_spbs).length > 0) payload._perBunkSlotsData = _spbs;
+                if (window._autoSkeleton) payload.manualSkeleton = window._autoSkeleton;
+                if (window.dailyOverrideSkeleton && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length > 0) {
+                    payload.manualSkeleton = payload.manualSkeleton || window.dailyOverrideSkeleton;
+                }
+                try {
+                    const _lsRow = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}')[dateKey];
+                    if (_lsRow?._autoGenerated) payload._autoGenerated = true;
+                } catch (_) {}
+                return payload;
+            };
+
             if (dateKey && bunkCount > 0) {
                 console.log('🔗 Page unloading, final save...');
-                
+
+                const payload = buildFullPayload();
+
                 // Synchronous localStorage save (guaranteed)
                 try {
                     const DAILY_KEY = 'campDailyData_v1';
                     const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    allData[dateKey] = {
-                        scheduleAssignments: window.scheduleAssignments,
-                        leagueAssignments: window.leagueAssignments,
-                        unifiedTimes: window.unifiedTimes,
-                        divisionTimes: window.divisionTimes,
-                        isRainyDay: window.isRainyDay || false,
-                        rainyDayStartTime: window.rainyDayStartTime ?? null,
-                        rainyDayMode: window.isRainyDay || false,  // backward compatibility
-                        savedAt: new Date().toISOString()
-                    };
+                    allData[dateKey] = payload;
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
                 } catch (err) {
                     logError('Final save failed:', err);
                 }
-                
+
                 // Attempt cloud save (may not complete)
-                window.ScheduleDB?.saveSchedule?.(dateKey, {
-                    scheduleAssignments: window.scheduleAssignments,
-                    leagueAssignments: window.leagueAssignments,
-                    unifiedTimes: window.unifiedTimes,
-                    divisionTimes: window.divisionTimes,
-                    isRainyDay: window.isRainyDay || false,
-                    rainyDayStartTime: window.rainyDayStartTime ?? null,
-                    rainyDayMode: window.isRainyDay || false
-                }).catch(() => {});
+                window.ScheduleDB?.saveSchedule?.(dateKey, payload).catch(() => {});
             }
+
+            // Flush _pendingChanges (camp_state_kv batch) via fetch with
+            // keepalive: true so the request survives tab close. The
+            // supabase-js upsert path doesn't set keepalive, so it dies
+            // with the tab on slow networks. We send the request manually
+            // to the Supabase REST endpoint with the cached access token.
+            try {
+                const pending = (typeof _pendingChanges === 'object' && _pendingChanges) ? _pendingChanges : {};
+                const pendingKeys = Object.keys(pending).filter(k => k !== 'updated_at');
+                const cfg = window.CampistryDB?.config;
+                const campId = window.CampistryDB?.getCampId?.();
+                // Skip if we have no fresh cached token — sending without
+                // one would 401, then the optimistic clear below would
+                // drop the pending edits with no chance to retry.
+                if (pendingKeys.length > 0 && _cachedAccessToken && cfg?.SUPABASE_URL && cfg?.SUPABASE_ANON_KEY && campId) {
+                    const nowIso = new Date().toISOString();
+                    const rows = pendingKeys.map(k => ({
+                        camp_id: campId,
+                        key: k,
+                        value: pending[k] ?? null,
+                        updated_at: nowIso
+                    }));
+                    // Body cap: fetch keepalive limits total in-flight body
+                    // size to ~64KB. Anything bigger we let the regular
+                    // executeBatchSync attempt fire-and-forget.
+                    const body = JSON.stringify(rows);
+                    if (body.length < 60000) {
+                        fetch(`${cfg.SUPABASE_URL}/rest/v1/camp_state_kv?on_conflict=camp_id,key`, {
+                            method: 'POST',
+                            keepalive: true,
+                            headers: {
+                                'apikey': cfg.SUPABASE_ANON_KEY,
+                                'Authorization': `Bearer ${_cachedAccessToken}`,
+                                'Content-Type': 'application/json',
+                                'Prefer': 'resolution=merge-duplicates,return=minimal'
+                            },
+                            body
+                        }).catch(() => {});
+                        // Optimistically clear so a regular executeBatchSync
+                        // call right after doesn't race-double-submit.
+                        pendingKeys.forEach(k => delete _pendingChanges[k]);
+                    }
+                }
+                // Belt-and-suspenders fallback for over-cap payloads or
+                // when no cached token is available.
+                if (typeof executeBatchSync === 'function') executeBatchSync();
+            } catch (_) {}
         });
 
         console.log('🔗 beforeunload hook installed');
@@ -2152,7 +2512,14 @@
     // HOOK: AUTO-LOAD FROM CLOUD AFTER HYDRATION
     // =========================================================================
 
+    let _hookCloudHydrationRegistered = false;
     function hookCloudHydration() {
+        // Idempotent: waitForSystems registers this BEFORE hydrateFromCloud
+        // (so the listener catches the first hydration event), and
+        // installHooks also calls it — guard so the listener is bound once.
+        if (_hookCloudHydrationRegistered) return;
+        _hookCloudHydrationRegistered = true;
+
         window.addEventListener('campistry-cloud-hydrated', async () => {
             if (_scheduleCloudLoadDone) return;
             _scheduleCloudLoadDone = true;
@@ -2161,18 +2528,27 @@
 
             await new Promise(r => setTimeout(r, 500));
 
-            const dateKey = window.currentScheduleDate || 
+            const dateKey = window.currentScheduleDate ||
                            document.getElementById('schedule-date-input')?.value ||
                            document.getElementById('datepicker')?.value ||
                            document.getElementById('calendar-date-picker')?.value;
-            
+
             if (!dateKey) {
                 log('[HOOK] No date key available');
                 return;
             }
 
+            // Don't clobber an in-flight generation or post-edit. The
+            // realtime hookRemoteChanges path already gates on these — this
+            // path needs the same guard so a realtime re-hydration mid-edit
+            // doesn't wipe unsaved in-memory work.
+            if (window._postEditInProgress || window._generationInProgress) {
+                log('[HOOK] Skipping cloud reload — generation/edit in progress');
+                return;
+            }
+
             const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-            
+
             if (currentBunks === 0) {
                 log('[HOOK] No local data, fetching from cloud...');
                 await forceLoadScheduleFromCloud(dateKey);

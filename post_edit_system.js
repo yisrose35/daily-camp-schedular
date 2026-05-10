@@ -1957,12 +1957,12 @@
                 history.bunks[bunk][actName] = timestamp;
             }
             window.saveRotationHistory?.(history);
-            const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                setTimeout(() => window.SchedulerCoreUtils.reIncrementHistoricalCounts(dateKey, window.scheduleAssignments || {}, true), 200);
-            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                setTimeout(() => window.SchedulerCoreUtils.rebuildHistoricalCounts(true), 200);
-            }
+            // historicalCounts are already updated synchronously by
+            // SchedulerCoreUtils.applyPostEditCounts (called from submitEdit).
+            // The previous setTimeout(reIncrement) here ran on top of that delta
+            // with a stale "old" snapshot (post-save allDaily), which silently
+            // double-corrupted the count. Removed — applyPostEditCounts is the
+            // single source of truth for post-edit count deltas.
             debugLog('v3.3: Rotation history updated for', bunk);
         } catch (e) { console.error('[PostEdit] Rotation history update failed:', e); }
     }

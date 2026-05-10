@@ -113,10 +113,21 @@
       window.runSkeletonOptimizer = function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
 
             // ★★★ AUTO MODE: full bypass — scheduler_core_auto.js owns the entire pipeline
-            if (window._daBuilderMode === 'auto' || window._divisionTimesLocked) {
-                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass');
+            // Only bypass when there's NO manual skeleton to schedule. A non-empty
+            // skeleton parameter means the caller (manual builder, daily adjustments
+            // manual mode, etc.) is explicitly asking for the manual path even if the
+            // global UI mode flipped to "auto" between the caller's mode-check and
+            // this call (e.g. a focus-refresh re-init firing mid-flow). Without this
+            // guard, the manual click "wipe + generate" sequence would silently no-op
+            // and surface as "Error generating schedule" with 0 bunks saved.
+            const _hasManualSkeleton = Array.isArray(manualSkeleton) && manualSkeleton.length > 0;
+            if (!_hasManualSkeleton && (window._daBuilderMode === 'auto' || window._divisionTimesLocked)) {
+                console.log('[DivTimesIntegration] ⏭️ Auto mode — full bypass (no manual skeleton)');
                 return false;
             }
+            // Note: a non-empty manual skeleton always proceeds — even if
+            // _divisionTimesLocked is set from a prior auto run. The lock flag
+            // can persist across runs and would otherwise wedge the manual path.
 
             // ★ AUTO BUILD: divisionTimes already built by AutoBuildPrep — skip rebuild
             if (window._autoBuildRunActive) {
@@ -255,13 +266,48 @@
         const originalSaveCurrentDailyData = window.saveCurrentDailyData;
 
         if (typeof originalSaveCurrentDailyData === 'function') {
+            // ★ v4.1: Debounced auto-persist of _perBunkSlotsData on every edit so
+            // post-build resizes / daily adjustments / post-edits keep their geometry
+            // across reload (Step 5 build save isn't the only path that can change it).
+            let _pbsPersistTimer = null;
+            function _schedulePerBunkSlotsPersist() {
+                if (_pbsPersistTimer) return; // already queued
+                _pbsPersistTimer = setTimeout(function() {
+                    _pbsPersistTimer = null;
+                    try {
+                        const dt = window.divisionTimes || {};
+                        const hasLivePerBunk = Object.values(dt).some(function(d) { return d && d._isPerBunk && d._perBunkSlots; });
+                        if (!hasLivePerBunk) return;
+                        const spbs = {};
+                        Object.keys(dt).forEach(function(g) {
+                            if (dt[g]?._perBunkSlots) spbs[g] = dt[g]._perBunkSlots;
+                        });
+                        originalSaveCurrentDailyData.call(window, '_perBunkSlotsData', spbs);
+                    } catch (e) {
+                        console.warn('[DivTimesIntegration] _perBunkSlotsData persist failed:', e);
+                    }
+                }, 250);
+            }
+
             window.saveCurrentDailyData = function(key, value) {
                 // If saving full data, include divisionTimes
                 if (key === undefined && typeof value === 'object') {
                     value.divisionTimes = window.DivisionTimesSystem?.serialize(window.divisionTimes) || {};
+                    // Also include _perBunkSlotsData so geometry survives reload
+                    const dt = window.divisionTimes || {};
+                    const spbs = {};
+                    Object.keys(dt).forEach(function(g) {
+                        if (dt[g]?._perBunkSlots) spbs[g] = dt[g]._perBunkSlots;
+                    });
+                    if (Object.keys(spbs).length > 0) value._perBunkSlotsData = spbs;
                 }
-                
-                return originalSaveCurrentDailyData.call(this, key, value);
+
+                const ret = originalSaveCurrentDailyData.call(this, key, value);
+
+                // Don't recurse when we're the ones writing _perBunkSlotsData
+                if (key !== '_perBunkSlotsData') _schedulePerBunkSlotsPersist();
+
+                return ret;
             };
         }
 

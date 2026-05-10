@@ -216,7 +216,20 @@ var selSess='',selPM='',siblings=[],uploads=[],discount={active:false,code:'',pc
 var sessions=[],promoCodes={};
 var sigCtx=null,sigDrawing=false,sigHasData=false;
 
-function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+// HTML+attribute-context escape. The previous textContent/innerHTML
+// round-trip escaped <>& but NOT " or ' — every value="'+esc(x)+'" in
+// this file was a latent attribute-context XSS the moment user data
+// reached an attribute (e.g. an option label like Foo" autofocus
+// onfocus=alert(1) x=").
+function esc(s){
+    if(s===null||s===undefined)return'';
+    return String(s)
+        .replace(/&/g,'&amp;')
+        .replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;')
+        .replace(/"/g,'&#34;')
+        .replace(/'/g,'&#39;');
+}
 function v(id){return(document.getElementById(id)?.value||'').trim()}
 function fm(n){return'$'+Number(n||0).toLocaleString()}
 
@@ -229,22 +242,62 @@ if(params.get('status')){
     return;
 }
 
-function showStatus(id){
+function renderStatus(e){
+    if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
+    var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
+    var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
+    h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
+    h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
+    h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
+    h+='<div>Session: <strong>'+esc(e.session||'—')+'</strong></div>';
+    h+='<div>Applied: '+esc(e.appliedDate)+'</div>';
+    h+='<div>Payment: '+esc(e.paymentStatus||'pending')+'</div>';
+    h+='<div>Forms: '+(e.formsCompleted||0)+'/'+(e.formsRequired||0)+' completed</div>';
+    h+='</div>';
+    document.getElementById('statusContent').innerHTML=h;
+}
+
+async function showStatus(id){
     try{
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-        var e=(g.campistryMe?.enrollments||{})[id];
-        if(!e){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Application Not Found</h2><p>Please check the link and try again.</p>';return}
-        var sc=e.status==='enrolled'?'color:var(--ok)':e.status==='accepted'?'color:#3B82F6':e.status==='waitlisted'?'color:var(--me)':e.status==='declined'?'color:var(--err)':'color:var(--s500)';
-        var h='<div style="font-size:48px;margin-bottom:8px">'+(e.status==='enrolled'?'✅':e.status==='accepted'?'👍':e.status==='waitlisted'?'⏳':e.status==='declined'?'❌':'📋')+'</div>';
-        h+='<h2 style="'+sc+'">Application Status: '+e.status.charAt(0).toUpperCase()+e.status.slice(1)+'</h2>';
-        h+='<p style="font-size:.9rem;color:var(--s700);margin-top:8px"><strong>'+esc(e.camperName)+'</strong></p>';
-        h+='<div style="text-align:left;margin-top:14px;padding:12px;background:var(--s50);border-radius:var(--r);font-size:.82rem;color:var(--s600)">';
-        h+='<div>Session: <strong>'+esc(e.session||'—')+'</strong></div>';
-        h+='<div>Applied: '+esc(e.appliedDate)+'</div>';
-        h+='<div>Payment: '+esc(e.paymentStatus||'pending')+'</div>';
-        h+='<div>Forms: '+(e.formsCompleted||0)+'/'+(e.formsRequired||0)+' completed</div>';
-        h+='</div>';
-        document.getElementById('statusContent').innerHTML=h;
+        // The localStorage snapshot strips campistryMe.enrollments to keep
+        // the lite cache under quota — so this read is intentionally a
+        // fast-path that often misses on a freshly opened tab. Fall back
+        // through loadGlobalSettings (IDB-backed full state) and finally
+        // a direct Supabase query so the status link works on any device.
+        var enrollments=null;
+        try{
+            var ls=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+            enrollments=ls.campistryMe?.enrollments;
+        }catch(_){}
+        if(!enrollments||!enrollments[id]){
+            try{
+                if(typeof window.loadGlobalSettings==='function'){
+                    var full=window.loadGlobalSettings();
+                    if(full?.campistryMe?.enrollments) enrollments=full.campistryMe.enrollments;
+                }
+            }catch(_){}
+        }
+        if(!enrollments||!enrollments[id]){
+            // Final fallback: query Supabase directly. CampistryDB resolves
+            // a campId from the URL / session; if it's not available yet
+            // the status panel surfaces the original "Not Found".
+            try{
+                var client=window.CampistryDB?.getClient?.();
+                var campId=window.CampistryDB?.getCampId?.();
+                if(client&&campId){
+                    var res=await client
+                        .from('camp_state_kv')
+                        .select('value')
+                        .eq('camp_id',campId)
+                        .eq('key','campistryMe')
+                        .maybeSingle();
+                    if(!res?.error&&res?.data?.value?.enrollments){
+                        enrollments=res.data.value.enrollments;
+                    }
+                }
+            }catch(_){}
+        }
+        renderStatus(enrollments&&enrollments[id]);
     }catch(ex){document.getElementById('statusContent').innerHTML='<h2 style="color:var(--err)">Error</h2><p>Unable to load status.</p>'}
 }
 
@@ -370,11 +423,38 @@ upZone.ondragover=function(e){e.preventDefault();upZone.classList.add('dragover'
 upZone.ondragleave=function(){upZone.classList.remove('dragover')};
 upZone.ondrop=function(e){e.preventDefault();upZone.classList.remove('dragover');handleFiles(e.dataTransfer.files)};
 upIn.onchange=function(){handleFiles(upIn.files);upIn.value=''};
+// MIME-type allow-list. The accept= attribute is a UI hint only — the
+// browser doesn't enforce it. Without this check an attacker could
+// upload .html / .svg containing JS as a base64 dataURL; later if any
+// admin code renders the dataURL (or opens it directly) the script
+// runs in the same origin.
+var ALLOWED_UPLOAD_MIME = {
+    'application/pdf': true,
+    'image/jpeg': true,
+    'image/jpg': true,
+    'image/png': true,
+    'application/msword': true,
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document': true
+};
+var MAX_UPLOADS_PER_SUBMISSION = 5;
+
 function handleFiles(files){
     for(var i=0;i<files.length;i++){
-        var f=files[i];if(f.size>5*1024*1024){alert(f.name+' is over 5MB');continue}
+        var f=files[i];
+        if(uploads.length>=MAX_UPLOADS_PER_SUBMISSION){
+            alert('Maximum '+MAX_UPLOADS_PER_SUBMISSION+' files per submission.');
+            break;
+        }
+        if(f.size>5*1024*1024){alert(f.name+' is over 5MB');continue}
+        if(!ALLOWED_UPLOAD_MIME[f.type]){
+            alert(f.name+' has unsupported type ('+(f.type||'unknown')+'). Allowed: PDF, JPG, PNG, DOC, DOCX.');
+            continue;
+        }
         var reader=new FileReader();
-        reader.onload=(function(name,size){return function(e){uploads.push({name:name,size:size,data:e.target.result});renderUploads()}})(f.name,f.size);
+        reader.onload=(function(name,size,type){return function(e){
+            uploads.push({name:name,size:size,type:type,data:e.target.result});
+            renderUploads();
+        }})(f.name,f.size,f.type);
         reader.readAsDataURL(f);
     }
 }
@@ -402,8 +482,50 @@ window.clearSig=function(){sigCtx.clearRect(0,0,sigCtx.canvas.width,sigCtx.canva
 initSig();
 
 // ─── SUBMIT ──────────────────────────────────────────────────
+// Client-side guards: a single in-flight submit, a per-browser
+// 30-second cooldown, and a rolling 5-per-hour cap. None of this
+// stops a determined attacker (they can clear localStorage), but
+// it raises the bar for spam-from-a-real-browser, which is the
+// realistic threat against a public kiosk page. The real defense
+// is the SECURITY DEFINER RPC + hCaptcha that should sit behind
+// this form — flagged in the audit, not landed here.
+var REGISTER_RATE_KEY='_reg_rate_v1';
+var REGISTER_COOLDOWN_MS=30000;
+var REGISTER_HOURLY_CAP=5;
+var _registerSubmitInFlight=false;
+
+function checkRateLimit(){
+    try{
+        var raw=localStorage.getItem(REGISTER_RATE_KEY);
+        var rec=raw?JSON.parse(raw):{ts:[]};
+        var now=Date.now();
+        rec.ts=(rec.ts||[]).filter(function(t){return now-t<3600000});
+        if(rec.ts.length>0&&now-rec.ts[rec.ts.length-1]<REGISTER_COOLDOWN_MS){
+            var wait=Math.ceil((REGISTER_COOLDOWN_MS-(now-rec.ts[rec.ts.length-1]))/1000);
+            return'Please wait '+wait+' seconds before submitting again.';
+        }
+        if(rec.ts.length>=REGISTER_HOURLY_CAP){
+            return'Submission limit reached. Please try again later.';
+        }
+        return null;
+    }catch(_){return null;}
+}
+function recordSubmission(){
+    try{
+        var raw=localStorage.getItem(REGISTER_RATE_KEY);
+        var rec=raw?JSON.parse(raw):{ts:[]};
+        rec.ts=(rec.ts||[]).concat([Date.now()]);
+        localStorage.setItem(REGISTER_RATE_KEY,JSON.stringify(rec));
+    }catch(_){}
+}
+
 window.submitApp=function(){
     var err=document.getElementById('formErr');err.style.display='none';
+    if(_registerSubmitInFlight){return showErr('Already submitting…');}
+    var rateMsg=checkRateLimit();
+    if(rateMsg){return showErr(rateMsg);}
+    _registerSubmitInFlight=true;
+    setTimeout(function(){_registerSubmitInFlight=false;},5000);
 
     // Read sibling data from DOM
     document.querySelectorAll('.sib-f').forEach(function(el){var i=parseInt(el.dataset.i);if(siblings[i])siblings[i].first=el.value.trim()});
@@ -519,6 +641,9 @@ window.submitApp=function(){
         console.error('[Register] Save error:',e);
         return showErr('Error submitting. Please try again.');
     }
+
+    recordSubmission();
+    _registerSubmitInFlight=false;
 
     // Show success
     document.getElementById('formWrap').style.display='none';

@@ -118,6 +118,41 @@
         if (!Array.isArray(arr)) return;
         arr.sort(compareBunks);
     }
+
+    // Globally-available helper: return division keys ordered by the user's
+    // drag-and-drop preferences in Campistry Me / flow.html.
+    //   1) gs.app1.manualColumnOrder (set by drag-reorder of grade columns)
+    //   2) gs.campStructure key order via parentDivision lookup
+    //   3) Numeric-then-alphabetic fallback
+    // Use this everywhere a list of division/grade keys is rendered to keep
+    // the order consistent across the entire site.
+    window.getUserDivisionOrder = function (keys) {
+        if (!Array.isArray(keys) || keys.length === 0) return keys || [];
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
+        var structureOrder = Object.keys(gs.campStructure || {});
+        var divs = window.divisions || {};
+        return keys.slice().sort(function (a, b) {
+            if (manualOrder) {
+                var ai = manualOrder.indexOf(a);
+                var bi = manualOrder.indexOf(b);
+                if (ai >= 0 && bi >= 0) return ai - bi;
+                if (ai >= 0) return -1;
+                if (bi >= 0) return 1;
+            }
+            if (structureOrder.length > 0) {
+                var aParent = (divs[a] && divs[a].parentDivision) || a;
+                var bParent = (divs[b] && divs[b].parentDivision) || b;
+                var ai2 = structureOrder.indexOf(aParent);
+                var bi2 = structureOrder.indexOf(bParent);
+                if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+            }
+            var na = parseInt(String(a).match(/(\d+)/) ? String(a).match(/(\d+)/)[1] : '');
+            var nb = parseInt(String(b).match(/(\d+)/) ? String(b).match(/(\d+)/)[1] : '');
+            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            return String(a).localeCompare(String(b));
+        });
+    };
     
     function escapeHtml(str) {
         if (!str) return "";
@@ -574,13 +609,9 @@
                 fragment.appendChild(groupHeader);
             }
             
-           // Grade cards within this parent division (sorted numerically)
-            const sortedGrades = [...group.grades].sort((a, b) => {
-                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                if (numA !== numB) return numA - numB;
-                return String(a).localeCompare(String(b));
-            });
+           // Grade cards within this parent division — preserve user-defined
+           // order from campStructure (set via drag-and-drop in Campistry Me).
+            const sortedGrades = [...group.grades];
             sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
@@ -781,7 +812,8 @@
             if (!divObj.bunks?.length) {
                 bunkList.innerHTML = '<p class="muted">No bunks assigned yet.</p>';
             } else {
-                const sorted = [...divObj.bunks].sort(compareBunks);
+                // Preserve user-defined bunk order (drag-and-drop in Campistry Me)
+                const sorted = [...divObj.bunks];
                 sorted.forEach(bunkName => {
                     const meta = state.bunkMetaData[bunkName] || { size: 0 };
                     const pill = document.createElement("span");
@@ -910,7 +942,9 @@
                         gradeBasedDivisions[key] = {
                             startTime: times.startTime || "",
                             endTime: times.endTime || "",
-                            bunks: [...bunks].sort(compareBunks),
+                            // Honor the user-defined bunk order from campStructure
+                            // (set via drag-and-drop in Campistry Me) verbatim.
+                            bunks: [...bunks],
                             color: parentColor,
                             parentDivision: divName
                         };
@@ -921,17 +955,8 @@
                 
                 state.divisions = gradeBasedDivisions;
                 state.bunks = allBunks;
-                // Sort grades numerically within each group so rendering is always consistent
-                for (const groupName in divGroups) {
-                    if (divGroups[groupName].grades) {
-                        divGroups[groupName].grades.sort((a, b) => {
-                            const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                            const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                            if (numA !== numB) return numA - numB;
-                            return String(a).localeCompare(String(b));
-                        });
-                    }
-                }
+                // Preserve user-defined grade order from campStructure
+                // (set via drag-and-drop in Campistry Me).
                 state.divisionGroups = divGroups;
                 
             } else {
@@ -961,18 +986,58 @@
                     validDivisions[divName] = {
                         startTime: div.startTime || "",
                         endTime: div.endTime || "",
-                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
-                        color: div.color || getNextUniqueDivisionColor(validDivisions)
+                        bunks: Array.isArray(div.bunks) ? div.bunks.slice() : [],
+                        color: div.color || getNextUniqueDivisionColor(validDivisions),
+                        // Preserve legacy grouping fields so divisionGroups stays intact.
+                        parentDivision: div.parentDivision || null
                     };
-                    sortBunksInPlace(validDivisions[divName].bunks);
                 });
                 state.divisions = validDivisions;
-                
-                state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+
+                // Preserve the user's existing groupings if present in the cloud
+                // payload (legacy app1.divisionGroups). Otherwise reconstruct
+                // groups from parentDivision references, and finally fall back
+                // to a single "All" bucket.
+                if (data.divisionGroups && typeof data.divisionGroups === 'object' && Object.keys(data.divisionGroups).length > 0) {
+                    state.divisionGroups = deepClone(data.divisionGroups);
+                } else {
+                    const reconstructedGroups = {};
+                    Object.entries(state.divisions).forEach(([divName, div]) => {
+                        const parent = div.parentDivision || 'All';
+                        if (!reconstructedGroups[parent]) {
+                            reconstructedGroups[parent] = { color: div.color || '#6B7280', grades: [] };
+                        }
+                        reconstructedGroups[parent].grades.push(divName);
+                    });
+                    state.divisionGroups = Object.keys(reconstructedGroups).length > 0
+                        ? reconstructedGroups
+                        : { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+                }
             }
             
-           // Rebuild divisions object with numerically sorted keys
-            const sortedDivKeys = Object.keys(state.divisions).sort((a, b) => {
+           // Rebuild divisions object honoring user-defined order:
+            //   1) gs.app1.manualColumnOrder if present (set via drag in Campistry Me)
+            //   2) Otherwise, the natural campStructure key order (also user-defined)
+            //   3) Numeric/alphabetic sort only for keys not in either source
+            const _gs2 = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+            const _manualOrder = (_gs2.app1 && Array.isArray(_gs2.app1.manualColumnOrder)) ? _gs2.app1.manualColumnOrder : null;
+            const _structureOrder = Object.keys(_gs2.campStructure || {});
+            const sortedDivKeys = Object.keys(state.divisions).slice().sort((a, b) => {
+                if (_manualOrder) {
+                    const ai = _manualOrder.indexOf(a);
+                    const bi = _manualOrder.indexOf(b);
+                    if (ai >= 0 && bi >= 0) return ai - bi;
+                    if (ai >= 0) return -1;
+                    if (bi >= 0) return 1;
+                }
+                if (_structureOrder.length > 0) {
+                    // Try matching the parentDivision in structure order
+                    const aParent = (state.divisions[a] && state.divisions[a].parentDivision) || a;
+                    const bParent = (state.divisions[b] && state.divisions[b].parentDivision) || b;
+                    const ai2 = _structureOrder.indexOf(aParent);
+                    const bi2 = _structureOrder.indexOf(bParent);
+                    if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+                }
                 const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
                 const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
                 if (numA !== numB) return numA - numB;
@@ -1230,16 +1295,31 @@
     };
     
     window.saveGlobalSpecialActivities = (updatedActivities) => {
-        state.specialActivities = updatedActivities;
+        // ★ Defensive dedupe. Previously cloud-sync races could produce
+        //   thousands of duplicate rows for the same special (one user hit
+        //   216× per rainy-only entry). De-dup by name here so corruption
+        //   can't survive a save round-trip. First occurrence wins.
+        const _input = Array.isArray(updatedActivities) ? updatedActivities : [];
+        const _seen = new Map();
+        for (const a of _input) {
+            if (!a || !a.name) continue;
+            if (!_seen.has(a.name)) _seen.set(a.name, a);
+        }
+        const cleaned = [..._seen.values()];
+        if (cleaned.length !== _input.length) {
+            console.warn('[saveGlobalSpecialActivities] de-duplicated', _input.length - cleaned.length, 'rows');
+        }
+
+        state.specialActivities = cleaned;
         saveData();
         // Also write the root-level key that all readers check first —
         // without this, the cloud_sync_helpers version's dual-write is lost
         // once app1 initialises and replaces that function.
-        window.saveGlobalSettings?.('specialActivities', updatedActivities);
+        window.saveGlobalSettings?.('specialActivities', cleaned);
         // Sync special_activities.js in-memory cache so getAllSpecialActivities()
         // returns the fresh list immediately without needing a storage reload.
         // The setter defined in special_activities.js accepts an array directly.
-        try { window.specialActivities = updatedActivities; } catch(_) {}
+        try { window.specialActivities = cleaned; } catch(_) {}
         window.refreshSpecialActivitiesFromStorage?.();
     };
     

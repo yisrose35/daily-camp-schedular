@@ -1,5 +1,14 @@
 // =============================================================================
-// Campistry Supabase config (gitignored — do not commit)
+// Campistry Supabase config — anon key + project URL.
+//
+// The anon key is designed to be public; it is shipped to every browser
+// that loads this app, and Supabase RLS is the actual authorization
+// boundary. So this file is intentionally checked into the repo.
+//
+// DO NOT add the service_role key, JWT secret, or any other privileged
+// credential to this file — those keys bypass RLS entirely and would
+// be a critical leak. Service-role access belongs server-side (Edge
+// Functions / dedicated backend), never in client code.
 // =============================================================================
 
 (function() {

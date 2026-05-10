@@ -839,15 +839,41 @@ const actualSlots = slots?.length || 0;
             }
             
             if (actualSlots !== expectedSlots) {
-                const newArr = new Array(expectedSlots).fill(null);
-                const minLen = Math.min(actualSlots, expectedSlots);
-                
-                for (let i = 0; i < minLen; i++) {
-                    newArr[i] = slots[i];
+                // ★ NEVER truncate non-null assignment data. Earlier behavior
+                //   blindly resized to expectedSlots; on reload, if the
+                //   skeleton rebuild produced fewer per-bunk slots than the
+                //   actual schedule (timing/race during cloud hydration),
+                //   real placed activities got silently dropped — leaving
+                //   "+ Add" gaps where Sports/Specials had been scheduled.
+                //
+                //   Safe rules:
+                //   - If expected > actual → pad with nulls (grow array)
+                //   - If actual > expected AND the extras contain real data
+                //     → keep the array as-is, log a mismatch warning
+                //   - If actual > expected AND extras are all null → trim
+                if (expectedSlots > actualSlots) {
+                    const newArr = new Array(expectedSlots).fill(null);
+                    for (let i = 0; i < actualSlots; i++) newArr[i] = slots[i];
+                    window.scheduleAssignments[bunk] = newArr;
+                    fixedCount++;
+                } else {
+                    // actual > expected — check if the extras have real data
+                    let extrasHaveData = false;
+                    for (let i = expectedSlots; i < actualSlots; i++) {
+                        if (slots[i] != null && (slots[i]._activity || slots[i].field || slots[i].sport)) {
+                            extrasHaveData = true;
+                            break;
+                        }
+                    }
+                    if (extrasHaveData) {
+                        console.warn(`[DivisionTimes] ${bunk}: keeping ${actualSlots} slots (skeleton rebuild produced only ${expectedSlots} — preserving real assignment data)`);
+                        // leave scheduleAssignments[bunk] untouched
+                    } else {
+                        // extras are null/empty — safe to trim
+                        window.scheduleAssignments[bunk] = slots.slice(0, expectedSlots);
+                        fixedCount++;
+                    }
                 }
-                
-                window.scheduleAssignments[bunk] = newArr;
-                fixedCount++;
             }
         });
         

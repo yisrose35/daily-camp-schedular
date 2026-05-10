@@ -112,11 +112,15 @@
     // =========================================================================
 
     function getGlobalSettings() { return window.loadGlobalSettings ? window.loadGlobalSettings() : {}; }
+    // ★ Symbol key so the cache CAN'T be serialized into localStorage / cloud.
+    //   Earlier code attached `gs._cachedSpecialsList` directly. Because `gs`
+    //   gets persisted, a stale (or polluted) list from one session survived
+    //   forever and the early-return prevented the merge from ever picking up
+    //   newly-configured specials. Symbols are non-enumerable in JSON, so a
+    //   Symbol-keyed cache stays per-run and dies with the page session.
+    const _CACHED_SPECIALS = Symbol('cachedSpecialsList');
     function getSpecialActivitiesList(gs) {
-        // Cache on the gs object so the three external calls happen ONCE per
-        // scheduler run, not once per getSpecialConfig call (which is called
-        // thousands of times and would flood the console / trigger side-effects).
-        if (gs && gs._cachedSpecialsList) return gs._cachedSpecialsList;
+        if (gs && gs[_CACHED_SPECIALS]) return gs[_CACHED_SPECIALS];
 
         // Merge ALL known sources so the scheduler sees every configured special.
         // Priority (last write wins): getAll → global → app1
@@ -129,7 +133,12 @@
             if (s && s.name) merged.set(s.name, s);
         });
         const result = Array.from(merged.values());
-        if (gs) gs._cachedSpecialsList = result;
+        if (gs) gs[_CACHED_SPECIALS] = result;
+        // Defensive: if a legacy persisted `_cachedSpecialsList` is still on
+        //   the gs object, evict it so subsequent code paths can't read stale.
+        if (gs && '_cachedSpecialsList' in gs) {
+            try { delete gs._cachedSpecialsList; } catch (_) {}
+        }
         return result;
     }
 
@@ -442,13 +451,22 @@
                 const rotData = await window.RotationCloud.load(true); // force refresh
                 if (rotData?.counts && Object.keys(rotData.counts).length > 0) {
                     // 1. Merge cloud counts into globalSettings.historicalCounts
-                    //    (used by RotationEngine.getActivityCount fallback)
+                    //    (used by RotationEngine.getActivityCount fallback).
+                    //    Subtract today's row so a regenerate isn't biased
+                    //    against activities the previous draft used. Today's
+                    //    contribution is re-added after generation via the
+                    //    post-gen rebuildHistoricalCounts call.
                     const gs = getGlobalSettings();
                     if (!gs.historicalCounts) gs.historicalCounts = {};
+                    const _today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    const _todayCloud = (rotData.countsByDate && rotData.countsByDate[_today]) || {};
                     for (const [bunk, activities] of Object.entries(rotData.counts)) {
                         if (!gs.historicalCounts[bunk]) gs.historicalCounts[bunk] = {};
+                        const _todayBunk = _todayCloud[bunk] || {};
                         for (const [act, count] of Object.entries(activities)) {
-                            gs.historicalCounts[bunk][act] = count;
+                            const _historical = count - (_todayBunk[act] || 0);
+                            if (_historical > 0) gs.historicalCounts[bunk][act] = _historical;
+                            else delete gs.historicalCounts[bunk][act];
                         }
                     }
                     if (typeof window.saveGlobalSettings === 'function') {
@@ -1281,9 +1299,17 @@
             if (!timeOk) return false;
 
             // ★ GRADE ACCESS RESTRICTION (accessRestrictions)
+            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+            //   the original grade type. Also enforce per-bunk allow-list
+            //   when divisions[grade] is a non-empty bunk array, mirroring
+            //   commitWriteIfLegal / _validateWritePlacement / safety net.
             if (ledger.accessRestrictions?.enabled) {
                 const divRules = ledger.accessRestrictions.divisions || {};
-                if (!(grade in divRules)) return false;
+                const gradeKey = String(grade);
+                if (!(gradeKey in divRules) && !(grade in divRules)) return false;
+                const bunkAllow = divRules[gradeKey] || divRules[grade];
+                if (Array.isArray(bunkAllow) && bunkAllow.length > 0
+                    && !bunkAllow.map(String).includes(String(bunk))) return false;
             }
 
             // Capacity
@@ -2590,6 +2616,38 @@
                 //   while priorityList + free time allow.
                 if (stillAllowed === 0) return;
 
+                // ★ Special layer with per-subcategory grid: emit one need per
+                //   subcategory with positive qty so the cap-summing loop and
+                //   the per-subcategory gate (_canPickSpecialBySubcategory) see
+                //   demand for each tag independently. Each row is "exactly N".
+                //   Falls through to single-need emission if grid is empty.
+                if (t === 'special' && layer.subQuantities && typeof layer.subQuantities === 'object') {
+                    const entries = Object.keys(layer.subQuantities)
+                        .map(k => [k, parseInt(layer.subQuantities[k], 10) || 0])
+                        .filter(([, v]) => v > 0);
+                    if (entries.length > 0) {
+                        // Distribute alreadyPlaced proportionally across entries
+                        // is overkill — placedTypes is shared across the whole
+                        // 'special' type, so just pass per-row floor=cap=qty
+                        // and let _canPickSpecialBySubcategory enforce per-tag.
+                        entries.forEach(([subName, subQty]) => {
+                            const layerForSub = Object.assign({}, layer, {
+                                subcategory: subName,
+                                qty: subQty,
+                                op: '='
+                            });
+                            remainingNeeds.push({
+                                layer: layerForSub,
+                                type: 'special',
+                                count: subQty,
+                                cap: subQty,
+                                op: '='
+                            });
+                        });
+                        return;
+                    }
+                }
+
                 remainingNeeds.push({ layer, type: t, count: stillNeeded, cap: stillAllowed, op });
             });
 
@@ -2676,11 +2734,19 @@
             //   ('') = "Regular". Subcategories normalized to lowercase here so
             //   case-insensitive matching at pick time is one lookup.
             //   _hasSubcategoryTags = true means subcategory enforcement is on.
+            // ★ Untagged activities map to the conventional "regular" bucket
+            //   (matches getDisplaySubcategory in special_activities.js). This
+            //   way "Regular=1" in the per-subcategory grid pulls any untagged
+            //   special — without forcing the user to tag every existing one.
+            const _canonSub = (s) => {
+                const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
+                return v || 'regular';
+            };
             const specialSubcategoryCap = {};
             let _hasSubcategoryTags = false;
             specialNeeds.forEach(n => {
                 const subRaw = (n.layer && typeof n.layer.subcategory === 'string') ? n.layer.subcategory.trim() : '';
-                const subKey = subRaw.toLowerCase();
+                const subKey = _canonSub(subRaw);
                 if (subRaw) _hasSubcategoryTags = true;
                 const c = (n.cap === Infinity) ? Infinity : (n.cap || 0);
                 specialSubcategoryCap[subKey] = (specialSubcategoryCap[subKey] === Infinity || c === Infinity)
@@ -2904,10 +2970,18 @@
             //   this bunk. Returns true when no subcategory enforcement is on
             //   for this bunk (legacy / no tags), or when there is remaining
             //   demand for this special's subcategory.
+            // ★ Untagged activities → "regular" bucket (matches
+            //   getDisplaySubcategory in special_activities.js). Inlined here
+            //   because the equivalent helper in the per-grade loop is in a
+            //   different scope and not visible to runGlobalPlanner.
+            const _gpCanonSub = (s) => {
+                const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
+                return v || 'regular';
+            };
             function _canPickSpecialBySubcategory(special, sl, result) {
                 if (!sl?.specials?.subcategoryEnforced) return true;
                 const caps = sl.specials.subcategoryCap || {};
-                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                const subKey = _gpCanonSub(special.subcategory);
                 const cap = caps[subKey];
                 if (cap == null) return false; // subcategory not demanded by any layer
                 if (cap === Infinity) return true;
@@ -2915,7 +2989,7 @@
                 return used < cap;
             }
             function _markSpecialSubcategoryAssigned(special, result) {
-                const subKey = (typeof special.subcategory === 'string' ? special.subcategory : '').trim().toLowerCase();
+                const subKey = _gpCanonSub(special.subcategory);
                 if (!result.subcategoryAssigned) result.subcategoryAssigned = {};
                 result.subcategoryAssigned[subKey] = (result.subcategoryAssigned[subKey] || 0) + 1;
             }
@@ -3075,6 +3149,13 @@
                             location: special.location,
                             duration: special.totalDuration || special.dMin || 30,
                             isScarce: special.isScarce,
+                            // ★ Carry the subcategory tag so the per-subcategory
+                            //   gate (_canPickSpecialBySubcategory) can match it
+                            //   against the layer's subQuantities cap dict.
+                            //   Without this, every special looks untagged →
+                            //   the gate routes everything into the "regular"
+                            //   bucket, stops after one fill, blocks the rest.
+                            subcategory: special.subcategory || '',
                             specialItem: special
                         };
                     }
@@ -13193,6 +13274,163 @@
         // Refresh debug exposure with final post-2.78 state.
         try { window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines)); } catch (_e) {}
 
+        // ★ Shared placement validator used by all Step 2.7 writers.
+        //   Returns null if the placement is allowed, otherwise a short
+        //   reason string. Mirrors the Step 4.95 safety net so the same
+        //   rules apply at write time too — bad placements never reach
+        //   scheduleAssignments in the first place.
+        // ★ Live-read on every call. The previous snapshot at the top of
+        //   Step 2.7 could go stale if anything between the snapshot and a
+        //   later write mutated app1.fields / specialActivities (cloud sync,
+        //   late facility edits). commitWriteIfLegal already reads live for
+        //   the same reason — this validator now matches.
+        function _validateWritePlacement(fieldName, activityName, grade, bunk, startMin, endMin) {
+            if (!fieldName || fieldName === 'Free') return null;
+            const _gs = getGlobalSettings();
+            const _fields = _gs.app1?.fields || [];
+            const _specials = _gs.app1?.specialActivities || [];
+            const fld = _fields.find(f => f && f.name === fieldName);
+            const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
+            if (fld?.accessRestrictions?.enabled) {
+                const divs = fld.accessRestrictions.divisions || {};
+                const gradeKey = String(grade);
+                if (!(gradeKey in divs) && !(grade in divs)) return 'field access: grade not allowed';
+                const bunkList = divs[gradeKey] || divs[grade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunk))) return 'field access: bunk not in allowed list';
+            }
+
+            // Field-level grade-scoped time rules
+            if (fld && Array.isArray(fld.timeRules) && fld.timeRules.length > 0
+                && startMin != null && endMin != null) {
+                const myG = grade != null ? String(grade) : null;
+                let hasGradeAvail = false, insideAvail = false;
+                for (const r of fld.timeRules) {
+                    const t = String(r.type || '').toLowerCase();
+                    const isUnavail = t === 'unavailable' || r.available === false;
+                    const isAvail = t === 'available' || r.available === true;
+                    const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                    const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                    if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                    const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                    if (rDivs.length > 0 && myG && !rDivs.includes(myG)) continue;
+                    if (isUnavail && rs < endMin && re > startMin) return 'field timeRules: overlapping Unavailable rule';
+                    if (isAvail) {
+                        hasGradeAvail = true;
+                        if (startMin >= rs && endMin <= re) insideAvail = true;
+                    }
+                }
+                if (hasGradeAvail && !insideAvail) return 'field timeRules: outside Available windows';
+            }
+
+            // Special-level access restriction
+            if (spByName?.accessRestrictions?.enabled) {
+                const divs = spByName.accessRestrictions.divisions || {};
+                const gradeKey = String(grade);
+                if (!(gradeKey in divs) && !(grade in divs)) return 'special access: grade not allowed';
+                const bunkList = divs[gradeKey] || divs[grade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunk))) return 'special access: bunk not in allowed list';
+            }
+
+            return null;
+        }
+        const _stepRulesBlocked = []; // diagnostic accumulator
+        const _stepRulesRescued = []; // diagnostic for write-site rescues
+
+        // Find another field that can host `activityName` for this bunk's grade
+        // at this time, passing every gate (access, timeRules, sharing,
+        // capacity). Returns the field name or null. Used both at write sites
+        // (Step 2.7) and by the safety net (Step 4.95) so a rule-blocked
+        // placement gets relocated rather than dropped to Free whenever
+        // possible.
+        function _findValidAlternativeField(activityName, grade, bunk, startMin, endMin, excludeField) {
+            if (!activityName || activityName === 'Free') return null;
+            const sa = window.scheduleAssignments || {};
+            const wantLower = String(activityName).toLowerCase();
+            const candidates = [];
+            // Live read — same rationale as _validateWritePlacement
+            const _altGs = getGlobalSettings();
+            const _altFields = _altGs.app1?.fields || [];
+            for (const f of _altFields) {
+                if (!f || !f.name) continue;
+                if (excludeField && f.name === excludeField) continue;
+                if (!Array.isArray(f.activities)) continue;
+                if (!f.activities.some(a => String(a).toLowerCase() === wantLower)) continue;
+                if (_validateWritePlacement(f.name, activityName, grade, bunk, startMin, endMin)) continue;
+
+                // Capacity check against current scheduleAssignments —
+                // collect overlap details for share-rule evaluation below.
+                let overlapCount = 0;
+                let crossGradeOverlap = false;
+                let misalignedShare = false;
+                const overlapGrades = [];
+                for (const [otherBunk, otherSlots] of Object.entries(sa)) {
+                    if (String(otherBunk) === String(bunk)) continue;
+                    if (!Array.isArray(otherSlots)) continue;
+                    const otherGrade = Object.entries(divisions).find(([g, d]) =>
+                        (d.bunks || []).map(String).includes(String(otherBunk))
+                    )?.[0];
+                    const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                    for (let oi = 0; oi < otherSlots.length; oi++) {
+                        const oe = otherSlots[oi];
+                        if (!oe || oe.continuation) continue;
+                        const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
+                        if (oField !== f.name) continue;
+                        const oslot = otherPbs[oi];
+                        const oStart = oe._startMin ?? oslot?.startMin;
+                        const oEnd   = oe._endMin   ?? oslot?.endMin;
+                        if (oStart == null || oEnd == null) continue;
+                        if (oEnd <= startMin || oStart >= endMin) continue;
+                        overlapCount++;
+                        overlapGrades.push(otherGrade);
+                        if (otherGrade !== grade) crossGradeOverlap = true;
+                        if (oStart !== startMin || oEnd !== endMin) misalignedShare = true;
+                    }
+                }
+
+                let sharing = f.sharableWith?.type || 'not_sharable';
+                let cap = parseInt(f.sharableWith?.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                // ★ Per-grade override resolves effective shareType/capacity
+                const _override = f.gradeShareRules?.[grade];
+                if (_override) {
+                    sharing = _override.type || 'not_sharable';
+                    cap = parseInt(_override.capacity) || (sharing === 'not_sharable' ? 1 : 2);
+                }
+                if (sharing === 'not_sharable' && overlapCount >= 1) continue;
+                if (sharing === 'same_division' && crossGradeOverlap) continue;
+                if (sharing === 'custom') {
+                    const allowed = f.sharableWith?.divisions || [];
+                    if (allowed.length > 0 && !allowed.includes(grade)) continue;
+                    // Cross-grade occupants must also be in allowed list
+                    if (allowed.length > 0
+                        && overlapGrades.some(og => og !== grade && !allowed.includes(og))) continue;
+                }
+                if (sharing === 'cross_division') {
+                    // Every existing claim grade must be pair-compatible with new grade
+                    const pairs = f.sharableWith?.allowedPairs || {};
+                    let pairsOk = true;
+                    for (const og of overlapGrades) {
+                        if (og === grade) continue;
+                        const key = [grade, og].sort().join('|');
+                        if (pairs[key] !== true) { pairsOk = false; break; }
+                    }
+                    if (!pairsOk) continue;
+                }
+                if (overlapCount >= cap) continue;
+                // Shared field needs exact time match — strictTiming honors the
+                // field-level opt-in (default behavior allows misaligned shares).
+                if (overlapCount > 0 && misalignedShare && f.strictTiming === true) continue;
+
+                candidates.push({ name: f.name, used: overlapCount });
+            }
+            if (candidates.length === 0) return null;
+            // Prefer fields with existing same-time same-activity occupants
+            // (better field utilisation) over empty alternatives.
+            candidates.sort((a, b) => b.used - a.used);
+            return candidates[0].name;
+        }
+
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
             const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
@@ -13213,6 +13451,11 @@
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
                     const fn = block._specialLocation || block._assignedSpecial;
+                    const _why = _validateWritePlacement(fn, block._assignedSpecial, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _why });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: fn, sport: null, _activity: block._assignedSpecial,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
@@ -13327,6 +13570,12 @@
                 (bunkTimelines[bunk] || []).filter(b => b && b._rotationEventId).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1) return;
+                    const _reFn = block._rotationEventLocation || block.event;
+                    const _why = _validateWritePlacement(_reFn, block.event, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _reFn, activity: block.event, reason: 'rotation-event-write: ' + _why });
+                        return;
+                    }
                    window.scheduleAssignments[String(bunk)][idx] = {
                         field: block._rotationEventLocation || block.event,
                         sport: null,
@@ -13377,15 +13626,15 @@
                                 ))
                                 .map(f => f.name);
 
-                            // Pick first court not already claimed at this time across the day
-                            let pickedCourt = null;
-                            for (const court of courts) {
-                                let inUse = false;
-                                // Check existing scheduleAssignments for cross-bunk conflicts at this time
+                            // ★ Prefer courts that pass _validateWritePlacement
+                            //   (accessRestrictions + timeRules) AND aren't double-booked.
+                            //   Previously we only filtered on double-booking; if the
+                            //   first matching court was rule-incompatible the override
+                            //   silently failed even when later courts were legal.
+                            const courtIsBusy = (court) => {
                                 for (const [otherBunk, otherSlots] of Object.entries(window.scheduleAssignments || {})) {
                                     if (String(otherBunk) === String(bunk)) continue;
                                     if (!Array.isArray(otherSlots)) continue;
-                                    // Find that bunk's grade + per-bunk slots to resolve times
                                     const otherGrade = Object.entries(divisions).find(([g, d]) =>
                                         (d.bunks || []).map(String).includes(String(otherBunk))
                                     )?.[0];
@@ -13398,18 +13647,33 @@
                                         if (oslot.endMin <= block.startMin || oslot.startMin >= block.endMin) continue;
                                         const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
                                         if (oField && String(oField).toLowerCase() === String(court).toLowerCase()) {
-                                            inUse = true; break;
+                                            return true;
                                         }
                                     }
-                                    if (inUse) break;
                                 }
-                                if (!inUse) { pickedCourt = court; break; }
-                            }
+                                return false;
+                            };
 
-                            // Last resort: take first court even if "in use" — override is user-mandated
+                            let pickedCourt = null;
+                            // Pass 1: rule-passing AND not double-booked
+                            for (const court of courts) {
+                                if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
+                                if (courtIsBusy(court)) continue;
+                                pickedCourt = court; break;
+                            }
+                            // Pass 2: rule-passing even if busy — better than rule-violating
+                            if (!pickedCourt) {
+                                for (const court of courts) {
+                                    if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
+                                    pickedCourt = court;
+                                    console.warn(`[Override] All clean courts busy; forcing rule-passing ${pickedCourt} for ${bunk}`);
+                                    break;
+                                }
+                            }
+                            // Pass 3 (last resort): any court — original behavior
                             if (!pickedCourt && courts.length > 0) {
                                 pickedCourt = courts[0];
-                                console.warn(`[Override] No clean court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
+                                console.warn(`[Override] No rule-passing court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
                             }
 
                             if (pickedCourt) {
@@ -13421,10 +13685,16 @@
                             }
                         }
 
+                        const _pcAct = isCustom ? (block._customActivity || block.event) : block.event;
+                        const _pcWhy = _validateWritePlacement(resolvedField, _pcAct, grade, bunk, block.startMin, block.endMin);
+                        if (_pcWhy) {
+                            _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcWhy });
+                            return;
+                        }
                         window.scheduleAssignments[String(bunk)][idx] = {
                             field: resolvedField,
                             sport: resolvedSport,
-                            _activity: isCustom ? (block._customActivity || block.event) : block.event,
+                            _activity: _pcAct,
                             _fixed: true, _pinned: block._classification === 'pinned',
                             _bunkOverride: true, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
@@ -13469,16 +13739,32 @@
                 ).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || !window.scheduleAssignments[String(bunk)] || window.scheduleAssignments[String(bunk)][idx]) return;
+                    let _useField = block.field;
+                    const _why = _validateWritePlacement(_useField, block._assignedSport, grade, bunk, block.startMin, block.endMin);
+                    if (_why) {
+                        // Try to rescue: find another field that hosts the same
+                        // sport, allows this grade/bunk, isn't blocked by time
+                        // rules, and has free capacity. Falls back to skip
+                        // (Free) only when no alternative exists.
+                        const _alt = _findValidAlternativeField(block._assignedSport, grade, bunk, block.startMin, block.endMin, _useField);
+                        if (_alt) {
+                            _stepRulesRescued.push({ bunk, grade, idx, from: _useField, to: _alt, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
+                            _useField = _alt;
+                        } else {
+                            _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _useField, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _why });
+                            return;
+                        }
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
-                        field: block.field, sport: block._assignedSport,
+                        field: _useField, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
                         _activityLocked: false, _autoMode: true, _capacityChecked: true, continuation: false,
                         _startMin: block.startMin, _endMin: block.endMin
                     };
                     if (!fieldUsageBySlot[idx]) fieldUsageBySlot[idx] = {};
-                    if (!fieldUsageBySlot[idx][block.field]) fieldUsageBySlot[idx][block.field] = { count: 0, bunks: {} };
-                    fieldUsageBySlot[idx][block.field].count++;
-                    fieldUsageBySlot[idx][block.field].bunks[String(bunk)] = block._assignedSport;
+                    if (!fieldUsageBySlot[idx][_useField]) fieldUsageBySlot[idx][_useField] = { count: 0, bunks: {} };
+                    fieldUsageBySlot[idx][_useField].count++;
+                    fieldUsageBySlot[idx][_useField].bunks[String(bunk)] = block._assignedSport;
                     sportWriteCount++;
                 });
             });
@@ -13494,6 +13780,13 @@
                 (bunkTimelines[bunk] || []).filter(b => b._activityLocked && b._committed && !b._assignedSpecial && !(b._fixed || b._classification === 'pinned')).forEach(block => {
                     const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
+                    // For anchor blocks the "field" is the event name itself (Lunch, Swim, …);
+                    // only validate when it really is a configured field/special location.
+                    const _aWhy = _validateWritePlacement(block.event, block.event, grade, bunk, block.startMin, block.endMin);
+                    if (_aWhy) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aWhy });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.event, sport: null, _activity: block.event,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
@@ -13510,6 +13803,22 @@
         window._preGenClearActive = false;
 
         log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
+        if (_stepRulesRescued.length > 0) {
+            log('[2.7] ↪ Relocated ' + _stepRulesRescued.length + ' rule-violating write(s) to valid alternative field(s):');
+            _stepRulesRescued.forEach(r => {
+                log('  ↪ ' + r.bunk + ' (' + r.grade + ') slot ' + r.idx + ': '
+                    + r.activity + ' moved ' + r.from + ' → ' + r.to + ' (was: ' + r.reason + ')');
+            });
+            warnings.push({ type: 'write_relocated', count: _stepRulesRescued.length, items: _stepRulesRescued });
+        }
+        if (_stepRulesBlocked.length > 0) {
+            warn('[2.7] 🚫 Blocked ' + _stepRulesBlocked.length + ' rule-violating write(s) at the source (no alternative found):');
+            _stepRulesBlocked.forEach(v => {
+                warn('  - ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                    + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason);
+            });
+            warnings.push({ type: 'write_blocked', count: _stepRulesBlocked.length, items: _stepRulesBlocked });
+        }
 
         // ★ v4.0: Sync auto locks → GlobalFieldLocks so downstream code (fillers, post-edit, canBlockFit) sees them
         if (window.AutoFieldLocks?.syncToGlobalFieldLocks) {
@@ -13807,6 +14116,23 @@
             masterFields.forEach(f => { (f.activities || []).forEach(a => { if (!fbs[a]) fbs[a] = []; fbs[a].push(f.name); }); });
             window.fieldsBySport = fbs;
 
+            // ★ Daily sport-on-field overrides (e.g. "Hockey is disabled on
+            //   #2 gym today only"). Mirrors the source buildFieldLedger reads
+            //   so AutoSolverEngine.buildCandidates can apply the same gate.
+            let dailyDisabledSports = {};
+            try {
+                const _dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+                const _ov = (gs.app1?.dailyOverrides || {})[currentDate || ''] || {};
+                dailyDisabledSports = _dd.dailyDisabledSportsByField || _ov.dailyDisabledSportsByField || {};
+                if (!Object.keys(dailyDisabledSports).length && currentDate) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + currentDate);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (_parsed?.dailyDisabledSportsByField) dailyDisabledSports = _parsed.dailyDisabledSportsByField;
+                    }
+                }
+            } catch (_e) { dailyDisabledSports = {}; }
+
             return {
                 activityProperties: window.activityProperties || {},
                 masterFields,
@@ -13816,6 +14142,7 @@
                 disabledFields: (window.currentDisabledFields && window.currentDisabledFields.length)
                     ? window.currentDisabledFields
                     : (gs.app1?.disabledFields || []),
+                dailyDisabledSports,
                 dateStr: currentDate || '',
                 yesterdayHistory,
                 isRainy,
@@ -14264,6 +14591,56 @@
                 (de[1].bunks || []).forEach(function(b) { perfBunkGrade[String(b)] = de[0]; });
             });
 
+            // ★ Rules check used by Step 4.9 extensions: a Free slot can only
+            //   absorb a neighbouring sport block if THAT block's field still
+            //   allows this bunk's grade at the Free slot's actual time. Without
+            //   this check the perfection pass routinely created the violations
+            //   that Step 4.95 then had to clear to Free (e.g. extending a
+            //   pre-Unavailable block into the Unavailable window).
+            var _perfRulesGS = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var _perfRulesFields = _perfRulesGS.app1?.fields || [];
+            var _perfRulesByField = {};
+            _perfRulesFields.forEach(function(f) { if (f && f.name) _perfRulesByField[f.name] = f; });
+            function perfRulesPass(fieldName, freeSlot, grade) {
+                if (!fieldName || fieldName === 'Free') return true;
+                var fld = _perfRulesByField[fieldName];
+                if (!fld) return true;
+                var sMin = freeSlot && freeSlot.startMin;
+                var eMin = freeSlot && freeSlot.endMin;
+                if (sMin == null || eMin == null) return true;
+
+                // Field-level access restriction
+                // ★ Loosen `enabled` to truthy + dual-key divisions lookup
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
+                    var divs = fld.accessRestrictions.divisions || {};
+                    var gradeKey = String(grade);
+                    if (!(gradeKey in divs) && !(grade in divs)) return false;
+                }
+                // Field-level grade-scoped time rules
+                if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0) {
+                    var myG = grade != null ? String(grade) : null;
+                    var hasGradeAvail = false, insideAvail = false;
+                    for (var ri = 0; ri < fld.timeRules.length; ri++) {
+                        var r = fld.timeRules[ri];
+                        var rt = String(r.type || '').toLowerCase();
+                        var isUnavail = rt === 'unavailable' || r.available === false;
+                        var isAvail   = rt === 'available'   || r.available === true;
+                        var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.start || r.startTime);
+                        var re = r.endMin   != null ? r.endMin   : parseTimeToMinutes(r.end   || r.endTime);
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        var rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && myG && rDivs.indexOf(myG) === -1) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return false;
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) return false;
+                }
+                return true;
+            }
+
             // ★ FIX v10.3: Calculate the resulting duration of extending a sport
             // block that contains anchorIdx to also cover freeIdx.
             // Walks back through continuations to find the true block start, then
@@ -14299,12 +14676,15 @@
                     var slot = pbs[idx];
                     if (!slot) return;
 
+                    var _perfGrade = grade;
+
                     // Strategy 1: Extend previous SPORT slot to absorb this Free
                     if (idx > 0 && perfCanExtend(slots[idx - 1])) {
                         var prevField = slots[idx - 1].field;
-                        // ★ dMax guard + field-conflict guard
+                        // ★ dMax guard + field-conflict guard + RULE guard
                         if (perfExtendedDur(slots, pbs, idx - 1, idx) <= GAP_MAX_DUR &&
-                            perfFieldFreeAt(prevField, idx, bunk, pbs)) {
+                            perfFieldFreeAt(prevField, idx, bunk, pbs) &&
+                            perfRulesPass(prevField, slot, _perfGrade)) {
                             slots[idx] = {
                                 field: prevField,
                                 sport: slots[idx - 1].sport,
@@ -14321,7 +14701,8 @@
                     if (idx < slots.length - 1 && perfCanExtend(slots[idx + 1])) {
                         var nextField = slots[idx + 1].field;
                         if (perfExtendedDur(slots, pbs, idx + 1, idx) <= GAP_MAX_DUR &&
-                            perfFieldFreeAt(nextField, idx, bunk, pbs)) {
+                            perfFieldFreeAt(nextField, idx, bunk, pbs) &&
+                            perfRulesPass(nextField, slot, _perfGrade)) {
                             slots[idx] = {
                                 field: nextField,
                                 sport: slots[idx + 1].sport,
@@ -14339,12 +14720,14 @@
                         if (!perfCanExtend(slots[si])) continue;
                         if (perfExtendedDur(slots, pbs, si, idx) > GAP_MAX_DUR) continue;
                         // All intermediate slots must be Free/continuation AND field must be free at each
+                        // AND the field must satisfy access/timeRules at every bridged slot
                         var s3field = slots[si].field;
                         var canBridge = true;
                         for (var ci = si + 1; ci <= idx; ci++) {
                             var cs = slots[ci];
                             if (cs && cs.field !== 'Free' && !cs.continuation) { canBridge = false; break; }
                             if (!perfFieldFreeAt(s3field, ci, bunk, pbs)) { canBridge = false; break; }
+                            if (!perfRulesPass(s3field, pbs[ci], _perfGrade)) { canBridge = false; break; }
                         }
                         if (!canBridge) continue;
                         for (var fi = si + 1; fi <= idx; fi++) {
@@ -14368,6 +14751,7 @@
                             var cs2 = slots[ci2];
                             if (cs2 && cs2.field !== 'Free' && !cs2.continuation) { canBridge2 = false; break; }
                             if (!perfFieldFreeAt(s3bfield, ci2, bunk, pbs)) { canBridge2 = false; break; }
+                            if (!perfRulesPass(s3bfield, pbs[ci2], _perfGrade)) { canBridge2 = false; break; }
                         }
                         if (!canBridge2) continue;
                         for (var fi2 = idx; fi2 < si2; fi2++) {
@@ -14414,6 +14798,191 @@
             }
         }
 
+        // =====================================================================
+        // STEP 4.95 — RULES SAFETY NET (final pass)
+        // =====================================================================
+        // Belt-and-suspenders: scan every written assignment one more time
+        // against the current field/special accessRestrictions and per-grade
+        // timeRules. Any placement that violates a rule is cleared to Free
+        // and logged. This catches every code path we may have missed (older
+        // pre-allocators, cached pinned blocks, third-party patchers) so the
+        // schedule the user sees never contains a known violation.
+        (function rulesSafetyNet() {
+            try {
+                const _gs = getGlobalSettings();
+                const _allFields = _gs.app1?.fields || [];
+                const _allSpecials = _gs.app1?.specialActivities || [];
+                const _byField = {};
+                _allFields.forEach(f => { if (f && f.name) _byField[f.name] = f; });
+                const _bySpecial = {};
+                _allSpecials.forEach(s => { if (s && s.name) _bySpecial[s.name] = s; });
+
+                const violations = [];
+
+                function checkAccess(rules, grade, bunk) {
+                    // ★ Loosen `enabled` to truthy + dual-key divisions lookup
+                    if (!rules || !rules.enabled) return null;
+                    const divs = rules.divisions || {};
+                    const gradeKey = String(grade);
+                    if (!(gradeKey in divs) && !(grade in divs)) return 'grade not allowed';
+                    const bunkList = divs[gradeKey] || divs[grade];
+                    if (Array.isArray(bunkList) && bunkList.length > 0
+                        && !bunkList.map(String).includes(String(bunk))) return 'bunk not in allowed list';
+                    return null;
+                }
+
+                function checkTimeRules(rawRules, grade, sMin, eMin) {
+                    if (!Array.isArray(rawRules) || rawRules.length === 0) return null;
+                    const myG = grade != null ? String(grade) : null;
+                    let hasGradeAvail = false, insideAvail = false;
+                    for (const r of rawRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        const isAvail = t === 'available' || r.available === true;
+                        const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                        const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && myG && !rDivs.includes(myG)) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return 'overlapping Unavailable rule';
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) return 'outside Available windows';
+                    return null;
+                }
+
+                allGrades.forEach(grade => {
+                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const slotsArr = window.scheduleAssignments?.[String(bunk)] || [];
+                        const pbsArr = pbs?.[String(bunk)] || [];
+                        slotsArr.forEach((entry, idx) => {
+                            if (!entry || entry.continuation || entry._isTransition) return;
+                            const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                            if (!fieldName || fieldName === 'Free') return;
+                            const slotMeta = pbsArr[idx] || {};
+                            const sMin = entry._startMin ?? slotMeta.startMin;
+                            const eMin = entry._endMin ?? slotMeta.endMin;
+
+                            // Field-level accessRestrictions + timeRules
+                            const fld = _byField[fieldName];
+                            if (fld) {
+                                const r1 = checkAccess(fld.accessRestrictions, grade, bunk);
+                                if (r1) {
+                                    violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field access: ' + r1 });
+                                    return;
+                                }
+                                if (sMin != null && eMin != null) {
+                                    const r2 = checkTimeRules(fld.timeRules, grade, sMin, eMin);
+                                    if (r2) {
+                                        violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field timeRules: ' + r2 });
+                                        return;
+                                    }
+                                }
+                            }
+
+                            // Special-level accessRestrictions (when activity is a configured special)
+                            const actName = entry._activity;
+                            if (actName && _bySpecial[actName]) {
+                                const sp = _bySpecial[actName];
+                                const r3 = checkAccess(sp.accessRestrictions, grade, bunk);
+                                if (r3) {
+                                    violations.push({ bunk, grade, idx, fieldName, activity: actName, reason: 'special access: ' + r3 });
+                                    return;
+                                }
+                            }
+                        });
+                    });
+                });
+
+                if (violations.length > 0) {
+                    let rescuedCount = 0;
+                    let clearedCount = 0;
+                    warn('[STEP 4.95] 🚫 Rule-safety net found ' + violations.length + ' bad placement(s):');
+                    violations.forEach(v => {
+                        const slotsArr = window.scheduleAssignments[String(v.bunk)];
+                        if (!slotsArr) return;
+                        const original = slotsArr[v.idx] || {};
+                        const sMin = original._startMin;
+                        const eMin = original._endMin;
+                        const isSportPlacement = v.activity && !_bySpecial[v.activity];
+
+                        // ★ DIAGNOSTIC: which writer left this violation behind?
+                        //   Each writer stamps a different flag on the entry; surfacing
+                        //   them here points at the path that bypassed the rule gates.
+                        const _srcFlags = [];
+                        if (original._autoSolved) _srcFlags.push('autoSolved');
+                        if (original._bfsRepaired) _srcFlags.push('bfsRepaired');
+                        if (original._lnsRepaired) _srcFlags.push('lnsRepaired');
+                        if (original._lnsSwapped) _srcFlags.push('lnsSwapped');
+                        if (original._ejected) _srcFlags.push('ejected');
+                        if (original._ejectionChainFilled) _srcFlags.push('ejectionChainFilled');
+                        if (original._colocated) _srcFlags.push('colocated');
+                        if (original._capacityChecked) _srcFlags.push('capacityChecked');
+                        if (original._perfectionExtend) _srcFlags.push('perfectionExtend');
+                        if (original._bunkOverride) _srcFlags.push('bunkOverride');
+                        if (original._pinned) _srcFlags.push('pinned');
+                        if (original._restoredAt) _srcFlags.push('pinRestored');
+                        if (original._activityLocked) _srcFlags.push('activityLocked');
+                        if (original._fixed) _srcFlags.push('fixed');
+                        if (original.continuation) _srcFlags.push('continuation');
+                        if (original._fromSplitTile) _srcFlags.push('fromSplitTile');
+                        v._srcFlags = _srcFlags.length ? _srcFlags.join('+') : '(no flags)';
+
+                        // For real sports we try to relocate to a valid field
+                        // before clearing. Specials/anchors keep their original
+                        // semantics (location is part of the activity), so they
+                        // fall through to the clear branch.
+                        let resolved = null;
+                        if (isSportPlacement && sMin != null && eMin != null) {
+                            resolved = _findValidAlternativeField(v.activity, v.grade, v.bunk, sMin, eMin, v.fieldName);
+                        }
+
+                        if (resolved) {
+                            slotsArr[v.idx] = {
+                                ...original,
+                                field: resolved,
+                                _ruleViolationReassigned: true,
+                                _violationReason: v.reason,
+                                _originalField: v.fieldName
+                            };
+                            rescuedCount++;
+                            warn('  ↪ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved
+                                + ' [src: ' + v._srcFlags + ']');
+                        } else {
+                            // Replace with Free. _fixed:true keeps the cleaning
+                            // durable: saveCurrentDailyData strips non-_fixed
+                            // Free entries to null, which lets downstream
+                            // restorers (pinned, post-edit fillers) refill the
+                            // slot with the same bad placement we just cleared.
+                            slotsArr[v.idx] = {
+                                field: 'Free', sport: null, _activity: 'Free',
+                                _autoMode: true, _fixed: true, _ruleViolationCleared: true,
+                                _violationReason: v.reason,
+                                continuation: false
+                            };
+                            clearedCount++;
+                            warn('  ✗ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                + v.activity + ' @ ' + v.fieldName + ' — ' + v.reason
+                                + ' (no valid alternative — cleared) [src: ' + v._srcFlags + ']');
+                        }
+                    });
+                    log('[STEP 4.95] Rescued ' + rescuedCount + ', cleared ' + clearedCount);
+                    warnings.push({ type: 'rule_violations', count: violations.length, rescued: rescuedCount, cleared: clearedCount, items: violations });
+                    // Force a render so the user sees the cleaned grid right away
+                    try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (_e) {}
+                } else {
+                    log('[STEP 4.95] ✅ All placements pass field/special access + time rules');
+                }
+            } catch (sErr) {
+                warn('[STEP 4.95] safety net error: ' + sErr.message);
+            }
+        })();
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
@@ -14437,16 +15006,21 @@
                 const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                 if (!allDaily[dateKey]) allDaily[dateKey] = {};
 
-                // ★ v4.0: DON'T write _perBunkSlotsData or full divisionTimes to localStorage
-                // They're huge (37 bunks × N slots) and can be rebuilt from manualSkeleton.
-                // The load path in division_times_integration.js already handles this rebuild.
+                // ★ v4.1: Persist _perBunkSlotsData to localStorage so per-bunk activity
+                // sizes/positions survive reload (without waiting for async cloud load).
+                // Quota fallback below trims old dates if total payload grows too big.
+                const spbs = {};
+                Object.keys(window.divisionTimes || {}).forEach(g => {
+                    if (window.divisionTimes[g]?._perBunkSlots) spbs[g] = window.divisionTimes[g]._perBunkSlots;
+                });
+
                 Object.assign(allDaily[dateKey], {
                     scheduleAssignments: clean,
                     leagueAssignments: window.leagueAssignments || {},
                     manualSkeleton: autoSkeleton,
+                    _perBunkSlotsData: spbs,
                     _autoGenerated: true, _autoVersion: VERSION,
-                    _generatedAt: new Date().toISOString(),
-                    _rebuildPerBunkSlots: true  // flag tells load path to rebuild from skeleton
+                    _generatedAt: new Date().toISOString()
                 });
 
                 // ★ v4.0: Progressive save — try full, then trim old dates on quota error
@@ -14476,13 +15050,9 @@
                     } else throw quotaErr;
                 }
 
-                // Cloud save gets the FULL data including _perBunkSlotsData (no quota limit)
+                // Cloud save gets the FULL data including divisionTimes (no quota limit).
+                // _perBunkSlotsData was already attached above for the localStorage path.
                 if (typeof window.saveGlobalSettings === 'function') {
-                    const spbs = {};
-                    Object.keys(window.divisionTimes || {}).forEach(g => {
-                        if (window.divisionTimes[g]?._perBunkSlots) spbs[g] = window.divisionTimes[g]._perBunkSlots;
-                    });
-                    allDaily[dateKey]._perBunkSlotsData = spbs;
                     allDaily[dateKey].divisionTimes = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes || {};
                     window.saveGlobalSettings('daily_schedules', allDaily);
                 }
@@ -14501,6 +15071,15 @@
                 await window.RotationCloud.save(rotDateKey, window.scheduleAssignments || {});
                 log('[5] ☁️ Rotation counts saved to cloud');
             } catch (e) { warn('[5] RotationCloud save: ' + e.message); }
+        }
+        // ★ Also keep local historicalCounts in sync so the rotation tab works
+        //   when cloud is unavailable (offline, missing campId, partial sync).
+        //   Rebuild scans the freshly-saved allDaily and is deterministic.
+        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+            try {
+                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                log('[5] 🧮 Rebuilt local historicalCounts');
+            } catch (e) { warn('[5] historicalCounts rebuild: ' + e.message); }
         }
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);

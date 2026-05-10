@@ -428,15 +428,35 @@
             return;
         }
         
-        // Validate templates before saving (strip oversized logos to keep payload manageable)
+        // Strip oversized logos before they reach camp_state_kv. Earlier
+        // we only console.warn'd — a multi-MB base64 logo would land in a
+        // KV row and could push the per-camp KV fetch over Postgres TOAST
+        // / API gateway limits, breaking hydration on every subsequent
+        // load. 200KB is a safe cap that fits a reasonable PNG/JPG.
+        const LOGO_MAX_BYTES = 200 * 1024;
+        let strippedCount = 0;
         const validatedTemplates = templates.map(tpl => {
             const copy = { ...tpl };
-            // If logo is too large (>500KB base64), warn but still save
-            if (copy.campLogo && copy.campLogo.length > 500000) {
-                console.warn("☁️ Print template logo is large:", (copy.campLogo.length / 1024).toFixed(0) + "KB");
+            if (copy.campLogo && copy.campLogo.length > LOGO_MAX_BYTES) {
+                console.warn(
+                    "☁️ Print template logo too large (" +
+                    (copy.campLogo.length / 1024).toFixed(0) +
+                    "KB > " + (LOGO_MAX_BYTES / 1024) + "KB) — stripped before save"
+                );
+                copy.campLogo = null;
+                strippedCount++;
             }
             return copy;
         });
+        if (strippedCount > 0 && typeof window !== 'undefined') {
+            try {
+                (window.showNotification || alert)(
+                    "Logo too large — stripped from " + strippedCount +
+                    " template(s). Use an image under 200KB.",
+                    "warning"
+                );
+            } catch (_) {}
+        }
         
         const settings = window.loadGlobalSettings?.() || {};
         settings.printTemplates = validatedTemplates;

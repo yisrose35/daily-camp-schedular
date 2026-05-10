@@ -23,6 +23,40 @@ let selectedTileId = null;
 let builderMode = 'manual';
 let hasUnsavedChanges = false;
 
+// Returns the first enabled league assigned to `grade`, or null. Used to
+// auto-remap league/specialty_league tiles when copied/dragged into a
+// different grade so they don't keep referencing the source grade's league.
+function _mbFirstLeagueForGrade(grade) {
+  const _gs = window.loadGlobalSettings?.() || {};
+  const lbn = _gs.leaguesByName || {};
+  const matches = Object.keys(lbn).filter(n =>
+    lbn[n] && lbn[n].enabled !== false &&
+    Array.isArray(lbn[n].divisions) &&
+    lbn[n].divisions.includes(String(grade))
+  );
+  return matches[0] || null;
+}
+
+// Mutates a copied event so its league reference matches the new grade.
+// No-op for non-league events. If the target grade has no league, clears
+// leagueName + reverts event label so the schedule remains valid.
+function _mbRemapLeagueForGrade(ev, newGrade) {
+  if (!ev || (ev.type !== 'league' && ev.type !== 'specialty_league')) return ev;
+  const newLeague = _mbFirstLeagueForGrade(newGrade);
+  if (newLeague) {
+    if (ev.leagueName && ev.event === ev.leagueName) ev.event = newLeague;
+    ev.leagueName = newLeague;
+  } else {
+    delete ev.leagueName;
+    if (ev.event && ev.event !== 'League Game') ev.event = 'League Game';
+  }
+  return ev;
+}
+// Expose so daily_adjustments.js (and any other consumer) can reuse the
+// same remap logic without duplicating it.
+try { window._mbRemapLeagueForGrade = _mbRemapLeagueForGrade; } catch (_) {}
+try { window._mbFirstLeagueForGrade = _mbFirstLeagueForGrade; } catch (_) {}
+
 function _mbIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
   const parseT = typeof parseTimeToMinutes === 'function' ? parseTimeToMinutes : window.SchedulerCoreUtils?.parseTimeToMinutes;
@@ -543,14 +577,18 @@ function showCopyGradeModal(skeleton, onApply) {
     // Remove existing events for target divisions
     let updated = skeleton.filter(ev => !selectedTargets.has(ev.division));
 
-    // Copy source events to each target
+    // Copy source events to each target. Remap league references so a
+    // league tile copied into a new grade lands on a league assigned to
+    // THAT grade — not the source grade's league.
     selectedTargets.forEach(targetDiv => {
       sourceEvents.forEach(ev => {
-        updated.push({
+        const _copy = {
           ...JSON.parse(JSON.stringify(ev)),
           division: targetDiv,
           id: 'evt_' + Math.random().toString(36).slice(2, 9)
-        });
+        };
+        _mbRemapLeagueForGrade(_copy, targetDiv);
+        updated.push(_copy);
       });
     });
 
@@ -1012,12 +1050,24 @@ async function editTile(id) {
     ];
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
-      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
-      if (_leagueNames.length > 0) {
+      const _lbn = _gs.leaguesByName || {};
+      // Only show leagues assigned to this event's grade.
+      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+        _lbn[ln] && _lbn[ln].enabled !== false &&
+        Array.isArray(_lbn[ln].divisions) &&
+        _lbn[ln].divisions.includes(String(ev.division))
+      );
+      if (_gradeLeagues.length === 1) {
+        // Single league for this grade → assign silently, no picker.
+        if (ev.leagueName !== _gradeLeagues[0]) {
+          ev.leagueName = _gradeLeagues[0];
+          if (ev.event && (ev.event === 'League Game' || _lbn[ev.event])) ev.event = _gradeLeagues[0];
+        }
+      } else if (_gradeLeagues.length > 1) {
         modalFields.splice(1, 0, {
-          name: 'leagueName', label: 'Which League?', type: 'select',
-          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
-          default: ev.leagueName || ''
+          name: 'leagueName', label: 'Which League? (required)', type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : ''
         });
       }
     }
@@ -1690,11 +1740,14 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
 
   const divisions = window.divisions || {};
-  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
-    const na = parseInt(a), nb = parseInt(b);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return a.localeCompare(b);
-  });
+  const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
+  const grades = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_gradesRaw)
+    : _gradesRaw.sort((a, b) => {
+        const na = parseInt(a), nb = parseInt(b);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      });
 
   if (grades.length === 0) {
     gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
@@ -1876,6 +1929,15 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
 
   // Bind events (chips + bands + tracks)
   bindDAWEvents(gridEl, globalStart, globalEnd, { layerSource, onSave, onRender, isExternal });
+
+  // ★ Notify external decorators (e.g. daily_adjustments overlays trips on
+  //   top of this grid). innerHTML replacement above wipes their DOM — they
+  //   listen for this event to re-apply after every render, including
+  //   internal redraws triggered by drag/resize that don't go through
+  //   onLayersChanged.
+  try {
+    gridEl.dispatchEvent(new CustomEvent('campistry-daw-rendered', { bubbles: true }));
+  } catch (_) {}
 }
 
 function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
@@ -1905,26 +1967,68 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       if (dawSelectedBand) band.classList.add('selected');
     });
 
-    // Drag existing band to reposition (vertical)
+    // Drag existing band to reposition (vertical) — with smooth ghost +
+    // live drop-preview rectangle (parity with manual-builder skeleton tiles).
     band.addEventListener('dragstart', (e) => {
       if (e.target.classList.contains('band-resize')) { e.preventDefault(); return; }
       const id = band.dataset.id;
       const grade = band.dataset.grade;
       const layer = (layerSource[grade] || []).find(l => l.id === id);
       if (!layer) return;
-      dawDragData = { source: 'band', id, grade, layer, offsetMin: 0 };
 
       const rect = band.getBoundingClientRect();
       const clickY = e.clientY - rect.top;
-      dawDragData.offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
+      const offsetMin = Math.round(clickY / DAW_PIXELS_PER_MINUTE);
+      dawDragData = { source: 'band', id, grade, layer, offsetMin };
 
       e.dataTransfer.setData('text/daw-band-move', id);
       e.dataTransfer.effectAllowed = 'copyMove';
-      band.style.opacity = '0.4';
+
+      // Hide the browser's native drag preview — we draw our own ghost.
+      const _blank = new Image();
+      _blank.src = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+      e.dataTransfer.setDragImage(_blank, 0, 0);
+
+      // Create / reuse a floating ghost tooltip on body.
+      let ghost = document.getElementById('daw-drag-ghost');
+      if (!ghost) {
+        ghost = document.createElement('div');
+        ghost.id = 'daw-drag-ghost';
+        ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;'
+          + 'background:#1e293b;color:#f1f5f9;border:1px solid #334155;'
+          + 'border-radius:6px;padding:6px 10px;font-size:11px;font-weight:600;'
+          + 'box-shadow:0 8px 24px rgba(0,0,0,0.35);display:none;white-space:nowrap;';
+        document.body.appendChild(ghost);
+      }
+      const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
+      ghost.innerHTML = '<div>' + (typeDef?.name || layer.type) + '</div>'
+        + '<div id="daw-drag-ghost-time" style="font-weight:400;color:#94a3b8;margin-top:2px;">'
+        + minutesToTime(layer.startMin) + ' – ' + minutesToTime(layer.endMin) + '</div>';
+      ghost.style.display = 'block';
+      ghost.style.left = (e.clientX + 12) + 'px';
+      ghost.style.top = (e.clientY + 12) + 'px';
+
+      band.style.opacity = '0.35';
+    });
+
+    band.addEventListener('drag', (e) => {
+      // The terminal (0,0) drag event fires once when the user releases —
+      // ignore it so the ghost doesn't snap to the corner.
+      if (e.clientX === 0 && e.clientY === 0) return;
+      const ghost = document.getElementById('daw-drag-ghost');
+      if (ghost && ghost.style.display === 'block') {
+        ghost.style.left = (e.clientX + 12) + 'px';
+        ghost.style.top = (e.clientY + 12) + 'px';
+      }
     });
 
     band.addEventListener('dragend', () => {
       band.style.opacity = '1';
+      const ghost = document.getElementById('daw-drag-ghost');
+      if (ghost) ghost.style.display = 'none';
+      // Clean up any lingering preview rectangles in tracks.
+      gridEl.querySelectorAll('.ms-daw-drop-preview').forEach(el => el.remove());
+      gridEl.querySelectorAll('.ms-daw-track.drop-target').forEach(t => t.classList.remove('drop-target'));
       dawDragData = null;
     });
 
@@ -1996,15 +2100,55 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         e.dataTransfer.dropEffect = 'copy';
       }
       track.classList.add('drop-target');
+
+      // ★ Live drop preview — shows where the band will land at this moment.
+      //   Reuses one preview element per track so we don't spam the DOM.
+      if (dawDragData?.source === 'band' && dawDragData.layer) {
+        const trackRect = track.getBoundingClientRect();
+        const y = e.clientY - trackRect.top;
+        const dropMin = Math.round((y / DAW_PIXELS_PER_MINUTE + globalStart) / SNAP_MINS) * SNAP_MINS;
+        const duration = dawDragData.layer.endMin - dawDragData.layer.startMin;
+        let newStart = dropMin - dawDragData.offsetMin;
+        newStart = Math.max(globalStart, Math.min(globalEnd - duration, newStart));
+        const newEnd = newStart + duration;
+
+        let preview = track.querySelector('.ms-daw-drop-preview');
+        if (!preview) {
+          preview = document.createElement('div');
+          preview.className = 'ms-daw-drop-preview';
+          preview.style.cssText = 'position:absolute;left:0;right:0;'
+            + 'background:rgba(59,130,246,0.18);border:2px dashed #3b82f6;'
+            + 'border-radius:4px;pointer-events:none;z-index:7;'
+            + 'display:flex;align-items:flex-start;justify-content:center;padding-top:3px;';
+          track.appendChild(preview);
+        }
+        preview.style.top = ((newStart - globalStart) * DAW_PIXELS_PER_MINUTE) + 'px';
+        preview.style.height = (duration * DAW_PIXELS_PER_MINUTE) + 'px';
+        preview.innerHTML = '<span style="background:#3b82f6;color:#fff;'
+          + 'padding:2px 6px;border-radius:3px;font-size:9px;font-weight:700;'
+          + 'white-space:nowrap;">'
+          + minutesToTime(newStart) + ' – ' + minutesToTime(newEnd) + '</span>';
+
+        // Update the floating ghost's time line too.
+        const ghostTime = document.getElementById('daw-drag-ghost-time');
+        if (ghostTime) ghostTime.textContent = minutesToTime(newStart) + ' – ' + minutesToTime(newEnd);
+      }
     });
 
     track.addEventListener('dragleave', (e) => {
-      if (!track.contains(e.relatedTarget)) track.classList.remove('drop-target');
+      if (!track.contains(e.relatedTarget)) {
+        track.classList.remove('drop-target');
+        const preview = track.querySelector('.ms-daw-drop-preview');
+        if (preview) preview.remove();
+      }
     });
 
     track.addEventListener('drop', (e) => {
       e.preventDefault();
       track.classList.remove('drop-target');
+      // Remove any drop-preview rectangles so they don't briefly persist
+      // before the upcoming re-render replaces the track HTML.
+      gridEl.querySelectorAll('.ms-daw-drop-preview').forEach(el => el.remove());
 
       const grade = track.dataset.grade;
       const rect = track.getBoundingClientRect();
@@ -2055,14 +2199,19 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         const newEnd = newStart + duration;
 
         if (fromGrade !== grade) {
-          // Cross-grade drop → COPY the layer to the target grade
+          // Cross-grade drop → COPY the layer to the target grade. For
+          //   league layers, remap leagueName to a league assigned to the
+          //   target grade so the copy doesn't keep referencing the source
+          //   grade's league.
           if (!layerSource[grade]) layerSource[grade] = [];
-          layerSource[grade].push({
+          const _copyLayer = {
             ...JSON.parse(JSON.stringify(layer)),
             id: 'daw_' + Math.random().toString(36).slice(2, 9),
             startMin: Math.max(globalStart, newStart),
             endMin: Math.min(globalEnd, newEnd),
-          });
+          };
+          _mbRemapLeagueForGrade(_copyLayer, grade);
+          layerSource[grade].push(_copyLayer);
         } else {
           // Same grade → move in place
           layer.startMin = Math.max(globalStart, newStart);
@@ -2186,6 +2335,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           <span style="font-size:11px;color:#94a3b8;">min</span>
         </div>
       </div>
+      ${(() => {
+        // ★ Special-activity layers use a per-subcategory quantity grid driven
+        //   by the registry the user manages in Facilities. Each row's value
+        //   is "exactly N from this subcategory" (0 = skip). Total is the sum.
+        if (layer.type !== 'special') {
+          return `
       <div class="ms-daw-pop-field">
         <label>Quantity</label>
         <div class="ms-daw-pop-row">
@@ -2196,7 +2351,62 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           </div>
           <input type="number" id="daw-pop-qty" value="${layer.qty}" min="1" max="10" style="width:60px;">
         </div>
-      </div>
+      </div>`;
+        }
+        const _regSubs = (typeof window.getSpecialSubcategories === 'function')
+          ? window.getSpecialSubcategories() : [];
+        // ★ "Regular" is always present, even if the user never explicitly added
+        //   it to the registry. Untagged specials map here (see _canonSub in
+        //   scheduler_core_auto.js), so the grid always exposes a row for them.
+        const _hasRegular = _regSubs.some(s => s.toLowerCase() === 'regular');
+        const subs = _hasRegular ? _regSubs : ['Regular', ..._regSubs];
+        if (subs.length === 0) {
+          return `
+      <div class="ms-daw-pop-field">
+        <label>Quantity</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-qty" value="${layer.qty}" min="0" max="10" style="width:60px;">
+        </div>
+        <div class="ms-daw-pop-hint" style="color:#fbbf24;">No subcategories defined yet. Add them in Facilities → Special Activities → Subcategory.</div>
+      </div>`;
+        }
+        // Seed subQuantities. Priority: existing subQuantities → legacy
+        // {subcategory + qty} → all-zero defaults.
+        const existing = (layer.subQuantities && typeof layer.subQuantities === 'object') ? layer.subQuantities : null;
+        const legacySub = (typeof layer.subcategory === 'string') ? layer.subcategory.trim() : '';
+        const getSeeded = (name) => {
+          if (existing) {
+            // Case-insensitive lookup so renames in registry don't lose data.
+            const key = Object.keys(existing).find(k => k.toLowerCase() === name.toLowerCase());
+            return key ? (parseInt(existing[key], 10) || 0) : 0;
+          }
+          if (legacySub && legacySub.toLowerCase() === name.toLowerCase()) {
+            return parseInt(layer.qty, 10) || 1;
+          }
+          return 0;
+        };
+        const rows = subs.map(name => {
+          const v = getSeeded(name);
+          return `
+          <div class="ms-daw-subq-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;">
+            <span style="font-size:12px;color:#cbd5e1;">${name}</span>
+            <input type="number" class="ms-daw-subq-input" data-subname="${name.replace(/"/g, '&quot;')}" value="${v}" min="0" max="10" style="width:60px;">
+          </div>`;
+        }).join('');
+        const total = subs.reduce((s, name) => s + getSeeded(name), 0);
+        return `
+      <div class="ms-daw-pop-field">
+        <label>Quantity by Subcategory</label>
+        <div style="display:flex;flex-direction:column;gap:2px;border:1px solid rgba(255,255,255,0.08);border-radius:6px;padding:6px 10px;background:rgba(255,255,255,0.03);">
+          ${rows}
+          <div style="display:flex;justify-content:space-between;align-items:center;padding-top:6px;margin-top:4px;border-top:1px solid rgba(255,255,255,0.08);font-size:11px;color:#94a3b8;">
+            <span>Total</span>
+            <span id="daw-pop-subq-total" style="font-weight:600;color:#e2e8f0;">${total}</span>
+          </div>
+        </div>
+        <div class="ms-daw-pop-hint">0 = skip that subcategory. List comes from Facilities → Special Activities → Subcategory.</div>
+      </div>`;
+      })()}
       <div class="ms-daw-pop-divider"></div>
       <div class="ms-daw-pop-section">Rotation <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">optional</span></div>
       <div class="ms-daw-pop-field">
@@ -2320,6 +2530,18 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       btn.classList.add('active');
     };
   });
+
+  // Live total for special-layer per-subcategory grid.
+  const subqInputs = popover.querySelectorAll('.ms-daw-subq-input');
+  const subqTotalEl = popover.querySelector('#daw-pop-subq-total');
+  if (subqInputs.length && subqTotalEl) {
+    const recalcTotal = () => {
+      let t = 0;
+      subqInputs.forEach(i => { t += Math.max(0, parseInt(i.value, 10) || 0); });
+      subqTotalEl.textContent = String(t);
+    };
+    subqInputs.forEach(i => i.addEventListener('input', recalcTotal));
+  }
   
   // Grade Mode toggle (swim / lunch / snacks)
   popover.querySelectorAll('.ms-daw-grademode[data-gmode]').forEach(btn => {
@@ -2373,9 +2595,30 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     layer.durationMin = parseInt(popover.querySelector('#daw-pop-dur-min').value) || 30;
     layer.durationMax = parseInt(popover.querySelector('#daw-pop-dur-max').value) || 50;
     layer.periodMin = layer.durationMin; // backward compat
-    layer.qty = parseInt(popover.querySelector('#daw-pop-qty').value) || 1;
-    const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
-    if (activeOp) layer.op = activeOp.dataset.op;
+
+    // ★ Special-layer per-subcategory grid: collect values, drop the legacy
+    //   single-tag `subcategory` field, and set qty=sum so downstream code
+    //   that hasn't been migrated still sees the right total.
+    const _subqInputs = popover.querySelectorAll('.ms-daw-subq-input');
+    if (layer.type === 'special' && _subqInputs.length > 0) {
+      const subQ = {};
+      let total = 0;
+      _subqInputs.forEach(inp => {
+        const name = inp.dataset.subname || '';
+        const v = Math.max(0, parseInt(inp.value, 10) || 0);
+        if (!name) return;
+        if (v > 0) { subQ[name] = v; total += v; }
+      });
+      layer.subQuantities = subQ;
+      layer.qty = Math.max(1, total); // keep ≥1 so legacy paths don't no-op
+      layer.op = '=';                  // exact-N semantics per subcategory
+      delete layer.subcategory;        // superseded by subQuantities
+    } else {
+      const qtyEl = popover.querySelector('#daw-pop-qty');
+      if (qtyEl) layer.qty = parseInt(qtyEl.value) || 1;
+      const activeOp = popover.querySelector('.ms-daw-pop-op[data-op].active');
+      if (activeOp) layer.op = activeOp.dataset.op;
+    }
 
    // Rotation: Bunks Per Day + Times Per Week (all layer types)
     const bpdRaw = (popover.querySelector('#daw-pop-bpd')?.value || '').trim();
@@ -2487,7 +2730,8 @@ async function dawAddLayerDialog(grade) {
 
 async function dawCopyLayersDialog() {
   const divisions = window.divisions || {};
-  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort();
+  const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
+  const grades = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_gradesRaw) : _gradesRaw.sort();
   
   if (grades.length < 2) {
     await showAlert('Need at least 2 grades to copy between.');
@@ -3096,7 +3340,12 @@ function addDropListeners(selector) {
         const newEnd = minutesToTime(cellStartMin + snapMin + duration);
 
         if (divName !== event.division) {
-          dailySkeleton.push({ ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd });
+          // Cross-grade drop. Clone the event, retarget the division, and
+          // remap any league reference to one assigned to the new grade so
+          // it doesn't keep pointing at the source grade's league.
+          const _crossEv = { ...event, id: Date.now().toString() + '_' + Math.random().toString(36).slice(2, 5), division: divName, startTime: newStart, endTime: newEnd };
+          _mbRemapLeagueForGrade(_crossEv, divName);
+          dailySkeleton.push(_crossEv);
         } else {
           event.startTime = newStart;
           event.endTime = newEnd;
@@ -3497,18 +3746,34 @@ function addDropListeners(selector) {
         else if (tileData.type === 'specialty_league') { name = "Specialty League"; finalType = 'specialty_league'; }
         
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker for league tiles ★★★
+        // Filter to leagues assigned to THIS grade. If exactly one matches,
+        // skip the picker entirely and auto-assign it. If more than one,
+        // require an explicit pick. If none, block the drop.
         let leaguePickerField = [];
+        let _autoLeagueName = null;
         if (tileData.type === 'league') {
           const _gs = window.loadGlobalSettings?.() || {};
           const _lbn = _gs.leaguesByName || {};
-          const _leagueNames = Object.keys(_lbn).filter(ln => _lbn[ln] && _lbn[ln].enabled !== false);
-          if (_leagueNames.length > 0) {
+          const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+            _lbn[ln] && _lbn[ln].enabled !== false &&
+            Array.isArray(_lbn[ln].divisions) &&
+            _lbn[ln].divisions.includes(String(divName))
+          );
+          if (_gradeLeagues.length === 0) {
+            // No leagues configured for this grade — block the drop.
+            await showAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+            return;
+          } else if (_gradeLeagues.length === 1) {
+            // Only one league for this grade → use it silently.
+            _autoLeagueName = _gradeLeagues[0];
+          } else {
+            // Multiple leagues → require pick.
             leaguePickerField = [{
               name: 'leagueName',
-              label: 'Which League?',
+              label: 'Which League? (required)',
               type: 'select',
-              options: [{ value: '', label: '— Any League (auto) —' }].concat(
-                _leagueNames.map(ln => ({ value: ln, label: ln }))
+              options: [{ value: '', label: '— Choose a league —' }].concat(
+                _gradeLeagues.map(ln => ({ value: ln, label: ln }))
               ),
               default: ''
             }];
@@ -3526,9 +3791,9 @@ function addDropListeners(selector) {
             name: 'subcategory',
             label: 'Subcategory',
             type: 'select',
-            options: [{ value: '', label: '— Any —' }].concat(
-              _subOptions.map(s => ({ value: s, label: s }))
-            ),
+            options: [{ value: '', label: '— Any —' }]
+              .concat(_subOptions.map(s => ({ value: s, label: s })))
+              .concat([{ value: '__add_new__', label: '+ New subcategory…' }]),
             default: ''
           }];
         }
@@ -3540,9 +3805,38 @@ function addDropListeners(selector) {
             ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
-          ]
+          ],
+          postRender: (overlay) => {
+            const sel = overlay.querySelector('select[data-field="subcategory"]');
+            if (!sel) return;
+            sel.addEventListener('change', () => {
+              if (sel.value !== '__add_new__') return;
+              const newName = (window.prompt('New subcategory name (e.g. Food, Theme):') || '').trim();
+              if (!newName) { sel.value = ''; return; }
+              if (typeof window.addSpecialSubcategory === 'function') window.addSpecialSubcategory(newName);
+              const addOpt = sel.querySelector('option[value="__add_new__"]');
+              const exists = Array.from(sel.options).some(o => o.value.toLowerCase() === newName.toLowerCase());
+              if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = newName; opt.textContent = newName;
+                sel.insertBefore(opt, addOpt);
+              }
+              sel.value = newName;
+            });
+          }
         });
         if (!result) return;
+
+        // ★ Require an explicit league selection for league tiles when
+        //   the picker was shown (multi-league grade). Single-league
+        //   grades skip the picker and use _autoLeagueName below.
+        if (finalType === 'league' && leaguePickerField.length > 0 && !result.leagueName) {
+          await showAlert('Please choose a league before dropping the tile.');
+          return;
+        }
+        if (finalType === 'league' && _autoLeagueName) {
+          result.leagueName = _autoLeagueName;
+        }
 
         newEvent = {
           id: Date.now().toString(),
@@ -3554,7 +3848,7 @@ function addDropListeners(selector) {
         };
 
         // ★ Persist subcategory tag so the scheduler can filter specials.
-        if (tileData.type === 'special' && result.subcategory) {
+        if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
           newEvent.subcategory = String(result.subcategory).trim();
         }
 

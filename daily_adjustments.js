@@ -1,3 +1,4 @@
+
 // =================================================================
 // daily_adjustments.js  (v5.2 - In-App Modals + Merged: v3.9 Logic + v5.0 UI)
 // =================================================================
@@ -483,12 +484,17 @@ function daShowCopyGradeModal(skeleton, onApply) {
     // Remove existing events for target divisions
     var updated = skeleton.filter(function(ev) { return !selectedTargets[ev.division]; });
 
-    // Copy source events to each target
+    // Copy source events to each target. Remap league references so a
+    // league tile copied into a new grade lands on a league assigned to
+    // THAT grade — not the source grade's league.
     targets.forEach(function(targetDiv) {
       sourceEvents.forEach(function(ev) {
         var copy = JSON.parse(JSON.stringify(ev));
         copy.division = targetDiv;
         copy.id = 'evt_' + Math.random().toString(36).slice(2, 9);
+        if (typeof window._mbRemapLeagueForGrade === 'function') {
+          window._mbRemapLeagueForGrade(copy, targetDiv);
+        }
         updated.push(copy);
       });
     });
@@ -2051,8 +2057,25 @@ function renderDAWTimeline(gridEl) {
     }
   });
 
-  // ★ Overlay daily trips on the DAW grid — use requestAnimationFrame
-  // to ensure the DOM is painted before looking for track elements
+  // ★ Re-apply our overlays every time the DAW grid finishes rendering.
+  //   Master scheduler rebuilds gridEl.innerHTML on every drag/resize,
+  //   which wipes trip + period overlays. The custom event fires after
+  //   each render (including internal redraws), so we re-add them.
+  //   Using a single listener for the lifetime of this gridEl — innerHTML
+  //   replacement preserves the parent element's listeners.
+  if (!gridEl._campistryDawRenderedHooked) {
+    gridEl._campistryDawRenderedHooked = true;
+    gridEl.addEventListener('campistry-daw-rendered', function() {
+      overlayTripsOnDAW(gridEl);
+      if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+        window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+      }
+    });
+  }
+
+  // ★ Initial overlay — the event-driven re-render handles subsequent
+  //   updates, but the first render also fires the event so this is now
+  //   handled by the listener above. Keep a paint-time fallback for safety.
   overlayTripsOnDAW(gridEl);
   requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
   setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
@@ -2553,7 +2576,12 @@ function addDragToRepositionListeners(gridEl) {
         const newEnd = minutesToTime(cellStartMin + snapMin + duration);
 
         if (divName !== event.division) {
+          // Cross-grade drop. Remap league reference so the copy points
+          // at a league assigned to the new grade (not the source's).
           const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          if (typeof window._mbRemapLeagueForGrade === 'function') {
+            window._mbRemapLeagueForGrade(copy, divName);
+          }
           dailyOverrideSkeleton.push(copy);
           bumpOverlappingTiles(copy, divName);
         } else {
@@ -2982,20 +3010,29 @@ function addDropListeners(gridEl) {
       // ===== LEAGUE =====
      else if (tileData.type === 'league') {
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker ★★★
+        // Filter to leagues assigned to THIS grade. Skip the picker
+        // entirely when there's exactly one match (auto-fill silently).
         const globalSettings = window.loadGlobalSettings?.() || {};
         const leaguesByName = globalSettings.leaguesByName || {};
-        const leagueNames = Object.keys(leaguesByName).filter(ln => {
+        const gradeLeagues = Object.keys(leaguesByName).filter(ln => {
           const l = leaguesByName[ln];
-          return l && l.enabled !== false;
+          return l && l.enabled !== false && Array.isArray(l.divisions) && l.divisions.includes(String(divName));
         });
+        if (gradeLeagues.length === 0) {
+          await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+          return;
+        }
+        let _autoLeagueName = null;
         let leaguePickerField = [];
-        if (leagueNames.length > 0) {
+        if (gradeLeagues.length === 1) {
+          _autoLeagueName = gradeLeagues[0];
+        } else {
           leaguePickerField = [{
             name: 'leagueName',
-            label: 'Which League?',
+            label: 'Which League? (required)',
             type: 'select',
-            options: [{ value: '', label: '— Any League (auto) —' }].concat(
-              leagueNames.map(ln => ({ value: ln, label: ln }))
+            options: [{ value: '', label: '— Choose a league —' }].concat(
+              gradeLeagues.map(ln => ({ value: ln, label: ln }))
             ),
             default: ''
           }];
@@ -3010,13 +3047,19 @@ function addDropListeners(gridEl) {
           ]
         });
         if (!result || !result.startTime || !result.endTime) return;
+        if (_autoLeagueName) {
+          result.leagueName = _autoLeagueName;
+        } else if (!result.leagueName) {
+          await daShowAlert('Please choose a league before dropping the tile.');
+          return;
+        }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: 'league',
-          event: result.leagueName || 'League Game',
+          event: result.leagueName,
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
@@ -3064,9 +3107,9 @@ function addDropListeners(gridEl) {
             name: 'subcategory',
             label: 'Subcategory',
             type: 'select',
-            options: [{ value: '', label: '— Any —' }].concat(
-              _subOptions.map(s => ({ value: s, label: s }))
-            ),
+            options: [{ value: '', label: '— Any —' }]
+              .concat(_subOptions.map(s => ({ value: s, label: s })))
+              .concat([{ value: '__add_new__', label: '+ New subcategory…' }]),
             default: ''
           }];
         }
@@ -3077,7 +3120,25 @@ function addDropListeners(gridEl) {
             ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
-          ]
+          ],
+          postRender: (overlay) => {
+            const sel = overlay.querySelector('select[data-field="subcategory"]');
+            if (!sel) return;
+            sel.addEventListener('change', () => {
+              if (sel.value !== '__add_new__') return;
+              const newName = (window.prompt('New subcategory name (e.g. Food, Theme):') || '').trim();
+              if (!newName) { sel.value = ''; return; }
+              if (typeof window.addSpecialSubcategory === 'function') window.addSpecialSubcategory(newName);
+              const addOpt = sel.querySelector('option[value="__add_new__"]');
+              const exists = Array.from(sel.options).some(o => o.value.toLowerCase() === newName.toLowerCase());
+              if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = newName; opt.textContent = newName;
+                sel.insertBefore(opt, addOpt);
+              }
+              sel.value = newName;
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
@@ -3087,7 +3148,7 @@ function addDropListeners(gridEl) {
           id: Date.now().toString(), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
-        if (tileData.type === 'special' && result.subcategory) {
+        if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
           newEvent.subcategory = String(result.subcategory).trim();
         }
       }
@@ -3499,12 +3560,24 @@ async function editTile(id) {
     }
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
-      const _leagueNames = Object.keys(_gs.leaguesByName || {}).filter(ln => _gs.leaguesByName[ln]?.enabled !== false);
-      if (_leagueNames.length > 0) {
+      const _lbn = _gs.leaguesByName || {};
+      // Filter to leagues assigned to this event's grade.
+      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+        _lbn[ln] && _lbn[ln].enabled !== false &&
+        Array.isArray(_lbn[ln].divisions) &&
+        _lbn[ln].divisions.includes(String(ev.division))
+      );
+      if (_gradeLeagues.length === 1) {
+        // Single league for this grade → assign silently, no picker.
+        if (ev.leagueName !== _gradeLeagues[0]) {
+          ev.leagueName = _gradeLeagues[0];
+          if (ev.event && (ev.event === 'League Game' || _lbn[ev.event])) ev.event = _gradeLeagues[0];
+        }
+      } else if (_gradeLeagues.length > 1) {
         modalFields.splice(1, 0, {
-          name: 'leagueName', label: 'Which League?', type: 'select',
-          options: [{ value: '', label: '— Any League (auto) —' }].concat(_leagueNames.map(ln => ({ value: ln, label: ln }))),
-          default: ev.leagueName || ''
+          name: 'leagueName', label: 'Which League? (required)', type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : ''
         });
       }
     }
@@ -4053,7 +4126,22 @@ async function runOptimizer() {
         try {
             window.invalidateSmartLogicSpecialsCache?.();
             const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
-            if (!success) await daShowAlert("Auto scheduler did not complete successfully.");
+            if (success) {
+                // Match the manual builder's completion flow: confirm popup,
+                // then jump to the schedule view with a clean re-render.
+                try {
+                    document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+                        detail: { date: window.currentScheduleDate || new Date().toISOString().split('T')[0], mode: 'auto' }
+                    }));
+                } catch (_) { /* non-fatal */ }
+                await daShowAlert("✅ Schedule Generated!");
+                window.showTab?.('schedule');
+                const schedEl = document.getElementById('scheduleTable');
+                if (schedEl) schedEl.innerHTML = '';
+                window.renderStaggeredView?.();
+            } else {
+                await daShowAlert("Auto scheduler did not complete successfully.");
+            }
         } catch (e) {
             console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
             await daShowAlert("Auto scheduler error: " + e.message);

@@ -1230,6 +1230,19 @@
                     }
                     usedActivityNames.add(act);
                 });
+                // Per-bunk fallback: when cloud has zero entries for this bunk
+                // (e.g. cloud sync hasn't caught up yet, or an older bunk that
+                // pre-dates the cloud table), use the local historicalCounts
+                // for that bunk so its numbers don't disappear from the table.
+                if (Object.keys(cBunk).length === 0) {
+                    const hBunk = hCounts[bunk] || {};
+                    Object.keys(hBunk).forEach(act => {
+                        if (!hBunk[act]) return;
+                        liveCounts[bunk] = liveCounts[bunk] || {};
+                        liveCounts[bunk][act] = hBunk[act];
+                        usedActivityNames.add(act);
+                    });
+                }
             });
             // Seed lastDone from cloud (excluding today — Step 3 will pick it up from live)
             if (cloudData.lastDone) {
@@ -1506,6 +1519,17 @@
     }
     document.addEventListener('campistry-schedule-generated', scheduleRefresh);
     document.addEventListener('campistry-post-edit-complete',  scheduleRefresh);
+    // The auto-builder fires `campistry-generation-complete` on `window` (see
+    // scheduler_core_auto.js / integration_hooks.js). Without this listener the
+    // rotation tab held stale counts after every auto-generation. We also
+    // invalidate the RotationCloud cache so the next render fetches fresh
+    // numbers instead of waiting out the 30s TTL.
+    function onGenerationComplete() {
+        if (window.RotationCloud?.invalidateCache) window.RotationCloud.invalidateCache();
+        scheduleRefresh();
+    }
+    window.addEventListener('campistry-generation-complete', onGenerationComplete);
+    document.addEventListener('campistry-generation-complete', onGenerationComplete);
 
     // ========================================================================
     // EXPORTS

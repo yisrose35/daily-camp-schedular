@@ -1106,16 +1106,41 @@
                 // ★★★ Get matchups — playoff > round-robin ★★★
                 let matchups;
                 let playoffMatchupSports = null;     // null when not in playoff mode
+                let playoffMatchupFields = null;     // user-chosen field per matchup ('' = auto)
                 let playoffRoundNum = null;
+                let playoffIsTBD = false;            // true when emitting placeholder for an undecided future round
                 const _PM = window.PlayoffMode;
 
                 if (_PM && _PM.isLeagueInPlayoff(league)) {
                     const liveMatchups = _PM.getActiveMatchups(league);
                     if (liveMatchups.length > 0) {
-                        playoffRoundNum = league.playoff.currentRound;
-                        matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
-                        playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
-                        console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        if (todayGameIndex === 0) {
+                            playoffRoundNum = league.playoff.currentRound;
+                            matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
+                            playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
+                            playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
+                            console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        } else {
+                            // Game 2+ same day: winners not yet known — emit
+                            // placeholder TBD matchups for the forecast next round.
+                            const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
+                            const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                            const sportsPool = liveMatchups
+                                .map(function (m) { return m.sport || null; })
+                                .filter(Boolean);
+                            const fallbackSport = (league.sports && league.sports[0]) || null;
+                            playoffRoundNum = tbdRoundNum;
+                            playoffIsTBD = true;
+                            matchups = [];
+                            playoffMatchupSports = [];
+                            playoffMatchupFields = [];
+                            for (let k = 0; k < tbdCount; k++) {
+                                matchups.push(['TBD', 'TBD']);
+                                playoffMatchupSports.push(sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport);
+                                playoffMatchupFields.push('');
+                            }
+                            console.log('   🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                        }
                     } else {
                         console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
                         continue;
@@ -1174,6 +1199,70 @@
                     continue;
                 }
 
+                // ★★★ PLAYOFF TBD: information-only mode ★★★
+                // For game 2+ in playoff mode, winners aren't decided yet so we
+                // don't pick fields automatically — just list the open fields at
+                // this time so the user can assign them once results are in.
+                // No field locks, no per-matchup assignments.
+                if (playoffIsTBD) {
+                    leagueGameCounters[league.name]++;
+                    const _seenFields = new Set();
+                    const _openList = [];
+                    availablePool.forEach(function (p) {
+                        if (_seenFields.has(p.field)) return;
+                        _seenFields.add(p.field);
+                        _openList.push(p.field);
+                    });
+                    const _tbdLabel = 'Playoff R' + playoffRoundNum + ' TBD';
+                    const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
+                        .concat(_openList.length > 0
+                            ? ['Open fields:'].concat(_openList.map(function (s) { return '  • ' + s; }))
+                            : ['(no open fields at this time)']);
+                    console.log('   🏆 PLAYOFF TBD info-only: ' + _openList.length + ' open field(s) listed');
+                    leagueDivisions.forEach(function (divName) {
+                        const blocksForDiv = timeData.byDivision[divName];
+                        if (!blocksForDiv) return;
+                        blocksForDiv.forEach(function (block) {
+                            const _Utils = window.SchedulerCoreUtils;
+                            const _blockKey = (typeof block.startTime === 'number')
+                                ? block.startTime
+                                : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+                            if (Number(_blockKey) !== Number(timeKey)) return;
+                            const pick = {
+                                field: 'League: ' + league.name,
+                                sport: _tbdLabel,
+                                _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
+                                _h2h: true,
+                                _fixed: true,
+                                _allMatchups: _tbdRows,
+                                _gameLabel: _tbdLabel,
+                                _playoffRound: playoffRoundNum,
+                                _playoffTBD: true
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    // Reserved-activity locks still apply so non-playing bunks
+                    // get routed away from these activities even though we don't
+                    // know which kids will be playing yet.
+                    if (window.GlobalFieldLocks && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+                        const reservedReason = 'Playoff reserve (' + league.name + ' R' + playoffRoundNum + ' TBD)';
+                        leagueDivisions.forEach(function (divName) {
+                            league.playoff.reservedActivities.forEach(function (act) {
+                                try {
+                                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+                                } catch (e) {
+                                    console.warn('[PLAYOFF TBD] failed to reserve "' + act + '" for ' + divName + ':', e);
+                                }
+                            });
+                        });
+                    }
+                    console.log('   📈 Game #' + gameNumber + ' (TBD info) complete for "' + league.name + '"');
+                    continue;
+                }
+
                 // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
                 // For playoff mode: each matchup has its own fixed sport — bypass
                 // the variety logic and assign per-matchup directly.
@@ -1185,15 +1274,43 @@
                         const teamA = Array.isArray(mu) ? mu[0] : mu;
                         const teamB = Array.isArray(mu) ? mu[1] : null;
                         const wantedSport = playoffMatchupSports[i];
+                        const wantedField = (playoffMatchupFields && playoffMatchupFields[i]) || '';
                         if (!teamA || !teamB) return;
                         if (!wantedSport) {
                             console.log('   ⚠️ PLAYOFF: matchup ' + teamA + ' vs ' + teamB + ' has no sport set — skipping');
                             return;
                         }
-                        const candidates = availablePool.filter(function (p) {
+                        // Filter the pool to (sport-matching, field not yet used).
+                        let candidates = availablePool.filter(function (p) {
                             return p.sport === wantedSport && !_poolUsed.has(p.field);
                         });
+                        // ★ If the user chose a specific field for this matchup, prefer it.
+                        //   Fall back to any compatible field if the chosen one is unavailable.
+                        if (wantedField) {
+                            const chosen = candidates.find(function (p) { return p.field === wantedField; });
+                            if (chosen) {
+                                _poolUsed.add(chosen.field);
+                                assignments.push({ team1: teamA, team2: teamB, field: chosen.field, sport: chosen.sport });
+                                return;
+                            }
+                            console.log('   ⚠️ PLAYOFF: chosen field "' + wantedField + '" for ' + teamA + ' vs ' + teamB +
+                                ' is unavailable (in use or doesn\'t support ' + wantedSport + ') — falling back to auto-pick');
+                        }
                         if (candidates.length === 0) {
+                            // For TBD placeholders, the "wanted" sport is just a
+                            // forecast — the actual round 2 sport isn't known yet.
+                            // Fall back to any available pool entry so the slot
+                            // still gets reserved with a TBD label.
+                            if (playoffIsTBD) {
+                                const fallback = availablePool.filter(function (p) { return !_poolUsed.has(p.field); });
+                                if (fallback.length > 0) {
+                                    const pickF = fallback[0];
+                                    _poolUsed.add(pickF.field);
+                                    assignments.push({ team1: teamA, team2: teamB, field: pickF.field, sport: pickF.sport });
+                                    console.log('   🏆 PLAYOFF TBD: using fallback ' + pickF.sport + ' @ ' + pickF.field + ' (preferred sport "' + wantedSport + '" unavailable)');
+                                    return;
+                                }
+                            }
                             console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
                             return;
                         }
@@ -1236,7 +1353,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
     leagueName: league.name,
     division: leagueDivisions.join(', '),
     activity: playoffRoundNum
-        ? (`${league.name} Playoff R${playoffRoundNum}`)
+        ? (`${league.name} Playoff R${playoffRoundNum}` + (playoffIsTBD ? ' TBD' : ''))
         : (`${league.name} League Game`),
     startMin: _lockStartMin,
     endMin: _lockEndMin
@@ -1247,7 +1364,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
 // exclusively for this league's divisions during the playoff slot, so the
 // auto-scheduler routes the not-playing bunks into them.
 if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum})`;
+    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
     leagueDivisions.forEach(function (divName) {
         league.playoff.reservedActivities.forEach(function (act) {
             try {

@@ -135,6 +135,29 @@ function loadData() {
         if (legacyFields.length > 0 || legacySpecials.length > 0 || Object.keys(legacyZones).length > 0) {
             migrateLegacyToFacilities(legacyFields, legacySpecials, legacyZones, legacyPinned);
         }
+    } else {
+        // Incremental: auto-create facilities for legacy fields not yet covered
+        const legacyFields = app1.fields || [];
+        const facNames = new Set(facilities.map(f => f.name));
+        let added = 0;
+        legacyFields.forEach(f => {
+            if (f.name && !facNames.has(f.name)) {
+                facilities.push({
+                    id: 'fac_' + Date.now() + '_' + (added++),
+                    name: f.name,
+                    usedFor: ['sports'],
+                    specialActivityNames: [],
+                    generalActivities: [],
+                    swimConfig: { preSwimMin: 5, postSwimMin: 5 },
+                    order: facilities.length
+                });
+                facNames.add(f.name);
+            }
+        });
+        if (added > 0) {
+            console.log('[FACILITIES] Auto-migrated', added, 'legacy fields into facilities');
+            saveFacilitiesMetadata();
+        }
     }
 }
 
@@ -256,9 +279,10 @@ function syncAllToLegacy() {
     const newFields = [];
     const existingFields = app1.fields || [];
 
+    const facSportsNames = new Set();
     facilities.forEach(fac => {
         if (fac.usedFor.includes('sports')) {
-            // Find existing field data or create new
+            facSportsNames.add(fac.name);
             let fieldData = existingFields.find(f => f.name === fac.name);
             if (!fieldData) {
                 fieldData = {
@@ -272,6 +296,13 @@ function syncAllToLegacy() {
                 };
             }
             newFields.push(fieldData);
+        }
+    });
+
+    // Preserve legacy fields that have no matching facility yet
+    existingFields.forEach(f => {
+        if (f.name && !facSportsNames.has(f.name) && !newFields.some(nf => nf.name === f.name)) {
+            newFields.push(f);
         }
     });
 
@@ -424,11 +455,12 @@ function deleteFacility(fac) {
     }
 
     if (fac.usedFor.includes('general')) {
-        const pinned = window.getPinnedTileDefaults?.() || {};
+        // Full purge per general activity so schedules / activityProperties /
+        // pinned tiles / rotation tracking all forget the names.
         (fac.generalActivities || []).forEach(ga => {
-            delete pinned[ga.name];
+            const name = (ga && ga.name) || ga;
+            cleanupDeletedGeneral(name);
         });
-        window.savePinnedTileDefaults?.(pinned);
     }
 
     // Remove from zones
@@ -483,6 +515,8 @@ function renderMasterList() {
         return;
     }
 
+    // Stable order: existing .order if set, otherwise current array index.
+    facilities.forEach((f, i) => { if (typeof f.order !== 'number') f.order = i; });
     facilities.sort((a, b) => (a.order || 0) - (b.order || 0));
     const visible = facilities.filter(fac => facilityMatchesQuery(fac, _facilitySearchQuery));
 
@@ -492,14 +526,49 @@ function renderMasterList() {
     }
 
     visible.forEach(fac => facilitiesListEl.appendChild(masterListItem(fac)));
+
+    // Wire drag-and-drop reorder on the list container.
+    _facReorderInit(facilitiesListEl);
+}
+
+function _facReorderInit(listEl) {
+    if (!listEl || listEl._facDragInit) return;
+    listEl._facDragInit = true;
+    listEl.addEventListener('dragover', function (e) {
+        const dragging = listEl.querySelector(':scope > .fac-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const siblings = Array.prototype.slice.call(listEl.children).filter(el => el !== dragging);
+        const next = siblings.find(sib => {
+            const r = sib.getBoundingClientRect();
+            return e.clientY < r.top + r.height / 2;
+        });
+        listEl.insertBefore(dragging, next || null);
+    });
+    listEl.addEventListener('drop', function (e) { e.preventDefault(); });
+}
+
+function _facCommitOrder() {
+    const ids = Array.prototype.map.call(facilitiesListEl.children, el => el.getAttribute('data-fac-name'));
+    let pos = 0;
+    ids.forEach(name => {
+        if (!name) return;
+        const f = facilities.find(x => x.name === name);
+        if (f) f.order = pos++;
+    });
+    if (typeof saveData === 'function') saveData();
+    else if (typeof saveFacilities === 'function') saveFacilities();
 }
 
 function masterListItem(fac) {
     const id = `fac-${fac.name}`;
     const isSelected = id === selectedFacilityId;
     const el = document.createElement("div");
+    el.setAttribute('data-fac-name', fac.name);
+    el.draggable = true;
     el.style.cssText = `
-        padding:12px 16px; margin:4px 0; border-radius:12px; cursor:pointer;
+        padding:12px 16px; margin:4px 0; border-radius:12px; cursor:grab;
         display:flex; align-items:center; justify-content:space-between;
         transition:all 0.15s ease;
         background:${isSelected ? 'rgba(20,125,145,0.08)' : '#F9FAFB'};
@@ -509,9 +578,17 @@ function masterListItem(fac) {
     el.onmouseenter = () => { if (!isSelected) { el.style.background = '#F3F4F6'; el.style.borderColor = 'rgba(20,125,145,0.4)'; } };
     el.onmouseleave = () => { if (!isSelected) { el.style.background = '#F9FAFB'; el.style.borderColor = '#E5E7EB'; } };
     el.onclick = () => { selectedFacilityId = id; renderMasterList(); renderDetailPane(); };
+    el.addEventListener('dragstart', () => { el.classList.add('fac-dragging'); el.style.opacity = '0.45'; });
+    el.addEventListener('dragend', () => { el.classList.remove('fac-dragging'); el.style.opacity = '1'; _facCommitOrder(); });
+
+    const grip = document.createElement('span');
+    grip.textContent = '⋮⋮';
+    grip.title = 'Drag to reorder';
+    grip.style.cssText = 'color:#9CA3AF; font-size:0.95rem; line-height:1; padding-right:6px; user-select:none; cursor:grab;';
+    el.appendChild(grip);
 
     const name = document.createElement("div");
-    name.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937;";
+    name.style.cssText = "font-weight:500; font-size:0.9rem; color:#1F2937; flex:1;";
     name.textContent = fac.name;
     el.appendChild(name);
 
@@ -973,6 +1050,9 @@ function renderSpecialConfig(container, fac) {
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
 
+        saBody.appendChild(section("Subcategory", summarySpecialSubcategory(saData),
+            () => renderSpecialSubcategory(saData)));
+
         saBody.appendChild(section("Access", summarySpecialAccess(saData),
             () => renderSpecialAccess(saData)));
 
@@ -1123,7 +1203,9 @@ function renderGeneralConfig(container, fac) {
             removeBtn.textContent = "✕";
             removeBtn.style.cssText = "border:none; background:transparent; color:#9CA3AF; cursor:pointer; font-size:1rem;";
             removeBtn.onclick = () => {
+                const removedName = ga.name;
                 fac.generalActivities = fac.generalActivities.filter(g => g !== ga);
+                cleanupDeletedGeneral(removedName);
                 saveData();
                 renderDetailPane();
             };
@@ -1905,6 +1987,10 @@ function summarySpecialMultiPart(s) {
     var _nStr = _hasN ? " (" + s.multiPart.parts.map(function(p,i){return p.name||('Part '+(i+1));}).join(', ') + ")" : "";
     return s.multiPart.totalParts + " parts, " + s.multiPart.daysBetween + "d apart" + _nStr;
 }
+function summarySpecialSubcategory(s) {
+    var v = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
+    return v ? v : 'Uncategorized';
+}
 
 function saveSpecialData(saData) {
     const allSpecials = window.getAllSpecialActivities?.() || [];
@@ -2156,6 +2242,113 @@ function renderSpecialDayAvailability(saData) {
     });
 
     container.appendChild(chipWrap);
+    return container;
+}
+
+// -- Subcategory --
+// Tags this special with one of the user-defined subcategories ("Food",
+// "Theme", etc). The Master Schedule Builder reads this to fill per-
+// subcategory quantities in special-activity layers.
+function renderSpecialSubcategory(saData) {
+    const container = document.createElement("div");
+    container.style.cssText = "display:flex; flex-direction:column; gap:10px;";
+
+    const refreshSummary = () => {
+        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summarySpecialSubcategory(saData);
+    };
+
+    const renderChips = () => {
+        container.innerHTML = '';
+        const existing = (typeof window.getSpecialSubcategories === 'function')
+            ? window.getSpecialSubcategories() : [];
+        const current = (typeof saData.subcategory === 'string') ? saData.subcategory.trim() : '';
+
+        const chipWrap = document.createElement("div");
+        chipWrap.style.cssText = "display:flex; flex-wrap:wrap; gap:6px; align-items:center;";
+
+        // "Uncategorized" chip clears the tag.
+        const noneChip = document.createElement("span");
+        const isNone = current === '';
+        noneChip.className = "chip " + (isNone ? "active" : "inactive");
+        noneChip.textContent = "Uncategorized";
+        noneChip.onclick = () => {
+            saData.subcategory = '';
+            saveSpecialData(saData);
+            renderChips();
+            refreshSummary();
+        };
+        chipWrap.appendChild(noneChip);
+
+        existing.forEach(name => {
+            const isCur = current.toLowerCase() === name.toLowerCase();
+            const chip = document.createElement("span");
+            chip.className = "chip " + (isCur ? "active" : "inactive");
+            chip.textContent = name;
+            chip.title = "Click to assign · Shift-click to remove from registry";
+            chip.onclick = (e) => {
+                if (e.shiftKey) {
+                    if (!confirm(`Remove subcategory "${name}" from the list? Activities tagged with it will become Uncategorized.`)) return;
+                    if (typeof window.removeSpecialSubcategory === 'function') {
+                        window.removeSpecialSubcategory(name);
+                    }
+                    if (current.toLowerCase() === name.toLowerCase()) {
+                        saData.subcategory = '';
+                        saveSpecialData(saData);
+                    }
+                    renderChips();
+                    refreshSummary();
+                    return;
+                }
+                saData.subcategory = isCur ? '' : name; // toggle off if already set
+                saveSpecialData(saData);
+                renderChips();
+                refreshSummary();
+            };
+            chipWrap.appendChild(chip);
+        });
+
+        container.appendChild(chipWrap);
+
+        // Add new subcategory inline.
+        const addRow = document.createElement("div");
+        addRow.style.cssText = "display:flex; gap:6px; align-items:center; margin-top:4px;";
+
+        const input = document.createElement("input");
+        input.type = "text";
+        input.placeholder = "New subcategory (e.g. Food, Theme)";
+        input.style.cssText = "flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; outline:none;";
+
+        const btn = document.createElement("button");
+        btn.textContent = "+ Add";
+        btn.style.cssText = "background:#7C3AED; color:white; border:none; border-radius:6px; padding:6px 12px; cursor:pointer; font-size:0.8rem; font-weight:500;";
+
+        const doAdd = () => {
+            const v = input.value.trim();
+            if (!v) return;
+            if (typeof window.addSpecialSubcategory === 'function') {
+                window.addSpecialSubcategory(v);
+            }
+            saData.subcategory = v;
+            saveSpecialData(saData);
+            input.value = '';
+            renderChips();
+            refreshSummary();
+        };
+        btn.onclick = doAdd;
+        input.onkeyup = (e) => { if (e.key === 'Enter') doAdd(); };
+
+        addRow.appendChild(input);
+        addRow.appendChild(btn);
+        container.appendChild(addRow);
+
+        const hint = document.createElement("div");
+        hint.style.cssText = "font-size:0.75rem; color:#6B7280;";
+        hint.textContent = "Tip: shift-click a chip to remove it from the list everywhere.";
+        container.appendChild(hint);
+    };
+
+    renderChips();
     return container;
 }
 
@@ -3389,8 +3582,146 @@ function cleanupDeletedSpecial(specialName) {
         let pinnedChanged = false;
         Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
         if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // Rotation footprint (analytics counts + cloud rotation_counts)
+        cleanupRotationTracking(specialName);
     } catch (e) {
         console.error('[FACILITIES] Cleanup error (special):', e);
+    }
+}
+
+// ★ NEW: Comprehensive purge for a deleted general activity (Beis Medrash,
+//   custom block names, etc.). Mirrors cleanupDeletedSpecial — wipes
+//   schedule assignments, manual skeletons, pinned-tile defaults,
+//   activityProperties, and the rotation footprint so the activity name
+//   is fully forgotten everywhere (local + cloud).
+function cleanupDeletedGeneral(activityName) {
+    if (!activityName) return;
+    console.log(`[FACILITIES] Cleaning up deleted general: "${activityName}"`);
+    const norm = String(activityName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        const dailySchedules = settings.daily_schedules || {};
+        let cleanupCount = 0;
+
+        Object.keys(dailySchedules).forEach(dateKey => {
+            const dayData = dailySchedules[dateKey];
+            if (dayData?.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
+                    const slots = dayData.scheduleAssignments[bunkKey];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot, idx) => {
+                        if (!slot) return;
+                        if (matches(slot._activity) || matches(slot.event) || matches(slot.sport)) {
+                            dayData.scheduleAssignments[bunkKey][idx] = null;
+                            cleanupCount++;
+                        }
+                    });
+                });
+            }
+            ['manualSkeleton', 'skeletonAssignments'].forEach(key => {
+                const items = dayData?.[key];
+                if (!Array.isArray(items)) return;
+                for (let i = items.length - 1; i >= 0; i--) {
+                    const it = items[i];
+                    if (matches(it?.event) || matches(it?._activity)) {
+                        items.splice(i, 1); cleanupCount++;
+                    }
+                }
+            });
+        });
+        if (cleanupCount > 0) {
+            window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+            console.log(`[FACILITIES]   Cleaned ${cleanupCount} stale references in daily_schedules`);
+        }
+
+        // Pinned-tile defaults — general activities live here
+        const pinned = window.getPinnedTileDefaults?.() || {};
+        let pinnedChanged = false;
+        Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
+        if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // Activity properties
+        if (window.activityProperties) {
+            Object.keys(window.activityProperties).forEach(k => { if (matches(k)) delete window.activityProperties[k]; });
+        }
+
+        // Rotation footprint (analytics counts + cloud rotation_counts)
+        cleanupRotationTracking(activityName);
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (general):', e);
+    }
+}
+
+// ★ NEW: Purge a deleted activity's rotation footprint. Removes the
+//   activity from in-memory + on-disk historicalCounts, rotationHistory.bunks,
+//   manualUsageOffsets, and the cloud rotation_counts table. Without this,
+//   the analytics tab and the auto builder's "least-recent" picker keep
+//   reading rows for an activity the user just deleted.
+function cleanupRotationTracking(activityName) {
+    if (!activityName) return;
+    const norm = String(activityName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // historicalCounts: { bunkName: { activityName: number } }
+        const hist = settings.historicalCounts || {};
+        let histChanged = false;
+        Object.keys(hist).forEach(bunk => {
+            const row = hist[bunk];
+            if (!row || typeof row !== 'object') return;
+            Object.keys(row).forEach(act => {
+                if (matches(act)) { delete row[act]; histChanged = true; }
+            });
+        });
+        if (histChanged) window.saveGlobalSettings?.('historicalCounts', hist);
+
+        // manualUsageOffsets: { bunkName: { activityName: number } }
+        const offsets = settings.manualUsageOffsets || {};
+        let offsetsChanged = false;
+        Object.keys(offsets).forEach(bunk => {
+            const row = offsets[bunk];
+            if (!row || typeof row !== 'object') return;
+            Object.keys(row).forEach(act => {
+                if (matches(act)) { delete row[act]; offsetsChanged = true; }
+            });
+        });
+        if (offsetsChanged) window.saveGlobalSettings?.('manualUsageOffsets', offsets);
+
+        // rotationHistory.bunks: { bunkName: { activityName: [timestamps] } }
+        const rotHist = (typeof window.loadRotationHistory === 'function')
+            ? window.loadRotationHistory()
+            : (settings.rotationHistory || { bunks: {} });
+        let rotChanged = false;
+        if (rotHist && rotHist.bunks) {
+            Object.keys(rotHist.bunks).forEach(bunk => {
+                const row = rotHist.bunks[bunk];
+                if (!row || typeof row !== 'object') return;
+                Object.keys(row).forEach(act => {
+                    if (matches(act)) { delete row[act]; rotChanged = true; }
+                });
+            });
+        }
+        if (rotChanged) {
+            if (typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rotHist);
+            } else {
+                window.saveGlobalSettings?.('rotationHistory', rotHist);
+            }
+        }
+
+        // Cloud rotation_counts: drop every row referencing this activity name
+        if (window.RotationCloud?.deleteActivity) {
+            window.RotationCloud.deleteActivity(activityName);
+        }
+
+        if (histChanged || offsetsChanged || rotChanged) {
+            console.log(`[FACILITIES]   Cleared rotation tracking for "${activityName}"`);
+        }
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (rotation tracking):', e);
     }
 }
 
@@ -3449,6 +3780,8 @@ function sweepOrphanedReferences(opts) {
 // clean-up pass from the console or before a build.
 window.cleanupDeletedField = cleanupDeletedField;
 window.cleanupDeletedSpecial = cleanupDeletedSpecial;
+window.cleanupDeletedGeneral = cleanupDeletedGeneral;
+window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
 function propagateFieldRename(oldName, newName) {

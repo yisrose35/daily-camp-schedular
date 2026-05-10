@@ -609,7 +609,18 @@
             let bestField = null;
             let minGames = Infinity;
 
-            for (const field of availableFields) {
+            // ★ Playoff: if this matchup has a user-chosen field, prefer it
+            //   when still under the per-field game cap. Falls through to
+            //   the normal rotation-aware pick if it's not available.
+            if (matchup._playoffField && availableFields.includes(matchup._playoffField)) {
+                const cur = _effectiveGames(matchup._playoffField);
+                if (cur < (gamesPerFieldSlot || 3)) {
+                    bestField = matchup._playoffField;
+                    minGames = cur;
+                }
+            }
+
+            if (!bestField) for (const field of availableFields) {
                 const currentGames = _effectiveGames(field);
                 const maxGames = gamesPerFieldSlot || 3;
 
@@ -783,21 +794,48 @@
             // ★★★ Get matchups — playoff > regular ★★★
             let matchups;
             let _playoffRoundNum = null;
+            let _playoffIsTBD = false;
             const _PM_S = window.PlayoffMode;
             if (_PM_S && _PM_S.isLeagueInPlayoff(league)) {
                 const liveMatchups = _PM_S.getActiveMatchups(league);
                 if (liveMatchups.length > 0) {
-                    _playoffRoundNum = league.playoff.currentRound;
-                    matchups = liveMatchups.map(function (m) {
-                        return {
-                            teamA: m.teamA,
-                            teamB: m.teamB,
-                            conference: null,
-                            isInterConference: false,
-                            _playoffSport: m.sport || null
-                        };
-                    });
-                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                    if (todayGameIndex === 0) {
+                        _playoffRoundNum = league.playoff.currentRound;
+                        matchups = liveMatchups.map(function (m) {
+                            return {
+                                teamA: m.teamA,
+                                teamB: m.teamB,
+                                conference: null,
+                                isInterConference: false,
+                                _playoffSport: m.sport || null,
+                                _playoffField: m.field || null
+                            };
+                        });
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                    } else {
+                        // Game 2+ same day: emit TBD placeholders for forecast next round.
+                        const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
+                        const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                        const sportsPool = liveMatchups
+                            .map(function (m) { return m.sport || null; })
+                            .filter(Boolean);
+                        const fallbackSport = league.sport || null;
+                        _playoffRoundNum = tbdRoundNum;
+                        _playoffIsTBD = true;
+                        matchups = [];
+                        for (let k = 0; k < tbdCount; k++) {
+                            matchups.push({
+                                teamA: 'TBD',
+                                teamB: 'TBD',
+                                conference: null,
+                                isInterConference: false,
+                                _playoffSport: sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport,
+                                _playoffField: null,
+                                _playoffTBD: true
+                            });
+                        }
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                    }
                 } else {
                     console.log('[SpecialtyLeagues] 🏆 PLAYOFF: no active matchups in current round — skipping');
                     continue;
@@ -853,7 +891,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
     leagueName: league.name,
     division: divName,
     activity: _playoffRoundNum
-        ? `${league.name} Playoff R${_playoffRoundNum}`
+        ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
         : `${league.name} (${league.sport})`,
     startMin: _specLockStart,
     endMin: _specLockEnd
@@ -861,7 +899,7 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
 
 // ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
 if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
-    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum})`;
+    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
     league.playoff.reservedActivities.forEach(function (act) {
         try {
             window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
@@ -899,7 +937,7 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
             );
 
             const gameLabel = _playoffRoundNum
-                ? `${league.name} Playoff R${_playoffRoundNum}`
+                ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
                 : `${league.name} Game ${gameNumber}`;
 
             // Fill all blocks

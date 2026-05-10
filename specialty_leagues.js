@@ -453,7 +453,9 @@
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
             enabled: league.enabled !== false,
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
-            games: Array.isArray(league.games) ? league.games : []
+            games: Array.isArray(league.games) ? league.games : [],
+            // ★ Preserve playoff sub-object — see leagues.js for the same fix.
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
         };
 
         // ★ Filter out orphaned divisions (divisions that no longer exist)
@@ -500,11 +502,31 @@
                 return; // Don't wipe existing data
             }
             
+            // ★ Snapshot in-memory playoff state before clearing so a stale
+            //   cloud echo (loaded copy has rounds=[]) can't wipe a freshly
+            //   generated bracket that hasn't synced yet.
+            const _playoffBackup = {};
+            Object.keys(specialtyLeagues).forEach(k => {
+                const p = specialtyLeagues[k] && specialtyLeagues[k].playoff;
+                if (p && Array.isArray(p.rounds) && p.rounds.length > 0) {
+                    _playoffBackup[k] = p;
+                }
+            });
+
             // Clear and fill with validated data
             Object.keys(specialtyLeagues).forEach(k => delete specialtyLeagues[k]);
-            
+
             Object.keys(loaded).forEach(leagueId => {
-                specialtyLeagues[leagueId] = validateLeague(loaded[leagueId], leagueId);
+                const validated = validateLeague(loaded[leagueId], leagueId);
+                const backup = _playoffBackup[leagueId];
+                const loadedRoundsEmpty = !validated.playoff
+                    || !Array.isArray(validated.playoff.rounds)
+                    || validated.playoff.rounds.length === 0;
+                if (backup && loadedRoundsEmpty) {
+                    validated.playoff = backup;
+                    console.log('[SPECIALTY_LEAGUES] Preserved in-memory playoff bracket for "' + leagueId + '" (loaded copy had empty rounds)');
+                }
+                specialtyLeagues[leagueId] = validated;
             });
 
             console.log("[SPECIALTY_LEAGUES] Data loaded:", {
@@ -911,31 +933,13 @@
                 }
             };
 
-            // --- PLAYOFF CONTAINER ---
-            const playoffContainer = document.createElement('div');
-            playoffContainer.className = 'league-playoff-container';
-            playoffContainer.style.cssText = 'display:none;margin-top:8px;';
-            const _playoffMount = document.createElement('div');
-            playoffContainer.appendChild(_playoffMount);
-            detailPaneEl.appendChild(playoffContainer);
-
-            if (_playoffActive) {
-                playoffContainer.style.display = 'block';
-                playoffBtn.classList.add('active');
-                mountSpecialtyPlayoffUI(_playoffMount, league);
-            }
-
-            playoffBtn.onclick = () => {
-                const isOpen = playoffContainer.style.display !== 'none';
-                if (isOpen) {
-                    playoffContainer.style.display = 'none';
-                    playoffBtn.classList.remove('active');
-                    playoffBtn.textContent = (league.playoff && league.playoff.enabled) ? 'Playoff: ON' : 'Playoff Mode';
+            // ★ Specialty league playoff button now opens the per-league
+            //   PlayoffHub overlay — same shared UI as regular leagues.
+            playoffBtn.onclick = function () {
+                if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                    window.PlayoffHub.open(league, 'specialty');
                 } else {
-                    playoffContainer.style.display = 'block';
-                    playoffBtn.classList.add('active');
-                    playoffBtn.textContent = 'Close Playoff';
-                    mountSpecialtyPlayoffUI(_playoffMount, league);
+                    alert('Playoff Hub module not loaded.');
                 }
             };
 

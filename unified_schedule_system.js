@@ -1467,14 +1467,38 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     window._postEditInProgress = true;
     window._postEditTimestamp = Date.now();
-    
+    if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+    window._postEditClearTimer = setTimeout(() => {
+        window._postEditInProgress = false;
+        window._postEditClearTimer = null;
+    }, 8000);
+
     await bypassSaveAllBunks(modifiedBunks);
 
-    // ★ Sync rotation counts to cloud after conflict bypass
+    // ★ Update rotation counts (historicalCounts + rotationHistory + cloud) for
+    //   every bunk the bypass touched. applyPostEditCounts is the single source
+    //   of truth — it counts non-continuation slots, rebuilds rotationHistory
+    //   timestamps, and debounces the RotationCloud.save so a single batched
+    //   cloud sync fires for the whole bypass.
+    try {
+        const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+        if (_ape) {
+            (result.reassigned || []).forEach(r => {
+                _ape(r.bunk, r.from ? [r.from] : [], r.to || null, r.slots || []);
+            });
+            (result.failed || []).forEach(f => {
+                _ape(f.bunk, f.originalActivity ? [f.originalActivity] : [], null, f.slots || []);
+            });
+        }
+    } catch (_e) { console.warn('[ConflictBypass] post-edit counts failed:', _e); }
+
+    // Notify the rotation tab so it refreshes after the bypass.
     try {
         const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-        if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-    } catch (_e) { console.warn('[ConflictBypass] RotationCloud sync failed:', _e); }
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+            detail: { bunks: modifiedBunks, date: _rcDate, source: 'conflict-bypass' }
+        }));
+    } catch (_e) { /* non-fatal */ }
 
     // Track specific cells for temporary highlight
     const bypassedCellKeys = [];
@@ -2139,10 +2163,416 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
     }
 
     // =========================================================================
+    // TRANSPOSED VIEW (bunks down Y-axis, time across X-axis)
+    // =========================================================================
+
+    var TRANSPOSED_INCREMENT_OPTIONS = [10, 15, 20, 30, 40, 45, 60];
+
+    function _getTransposedIncrement() {
+        try {
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var v = parseInt(gs.scheduleViewIncrement, 10);
+            if (TRANSPOSED_INCREMENT_OPTIONS.indexOf(v) >= 0) return v;
+        } catch (_) {}
+        return 30;
+    }
+
+    function _setTransposedIncrement(val) {
+        try { window.saveGlobalSettings && window.saveGlobalSettings('scheduleViewIncrement', val); }
+        catch (_) {}
+    }
+
+    function _renderIncrementPicker() {
+        var bar = document.createElement('div');
+        bar.className = 'schedule-toolbar';
+        bar.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:12px;font-size:0.85rem;color:#374151;';
+        var label = document.createElement('span');
+        label.textContent = 'Time increment:';
+        label.style.fontWeight = '600';
+        bar.appendChild(label);
+        var sel = document.createElement('select');
+        sel.style.cssText = 'padding:5px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:0.85rem;background:#fff;font-family:inherit;';
+        var current = _getTransposedIncrement();
+        TRANSPOSED_INCREMENT_OPTIONS.forEach(function (v) {
+            var opt = document.createElement('option');
+            opt.value = v;
+            opt.textContent = v + ' min';
+            if (v === current) opt.selected = true;
+            sel.appendChild(opt);
+        });
+        sel.onchange = function () {
+            _setTransposedIncrement(parseInt(sel.value, 10));
+            updateTable();
+        };
+        bar.appendChild(sel);
+        return bar;
+    }
+
+    function _buildTimeColumns(increment) {
+        var allTimes = [];
+        var dt = window.divisionTimes || {};
+        Object.keys(dt).forEach(function (divName) {
+            (dt[divName] || []).forEach(function (s) {
+                if (typeof s.startMin === 'number') allTimes.push(s.startMin);
+                if (typeof s.endMin === 'number') allTimes.push(s.endMin);
+            });
+        });
+        if (allTimes.length === 0) return [];
+        var dayStart = Math.min.apply(null, allTimes);
+        var dayEnd = Math.max.apply(null, allTimes);
+        // Snap dayStart down to a clean increment boundary so columns align nicely.
+        dayStart = Math.floor(dayStart / increment) * increment;
+        var cols = [];
+        for (var t = dayStart; t < dayEnd; t += increment) {
+            cols.push({ startMin: t, endMin: t + increment });
+        }
+        return cols;
+    }
+
+    function _findSlotIndexAtTime(divSlots, colStartMin) {
+        if (!divSlots || divSlots.length === 0) return -1;
+        for (var i = 0; i < divSlots.length; i++) {
+            var s = divSlots[i];
+            if (s.startMin <= colStartMin && s.endMin > colStartMin) return i;
+        }
+        return -1;
+    }
+
+    function _entrySignatureForMerge(entry) {
+        if (!entry) return '__empty__';
+        var keys = ['field', 'sport', '_activity', 'event', 'location', 'swimLocation', 'reservedLocation', '_gameLabel', '_leagueName'];
+        return keys.map(function (k) { return entry[k] == null ? '' : String(entry[k]); }).join('|');
+    }
+
+    // For a given division slot index, decide whether every bunk in the
+    // division has identical content there (Lunch, league, full-grade swim,
+    // etc.). When true, the renderer merges those cells into a single cell
+    // spanning rowspan = bunks.length so the activity is shown once.
+    function _slotIsFullDivisionMerge(slotIdx, bunks, divSlots) {
+        if (!bunks || bunks.length < 2) return false;
+        // League slots: matchup data lives in leagueAssignments and applies to
+        // the whole grade, so always merge regardless of per-bunk entries.
+        var slot = divSlots && divSlots[slotIdx];
+        if (slot && isLeagueBlockType(slot.event, slot.type)) return true;
+        var firstSig = null;
+        for (var i = 0; i < bunks.length; i++) {
+            var entry = (window.scheduleAssignments && window.scheduleAssignments[bunks[i]]) ? window.scheduleAssignments[bunks[i]][slotIdx] : null;
+            var sig = _entrySignatureForMerge(entry);
+            if (sig === '__empty__') return false;
+            if (firstSig === null) firstSig = sig;
+            else if (sig !== firstSig) return false;
+        }
+        return true;
+    }
+
+    function _renderTransposedLeagueCell(block, bunk, divName, slotIdx) {
+        var td = document.createElement('td');
+        td.style.cssText = 'padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e5e7eb; background: linear-gradient(135deg, #e0f2fe 0%, #bae6fd 100%); border-left: 4px solid #0284c7;';
+
+        var leagueInfo = (typeof getLeagueMatchups === 'function') ? getLeagueMatchups(divName, slotIdx) : null;
+        if (!leagueInfo) leagueInfo = {};
+
+        var title = leagueInfo.gameLabel || block.event || 'League';
+        if (leagueInfo.sport && title.toLowerCase().indexOf(String(leagueInfo.sport).toLowerCase()) < 0) {
+            title += ' - ' + leagueInfo.sport;
+        }
+
+        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">🏆 ' + escapeHtml(title) + '</div>';
+
+        var matchups = leagueInfo.matchups || [];
+        if (matchups.length > 0) {
+            html += '<div style="display: flex; flex-direction: column; gap: 3px;">';
+            matchups.forEach(function (m) {
+                var line;
+                if (typeof m === 'string') {
+                    line = m;
+                } else if (m && (m.teamA || m.team1)) {
+                    var a = m.teamA || m.team1 || '';
+                    var b = m.teamB || m.team2 || '';
+                    var sport = m.sport || leagueInfo.sport || '';
+                    var field = m.field || '';
+                    line = a + ' vs ' + b;
+                    if (sport) line += ' — ' + (sport.charAt(0).toUpperCase() + sport.slice(1));
+                    if (field) line += ' (' + field + ')';
+                } else if (m && m.display) {
+                    line = m.display;
+                } else {
+                    line = JSON.stringify(m);
+                }
+                html += '<div style="background: #fff; padding: 3px 7px; border-radius: 4px; font-size: 0.74rem; color: #1e3a5f; box-shadow: 0 1px 1px rgba(0,0,0,0.04); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">' + escapeHtml(line) + '</div>';
+            });
+            html += '</div>';
+        } else {
+            html += '<div style="color: #64748b; font-size: 0.74rem; font-style: italic;">No matchups yet</div>';
+        }
+        td.innerHTML = html;
+        return td;
+    }
+
+    function renderTransposedView(container) {
+        if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
+        var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        if (!window._postEditInProgress) loadScheduleForDate(dateKey);
+
+        var skeleton = getSkeleton(dateKey);
+        var divisions = window.divisions || {};
+        var divisionTimes = window.divisionTimes || {};
+
+        console.log('[UnifiedSchedule] RENDER STATE:', {
+            dateKey: dateKey,
+            skeletonBlocks: skeleton.length,
+            divisionTimesCount: Object.keys(divisionTimes).length,
+            scheduleAssignmentsBunks: Object.keys(window.scheduleAssignments || {}).length,
+            divisionsCount: Object.keys(divisions).length,
+            mode: 'transposed'
+        });
+
+        container.innerHTML = '';
+
+        // Empty-state (mirrors the legacy view's check)
+        if ((!skeleton || skeleton.length === 0) && Object.keys(divisionTimes).length === 0) {
+            container.innerHTML = '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No daily schedule structure found for this date.</p><p style="font-size: 0.9rem;">Use <strong>"Build Day"</strong> in the Master Schedule Builder to create a schedule structure.</p></div>';
+            return;
+        }
+
+        // Auto mode delegates per-division to the AutoScheduleGrid (which has
+        // its own transposed renderer with time-scaled positioning, league
+        // and trip overlays, free-gap clickers, etc.). Manual mode uses the
+        // unified flat table built below.
+        var currentBuilderMode = (window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual';
+        if (currentBuilderMode === 'auto' && window.AutoScheduleGrid && window.AutoScheduleGrid.render) {
+            var divisionsAuto = Object.keys(divisions);
+            if (divisionsAuto.length === 0 && window.availableDivisions) divisionsAuto = window.availableDivisions;
+            divisionsAuto.sort(function (a, b) {
+                var na = parseInt(a), nb = parseInt(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
+            var autoEditable = (window.AccessControl && window.AccessControl.getEditableDivisions && window.AccessControl.getEditableDivisions()) || divisionsAuto;
+            var autoWrapper = document.createElement('div');
+            autoWrapper.style.cssText = 'display:flex;flex-direction:column;gap:24px;';
+            divisionsAuto.forEach(function (divName) {
+                if (!shouldShowDivision(divName)) return;
+                var divInfo = divisions[divName];
+                if (!divInfo) return;
+                // Honor the user-defined bunk order from campStructure verbatim.
+                var bunks = (divInfo.bunks || []).slice();
+                if (bunks.length === 0) return;
+                var isEditable = autoEditable.indexOf(divName) >= 0;
+                var el = window.AutoScheduleGrid.render(divName, divInfo, bunks, isEditable);
+                if (el) autoWrapper.appendChild(el);
+            });
+            container.appendChild(autoWrapper);
+            window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
+            return;
+        }
+
+        // Toolbar with increment picker
+        container.appendChild(_renderIncrementPicker());
+
+        // Resolve & sort divisions
+        var divisionsToShow = Object.keys(divisions);
+        if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
+        var customOrder = (window.loadGlobalSettings ? window.loadGlobalSettings() : {});
+        customOrder = customOrder && customOrder.app1 && customOrder.app1.manualColumnOrder;
+        if (Array.isArray(customOrder) && customOrder.length > 0) {
+            divisionsToShow.sort(function (a, b) {
+                var ai = customOrder.indexOf(a); if (ai < 0) ai = 9999;
+                var bi = customOrder.indexOf(b); if (bi < 0) bi = 9999;
+                return ai - bi;
+            });
+        } else {
+            divisionsToShow.sort(function (a, b) {
+                var na = parseInt(a), nb = parseInt(b);
+                if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                return String(a).localeCompare(String(b));
+            });
+        }
+
+        if (divisionsToShow.length === 0) {
+            container.innerHTML += '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>';
+            return;
+        }
+
+        var increment = _getTransposedIncrement();
+        var timeColumns = _buildTimeColumns(increment);
+        if (timeColumns.length === 0) {
+            container.innerHTML += '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No time slots available for this date.</p></div>';
+            return;
+        }
+
+        var editableDivisions = (window.AccessControl && window.AccessControl.getEditableDivisions && window.AccessControl.getEditableDivisions()) || divisionsToShow;
+
+        // Build a single big table: columns = bunk + time slots; rows = bunks grouped by division
+        var table = document.createElement('table');
+        table.className = 'schedule-flat-table';
+        table.style.cssText = 'border-collapse: collapse; box-shadow: 0 1px 3px rgba(0,0,0,0.1); border-radius: 8px; overflow: hidden; background: #fff; font-size: 0.85rem;';
+
+        // Header
+        var thead = document.createElement('thead');
+        var thr = document.createElement('tr');
+        thr.style.background = '#f3f4f6';
+        var thBunk = document.createElement('th');
+        thBunk.textContent = 'Bunk';
+        thBunk.style.cssText = 'position: sticky; left: 0; z-index: 2; background: #f3f4f6; padding: 10px 12px; font-weight: 700; color: #111827; border-bottom: 2px solid #e5e7eb; min-width: 110px; text-align: left;';
+        thr.appendChild(thBunk);
+        timeColumns.forEach(function (col) {
+            var th = document.createElement('th');
+            th.textContent = minutesToTimeLabel(col.startMin);
+            var isHour = (col.startMin % 60) === 0;
+            var leftBorder = isHour ? '2px solid #cbd5e1' : '1px solid #f1f5f9';
+            th.style.cssText = 'padding: 8px 6px; font-weight: ' + (isHour ? '700' : '500') + '; color: ' + (isHour ? '#111827' : '#6b7280') + '; border-bottom: 2px solid #e5e7eb; border-left: ' + leftBorder + '; white-space: nowrap; min-width: 78px; font-size: 0.78rem;';
+            thr.appendChild(th);
+        });
+        thead.appendChild(thr);
+        table.appendChild(thead);
+
+        var tbody = document.createElement('tbody');
+
+        divisionsToShow.forEach(function (divName) {
+            if (!shouldShowDivision(divName)) return;
+            var divInfo = divisions[divName];
+            if (!divInfo) return;
+            var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
+                return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
+            });
+            if (bunks.length === 0) return;
+            var divSlots = divisionTimes[divName] || [];
+            var divColor = divInfo.color || '#4b5563';
+            var isEditable = editableDivisions.indexOf(divName) >= 0;
+
+            // Division group header row
+            var ghTr = document.createElement('tr');
+            var ghTd = document.createElement('td');
+            ghTd.colSpan = 1 + timeColumns.length;
+            ghTd.style.cssText = 'background: ' + divColor + '; color: #fff; padding: 8px 12px; font-size: 0.95rem; font-weight: 700; letter-spacing: 0.02em;';
+            ghTd.textContent = divName + (isEditable ? '' : ' [LOCKED]');
+            ghTr.appendChild(ghTd);
+            tbody.appendChild(ghTr);
+
+            // Pre-compute which slots in this division have identical content
+            // for every bunk — those will merge into a single rowspan cell.
+            var mergeSlots = {}; // slotIdx -> true
+            for (var msi = 0; msi < divSlots.length; msi++) {
+                if (_slotIsFullDivisionMerge(msi, bunks, divSlots)) mergeSlots[msi] = true;
+            }
+
+            bunks.forEach(function (bunk, bi) {
+                var tr = document.createElement('tr');
+                tr.style.background = bi % 2 === 0 ? '#fff' : '#fafafa';
+
+                var tdBunk = document.createElement('td');
+                tdBunk.textContent = bunk;
+                tdBunk.style.cssText = 'position: sticky; left: 0; z-index: 1; background: ' + (bi % 2 === 0 ? '#fff' : '#fafafa') + '; padding: 8px 12px; font-weight: 600; color: #1f2937; border-right: 2px solid #e5e7eb; white-space: nowrap;';
+                tr.appendChild(tdBunk);
+
+                // For each time column, find which division slot covers it.
+                // Render once per slot with colspan = number of columns inside that slot.
+                var ci = 0;
+                while (ci < timeColumns.length) {
+                    var col = timeColumns[ci];
+                    var isHourMark = (col.startMin % 60) === 0;
+                    var leftBorder = isHourMark ? '2px solid #cbd5e1' : '1px solid #f1f5f9';
+
+                    var slotIdx = _findSlotIndexAtTime(divSlots, col.startMin);
+
+                    // Full-division merge: if this slot merges and we're not the
+                    // first bunk, skip the cell — it's covered by the rowspan
+                    // from the first bunk's cell above.
+                    if (slotIdx >= 0 && mergeSlots[slotIdx] && bi > 0) {
+                        var slotForSkip = divSlots[slotIdx];
+                        var skipSpan = 1;
+                        while (ci + skipSpan < timeColumns.length && timeColumns[ci + skipSpan].startMin < slotForSkip.endMin && timeColumns[ci + skipSpan].startMin >= slotForSkip.startMin) {
+                            skipSpan++;
+                        }
+                        ci += skipSpan;
+                        continue;
+                    }
+
+                    if (slotIdx < 0) {
+                        // No slot — division hasn't started yet or has ended.
+                        // Render a greyed-out striped cell so the timeline gap is obvious.
+                        var emptyTd = document.createElement('td');
+                        emptyTd.style.cssText = 'padding: 6px; border-left: ' + leftBorder + '; border-bottom: 1px solid #f1f5f9; background: repeating-linear-gradient(45deg, #f3f4f6, #f3f4f6 5px, #e5e7eb 5px, #e5e7eb 10px); color: #9ca3af;';
+                        emptyTd.textContent = '';
+                        tr.appendChild(emptyTd);
+                        ci++;
+                        continue;
+                    }
+                    var slot = divSlots[slotIdx];
+                    // Count subsequent columns that fall inside the same slot.
+                    var span = 1;
+                    while (ci + span < timeColumns.length && timeColumns[ci + span].startMin < slot.endMin && timeColumns[ci + span].startMin >= slot.startMin) {
+                        span++;
+                    }
+                    // Build a block object compatible with renderBunkCell.
+                    var blockObj = {
+                        slotIndex: slotIdx,
+                        startMin: slot.startMin,
+                        endMin: slot.endMin,
+                        event: slot.event || 'GA',
+                        type: slot.type || 'slot',
+                        division: divName,
+                        _splitHalf: slot._splitHalf,
+                        _splitParentEvent: slot._splitParentEvent,
+                        _isSplitTile: !!slot._splitHalf,
+                        electiveActivities: slot.electiveActivities,
+                        reservedFields: slot.reservedFields,
+                        location: slot.location,
+                        swimLocation: slot.swimLocation,
+                        _preChangeMin: slot._preChangeMin,
+                        _postChangeMin: slot._postChangeMin
+                    };
+                    var td;
+                    if (isLeagueBlockType(blockObj.event, blockObj.type)) {
+                        td = _renderTransposedLeagueCell(blockObj, bunk, divName, slotIdx);
+                    } else {
+                        td = renderBunkCell(blockObj, bunk, divName, isEditable);
+                    }
+                    // Apply the hour-mark left border so the timeline guide
+                    // shows up regardless of which renderer produced the cell.
+                    td.style.borderLeft = leftBorder;
+                    if (span > 1) td.colSpan = span;
+                    // Full-division merge: this cell on the first bunk's row
+                    // covers all bunks in the division for this slot.
+                    if (mergeSlots[slotIdx] && bi === 0 && bunks.length > 1) {
+                        td.rowSpan = bunks.length;
+                        td.style.verticalAlign = 'middle';
+                    }
+                    tr.appendChild(td);
+                    ci += span;
+                }
+
+                tbody.appendChild(tr);
+            });
+        });
+
+        table.appendChild(tbody);
+
+        var scrollWrap = document.createElement('div');
+        scrollWrap.style.cssText = 'overflow-x: auto; border: 1px solid #e5e7eb; border-radius: 8px;';
+        scrollWrap.appendChild(table);
+        container.appendChild(scrollWrap);
+
+        if (window.MultiSchedulerAutonomous && window.MultiSchedulerAutonomous.applyBlockingToGrid) {
+            setTimeout(function () { window.MultiSchedulerAutonomous.applyBlockingToGrid(); }, 50);
+        }
+        window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
+    }
+
+    // =========================================================================
     // MAIN RENDER FUNCTION
     // =========================================================================
 
+    // Legacy per-division stacked view, retained as fallback. The default
+    // entry point now delegates to renderTransposedView (bunks down Y-axis,
+    // time across X-axis). To force the legacy layout, call _renderStaggeredView.
     function renderStaggeredView(container) {
+        if (!container) container = document.getElementById('scheduleTable');
+        return renderTransposedView(container);
+    }
+
+    function _renderStaggeredViewLegacy(container) {
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
         const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         if (!window._postEditInProgress) loadScheduleForDate(dateKey);
@@ -2176,13 +2606,8 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        { const _customOrder = (window.loadGlobalSettings?.() || {})?.app1?.manualColumnOrder;
-          if (Array.isArray(_customOrder) && _customOrder.length > 0) {
-            const _pos = d => { const i = _customOrder.indexOf(d); return i === -1 ? 9999 : i; };
-            divisionsToShow.sort((a, b) => _pos(a) - _pos(b));
-          } else {
-            divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
-          }
+        if (typeof window.getUserDivisionOrder === 'function') {
+            divisionsToShow = window.getUserDivisionOrder(divisionsToShow);
         }
         
         if (divisionsToShow.length === 0) { 
@@ -2205,9 +2630,8 @@ const isAutoSchedule = currentBuilderMode === 'auto';
             if (!shouldShowDivision(divName)) return;
             const divInfo = divisions[divName];
             if (!divInfo) return;
-            let bunks = divInfo.bunks || [];
+            let bunks = (divInfo.bunks || []).slice();
             if (bunks.length === 0) return;
-            bunks = bunks.slice().sort((a, b) => String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' }));
             const isEditable = editableDivisions.includes(divName);
             
             let element;
@@ -2782,14 +3206,16 @@ if (bypassStatus.highlight) {
             const serialized = window.DivisionTimesSystem?.serialize?.(window.divisionTimes) || window.divisionTimes;
             window.saveCurrentDailyData('divisionTimes', serialized, { silent });
         }
-        // Update historicalCounts so rotation tracking works across all dates
+        // NOTE: saveSchedule does NOT touch historicalCounts.
+        //   - Post-edit callers run applyPostEditCounts (per-bunk delta) and
+        //     rely on its debounced RotationCloud.save.
+        //   - Generation callers (scheduler_core_main / scheduler_core_auto /
+        //     integration_hooks) run rebuildHistoricalCounts(true) themselves
+        //     after this save lands.
+        //   The previous reIncrement here was running with a post-save
+        //   "old" snapshot (= the new schedule) and silently shifted counts
+        //   by (newToday − oldToday) on every save. Removed.
         const dateKey = window.currentScheduleDate;
-        if (dateKey && window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-            window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                dateKey, window.scheduleAssignments || {}, true
-            );
-        }
-        // Sync rotation counts to cloud
         if (dateKey && window.RotationCloud?.save) {
             window.RotationCloud.save(dateKey, window.scheduleAssignments || {});
         }
@@ -2802,7 +3228,7 @@ if (bypassStatus.highlight) {
             _renderQueued = false; 
             if (_renderTimeout) { clearTimeout(_renderTimeout); _renderTimeout = null; }
             const container = document.getElementById('scheduleTable');
-            if (container) renderStaggeredView(container);
+            if (container) renderTransposedView(container);
             return;
         }
         if (now - _lastRenderTime < RENDER_DEBOUNCE_MS) {
@@ -2813,14 +3239,14 @@ if (bypassStatus.highlight) {
                     _renderQueued = false; 
                     _lastRenderTime = Date.now(); 
                     const container = document.getElementById('scheduleTable'); 
-                    if (container) renderStaggeredView(container); 
+                    if (container) renderTransposedView(container); 
                 }, RENDER_DEBOUNCE_MS); 
             }
             return;
         }
         _lastRenderTime = now;
         const container = document.getElementById('scheduleTable');
-        if (container) renderStaggeredView(container);
+        if (container) renderTransposedView(container);
     }
 
     // =========================================================================
@@ -3187,8 +3613,13 @@ if (bypassStatus.highlight) {
             if (_coolCheck?.blocked) { if (!confirm('Location Cooldown:\n\n' + _coolCheck.reason + '\n\nPlace anyway?')) return; }
         }
 
-        window._postEditInProgress = true; 
+        window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         const divSlots = window.divisionTimes?.[divName] || [];
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
@@ -3444,10 +3875,11 @@ if (bypassStatus.highlight) {
                 const plan = actionable[pi];
                 overlay.remove();
 
-                // Displace the blocking bunks to their alternatives
+                // Displace the blocking bunks to their alternatives.
+                // Track each bunk's old activity + slots so applyPostEditCounts
+                // (called after the save) can compute the correct delta per bunk.
                 const modifiedBunks = new Set([bunk]);
-                const _gs = window.loadGlobalSettings?.() || {};
-                const _hc = _gs.historicalCounts || {};
+                const _displacedDeltas = [];
 
                 for (const { bunk: cb, alt, editable } of plan.alts) {
                     if (!alt || !editable) continue;
@@ -3463,20 +3895,28 @@ if (bypassStatus.highlight) {
                         };
                     });
                     modifiedBunks.add(cb);
-                    // Rotation counts
-                    if (!_hc[cb]) _hc[cb] = {};
-                    oldAct.forEach(a => { _hc[cb][a] = Math.max(0, (_hc[cb][a] || 0) - 1); });
-                    _hc[cb][alt.activityName] = (_hc[cb][alt.activityName] || 0) + 1;
+                    _displacedDeltas.push({ bunk: cb, oldAct, newAct: alt.activityName, slots: cbSlots });
                 }
 
-                window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-                // ★ Sync rotation counts to cloud after displacement
+                // ★ Update counts (historicalCounts + rotationHistory) per bunk
+                //   via the shared applyPostEditCounts. It handles slot counting,
+                //   timestamps, and a debounced cloud sync.
+                try {
+                    const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+                    if (_ape) {
+                        _displacedDeltas.forEach(d => _ape(d.bunk, d.oldAct, d.newAct, d.slots));
+                    }
+                } catch (_e) { console.warn('[Displacement] post-edit counts failed:', _e); }
+
+                // Notify the rotation tab so it refreshes after the displacement.
                 try {
                     const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-                } catch (_e) { console.warn('[Displacement] RotationCloud sync failed:', _e); }
+                    document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                        detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'displacement' }
+                    }));
+                } catch (_e) { /* non-fatal */ }
 
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
@@ -5050,6 +5490,15 @@ if (softBlocks.length > 0) {
 
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        // Auto-clear after 8s — without this, an exception in the surrounding
+        // flow would leave the flag set forever, silently disabling realtime
+        // sync (hookCloudHydration / hookRemoteChanges both early-return
+        // while it's true). Mirrors post_edit_system.js's pattern.
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
@@ -5062,32 +5511,40 @@ if (softBlocks.length > 0) {
             }
         }
 
-        // *** FIX: Update rotation counts for each edited bunk (delta: decrement old, increment new) ***
+        // *** Update rotation counts via shared applyPostEditCounts ***
+        //   Per-bunk delta: handles slot counting, rotationHistory timestamps,
+        //   and a debounced RotationCloud.save (single batched cloud sync).
         try {
-            const _gs = window.loadGlobalSettings?.() || {};
-            const _hc = _gs.historicalCounts || {};
-            const _validActs = window.SchedulerCoreUtils?.getValidActivityNames?.() || new Set();
-            for (const bunk of bunks) {
-                if (!_hc[bunk]) _hc[bunk] = {};
-                // Decrement each old activity (de-duplicate: each unique activity counts once)
-                const oldUnique = {};
-                (oldActivitiesByBunk[bunk] || []).forEach(a => { oldUnique[a] = (oldUnique[a] || 0) + 1; });
-                for (const [act, cnt] of Object.entries(oldUnique)) {
-                    _hc[bunk][act] = Math.max(0, (_hc[bunk][act] || 0) - cnt);
+            const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+            if (_ape) {
+                // Primary edited bunks: each gets the new activity at its own
+                // resolved slot indices in this division.
+                for (const bunk of bunks) {
+                    let bunkSlots;
+                    if (isAutoMode && result.timeStartMin != null && result.timeEndMin != null) {
+                        bunkSlots = findSlotsForRange(result.timeStartMin, result.timeEndMin, divName, bunk);
+                    } else if (perBunkSlotMap?.[String(bunk)]) {
+                        bunkSlots = perBunkSlotMap[String(bunk)];
+                    } else {
+                        bunkSlots = slots || [];
+                    }
+                    _ape(bunk, oldActivitiesByBunk[bunk] || [], activity || null, bunkSlots);
                 }
-                // Increment new activity
-                if (activity && (_validActs.size === 0 || _validActs.has(activity))) {
-                    _hc[bunk][activity] = (_hc[bunk][activity] || 0) + 1;
+                // Cascade-reassigned bunks (the `plan` array): one slot each.
+                for (const move of plan) {
+                    const _moveOld = (move.from && move.from.activity) ? [move.from.activity] : [];
+                    _ape(move.bunk, _moveOld, move.to?.activity || null, [move.slot]);
                 }
             }
-            window.saveGlobalSettings?.('historicalCounts', _hc);
-            setTimeout(() => window.forceSyncToCloud?.(), 200);
-            // ★ Sync rotation counts to cloud after multi-bunk edit
+            console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
+
+            // Notify the rotation tab so it refreshes after the multi-bunk edit.
             try {
                 const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-            } catch (_e) { console.warn('[MultiBunkEdit] RotationCloud sync failed:', _e); }
-            console.log('[applyMultiBunkEdit] Rotation counts updated for', bunks.length, 'bunks');
+                document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                    detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'multi-bunk-edit' }
+                }));
+            } catch (_e) { /* non-fatal */ }
         } catch (rcErr) { console.error('[applyMultiBunkEdit] Rotation count update failed:', rcErr); }
 
         if (typeof renderStaggeredView === 'function') renderStaggeredView();
@@ -5222,16 +5679,15 @@ if (softBlocks.length > 0) {
         document.getElementById('ar-apply').onclick = async () => {
             closeRebalance();
             try {
-                const _gs = window.loadGlobalSettings?.() || {};
-                const _hc = _gs.historicalCounts || {};
                 const modifiedBunks = new Set();
+                const _rebalDeltas = [];
                 for (const { bunk, alt } of suggestions) {
                     if (!alt) continue;
                     const bunkSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, bunk);
                     const perBunk = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)];
                     const slotCount = perBunk ? perBunk.length : 50;
                     if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(slotCount);
-                    // Capture old for rotation count
+                    // Capture old activities for the post-edit count delta
                     const oldAct = bunkSlots.filter(i => window.scheduleAssignments[bunk]?.[i] && !window.scheduleAssignments[bunk][i].continuation)
                         .map(i => window.scheduleAssignments[bunk][i]._activity).filter(Boolean);
                     // Write alternative
@@ -5243,19 +5699,26 @@ if (softBlocks.length > 0) {
                         };
                     }
                     modifiedBunks.add(bunk);
-                    // Update rotation counts
-                    if (!_hc[bunk]) _hc[bunk] = {};
-                    oldAct.forEach(a => { _hc[bunk][a] = Math.max(0, (_hc[bunk][a] || 0) - 1); });
-                    _hc[bunk][alt.activityName] = (_hc[bunk][alt.activityName] || 0) + 1;
+                    _rebalDeltas.push({ bunk, oldAct, newAct: alt.activityName, slots: bunkSlots });
                 }
-                window.saveGlobalSettings?.('historicalCounts', _hc);
                 if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
-                // ★ Sync rotation counts to cloud after rebalance
+                // ★ Update rotation counts (historicalCounts + rotationHistory +
+                //   debounced cloud save) via the shared applyPostEditCounts.
+                try {
+                    const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+                    if (_ape) {
+                        _rebalDeltas.forEach(d => _ape(d.bunk, d.oldAct, d.newAct, d.slots));
+                    }
+                } catch (_e) { console.warn('[AutoRebalance] post-edit counts failed:', _e); }
+
+                // Notify the rotation tab so it refreshes after the rebalance.
                 try {
                     const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                    if (_rcDate && window.RotationCloud?.save) window.RotationCloud.save(_rcDate, window.scheduleAssignments || {});
-                } catch (_e) { console.warn('[AutoRebalance] RotationCloud sync failed:', _e); }
+                    document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                        detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'auto-rebalance' }
+                    }));
+                } catch (_e) { /* non-fatal */ }
 
                 if (typeof renderStaggeredView === 'function') renderStaggeredView();
                 if (typeof updateTable === 'function') updateTable();
@@ -5555,6 +6018,15 @@ if (softBlocks.length > 0) {
 
         window._postEditInProgress = true;
         window._postEditTimestamp = Date.now();
+        // Auto-clear after 8s — without this, an exception in the surrounding
+        // flow would leave the flag set forever, silently disabling realtime
+        // sync (hookCloudHydration / hookRemoteChanges both early-return
+        // while it's true). Mirrors post_edit_system.js's pattern.
+        if (window._postEditClearTimer) clearTimeout(window._postEditClearTimer);
+        window._postEditClearTimer = setTimeout(() => {
+            window._postEditInProgress = false;
+            window._postEditClearTimer = null;
+        }, 8000);
         if (typeof bypassSaveAllBunks === 'function') await bypassSaveAllBunks([...modifiedBunks]);
 
         if (window.SchedulerCoreUtils?.applyPostEditCounts) {
@@ -5565,6 +6037,14 @@ if (softBlocks.length > 0) {
                 window.SchedulerCoreUtils.applyPostEditCounts(move.bunk, planOldActivities.get(move.bunk) || [], move.to.activity, [move.slot]);
             }
         }
+
+        // Notify the rotation tab so it refreshes after a proposal is applied.
+        try {
+            const _rcDate = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
+                detail: { bunks: [...modifiedBunks], date: _rcDate, source: 'proposal-applied' }
+            }));
+        } catch (_e) { /* non-fatal */ }
 
         if (plan.length > 0) enableBypassRBACView(plan.map(p => p.bunk));
 

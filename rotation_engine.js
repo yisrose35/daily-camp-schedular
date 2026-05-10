@@ -1264,19 +1264,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (cloudData.counts) Object.keys(cloudData.counts).forEach(function(b) { allBunks.add(b); });
         if (cloudData.lastDone) Object.keys(cloudData.lastDone).forEach(function(b) { allBunks.add(b); });
 
+        // Today's per-bunk cloud contribution. The local 14-day scan
+        // (buildBunkActivityHistory) deliberately excludes today, so cloud
+        // counts must do the same — otherwise a regenerate sees today's stale
+        // draft as "history" and biases scoring against it.
+        var todayCloud = (cloudData.countsByDate && cloudData.countsByDate[today]) || {};
+
         allBunks.forEach(function(bunk) {
             // Get or build the history for this bunk
             var history = _historyCache.has(bunk) ? _historyCache.get(bunk) : buildBunkActivityHistory(bunk);
 
             var cloudCounts = (cloudData.counts || {})[bunk] || {};
             var cloudLast = (cloudData.lastDone || {})[bunk] || {};
+            var todayBunk = todayCloud[bunk] || {};
 
             // For each cloud activity, fill gaps the local scan may have missed
             var allActs = new Set(Object.keys(cloudCounts).concat(Object.keys(cloudLast)));
             allActs.forEach(function(act) {
                 var actLower = act.toLowerCase().trim();
                 var local = history.byActivity[actLower];
-                var cloudCount = cloudCounts[act] || 0;
+                var cloudCount = Math.max(0, (cloudCounts[act] || 0) - (todayBunk[act] || 0));
                 var cloudLastDate = cloudLast[act] || null;
 
                 if (!local) {

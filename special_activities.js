@@ -342,9 +342,22 @@ function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
         const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
-        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${allActivities.length} total activities`);
+        // ★ Defensive dedupe on load. Cloud-sync races have produced storage
+        //   payloads with thousands of duplicate rows for the same name. Heal
+        //   on read so the rest of the app sees a clean registry; first
+        //   occurrence wins (it's the one users created interactively).
+        const _seenNames = new Map();
+        for (const s of allActivities) {
+            if (!s || !s.name) continue;
+            if (!_seenNames.has(s.name)) _seenNames.set(s.name, s);
+        }
+        const dedupedActivities = [..._seenNames.values()];
+        if (dedupedActivities.length !== allActivities.length) {
+            console.warn(`[SPECIAL_ACTIVITIES] loadData: dropped ${allActivities.length - dedupedActivities.length} duplicate rows (${allActivities.length} → ${dedupedActivities.length})`);
+        }
+        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${dedupedActivities.length} unique activities`);
         specialActivities = []; rainyDayActivities = [];
-        allActivities.forEach(s => {
+        dedupedActivities.forEach(s => {
             const validated = validateSpecialActivity(s, s?.name);
             if (validated.rainyDayOnly === true) validated.rainyDayExclusive = true;
             if (validated.rainyDayExclusive) rainyDayActivities.push(validated);
@@ -381,12 +394,45 @@ function renderMasterList() {
     if (!specialsListEl) return; specialsListEl.innerHTML = "";
     if (specialActivities.length === 0) { specialsListEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>'; return; }
     specialActivities.forEach(item => specialsListEl.appendChild(createMasterListItem(item, false)));
+    _saReorderInit(specialsListEl, specialActivities);
 }
 
 function renderRainyDayList() {
     if (!rainyDayListEl) return; rainyDayListEl.innerHTML = "";
     if (rainyDayActivities.length === 0) { rainyDayListEl.innerHTML = '<div style="padding:16px; text-align:center; color:#0369a1; font-size:0.85rem;">No rainy day activities yet.</div>'; return; }
     rainyDayActivities.forEach(item => rainyDayListEl.appendChild(createMasterListItem(item, true)));
+    _saReorderInit(rainyDayListEl, rainyDayActivities);
+}
+
+function _saReorderInit(listEl, sourceArr) {
+    if (!listEl || listEl._saDragInit) return;
+    listEl._saDragInit = true;
+    listEl.addEventListener('dragover', function (e) {
+        const dragging = listEl.querySelector(':scope > .sa-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const siblings = Array.prototype.slice.call(listEl.children).filter(el => el !== dragging);
+        const next = siblings.find(sib => {
+            const r = sib.getBoundingClientRect();
+            return e.clientY < r.top + r.height / 2;
+        });
+        listEl.insertBefore(dragging, next || null);
+    });
+    listEl._saSourceArr = sourceArr;
+}
+
+function _saCommitOrder(listEl, sourceArr) {
+    if (!listEl || !Array.isArray(sourceArr)) return;
+    const names = Array.prototype.map.call(listEl.children, el => el.getAttribute('data-sa-name')).filter(Boolean);
+    const byName = {};
+    sourceArr.forEach(item => { if (item && item.name) byName[item.name] = item; });
+    const reordered = names.map(n => byName[n]).filter(Boolean);
+    // Append any items that weren't in the DOM (defensive)
+    sourceArr.forEach(item => { if (item && item.name && reordered.indexOf(item) < 0) reordered.push(item); });
+    sourceArr.length = 0;
+    reordered.forEach(it => sourceArr.push(it));
+    if (typeof saveData === 'function') saveData();
 }
 
 function createMasterListItem(item, isRainyDay) {
@@ -394,7 +440,21 @@ function createMasterListItem(item, isRainyDay) {
     const id = 'special-' + item.name;
     const el = document.createElement("div");
     el.className = "list-item" + (id === selectedItemId ? " selected" : "");
+    el.setAttribute('data-sa-name', item.name);
+    el.draggable = true;
+    el.style.cursor = 'grab';
     el.onclick = () => { selectedItemId = id; renderMasterList(); renderRainyDayList(); renderDetailPane(); };
+    el.addEventListener('dragstart', (e) => { el.classList.add('sa-dragging'); el.style.opacity = '0.45'; e.stopPropagation(); });
+    el.addEventListener('dragend', (e) => {
+        el.classList.remove('sa-dragging'); el.style.opacity = '1'; e.stopPropagation();
+        const parent = el.parentElement;
+        if (parent && parent._saSourceArr) _saCommitOrder(parent, parent._saSourceArr);
+    });
+    const grip = document.createElement('span');
+    grip.textContent = '⋮⋮';
+    grip.title = 'Drag to reorder';
+    grip.style.cssText = 'color:#9CA3AF; font-size:0.95rem; line-height:1; padding-right:6px; user-select:none; cursor:grab;';
+    el.appendChild(grip);
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
     // ★ v3.5: Show multi-part badge in master list
@@ -548,6 +608,35 @@ function renderDetailPane() {
 // =========================================================================
 // Subcategories let the user split "Special Activity" into named buckets
 // (e.g. "Food", "Theme") so a layer can demand 1-of-each. Empty = "Regular".
+// Persistent user-defined subcategories (so a name stays even if no special
+// is tagged with it yet). Merged with tags found on existing specials.
+const SUBCAT_REGISTRY_KEY = 'specialSubcategoryRegistry_v1';
+function loadSubcategoryRegistry() {
+    try {
+        const raw = localStorage.getItem(SUBCAT_REGISTRY_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch { return []; }
+}
+function saveSubcategoryRegistry(list) {
+    try { localStorage.setItem(SUBCAT_REGISTRY_KEY, JSON.stringify(list || [])); } catch {}
+}
+function addSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim() : '';
+    if (!v) return false;
+    const reg = loadSubcategoryRegistry();
+    if (reg.some(r => r.toLowerCase() === v.toLowerCase())) return false;
+    reg.push(v);
+    saveSubcategoryRegistry(reg);
+    return true;
+}
+function removeSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim().toLowerCase() : '';
+    if (!v) return;
+    const reg = loadSubcategoryRegistry().filter(r => r.toLowerCase() !== v);
+    saveSubcategoryRegistry(reg);
+}
+
 function getAllSubcategories() {
     const seen = new Set();
     const out = [];
@@ -559,11 +648,14 @@ function getAllSubcategories() {
         seen.add(key);
         out.push(v);
     };
+    loadSubcategoryRegistry().forEach(push);
     (specialActivities || []).forEach(a => push(a?.subcategory));
     (rainyDayActivities || []).forEach(a => push(a?.subcategory));
     return out.sort((a, b) => a.localeCompare(b));
 }
 window.getSpecialSubcategories = getAllSubcategories;
+window.addSpecialSubcategory = addSubcategory;
+window.removeSpecialSubcategory = removeSubcategory;
 
 function summarySubcategory(item) {
     const v = (typeof item.subcategory === 'string') ? item.subcategory.trim() : '';
@@ -2122,7 +2214,80 @@ function propagateMultiPartRename(oldName, newName) {
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
-function cleanupDeletedSpecialActivity(name) { if(!name)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name){dd.scheduleAssignments[bk][i]=null;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.scheduleAssignments){Object.keys(window.scheduleAssignments).forEach(bk=>{const sl=window.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name)window.scheduleAssignments[bk][i]=null;});}); } if(window.activityProperties?.[name])delete window.activityProperties[name]; } catch(e){console.error('[SPECIAL_ACTIVITIES] Cleanup error:',e);} }
+function cleanupDeletedSpecialActivity(name) {
+    if (!name) return;
+    try {
+        const s = window.loadGlobalSettings?.() || {};
+        const ds = s.daily_schedules || {};
+        let c = 0;
+        Object.keys(ds).forEach(dk => {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(bk => {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        dd.scheduleAssignments[bk][i] = null;
+                        c++;
+                    }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bk => {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        window.scheduleAssignments[bk][i] = null;
+                    }
+                });
+            });
+        }
+        if (window.activityProperties?.[name]) delete window.activityProperties[name];
+
+        // Cloud rotation_counts purge — without this, deleted specials
+        // accumulate stale rotation rows that bias the auto-builder's
+        // least-recently-done picker forever. The facilities.js delete
+        // path already routes through cleanupRotationTracking; this UI
+        // path bypassed it.
+        try { window.RotationCloud?.deleteActivity?.(name); } catch (_) {}
+
+        // Local rotation tracking purge — mirror what cleanupRotationTracking
+        // does so this UI path matches the facilities path.
+        try {
+            if (window.historicalCounts) {
+                Object.keys(window.historicalCounts).forEach(bk => {
+                    if (window.historicalCounts[bk] && name in window.historicalCounts[bk]) {
+                        delete window.historicalCounts[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+            }
+            if (window.manualUsageOffsets) {
+                Object.keys(window.manualUsageOffsets).forEach(bk => {
+                    if (window.manualUsageOffsets[bk] && name in window.manualUsageOffsets[bk]) {
+                        delete window.manualUsageOffsets[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+            }
+            const rh = window.loadRotationHistory?.();
+            if (rh?.bunks) {
+                let rhChanged = false;
+                Object.keys(rh.bunks).forEach(bk => {
+                    if (rh.bunks[bk] && name in rh.bunks[bk]) {
+                        delete rh.bunks[bk][name];
+                        rhChanged = true;
+                    }
+                });
+                if (rhChanged) window.saveRotationHistory?.(rh);
+            }
+        } catch (_) {}
+    } catch (e) { console.error('[SPECIAL_ACTIVITIES] Cleanup error:', e); }
+}
 function propagateSpecialActivityRename(oldN,newN) { if(!oldN||!newN||oldN===newN)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===oldN){dd.scheduleAssignments[bk][i]._activity=newN;c++;} if(s?.activity===oldN){dd.scheduleAssignments[bk][i].activity=newN;c++;} if(s?.event===oldN){dd.scheduleAssignments[bk][i].event=newN;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.activityProperties?.[oldN]){window.activityProperties[newN]={...window.activityProperties[oldN]};delete window.activityProperties[oldN];} } catch(e){console.error('[SPECIAL_ACTIVITIES] Rename error:',e);} }
 
 function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }

@@ -74,10 +74,66 @@
     // From a seedOrder array (1-indexed by position), produce Round-1 matchups
     // for the given style. Handles non-power-of-2 by padding with BYE entries
     // (top seeds get the byes).
-    function generateRound1(seedOrder, style) {
+    //
+    // Optional `adjust` parameter (object) supports user-driven shaping:
+    //   { mode:'eliminate', eliminated:[...] }   – drop teams before bracketing
+    //   { mode:'bye', byes:{ teamName:1 } }      – give selected teams a R1 bye
+    //   { mode:'playin', playIn:[...] }          – return only play-in matchups
+    //                                              (callers route winners into R1)
+    //   { mode:'none' } / undefined              – legacy behavior
+    function generateRound1(seedOrder, style, adjust) {
         var teams = (seedOrder || []).slice();
+        adjust = adjust || { mode: 'none' };
+
+        // ELIMINATE: remove selected teams up-front
+        if (adjust.mode === 'eliminate' && Array.isArray(adjust.eliminated)) {
+            var dropSet = {};
+            adjust.eliminated.forEach(function (t) { dropSet[t] = true; });
+            teams = teams.filter(function (t) { return !dropSet[t]; });
+        }
+
+        // PLAY-IN: emit only the play-in matchups (round 0). The hub creates
+        // a separate round entry so winners are decided before generateRound1
+        // is called again to build the real R1.
+        if (adjust.mode === 'playin' && Array.isArray(adjust.playIn) && adjust.playIn.length >= 2) {
+            var pi = adjust.playIn.slice();
+            // Pair sequentially: 1st vs 2nd, 3rd vs 4th, ...
+            var out = [];
+            for (var i = 0; i < pi.length - 1; i += 2) {
+                var teamA = pi[i], teamB = pi[i + 1];
+                if (!teamA || !teamB) continue;
+                out.push({
+                    id: uid(),
+                    teamA: teamA,
+                    teamB: teamB,
+                    seedA: null,
+                    seedB: null,
+                    sport: '',
+                    field: '',
+                    winner: null,
+                    isBye: false,
+                    isPlayIn: true
+                });
+            }
+            return out;
+        }
+
         var n = teams.length;
         if (n < 2) return [];
+
+        // BYE: explicitly chosen teams get a BYE opponent in R1.
+        // Reorder so bye teams occupy top seed slots (which standard bracket
+        // pairing matches against the lowest-seed BYE pad).
+        if (adjust.mode === 'bye' && adjust.byes && typeof adjust.byes === 'object') {
+            var byeNames = Object.keys(adjust.byes).filter(function (k) { return adjust.byes[k] >= 1; });
+            if (byeNames.length > 0) {
+                var byeSet = {};
+                byeNames.forEach(function (n2) { byeSet[n2] = true; });
+                var byeFirst = teams.filter(function (t) { return byeSet[t]; });
+                var rest = teams.filter(function (t) { return !byeSet[t]; });
+                teams = byeFirst.concat(rest);
+            }
+        }
 
         var size = nextPowerOf2(n);
         // Pad with BYEs so the high-seed positions face byes
@@ -100,6 +156,7 @@
                 seedA: seedA,
                 seedB: seedB,
                 sport: '',
+                field: '',
                 winner: winner,
                 isBye: (teamA === 'BYE' || teamB === 'BYE')
             });
@@ -131,6 +188,7 @@
                 seedA: seedA,
                 seedB: seedB,
                 sport: '',
+                field: '',
                 winner: winner,
                 isBye: (!a || !b)
             });
@@ -169,6 +227,7 @@
                 seedA: seedRank[teamA] || null,
                 seedB: seedRank[teamB] || null,
                 sport: '',
+                field: '',
                 winner: null,
                 isBye: false
             });
@@ -183,6 +242,7 @@
                 seedA: seedRank[sorted[lo]] || null,
                 seedB: null,
                 sport: '',
+                field: '',
                 winner: sorted[lo],
                 isBye: true
             });
@@ -213,6 +273,14 @@
         if (!Array.isArray(p.rounds)) p.rounds = [];
         if (!Array.isArray(p.reservedActivities)) p.reservedActivities = [];
         if (typeof p.currentRound !== 'number' || p.currentRound < 1) p.currentRound = 1;
+        // Bracket adjustments (eliminate / bye / playin) for non-power-of-2 fields
+        if (!p.bracketAdjust || typeof p.bracketAdjust !== 'object') {
+            p.bracketAdjust = { mode: 'none', eliminated: [], byes: {}, playIn: [] };
+        }
+        if (['none', 'eliminate', 'bye', 'playin'].indexOf(p.bracketAdjust.mode) < 0) p.bracketAdjust.mode = 'none';
+        if (!Array.isArray(p.bracketAdjust.eliminated)) p.bracketAdjust.eliminated = [];
+        if (!p.bracketAdjust.byes || typeof p.bracketAdjust.byes !== 'object') p.bracketAdjust.byes = {};
+        if (!Array.isArray(p.bracketAdjust.playIn)) p.bracketAdjust.playIn = [];
         return p;
     }
 
@@ -756,7 +824,12 @@
         });
         sportSel.onchange = function () {
             m.sport = sportSel.value;
+            // Field is sport-specific — clear it when sport changes so a
+            // stale incompatible field doesn't get scheduled.
+            if (m.field && !_fieldSupportsSport(m.field, m.sport, opts)) m.field = '';
             save();
+            var mount = box.closest('.playoff-mount');
+            if (mount && mount._reRender) mount._reRender();
         };
         sportRow.appendChild(sportSel);
 
@@ -766,9 +839,72 @@
             byeNote.textContent = 'auto-advance';
             sportRow.appendChild(byeNote);
         }
-
         box.appendChild(sportRow);
+
+        // Field dropdown — only fields whose `activities` list includes the
+        // chosen sport. Empty = scheduler auto-picks any compatible field.
+        if (!m.isBye) {
+            var fieldRow = document.createElement('div');
+            fieldRow.className = 'playoff-sport-row';
+
+            var fieldLabel = document.createElement('span');
+            fieldLabel.className = 'playoff-sport-label';
+            fieldLabel.textContent = 'Field:';
+            fieldRow.appendChild(fieldLabel);
+
+            var fieldSel = document.createElement('select');
+            fieldSel.disabled = opts.readOnly || m.isBye || !m.sport;
+
+            var fAuto = document.createElement('option');
+            fAuto.value = '';
+            fAuto.textContent = m.sport ? 'Auto (any compatible field)' : '-- pick sport first --';
+            fieldSel.appendChild(fAuto);
+
+            if (m.sport) {
+                var compat = _fieldsForSport(m.sport, opts);
+                compat.forEach(function (fName) {
+                    var o = document.createElement('option');
+                    o.value = fName;
+                    o.textContent = fName;
+                    if (m.field === fName) o.selected = true;
+                    fieldSel.appendChild(o);
+                });
+                if (compat.length === 0) {
+                    fAuto.textContent = 'No fields support "' + m.sport + '"';
+                }
+            }
+            fieldSel.onchange = function () {
+                m.field = fieldSel.value || '';
+                save();
+            };
+            fieldRow.appendChild(fieldSel);
+
+            box.appendChild(fieldRow);
+        }
+
         return box;
+    }
+
+    // Returns array of field names whose activities include `sport`. Pulls
+    // from opts.getFieldsForSport when provided, otherwise reads
+    // gs.app1.fields. Used by the per-matchup field dropdown.
+    function _fieldsForSport(sport, opts) {
+        if (!sport) return [];
+        if (opts && typeof opts.getFieldsForSport === 'function') {
+            return opts.getFieldsForSport(sport) || [];
+        }
+        try {
+            var gs = (typeof window !== 'undefined' && window.loadGlobalSettings)
+                ? window.loadGlobalSettings() : {};
+            var fields = (gs.app1 && gs.app1.fields) || gs.fields || [];
+            return fields
+                .filter(function (f) { return f && Array.isArray(f.activities) && f.activities.indexOf(sport) >= 0; })
+                .map(function (f) { return f.name; });
+        } catch (_) { return []; }
+    }
+    function _fieldSupportsSport(field, sport, opts) {
+        if (!field || !sport) return false;
+        return _fieldsForSport(sport, opts).indexOf(field) >= 0;
     }
 
     // -------------------------------------------------------------------------

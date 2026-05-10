@@ -238,12 +238,18 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             enabled: league.enabled !== false,
-          schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority) 
-                ? league.schedulingPriority 
+          schedulingPriority: ['sport_variety', 'matchup_variety'].includes(league.schedulingPriority)
+                ? league.schedulingPriority
                 : 'sport_variety',
             offCampus: (league.offCampus && typeof league.offCampus === 'object')
                 ? { enabled: league.offCampus.enabled === true, zone: typeof league.offCampus.zone === 'string' ? league.offCampus.zone : '', teamsPerDay: parseInt(league.offCampus.teamsPerDay) || 0 }
-                : { enabled: false, zone: '', teamsPerDay: 0 }
+                : { enabled: false, zone: '', teamsPerDay: 0 },
+            // ★ Preserve the playoff sub-object verbatim. Earlier this field
+            //   was dropped, so any cloud-sync echo or background re-validation
+            //   that ran right after a save (e.g. saving from the Playoff Hub)
+            //   wiped enable/style/seeds/rounds and made the bracket appear
+            //   to "shut off" until the user re-toggled it.
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -506,6 +512,18 @@
                 return; // Keep current in-memory data
             }
 
+            // ★ Snapshot in-memory playoff state BEFORE clearing so we can
+            //   defend against stale cloud echoes that haven't yet received
+            //   the latest bracket save. If cloud says rounds=[] but we have
+            //   real rounds in memory, keep ours — local writes always win.
+            const _playoffBackup = {};
+            Object.keys(leaguesByName).forEach(k => {
+                const p = leaguesByName[k] && leaguesByName[k].playoff;
+                if (p && Array.isArray(p.rounds) && p.rounds.length > 0) {
+                    _playoffBackup[k] = p;
+                }
+            });
+
             // GCM FIX: Don't replace the object. Clear and refill it.
             // 1. Remove old keys
             Object.keys(leaguesByName).forEach(k => delete leaguesByName[k]);
@@ -513,9 +531,20 @@
             // 2. Add new keys with validation (only valid leagues)
             Object.keys(loadedData).forEach(leagueName => {
                 const league = loadedData[leagueName];
-                if (league && typeof league === 'object' && 
+                if (league && typeof league === 'object' &&
                     (league.name || Array.isArray(league.teams))) {
-                    leaguesByName[leagueName] = validateLeague(league, leagueName);
+                    const validated = validateLeague(league, leagueName);
+                    // Restore richer in-memory playoff state if loaded copy has
+                    // empty rounds but we had a populated bracket (stale cloud).
+                    const backup = _playoffBackup[leagueName];
+                    const loadedRoundsEmpty = !validated.playoff
+                        || !Array.isArray(validated.playoff.rounds)
+                        || validated.playoff.rounds.length === 0;
+                    if (backup && loadedRoundsEmpty) {
+                        validated.playoff = backup;
+                        console.log('[LEAGUES] Preserved in-memory playoff bracket for "' + leagueName + '" (loaded copy had empty rounds)');
+                    }
+                    leaguesByName[leagueName] = validated;
                 } else {
                     console.warn("[LEAGUES] Skipping invalid league entry:", leagueName, league);
                 }
@@ -874,32 +903,16 @@
             }
         };
 
-        // --- PLAYOFF CONTAINER (collapsible) ---
-        const playoffContainer = document.createElement('div');
-        playoffContainer.className = 'league-playoff-container';
-        playoffContainer.style.cssText = 'display:none;margin-top:8px;';
-        const _playoffMount = document.createElement('div');
-        playoffContainer.appendChild(_playoffMount);
-        detailPaneEl.appendChild(playoffContainer);
-
-        // Auto-expand if playoff already enabled
-        if (_playoffActive) {
-            playoffContainer.style.display = 'block';
-            playoffBtn.classList.add('active');
-            mountPlayoffUI(_playoffMount, league);
-        }
-
+        // ★ Playoff button now opens the dedicated per-league Playoff Hub
+        //   overlay (window.PlayoffHub.open). The old collapsible inline panel
+        //   was replaced because users asked for one focused, shared UI per
+        //   league. The hub still saves through the same league.playoff
+        //   sub-object, so any state set there is read by the scheduler.
         playoffBtn.onclick = function () {
-            const isOpen = playoffContainer.style.display !== 'none';
-            if (isOpen) {
-                playoffContainer.style.display = 'none';
-                playoffBtn.classList.remove('active');
-                playoffBtn.textContent = (league.playoff && league.playoff.enabled) ? 'Playoff: ON' : 'Playoff Mode';
+            if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                window.PlayoffHub.open(league, 'regular');
             } else {
-                playoffContainer.style.display = 'block';
-                playoffBtn.classList.add('active');
-                playoffBtn.textContent = 'Close Playoff';
-                mountPlayoffUI(_playoffMount, league);
+                alert('Playoff Hub module not loaded.');
             }
         };
 
