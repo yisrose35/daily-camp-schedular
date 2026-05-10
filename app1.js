@@ -118,6 +118,41 @@
         if (!Array.isArray(arr)) return;
         arr.sort(compareBunks);
     }
+
+    // Globally-available helper: return division keys ordered by the user's
+    // drag-and-drop preferences in Campistry Me / flow.html.
+    //   1) gs.app1.manualColumnOrder (set by drag-reorder of grade columns)
+    //   2) gs.campStructure key order via parentDivision lookup
+    //   3) Numeric-then-alphabetic fallback
+    // Use this everywhere a list of division/grade keys is rendered to keep
+    // the order consistent across the entire site.
+    window.getUserDivisionOrder = function (keys) {
+        if (!Array.isArray(keys) || keys.length === 0) return keys || [];
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
+        var structureOrder = Object.keys(gs.campStructure || {});
+        var divs = window.divisions || {};
+        return keys.slice().sort(function (a, b) {
+            if (manualOrder) {
+                var ai = manualOrder.indexOf(a);
+                var bi = manualOrder.indexOf(b);
+                if (ai >= 0 && bi >= 0) return ai - bi;
+                if (ai >= 0) return -1;
+                if (bi >= 0) return 1;
+            }
+            if (structureOrder.length > 0) {
+                var aParent = (divs[a] && divs[a].parentDivision) || a;
+                var bParent = (divs[b] && divs[b].parentDivision) || b;
+                var ai2 = structureOrder.indexOf(aParent);
+                var bi2 = structureOrder.indexOf(bParent);
+                if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+            }
+            var na = parseInt(String(a).match(/(\d+)/) ? String(a).match(/(\d+)/)[1] : '');
+            var nb = parseInt(String(b).match(/(\d+)/) ? String(b).match(/(\d+)/)[1] : '');
+            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            return String(a).localeCompare(String(b));
+        });
+    };
     
     function escapeHtml(str) {
         if (!str) return "";

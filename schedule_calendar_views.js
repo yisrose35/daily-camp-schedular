@@ -63,7 +63,9 @@
     function getDivisions() { return window.divisions || {}; }
 
     function getDivisionList() {
-        return Object.keys(getDivisions()).sort(function (a, b) {
+        var keys = Object.keys(getDivisions());
+        if (typeof window.getUserDivisionOrder === 'function') return window.getUserDivisionOrder(keys);
+        return keys.sort(function (a, b) {
             var numA = parseInt(a), numB = parseInt(b);
             if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
             return String(a).localeCompare(String(b));

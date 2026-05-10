@@ -589,7 +589,7 @@ function buildDivisionBlocks(divName) {
     sorted.sort(function (a, b) { return a.startMin - b.startMin; });
 
     var divs = getDivisions();
-    var divBunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
+    var divBunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
     var lc = 0, sc2 = 0;
     var blocks = [];
     var la = window.leagueAssignments || {};
@@ -1426,7 +1426,7 @@ function populateSidebar() {
         var available2 = getAvailableDivisions();
         available2.sort(naturalSort);
         available2.forEach(function (d) {
-            var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
+            var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
             if (!bunks.length) return;
             var grp = { name: d, items: [] };
             bunks.forEach(function (b) { grp.items.push({ id: b, label: b }); });
@@ -1562,7 +1562,7 @@ function pcRowNum(r) {
 function renderDivisionSheet(divName) {
     var t = _currentTemplate;
     var divs = getDivisions();
-    var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
+    var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
     if (!bunks.length) return '';
 
     var auto = isAutoMode();
@@ -2103,11 +2103,13 @@ function scanLocationAcrossBunks(loc) {
     // Use a map keyed by time range label to aggregate bunks across divisions
     var byTimeLabel = {};
 
+    var _orderedDivKeys = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divs)) : Object.keys(divs).sort(naturalSort);
+
     if (isAutoMode()) {
         // ★★★ AUTO MODE: Each bunk has its own slot indices ★★★
         // We must iterate each bunk individually using its per-bunk slots
-        Object.keys(divs).sort(naturalSort).forEach(function (dn) {
-            var bunks = (divs[dn].bunks || []).sort(naturalSort);
+        _orderedDivKeys.forEach(function (dn) {
+            var bunks = (divs[dn].bunks || []).slice();
             bunks.forEach(function (bk) {
                 var bunkSlots = getPerBunkSchedule(bk, dn);
                 bunkSlots.forEach(function (slot, si) {
@@ -2123,9 +2125,9 @@ function scanLocationAcrossBunks(loc) {
         });
     } else {
         // ★★★ MANUAL MODE: All bunks share division-level slot indices ★★★
-        Object.keys(divs).sort(naturalSort).forEach(function (dn) {
+        _orderedDivKeys.forEach(function (dn) {
             var divSlots = window.divisionTimes && window.divisionTimes[dn] ? window.divisionTimes[dn] : [];
-            var bunks = (divs[dn].bunks || []).sort(naturalSort);
+            var bunks = (divs[dn].bunks || []).slice();
             divSlots.forEach(function (slot, si) {
                 bunks.forEach(function (bk) {
                     var entry = getEntry(bk, si);
@@ -2140,13 +2142,9 @@ function scanLocationAcrossBunks(loc) {
         });
     }
 
-    // Sort by start time and sort bunk lists within each entry
-    return Object.values(byTimeLabel)
-        .sort(function (a, b) { return a.startMin - b.startMin; })
-        .map(function (entry) {
-            entry.bunks.sort(naturalSort);
-            return entry;
-        });
+    // Sort by start time only — bunk lists within each entry already follow
+    // the user-defined division/bunk iteration order from above.
+    return Object.values(byTimeLabel).sort(function (a, b) { return a.startMin - b.startMin; });
 }
 
 /**
@@ -2404,7 +2402,7 @@ function liveRefresh() {
             // Combined: gather ALL bunks across all selected divisions → one unified table
             var allDivBunks = [];
             sel.forEach(function (d) {
-                var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
+                var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
                 bunks.forEach(function (b) { allDivBunks.push({ bunk: b, div: d }); });
             });
             html += '<div class="pc3-sheet">';
@@ -2414,7 +2412,7 @@ function liveRefresh() {
             // Manual combined
             html += '<div class="pc3-sheet">';
             sel.forEach(function (d) {
-                var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).sort(naturalSort);
+                var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
                 if (!bunks.length) return;
                 var blocks = buildDivisionBlocks(d);
                 html += renderManualBunksTop(d, bunks, blocks);
@@ -3010,11 +3008,11 @@ function renderLiveContent() {
     if (!body) return;
     var nowMin = getNowMinutes();
     var divs = getDivisions();
-    var available = getAvailableDivisions().sort(naturalSort);
+    var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
     var html = '';
 
     available.forEach(function (divName) {
-        var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).sort(naturalSort);
+        var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
 
         // Compute section dayStart/dayEnd for cursor placement
@@ -3368,7 +3366,7 @@ function buildExcelRows(item) {
 
     if (_activeView === 'division') {
         // ─── Division header rows ───
-        var bunks = (divs[item] && divs[item].bunks ? divs[item].bunks : []).sort(naturalSort);
+        var bunks = (divs[item] && divs[item].bunks ? divs[item].bunks : []).slice();
         rows.push([item + ' — ' + formatDisplayDate(dateStr), '', '', '', mode + ' Builder']);
         rows.push([]); // blank row
 

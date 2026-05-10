@@ -1663,17 +1663,11 @@
         } = config;
 
         // =========================================================================
-        // NUMERIC BUNK SORTING
+        // BUNK ORDER: respect user-defined order from campStructure.
+        // The previous numeric sort overrode drag-reorder choices made in
+        // Campistry Me — divisions[divName].bunks already arrives in the
+        // correct user-chosen order from app1.js, so leave it alone.
         // =========================================================================
-        Object.keys(divisions).forEach(divName => {
-            if (divisions[divName].bunks) {
-                divisions[divName].bunks.sort((a, b) => {
-                    const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-                    const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-                    return numA - numB || a.localeCompare(b);
-                });
-            }
-        });
 
         window.SchedulerCoreUtils._bunkMetaData = bunkMetaData;
         window.SchedulerCoreUtils._sportMetaData = config.sportMetaData || {};

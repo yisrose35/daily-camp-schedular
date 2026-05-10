@@ -1740,11 +1740,14 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
 
   const divisions = window.divisions || {};
-  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort((a, b) => {
-    const na = parseInt(a), nb = parseInt(b);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return a.localeCompare(b);
-  });
+  const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
+  const grades = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_gradesRaw)
+    : _gradesRaw.sort((a, b) => {
+        const na = parseInt(a), nb = parseInt(b);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return a.localeCompare(b);
+      });
 
   if (grades.length === 0) {
     gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#8888aa;">No grades configured. Go to Setup to create divisions.</div>';
@@ -2727,7 +2730,8 @@ async function dawAddLayerDialog(grade) {
 
 async function dawCopyLayersDialog() {
   const divisions = window.divisions || {};
-  const grades = Object.keys(divisions).filter(d => !divisions[d].isParent).sort();
+  const _gradesRaw = Object.keys(divisions).filter(d => !divisions[d].isParent);
+  const grades = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_gradesRaw) : _gradesRaw.sort();
   
   if (grades.length < 2) {
     await showAlert('Need at least 2 grades to copy between.');

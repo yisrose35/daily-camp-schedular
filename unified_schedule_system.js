@@ -2606,13 +2606,8 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         
         let divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        { const _customOrder = (window.loadGlobalSettings?.() || {})?.app1?.manualColumnOrder;
-          if (Array.isArray(_customOrder) && _customOrder.length > 0) {
-            const _pos = d => { const i = _customOrder.indexOf(d); return i === -1 ? 9999 : i; };
-            divisionsToShow.sort((a, b) => _pos(a) - _pos(b));
-          } else {
-            divisionsToShow.sort((a, b) => { const numA = parseInt(a), numB = parseInt(b); if (!isNaN(numA) && !isNaN(numB)) return numA - numB; return String(a).localeCompare(String(b)); });
-          }
+        if (typeof window.getUserDivisionOrder === 'function') {
+            divisionsToShow = window.getUserDivisionOrder(divisionsToShow);
         }
         
         if (divisionsToShow.length === 0) { 

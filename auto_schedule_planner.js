@@ -127,7 +127,9 @@ function getColor(type) { return LAYER_COLORS[type] || LAYER_COLORS.custom; }
 // =================================================================
 function getGrades() {
   const divisions = window.divisions || {};
-  return Object.keys(divisions).sort((a, b) => {
+  const keys = Object.keys(divisions);
+  if (typeof window.getUserDivisionOrder === 'function') return window.getUserDivisionOrder(keys);
+  return keys.sort((a, b) => {
     const numA = parseInt(a), numB = parseInt(b);
     if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
     return String(a).localeCompare(String(b));
