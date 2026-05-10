@@ -455,27 +455,96 @@
         var bracket = document.createElement('div');
         bracket.className = 'ph-bracket';
 
-        p.rounds.forEach(function (round, ri) {
+        // Project the full bracket from seed count so future rounds appear
+        // as TBD slots that center between their two parent matchups.
+        var totalTeams = (p.seedOrder || []).length;
+        var totalRounds = Math.max(p.rounds.length, Math.ceil(Math.log2(Math.max(2, totalTeams))) || 1);
+
+        for (var ri = 0; ri < totalRounds; ri++) {
             var col = document.createElement('div');
-            col.className = 'ph-round-col';
+            col.className = 'ph-round-col round-' + ri;
+            // Each round halves matchup count → spacing doubles so children
+            // visually center between their two parents.
+            var spacing = Math.pow(2, ri) * 12;
+            col.style.gap = spacing + 'px';
+            col.style.paddingTop = ((Math.pow(2, ri) - 1) * 28) + 'px';
+
+            var realRound = p.rounds[ri];
+            var isFinal = ri === totalRounds - 1;
             var isSettled = ri < p.rounds.length - 1;
-            var done = window.PlayoffMode.isRoundComplete(round);
+            var done = realRound && window.PlayoffMode.isRoundComplete(realRound);
+
+            var roundName = isFinal ? 'Final'
+                : (ri === totalRounds - 2 ? 'Semifinals'
+                : (ri === totalRounds - 3 && totalRounds >= 4 ? 'Quarterfinals' : 'Round ' + (ri + 1)));
 
             var rh = document.createElement('div');
             rh.className = 'ph-round-head';
-            rh.innerHTML = '<span class="ph-round-num">Round ' + round.number + '</span>'
+            rh.innerHTML = '<span class="ph-round-num">' + roundName + '</span>'
                 + (done ? '<span class="ph-round-status">' + (isSettled ? 'locked' : 'complete') + '</span>' : '');
             col.appendChild(rh);
 
-            (round.matchups || []).forEach(function (m) {
-                col.appendChild(_renderMatchup(p, round, m, isSettled));
-            });
+            var roundMatchupsCount = Math.max(1, Math.pow(2, totalRounds - ri - 1));
+            for (var mi = 0; mi < roundMatchupsCount; mi++) {
+                var m = realRound && realRound.matchups && realRound.matchups[mi];
+                if (m) {
+                    col.appendChild(_renderMatchup(p, realRound, m, isSettled));
+                } else {
+                    col.appendChild(_renderForecastMatchup(ri, mi, p, totalRounds));
+                }
+            }
 
             bracket.appendChild(col);
-        });
+        }
 
         wrap.appendChild(bracket);
         return wrap;
+    }
+
+    function _renderForecastMatchup(roundIdx, matchupIdx, p, totalRounds) {
+        // Synthesize forecast labels (e.g. "Winner of M1") so users can
+        // see the bracket flow before round 1 results are in.
+        var box = document.createElement('div');
+        box.className = 'ph-matchup forecast';
+
+        var prevRound = p.rounds[roundIdx - 1];
+        var teamA = 'TBD';
+        var teamB = 'TBD';
+        if (roundIdx === 0) {
+            // No round 1 generated yet — show seeds if available
+            var so = p.seedOrder || [];
+            // Standard fixed bracket pairing: 1v8, 4v5, 2v7, 3v6 etc — but
+            // we don't replicate the algorithm here, just show seed numbers.
+            var pairCount = Math.pow(2, totalRounds - 1);
+            if (so.length >= pairCount * 2) {
+                teamA = '#' + (matchupIdx * 2 + 1);
+                teamB = '#' + (matchupIdx * 2 + 2);
+            }
+        } else if (prevRound && prevRound.matchups) {
+            var feedA = prevRound.matchups[matchupIdx * 2];
+            var feedB = prevRound.matchups[matchupIdx * 2 + 1];
+            if (feedA && feedA.winner) teamA = feedA.winner;
+            else if (feedA) teamA = 'Winner ' + (feedA.teamA || '?') + '/' + (feedA.teamB || '?');
+            if (feedB && feedB.winner) teamB = feedB.winner;
+            else if (feedB) teamB = 'Winner ' + (feedB.teamA || '?') + '/' + (feedB.teamB || '?');
+        }
+
+        var aDiv = document.createElement('div');
+        aDiv.className = 'ph-team-forecast';
+        aDiv.textContent = teamA;
+        box.appendChild(aDiv);
+
+        var vs = document.createElement('span');
+        vs.className = 'ph-vs';
+        vs.textContent = 'vs';
+        box.appendChild(vs);
+
+        var bDiv = document.createElement('div');
+        bDiv.className = 'ph-team-forecast';
+        bDiv.textContent = teamB;
+        box.appendChild(bDiv);
+
+        return box;
     }
 
     function _renderMatchup(p, round, m, isSettled) {
@@ -726,8 +795,15 @@
             // Bracket
             '.ph-bracket-wrap{margin-left:42px;}',
             '@media (max-width:720px){.ph-bracket-wrap{margin-left:0;}}',
-            '.ph-bracket{display:flex;gap:18px;overflow-x:auto;padding:6px 2px 14px;}',
-            '.ph-round-col{display:flex;flex-direction:column;gap:10px;min-width:240px;}',
+            '.ph-bracket{display:flex;gap:32px;overflow-x:auto;padding:6px 2px 14px;align-items:flex-start;}',
+            '.ph-round-col{display:flex;flex-direction:column;min-width:240px;position:relative;}',
+            '.ph-round-col .ph-matchup{position:relative;}',
+            // Visual connectors: each matchup (except last round) sprouts a horizontal stub on the right;
+            // pairs of matchups get joined by a vertical line.
+            '.ph-round-col:not(:last-child) .ph-matchup::after{content:"";position:absolute;top:50%;right:-16px;width:16px;height:1px;background:#CBD5E1;}',
+            // Forecast matchups (TBD placeholder rows)
+            '.ph-matchup.forecast{background:#F9FAFB;border:1px dashed #CBD5E1;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:6px;opacity:0.85;}',
+            '.ph-team-forecast{padding:8px 10px;border:1px dashed #CBD5E1;background:#fff;border-radius:7px;font-size:0.82rem;color:#64748B;font-style:italic;text-align:left;}',
             '.ph-round-head{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 2px;}',
             '.ph-round-num{font-size:0.78rem;font-weight:700;color:#0A4A56;text-transform:uppercase;letter-spacing:0.06em;}',
             '.ph-round-status{font-size:0.65rem;font-weight:700;padding:3px 8px;border-radius:999px;background:#D1FAE5;color:#065F46;text-transform:uppercase;letter-spacing:0.04em;}',
