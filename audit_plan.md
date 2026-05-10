@@ -39,14 +39,14 @@ After the agent reports, fix the HIGHs (and MEDs that are cheap), commit each ba
 
 ## Recommended order
 
-Listed in highest-leverage-first order. You can skip any that aren't relevant to your concerns this week.
+Run **every** slice. The order below is highest-leverage-first; do not skip any. Slices 3 and 6 had prior partial passes — re-audit them in full to catch regressions and finish the items the prior runs deferred.
 
 1. Cloud sync + persistence
 2. Auth + Supabase RLS + secret exposure
-3. ~~Auto generation pipeline~~ — done 2026-05-10 (`0361dd8d`)
+3. Auto generation pipeline (re-audit; finish deferred items — see slice 3)
 4. Manual builder + edit / undo / displacement
 5. Rotation tracking + analytics
-6. Deletion / cleanup paths (partial — done 2026-05-10 in `4919ba66`; verify remaining surfaces)
+6. Deletion / cleanup paths (re-audit; cover surfaces beyond the patched three)
 7. Calendar / day management
 8. Leagues + playoffs
 9. Daily adjustments + overrides + pinned activities
@@ -114,19 +114,26 @@ Listed in highest-leverage-first order. You can skip any that aren't relevant to
 
 ---
 
-## Slice 3 — Auto generation pipeline ✅ DONE 2026-05-10
+## Slice 3 — Auto generation pipeline (re-audit)
 
-Commit `0361dd8d`. Findings: 17 (6 HIGH, 7 MED, 4 LOW). HIGHs and most MEDs fixed.
+**Files in scope:** `scheduler_core_auto.js`, `auto_solver_engine.js`, `rules.js`, `pinned_activity_preservation.js`, `rotation_engine.js`, `scheduler_core_utils.js`
 
-**Skipped fixes** (re-run if you want them addressed):
+**Status:** First pass on 2026-05-10 in commit `0361dd8d` found 17 issues; HIGHs and most MEDs fixed. Re-audit because:
 
-- Per-slot rotation re-score in Phase-3 picker.
-- bunkActivities map centralization across all repair phases.
-- Narrowness-first ordering for specials pre-place.
-- `_findValidAlternativeField` index optimization.
-- Field Quality Group ranking.
-- `getActivityCount` case normalization.
-- `pickFillActivity` cache invalidation after writes.
+1. **Verify no regression** of the fixes. Specifically: every `accessRestrictions.enabled` check is truthy (not `=== true`); every divisions lookup tries both `String(grade)` and `grade`; `fallbackSweep` routes through `commitWriteIfLegal`; `_validateWritePlacement` reads live; BFS helpers use `_bfsShareLegal`; `commitWriteIfLegal` calls `SchedulingRules.isCandidateAllowed`; sport-override picker prefers rule-passing courts.
+
+2. **Finish deferred items** from the first pass:
+   - Per-slot rotation re-score in Phase-3 picker (priority list built once with `beforeSlotIndex: 0` is stale by the time later slots are picked).
+   - `bunkActivities` map centralization across all repair phases (each helper currently rebuilds its own; same-day duplicates can slip in).
+   - Narrowness-first ordering for specials pre-place (sort by `restrictionWidth = numGrades * numFields` ascending).
+   - `_findValidAlternativeField` index optimization (currently O(F × B × S) per rescue; build a `fieldUsageBySlot` index once per safety-net pass).
+   - Field Quality Group ranking (`rules.js:583-826` defines it; no consumer reads `field.fieldGroup` / `field.qualityRank`).
+   - `getActivityCount` case normalization (mixed-case `historicalCounts` vs `manualUsageOffsets` keys can desync).
+   - `pickFillActivity` cache invalidation after writes (later picks see pre-first-pick rotation state).
+
+3. **Look for new issues** — anything the first pass missed.
+
+Use the same audit goals from the original prompt: grade/access on every write path, sharing rules at every gate, rules.js propagation through every phase, rotation correctness, placement intelligence (most-constrained-first, no quadratic blow-ups, no stale caches).
 
 ---
 
@@ -187,9 +194,11 @@ Commit `0361dd8d`. Findings: 17 (6 HIGH, 7 MED, 4 LOW). HIGHs and most MEDs fixe
 
 ---
 
-## Slice 6 — Deletion / cleanup paths
+## Slice 6 — Deletion / cleanup paths (re-audit)
 
-**Files in scope:** `facilities.js` (cleanupDeletedField, cleanupDeletedSpecial, cleanupDeletedGeneral, cleanupRotationTracking, deleteFacility, X-button handlers), `app1.js` (camper / bunk / grade / division delete), `calendar.js` (day delete, half reset), any league/playoff delete
+**Status:** First pass on 2026-05-10 in commit `4919ba66` patched field/special/general activity deletion. Re-audit because the prior pass focused on three deletion paths; this slice covers all surfaces.
+
+**Files in scope:** `facilities.js` (cleanupDeletedField, cleanupDeletedSpecial, cleanupDeletedGeneral, cleanupRotationTracking, deleteFacility, X-button handlers), `app1.js` (camper / bunk / grade / division delete, sport delete via `removeGlobalSport`), `calendar.js` (day delete, half reset), `cloud_sync_helpers.js`, every league/playoff delete site
 
 **Audit goals:**
 
@@ -291,9 +300,21 @@ Commit `0361dd8d`. Findings: 17 (6 HIGH, 7 MED, 4 LOW). HIGHs and most MEDs fixe
 
 ## Slice 12 — XSS / input validation / user-supplied content
 
-**Files in scope:** every renderer + every save handler that accepts free-text input
+**Files in scope:** every renderer that interpolates user-supplied strings into HTML, every save handler that accepts free-text input. Search the codebase for `innerHTML`, template literals containing user content, any `document.write`-style sinks.
 
-Mostly covered by slice 2 + slice 11. Run as a separate slice only if slice 2 surfaced a lot.
+**Audit goals:**
+
+1. **Free-text input surfaces.** Camper names, bunk names, division/grade names, activity names (sport/special/general/custom), field names, league names, playoff names, skeleton names, custom block titles, print-template caption fields, schedule notes. For each: where the value is read, where it is rendered.
+
+2. **Render-side escape.** For every render site, confirm the value is set via `textContent` or escaped via an `escapeHtml`-style helper, NOT via `innerHTML += "<div>" + name + "</div>"`. The `escapeHtml` helper already exists (search for it); enforce its consistent use.
+
+3. **Print/export paths.** Print templates, CSV export, JSON export. Print is especially risky because it often builds HTML strings.
+
+4. **Camp/user-scoped data crossing camps.** If user A's input ever renders inside user B's session (shared camp, multi-tenant), an XSS payload becomes cross-account. Verify camp_id scoping in renderers.
+
+5. **Stored vs reflected.** Most XSS here would be stored (saved to cloud, rendered on every load). Identify any field that is rendered without escape AND saved without sanitization — that pair is the live vulnerability.
+
+6. **HTML in legitimate fields.** Any field that intentionally accepts HTML (camp logo, custom message templates) — verify allowed tags are whitelisted, not permissive.
 
 ---
 
