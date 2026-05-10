@@ -574,13 +574,9 @@
                 fragment.appendChild(groupHeader);
             }
             
-           // Grade cards within this parent division (sorted numerically)
-            const sortedGrades = [...group.grades].sort((a, b) => {
-                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                if (numA !== numB) return numA - numB;
-                return String(a).localeCompare(String(b));
-            });
+           // Grade cards within this parent division — preserve user-defined
+           // order from campStructure (set via drag-and-drop in Campistry Me).
+            const sortedGrades = [...group.grades];
             sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
@@ -781,7 +777,8 @@
             if (!divObj.bunks?.length) {
                 bunkList.innerHTML = '<p class="muted">No bunks assigned yet.</p>';
             } else {
-                const sorted = [...divObj.bunks].sort(compareBunks);
+                // Preserve user-defined bunk order (drag-and-drop in Campistry Me)
+                const sorted = [...divObj.bunks];
                 sorted.forEach(bunkName => {
                     const meta = state.bunkMetaData[bunkName] || { size: 0 };
                     const pill = document.createElement("span");
