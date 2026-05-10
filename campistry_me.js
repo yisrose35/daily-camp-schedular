@@ -805,15 +805,67 @@ function syncAllAddressesToGo(){
 }
 
 // ── STRUCTURE ────────────────────────────────────────────────────
+function _getDivisionOrder(){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        var ord=(gs.app1&&gs.app1.manualColumnOrder)||[];
+        return Array.isArray(ord)?ord:[];
+    }catch(_){return []}
+}
+function _saveDivisionOrder(order){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        if(!gs.app1)gs.app1={};
+        gs.app1.manualColumnOrder=order;
+        if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
+    }catch(e){console.warn('[CampistryMe] save order failed',e)}
+}
+function _sortedDivisions(){
+    var keys=Object.keys(structure);
+    var ord=_getDivisionOrder();
+    if(ord.length>0){
+        var pos={};ord.forEach(function(k,i){pos[k]=i});
+        keys.sort(function(a,b){
+            var ai=pos[a]==null?9999:pos[a];
+            var bi=pos[b]==null?9999:pos[b];
+            if(ai!==bi)return ai-bi;
+            return a.localeCompare(b);
+        });
+    }else{
+        keys.sort(function(a,b){
+            var na=parseInt(a),nb=parseInt(b);
+            if(!isNaN(na)&&!isNaN(nb))return na-nb;
+            return a.localeCompare(b);
+        });
+    }
+    return keys.map(function(k){return [k,structure[k]]});
+}
+function moveDivision(name,dir){
+    var keys=_sortedDivisions().map(function(e){return e[0]});
+    var i=keys.indexOf(name);
+    if(i<0)return;
+    var j=i+dir;
+    if(j<0||j>=keys.length)return;
+    var tmp=keys[i];keys[i]=keys[j];keys[j]=tmp;
+    _saveDivisionOrder(keys);
+    render(curPage);
+}
 function renderStructure(){
-    var c=document.getElementById('page-structure'),divs=Object.entries(structure).sort(function(a,b){return a[0].localeCompare(b[0])});
+    var c=document.getElementById('page-structure'),divs=_sortedDivisions();
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
-    else divs.forEach(function([dn,dd]){
+    else divs.forEach(function([dn,dd],ix){
         var grades=Object.entries(dd.grades||{}).sort(function(a,b){return a[0].localeCompare(b[0],undefined,{numeric:true})});
         var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
         var col=dd.color||'#94A3B8';
-        h+='<div class="me-card" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button><button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button></div></div>';
+        var upDis=ix===0?' disabled':'';
+        var dnDis=ix===divs.length-1?' disabled':'';
+        h+='<div class="me-card" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
+            +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
+            +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
+            +'</div></div>';
         h+='<div style="padding:14px 18px">';
         grades.forEach(function([gn,gd]){
             h+='<div style="margin-bottom:10px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+esc(gn)+'</div><div style="display:flex;flex-wrap:wrap;gap:4px">';
@@ -3531,7 +3583,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
+    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
