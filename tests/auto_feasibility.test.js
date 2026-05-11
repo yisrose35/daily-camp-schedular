@@ -609,6 +609,75 @@ describe('AutoFeasibility.check — swim concurrent capacity (Fix v1.1)', () => 
         assert.equal(swimEntry.periodsNeeded, 2);
         assert.equal(swimEntry.flagged, true);
     });
+
+    it('sharableWith.type="all" with no explicit capacity defaults to 999 (not flagged)', () => {
+        // Regression: pre-flight was defaulting to 1 for any field without explicit
+        // capacity. The scheduler defaults 'all'-type fields to 999 (unlimited sharing).
+        // 8 bunks, type='all', no capacity → swimPoolCap=999 → needed=ceil(8/999)=1.
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5','B6','B7','B8'],
+                   startTime: '9:00am', endTime: '4:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '3:00pm',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        cfg.globalSettings.app1.fields = [
+            { name: 'Pool', activities: ['Swim'], isIndoor: false,
+              sharableWith: { type: 'all' } }   // no explicit capacity
+        ];
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 },   // 10:00-10:40
+                { startMin: 640, endMin: 680 },   // 10:40-11:20
+                { startMin: 680, endMin: 720 },   // 11:20-12:00
+                { startMin: 720, endMin: 760 },   // 12:00-12:40
+                { startMin: 760, endMin: 800 },   // 12:40-13:20
+                { startMin: 800, endMin: 840 }    // 13:20-14:00
+            ]   // 6 periods — fine for 1 needed
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry, 'swim entry must exist');
+        assert.equal(swimEntry.concurrentCapacity, 999, 'all-type pool → 999');
+        assert.equal(swimEntry.periodsNeeded, 1, 'ceil(8/999)=1');
+        assert.equal(swimEntry.flagged, false, 'should NOT flag for all-type pool');
+    });
+
+    it('sharableWith type not set and no capacity → defaults to 2 (not "all")', () => {
+        // Regression guard: a field with no sharableWith at all defaults to 2 (not 999).
+        // 8 bunks, no sharableWith → swimPoolCap=2 → needed=ceil(8/2)=4 periods.
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5','B6','B7','B8'],
+                   startTime: '9:00am', endTime: '4:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '3:00pm',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        cfg.globalSettings.app1.fields = [
+            { name: 'Pool', activities: ['Swim'], isIndoor: false }   // no sharableWith at all
+        ];
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 },
+                { startMin: 640, endMin: 680 },
+                { startMin: 680, endMin: 720 }    // 3 periods — deficit=1 for needed=4
+            ]
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry, 'swim entry must exist');
+        assert.equal(swimEntry.concurrentCapacity, 2, 'no sharableWith → defaults to 2');
+        assert.equal(swimEntry.periodsNeeded, 4, 'ceil(8/2)=4');
+        assert.equal(swimEntry.periodsInWindow, 3);
+        assert.equal(swimEntry.deficit, 1);
+        assert.equal(swimEntry.flagged, true, 'should flag when needed > available');
+    });
 });
 
 describe('AutoFeasibility.forensics — cross-ref Cause 2 (Fix v1.1)', () => {
