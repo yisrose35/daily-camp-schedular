@@ -1578,7 +1578,8 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
         return scoredPicks.length > 0 ? scoredPicks[0] : null;
     }
 
-    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProps) {        const divName = getDivisionForBunk(bunk);
+    function applyPickToBunk(bunk, slots, pick, fieldUsageBySlot, activityProps) {
+        const divName = getDivisionForBunk(bunk);
         const divSlots = window.divisionTimes?.[divName] || [];
         
         let startMin = null, endMin = null;
@@ -1611,7 +1612,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             );
             if (!_check.ok && !_check.soft) {
                 console.warn('[applyPickToBunk] BLOCKED:', _check.reason, 'for', bunk);
-                return;
+                return { ok: false, reason: _check.reason };
             }
         }
 
@@ -1629,6 +1630,7 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             usage.bunks[bunk] = pick.activityName;
             if (divName && !usage.divisions.includes(divName)) usage.divisions.push(divName);
         }
+        return { ok: true };
     }
 
     // =========================================================================
@@ -2229,8 +2231,10 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
         const bestPick = findBestActivityForBunk(bunk, slots, fieldUsageBySlot, activityProps, [avoidLocation]);
         
         if (bestPick) {
-            applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
-           
+            const _pickResult = applyPickToBunk(bunk, slots, bestPick, fieldUsageBySlot, activityProps);
+            if (_pickResult && !_pickResult.ok) {
+                return { success: false, reason: _pickResult.reason };
+            }
 if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activityName}`, 'info');
             return { success: true, field: bestPick.field, activity: bestPick.activityName, cost: bestPick.cost };
         } else {
@@ -4227,6 +4231,16 @@ if (bypassStatus.highlight) {
                 // slot range.
                 const _mrBunks = [bunk].concat((plan.alts || []).map(function (a) { return a.bunk; }).filter(Boolean));
                 const _mrCounts = [];
+                // Primary bunk counts entry
+                const _primaryDiv = getDivisionForBunk(bunk);
+                const _primarySlots = findSlotsForRange(startMin, endMin, _primaryDiv, bunk);
+                if (_primarySlots && _primarySlots.length > 0) {
+                    const _primaryOldActs = _primarySlots
+                        .filter(function (i) { return window.scheduleAssignments[bunk]?.[i] && !window.scheduleAssignments[bunk][i].continuation; })
+                        .map(function (i) { return window.scheduleAssignments[bunk][i]._activity; })
+                        .filter(Boolean);
+                    _mrCounts.push({ bunk: bunk, newAct: activityName, oldActs: _primaryOldActs, slots: _primarySlots });
+                }
                 (plan.alts || []).forEach(function (a) {
                     if (!a || !a.alt || !a.editable) return;
                     const cbDiv = getDivisionForBunk(a.bunk);
@@ -6508,7 +6522,7 @@ if (softBlocks.length > 0) {
         const primaryOldActivities = new Map();
         for (const bunk of (bunks || [])) {
             const existing = window.scheduleAssignments[bunk] || [];
-            primaryOldActivities.set(bunk, (slots || []).map(s => existing[s]?._activity).filter(Boolean));
+            primaryOldActivities.set(bunk, (slots || []).filter(s => existing[s] && !existing[s].continuation).map(s => existing[s]._activity).filter(Boolean));
         }
         const planOldActivities = new Map();
         for (const move of plan) {

@@ -1645,18 +1645,23 @@
                     if (c.newAct) {
                         _ape(c.bunk, [c.newAct], null, c.slots || []);
                     }
-                    // Second step: re-add each unique original activity's
-                    // contribution. We don't know exactly which sub-slots
-                    // belonged to which original activity, so we attribute
-                    // each unique original to the FULL slot range; if the
-                    // original was a continuation across the same range
-                    // (the typical case) this is correct; if it was a mix
-                    // we slightly over-credit (acceptable — sums match what
-                    // the original applyPostEditCounts call did).
-                    const uniqueOldActs = Array.from(new Set((c.oldActs || []).filter(Boolean)));
-                    uniqueOldActs.forEach(function (origAct) {
-                        _ape(c.bunk, [], origAct, c.slots || []);
-                    });
+                    // Second step: re-add each original activity by its
+                    // exact frequency in oldActs. We can't use _ape here
+                    // because _ape counts non-continuation slots in the
+                    // range regardless of which activity occupies them,
+                    // which over-credits when multiple distinct originals
+                    // shared the range.
+                    const _oldFreq = {};
+                    (c.oldActs || []).forEach(function (a) { if (a) _oldFreq[a] = (_oldFreq[a] || 0) + 1; });
+                    const _gs2 = window.loadGlobalSettings?.() || {};
+                    const _hc = _gs2.historicalCounts || {};
+                    if (!_hc[c.bunk]) _hc[c.bunk] = {};
+                    for (const [act, count] of Object.entries(_oldFreq)) {
+                        _hc[c.bunk][act] = (_hc[c.bunk][act] || 0) + count;
+                    }
+                    if (Object.keys(_oldFreq).length > 0 && window.saveGlobalSettings) {
+                        window.saveGlobalSettings('historicalCounts', _hc);
+                    }
                 }
             }
         } catch (e) { console.warn('[peiUndo] counts inverse failed:', e?.message || e); }
