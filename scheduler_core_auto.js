@@ -5259,6 +5259,27 @@
                         return Math.max(need.dMin || 0, idealDur);
                     }
 
+                    // Multi-period spanning: checks if a position [posStart, posStart+dur)
+                    // fits inside a contiguous run of consecutive periods (no gaps).
+                    function fitsConsecutivePeriods(posStart, dur, periods) {
+                        if (!periods || periods.length < 2) return false;
+                        var posEnd = posStart + dur;
+                        var sorted = periods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                        var startIdx = -1;
+                        for (var i = 0; i < sorted.length; i++) {
+                            if (sorted[i].startMin <= posStart && sorted[i].endMin > posStart) {
+                                startIdx = i; break;
+                            }
+                        }
+                        if (startIdx === -1) return false;
+                        var coveredEnd = sorted[startIdx].endMin;
+                        for (var j = startIdx + 1; j < sorted.length && coveredEnd < posEnd; j++) {
+                            if (sorted[j].startMin !== coveredEnd) return false;
+                            coveredEnd = sorted[j].endMin;
+                        }
+                        return coveredEnd >= posEnd;
+                    }
+
                     // Generate ALL valid positions for a need (every 5-min increment)
                     function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
@@ -5320,6 +5341,8 @@
                                 // Period containment: if bell-schedule periods are defined, reject any
                                 // position that spans a period gap. Activities must fit inside one period.
                                 // Swim is exempt — staggered swim intentionally crosses periods.
+                                // Specials whose duration exceeds any single period may span
+                                // consecutive periods (multi-period spanning).
                                 if (_needType15 !== 'swim') {
                                     var _gvpPeriods = window.campPeriods && window.campPeriods[grade];
                                     if (_gvpPeriods && _gvpPeriods.length > 0) {
@@ -5327,6 +5350,17 @@
                                         for (var _gvpPi = 0; _gvpPi < _gvpPeriods.length; _gvpPi++) {
                                             if (_gvpPeriods[_gvpPi].startMin <= pos && _gvpPeriods[_gvpPi].endMin >= pos + dur) {
                                                 _gvpFits = true; break;
+                                            }
+                                        }
+                                        if (!_gvpFits && _needType15 === 'special') {
+                                            var _fitsAny = false;
+                                            for (var _mpd = 0; _mpd < _gvpPeriods.length; _mpd++) {
+                                                if (_gvpPeriods[_mpd].endMin - _gvpPeriods[_mpd].startMin >= dur) {
+                                                    _fitsAny = true; break;
+                                                }
+                                            }
+                                            if (!_fitsAny) {
+                                                _gvpFits = fitsConsecutivePeriods(pos, dur, _gvpPeriods);
                                             }
                                         }
                                         if (!_gvpFits) continue;
@@ -5427,6 +5461,16 @@
                                             break;
                                         }
                                     }
+                                    // Multi-period special: extend _rPeriodEnd through consecutive periods
+                                    if (_rPeriodEnd < pos + dur && _needType15 === 'special') {
+                                        var _sorted = _posPeriods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
+                                        for (var _mpp = 0; _mpp < _sorted.length; _mpp++) {
+                                            if (_sorted[_mpp].startMin === _rPeriodEnd) {
+                                                _rPeriodEnd = Math.min(gap.end, _sorted[_mpp].endMin);
+                                                if (_rPeriodEnd >= pos + dur) break;
+                                            }
+                                        }
+                                    }
                                 }
                                 var lGap = pos - _lPeriodStart;
                                 var rGap = _rPeriodEnd - (pos + dur);
@@ -5484,6 +5528,17 @@
                                         for (var _gvpPi2 = 0; _gvpPi2 < _gvpP2.length; _gvpPi2++) {
                                             if (_gvpP2[_gvpPi2].startMin <= endAligned && _gvpP2[_gvpPi2].endMin >= endAligned + dur) {
                                                 _gvpF2 = true; break;
+                                            }
+                                        }
+                                        if (!_gvpF2 && _needType15 === 'special') {
+                                            var _fitsAny2 = false;
+                                            for (var _mpd2 = 0; _mpd2 < _gvpP2.length; _mpd2++) {
+                                                if (_gvpP2[_mpd2].endMin - _gvpP2[_mpd2].startMin >= dur) {
+                                                    _fitsAny2 = true; break;
+                                                }
+                                            }
+                                            if (!_fitsAny2) {
+                                                _gvpF2 = fitsConsecutivePeriods(endAligned, dur, _gvpP2);
                                             }
                                         }
                                         if (!_gvpF2) ok2 = false;

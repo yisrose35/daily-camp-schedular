@@ -43,7 +43,7 @@
     
     const MODAL_ID = 'post-edit-modal';
     const OVERLAY_ID = 'post-edit-overlay';
-    const DEBUG = true;
+    const DEBUG = false;
     const TRANSITION_TYPE = window.TRANSITION_TYPE || "Transition/Buffer";
 
     // REMOVED: ROTATION_CONFIG (Moved to unified_schedule_system.js)
