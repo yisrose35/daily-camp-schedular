@@ -133,8 +133,8 @@
     check(typeof window.RotationEngine === 'object' && window.RotationEngine !== null,
         'S3-09: RotationEngine object exists');
 
-    // pinned_activity_preservation (internal function, may be exposed as PinnedPreservation)
-    check(typeof window.capturePinnedActivities === 'function' || typeof window.PinnedPreservation === 'object',
+    // pinned_activity_preservation exposed as PinnedActivitySystem
+    check(typeof window.PinnedActivitySystem === 'object' || typeof window.preservePinnedForRegeneration === 'function',
         'S3-10: Pin preservation module loaded');
 
     // ═════════════════════════════════════════════════════════════════
