@@ -3876,6 +3876,22 @@
                                         if (rightRem > 0 && rightRem >= _gpSportMin) score += 50;
                                         if (leftRem > 0 && leftRem < _gpSportMin) score -= 1000;  // dead remainder
                                         if (rightRem > 0 && rightRem < _gpSportMin) score -= 1000;
+                                        // Period-boundary alignment for multi-period specials
+                                        var _gpPeriods = window.campPeriods && window.campPeriods[grade];
+                                        if (_gpPeriods && _gpPeriods.length > 1) {
+                                            var _gpMaxPDur = 0;
+                                            for (var _gpi = 0; _gpi < _gpPeriods.length; _gpi++) {
+                                                var _gpPDur = _gpPeriods[_gpi].endMin - _gpPeriods[_gpi].startMin;
+                                                if (_gpPDur > _gpMaxPDur) _gpMaxPDur = _gpPDur;
+                                            }
+                                            if (dur > _gpMaxPDur) {
+                                                for (var _gpbi = 0; _gpbi < _gpPeriods.length; _gpbi++) {
+                                                    if (t === _gpPeriods[_gpbi].startMin || t + dur === _gpPeriods[_gpbi].endMin) {
+                                                        score += 150; break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         // Earliness preference: small bonus for earlier t — breaks
                                         // ties when nothing else differs (e.g. two equivalent clean gaps).
                                         score -= (t - gradeStart) * 0.01;
@@ -5175,36 +5191,8 @@
                                 }
 
                                 if (_p0SpansConsecutive) {
-                                    // Align within the consecutive-period span so any
-                                    // leftover gap is fillable (>= sport floor), not a
-                                    // dead 5-10 min orphan.
-                                    var _p0SpanStart = _p0Sorted[_p0SI].startMin;
-                                    var _p0SpanEnd = _p0Sorted[_p0SI].endMin;
-                                    for (var _pi0e = _p0SI + 1; _pi0e < _p0Sorted.length; _pi0e++) {
-                                        if (_p0Sorted[_pi0e].startMin !== _p0SpanEnd) break;
-                                        _p0SpanEnd = _p0Sorted[_pi0e].endMin;
-                                        if (_p0SpanEnd >= _p0Sorted[_p0SI].startMin + _p0Duration) break;
-                                    }
-                                    var _p0TotalSpan = _p0SpanEnd - _p0SpanStart;
-                                    var _p0Gap = _p0TotalSpan - _p0Duration;
-                                    var _p0SportFloor = TYPE_FLOORS.sport || 25;
-                                    if (_p0Gap > 0 && _p0Gap < _p0SportFloor) {
-                                        // Gap too small to fill — stretch the special to
-                                        // consume the full span so no orphan remains.
-                                        _p0Start = _p0SpanStart;
-                                        _p0End = _p0SpanEnd;
-                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
-                                            ' stretched ' + _p0Duration + 'min→' + _p0TotalSpan + 'min to fill ' + _p0SpanStart + '-' + _p0SpanEnd);
-                                    } else if (_p0Gap >= _p0SportFloor) {
-                                        // Start-aligned: gap at end is fillable
-                                        _p0Start = _p0SpanStart;
-                                        _p0End = _p0SpanStart + _p0Duration;
-                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
-                                            ' aligned start at ' + _p0Start + '-' + _p0End + ' (gap ' + _p0Gap + 'min at end)');
-                                    } else {
-                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
-                                            ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
-                                    }
+                                    log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
                                 } else if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
                                     // Block fits if we push startMin back to period start
                                     _p0Start = _p0PS.startMin;
@@ -5242,13 +5230,12 @@
                                 }
                             }
                         }
-                        var _p0ActualDur = _p0End - _p0Start;
                         template.push(makeBlock({
                             startMin: _p0Start, endMin: _p0End,
                             type: b.type, event: b.event,
                             layer: b.layer, field: b.field || null,
-                            dMin: c ? Math.max(c.dMin, _p0ActualDur) : _p0ActualDur,
-                            dMax: c ? Math.max(c.dMax, _p0ActualDur) : _p0ActualDur,
+                            dMin: c ? c.dMin : (_p0End - _p0Start),
+                            dMax: c ? c.dMax : (_p0End - _p0Start),
                             _fixed: true, _source: 'phase0',
                             _gradeWide: b._gradeWide || false,
                             _activityLocked: true,
@@ -11928,6 +11915,16 @@
                                 // the dead gap lands at the period edge, not between activities.
                                 if (_p25PreChgStarts[pos + specialDur]) score += 350;
                                 if (_p25PostChgEnds[pos])               score += 350;
+
+                                // Period-boundary alignment: for multi-period specials,
+                                // prefer positions where start or end lands on a period
+                                // boundary so any remainder gap is at a natural break.
+                                if (_sp25MergedPeriods.length > 0 && specialDur > (_p25Periods.length > 0 ? Math.max.apply(null, _p25Periods.map(function(p){return p.endMin-p.startMin;})) : 0)) {
+                                    for (var _pbai = 0; _pbai < _p25Periods.length; _pbai++) {
+                                        if (pos === _p25Periods[_pbai].startMin) { score += 150; break; }
+                                        if (pos + specialDur === _p25Periods[_pbai].endMin) { score += 150; break; }
+                                    }
+                                }
 
                                 candidatePositions.push({ pos: pos, score: score, deadGapCount: deadGapCount });
                             }
