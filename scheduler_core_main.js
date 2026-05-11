@@ -1812,8 +1812,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             
             (divisions[divName].bunks || []).forEach(bunk => {
                 if (isBeingGenerated) {
-                    // This division IS being generated — create fresh empty array
-                    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    if (window._skipGenerationWipe && Array.isArray(window.scheduleAssignments[bunk])) {
+                        // Mid-day rain path: keep _fixed/_pinned morning entries, null the rest
+                        const existing = window.scheduleAssignments[bunk];
+                        const arr = new Array(slotCount).fill(null);
+                        for (let i = 0; i < Math.min(existing.length, slotCount); i++) {
+                            if (existing[i] && (existing[i]._fixed || existing[i]._pinned)) {
+                                arr[i] = existing[i];
+                            }
+                        }
+                        window.scheduleAssignments[bunk] = arr;
+                    } else {
+                        // Normal generation — create fresh empty array
+                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
+                    }
                 } else {
                     // This division is NOT being generated — PRESERVE existing data
                     if (!window.scheduleAssignments[bunk]) {
