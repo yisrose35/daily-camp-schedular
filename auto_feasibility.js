@@ -468,6 +468,8 @@
             // If the pool fits N bunks concurrently, we only need ceil(bunks/N)
             // distinct period slots, not one per bunk. This prevents false-positive
             // deficits when all bunks can share a single pool slot simultaneously.
+            // Default logic mirrors buildFieldTimeIndex (scheduler_core_auto.js:1285):
+            //   'all' type → 999 (unlimited sharing), 'not_sharable' → 1, else → 2.
             let swimPoolCap = 1;
             const allSwimFields = (globalSettings.app1?.fields || globalSettings.fields || []);
             for (const sf of allSwimFields) {
@@ -475,7 +477,9 @@
                 if (isRainy && !sf.isIndoor) continue;
                 const sfActs = sf.activities || [];
                 if (!sfActs.some(a => typeof a === 'string' && /swim/i.test(a))) continue;
-                const sfCap = parseInt(sf.sharableWith?.capacity) || 1;
+                const sfShareType = (sf.sharableWith?.type || '').toLowerCase();
+                const sfCap = parseInt(sf.sharableWith?.capacity) || parseInt(sf.capacity) ||
+                    (sfShareType === 'not_sharable' ? 1 : (sfShareType === 'all' ? 999 : 2));
                 if (sfCap > swimPoolCap) swimPoolCap = sfCap;
             }
             const needed = isFullGrade ? 1 : Math.ceil(bunkCount / swimPoolCap);
