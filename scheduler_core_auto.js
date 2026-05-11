@@ -4674,7 +4674,10 @@
                 var dMax = constraints.dMax;
                 // ★ post-gap-forced micro-slots are exact-fit by design — honor their
                 //   declared dMin (= their actual duration) so integrity never drops them.
-                if (blk._source === 'post-gap-forced' && blk.dMin != null) {
+                var _exactFitSource = blk._source === 'post-gap-forced' ||
+                    blk._source === 'perfection-fill' ||
+                    blk._source === 'sport-fill-negotiated';
+                if (_exactFitSource && blk.dMin != null) {
                     dMin = blk.dMin;
                     dMax = Math.max(dMin, blk.dMax != null ? blk.dMax : dMax);
                 }
@@ -12610,8 +12613,8 @@
                 (bunkTimelines[bunk] || []).forEach(blk => {
                     const bt = (blk.type || '').toLowerCase();
                     if (blk._isTransition) return;
-                    // post-gap-forced micro-slots are intentionally sub-floor (exact-fit gap fillers)
-                    if (blk._source === 'post-gap-forced') return;
+                    var _efs = blk._source;
+                    if (_efs === 'post-gap-forced' || _efs === 'perfection-fill' || _efs === 'sport-fill-negotiated') return;
                     const c = resolveConstraints(blk.layer, bt, blk);
                     const d = blk.endMin - blk.startMin;
                     if (d > c.dMax) {
