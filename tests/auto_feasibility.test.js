@@ -491,6 +491,220 @@ describe('AutoFeasibility.check — global Hall check (Cause 2b)', () => {
     });
 });
 
+describe('AutoFeasibility.check — swim concurrent capacity (Fix v1.1)', () => {
+    // Regression: pre v1.1 always assumed staggered (1 bunk per period). When a
+    // swim field has sharableWith.capacity=N, ceil(bunks/N) periods suffice.
+
+    it('does NOT flag when pool capacity covers all bunks in one period', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // 4 bunks, pool capacity=4 → only 1 period needed → no deficit.
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '11:00am',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        cfg.globalSettings.app1.fields = [
+            { name: 'Pool', activities: ['Swim'], isIndoor: false,
+              sharableWith: { type: 'same_division', capacity: 4 } }
+        ];
+        sb.window.campPeriods = {
+            '1': [{ startMin: 600, endMin: 640 }]   // exactly 1 period in window
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry, 'swim entry must exist');
+        assert.equal(swimEntry.concurrentCapacity, 4, 'should read pool capacity=4');
+        assert.equal(swimEntry.periodsNeeded, 1, 'ceil(4/4)=1 period needed');
+        assert.equal(swimEntry.periodsInWindow, 1);
+        assert.equal(swimEntry.flagged, false, 'should NOT flag when capacity covers all bunks');
+    });
+
+    it('uses ceil(bunks/capacity) to compute periodsNeeded for partial coverage', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // 5 bunks, pool capacity=2 → ceil(5/2)=3 periods needed.
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '12:00pm',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        cfg.globalSettings.app1.fields = [
+            { name: 'Pool', activities: ['Swim'], isIndoor: false,
+              sharableWith: { type: 'same_division', capacity: 2 } }
+        ];
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 },   // 10:00-10:40
+                { startMin: 640, endMin: 680 },   // 10:40-11:20
+                { startMin: 680, endMin: 720 }    // 11:20-12:00
+            ]
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        assert.equal(swimEntry.concurrentCapacity, 2);
+        assert.equal(swimEntry.periodsNeeded, 3, 'ceil(5/2)=3');
+        assert.equal(swimEntry.periodsInWindow, 3);
+        assert.equal(swimEntry.flagged, false, '3 periods available for 3 needed — ok');
+    });
+
+    it('flags when window periods < ceil(bunks/capacity)', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // 6 bunks, capacity=2 → needs 3, only 2 in window → flagged.
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5','B6'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '11:20am',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        cfg.globalSettings.app1.fields = [
+            { name: 'Pool', activities: ['Swim'], isIndoor: false,
+              sharableWith: { type: 'same_division', capacity: 2 } }
+        ];
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 },   // 10:00-10:40
+                { startMin: 640, endMin: 680 }    // 10:40-11:20 — exactly at window edge, fits
+            ]
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        assert.equal(swimEntry.concurrentCapacity, 2);
+        assert.equal(swimEntry.periodsNeeded, 3, 'ceil(6/2)=3');
+        assert.equal(swimEntry.periodsInWindow, 2);
+        assert.equal(swimEntry.deficit, 1);
+        assert.equal(swimEntry.flagged, true);
+    });
+
+    it('falls back to capacity=1 when no swim field defined (staggered default)', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // No swim field in globalSettings → swimPoolCap stays 1 → staggered assumed.
+        cfg.globalSettings.app1.fields = [];   // no fields at all
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '10:40am',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        sb.window.campPeriods = {
+            '1': [{ startMin: 600, endMin: 640 }]   // 1 period, but 2 bunks staggered need 2
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        assert.equal(swimEntry.concurrentCapacity, 1);
+        assert.equal(swimEntry.periodsNeeded, 2);
+        assert.equal(swimEntry.flagged, true);
+    });
+});
+
+describe('AutoFeasibility.forensics — cross-ref Cause 2 (Fix v1.1)', () => {
+    // Regression: pre v1.1 only checked bunk-level pool flag (Cause 1). Frees
+    // caused by swim deficits (Cause 2a) or window deficits (Cause 2b) were all
+    // counted as "unexpected" even when pre-flight predicted them.
+
+    it('counts Frees in swim-deficit grades as predicted (Cause 2a)', () => {
+        const sb = setup();
+        // Pre-flight says grade 1 swim was flagged; grade 2 was not.
+        const preflight = {
+            perBunk: {
+                B1: { flagged: false, grade: '1', bunk: 'B1' },
+                B2: { flagged: false, grade: '1', bunk: 'B2' },
+                B3: { flagged: false, grade: '2', bunk: 'B3' }
+            },
+            perSwim: [
+                { grade: '1', flagged: true },
+                { grade: '2', flagged: false }
+            ],
+            perWindow: []
+        };
+        const sa = {
+            B1: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit', _startMin: 600, _endMin: 640 }],
+            B2: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit', _startMin: 640, _endMin: 680 }],
+            B3: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit', _startMin: 600, _endMin: 640 }]
+        };
+        const r = sb.window.AutoFeasibility.forensics({ scheduleAssignments: sa, preflight });
+        // B1 and B2 are in grade 1 (swim flagged) → predicted.
+        // B3 is in grade 2 (swim not flagged) → unexpected.
+        assert.equal(r.crossRef.predicted, 2, 'swim-deficit grade Frees must be predicted');
+        assert.equal(r.crossRef.unexpected, 1, 'non-deficit grade Free must be unexpected');
+    });
+
+    it('counts Frees in window-deficit time slots as predicted (Cause 2b)', () => {
+        const sb = setup();
+        // Pre-flight says window 540-600 had a deficit.
+        const preflight = {
+            perBunk: {
+                B1: { flagged: false, grade: '1', bunk: 'B1' },
+                B2: { flagged: false, grade: '1', bunk: 'B2' }
+            },
+            perSwim: [],
+            perWindow: [
+                { startMin: 540, endMin: 600, deficit: 2 }   // 9:00-10:00 deficit
+            ]
+        };
+        const sa = {
+            B1: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit', _startMin: 540, _endMin: 580 }],
+            B2: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit', _startMin: 620, _endMin: 660 }]
+        };
+        const r = sb.window.AutoFeasibility.forensics({ scheduleAssignments: sa, preflight });
+        // B1's Free (540-580) overlaps the deficit window (540-600) → predicted.
+        // B2's Free (620-660) is outside the deficit window → unexpected.
+        assert.equal(r.crossRef.predicted, 1, 'Free inside deficit window must be predicted');
+        assert.equal(r.crossRef.unexpected, 1, 'Free outside deficit window must be unexpected');
+    });
+
+    it('Cause 1 bunk flag still works alongside Cause 2 checks', () => {
+        const sb = setup();
+        const preflight = {
+            perBunk: {
+                B1: { flagged: true,  grade: '1', bunk: 'B1' },  // pool exhaustion
+                B2: { flagged: false, grade: '2', bunk: 'B2' }   // no flag at all
+            },
+            perSwim: [],
+            perWindow: []
+        };
+        const sa = {
+            B1: [{ field: 'Free', _activity: 'Free', _freeReason: 'pool_exhausted' }],
+            B2: [{ field: 'Free', _activity: 'Free', _freeReason: 'pool_exhausted' }]
+        };
+        const r = sb.window.AutoFeasibility.forensics({ scheduleAssignments: sa, preflight });
+        assert.equal(r.crossRef.predicted, 1, 'B1 (pool flag) must be predicted');
+        assert.equal(r.crossRef.unexpected, 1, 'B2 (no flag) must be unexpected');
+    });
+
+    it('Frees with no startMin are not matched by window deficit', () => {
+        const sb = setup();
+        const preflight = {
+            perBunk: {
+                B1: { flagged: false, grade: '1', bunk: 'B1' }
+            },
+            perSwim: [],
+            perWindow: [{ startMin: 540, endMin: 600, deficit: 1 }]
+        };
+        const sa = {
+            // startMin is null — cannot be matched to window
+            B1: [{ field: 'Free', _activity: 'Free', _freeReason: 'capacity_deficit' }]
+        };
+        const r = sb.window.AutoFeasibility.forensics({ scheduleAssignments: sa, preflight });
+        assert.equal(r.crossRef.unexpected, 1, 'null startMin cannot match window — unexpected');
+        assert.equal(r.crossRef.predicted, 0);
+    });
+});
+
 describe('AutoFeasibility — internal helpers', () => {
     // Note: assert.deepEqual against vm-sandbox return values fails on
     // prototype-identity in strict mode. Field-by-field comparison instead.
