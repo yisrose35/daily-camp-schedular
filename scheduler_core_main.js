@@ -1852,6 +1852,63 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // ★★★ STEP 1.1: RE-PLACE MORNING ENTRIES (MID-DAY RAIN) ★★★
+        // =========================================================================
+        // After Step 1 rebuilds divisionTimes from the rainy skeleton, slot indices
+        // have changed. Re-map morning entries from the pre-rebuild snapshot into
+        // the NEW slot structure using time-based matching.
+        if (window._skipGenerationWipe && window._midDayPreRebuild) {
+            const _mdr = window._midDayPreRebuild;
+            const _oldAssign = _mdr.assignments || {};
+            const _oldTimes = _mdr.times || [];
+            const _transMin = _mdr.transitionMinutes || 810;
+            let _placed = 0;
+
+            Object.keys(_oldAssign).forEach(bunk => {
+                const oldSlots = _oldAssign[bunk];
+                if (!Array.isArray(oldSlots)) return;
+
+                const divName = Object.keys(divisions).find(d =>
+                    divisions[d].bunks?.includes(bunk)
+                );
+                const newDivSlots = window.divisionTimes?.[divName] || [];
+                if (!newDivSlots.length) return;
+                if (!window.scheduleAssignments[bunk]) return;
+
+                oldSlots.forEach((entry, oldIdx) => {
+                    if (!entry) return;
+                    if (entry.continuation) return;
+                    const oldSlot = _oldTimes[oldIdx];
+                    if (!oldSlot) return;
+
+                    const oStart = oldSlot.startMin !== undefined ? oldSlot.startMin
+                        : oldSlot.start ? new Date(oldSlot.start).getHours() * 60 + new Date(oldSlot.start).getMinutes() : null;
+                    const oEnd = oldSlot.endMin !== undefined ? oldSlot.endMin
+                        : oldSlot.end ? new Date(oldSlot.end).getHours() * 60 + new Date(oldSlot.end).getMinutes() : null;
+                    if (oEnd === null || oEnd > _transMin) return;
+
+                    let bestIdx = -1, bestDiff = Infinity;
+                    for (let i = 0; i < newDivSlots.length; i++) {
+                        const ns = newDivSlots[i];
+                        const diff = Math.abs((ns.startMin || 0) - oStart) + Math.abs((ns.endMin || 0) - oEnd);
+                        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+                    }
+                    if (bestIdx >= 0 && bestDiff <= 15) {
+                        window.scheduleAssignments[bunk][bestIdx] = {
+                            ...entry,
+                            _fixed: true,
+                            _pinned: true,
+                            _preservedMorning: true
+                        };
+                        _placed++;
+                    }
+                });
+            });
+            console.log(`[STEP 1.1] Re-placed ${_placed} morning entries into new rainy slot structure`);
+            delete window._midDayPreRebuild;
+        }
+
+        // =========================================================================
         // ★★★ STEP 1.5: RESTORE EXISTING SCHEDULE FOR LOCKED DIVISIONS ★★★
         // =========================================================================
         (function() {
