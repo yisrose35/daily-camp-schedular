@@ -5175,8 +5175,36 @@
                                 }
 
                                 if (_p0SpansConsecutive) {
-                                    log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
-                                        ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
+                                    // Align within the consecutive-period span so any
+                                    // leftover gap is fillable (>= sport floor), not a
+                                    // dead 5-10 min orphan.
+                                    var _p0SpanStart = _p0Sorted[_p0SI].startMin;
+                                    var _p0SpanEnd = _p0Sorted[_p0SI].endMin;
+                                    for (var _pi0e = _p0SI + 1; _pi0e < _p0Sorted.length; _pi0e++) {
+                                        if (_p0Sorted[_pi0e].startMin !== _p0SpanEnd) break;
+                                        _p0SpanEnd = _p0Sorted[_pi0e].endMin;
+                                        if (_p0SpanEnd >= _p0Sorted[_p0SI].startMin + _p0Duration) break;
+                                    }
+                                    var _p0TotalSpan = _p0SpanEnd - _p0SpanStart;
+                                    var _p0Gap = _p0TotalSpan - _p0Duration;
+                                    var _p0SportFloor = TYPE_FLOORS.sport || 25;
+                                    if (_p0Gap > 0 && _p0Gap < _p0SportFloor) {
+                                        // Gap too small to fill — stretch the special to
+                                        // consume the full span so no orphan remains.
+                                        _p0Start = _p0SpanStart;
+                                        _p0End = _p0SpanEnd;
+                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                            ' stretched ' + _p0Duration + 'min→' + _p0TotalSpan + 'min to fill ' + _p0SpanStart + '-' + _p0SpanEnd);
+                                    } else if (_p0Gap >= _p0SportFloor) {
+                                        // Start-aligned: gap at end is fillable
+                                        _p0Start = _p0SpanStart;
+                                        _p0End = _p0SpanStart + _p0Duration;
+                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                            ' aligned start at ' + _p0Start + '-' + _p0End + ' (gap ' + _p0Gap + 'min at end)');
+                                    } else {
+                                        log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                            ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
+                                    }
                                 } else if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
                                     // Block fits if we push startMin back to period start
                                     _p0Start = _p0PS.startMin;
@@ -5214,12 +5242,13 @@
                                 }
                             }
                         }
+                        var _p0ActualDur = _p0End - _p0Start;
                         template.push(makeBlock({
                             startMin: _p0Start, endMin: _p0End,
                             type: b.type, event: b.event,
                             layer: b.layer, field: b.field || null,
-                            dMin: c ? c.dMin : (_p0End - _p0Start),
-                            dMax: c ? c.dMax : (_p0End - _p0Start),
+                            dMin: c ? Math.max(c.dMin, _p0ActualDur) : _p0ActualDur,
+                            dMax: c ? Math.max(c.dMax, _p0ActualDur) : _p0ActualDur,
                             _fixed: true, _source: 'phase0',
                             _gradeWide: b._gradeWide || false,
                             _activityLocked: true,
