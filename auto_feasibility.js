@@ -314,13 +314,32 @@
     }
 
     // -------------------------------------------------------------------------
-    // Per-window field-supply check (Hall's margin lite).
-    // We sample 30-min slices across the camp day and compute, per slice:
-    //   demand[grade] = number of bunks in grade whose sport-fill window covers t
-    //   supply[grade] = number of (field × capacity) slots accessible to grade at t
-    //                   (after rainy + access + timeRules)
-    // Deficit = max(0, demand - supply).
+    // Per-window field-supply check (Hall's margin — global, not per-grade).
     // -------------------------------------------------------------------------
+    // Previous version (v1.0) computed supply per-grade, which over-counted:
+    // every grade independently saw all fields as available, so 7 grades each
+    // saw e.g. 17 field-slots even though those 17 are ONE physical pool. The
+    // empirical run showed 43 Frees with `0` predicted deficits — proof the
+    // per-grade view missed the actual cross-grade contention.
+    //
+    // v1.1: compute total demand vs total supply at each slice, using whole-
+    // camp accounting. Mirrors the solver's own Hall check at line ~530 in
+    // auto_solver_engine.js (which prints `[Hall] Structural deficit @ X-Y:
+    // demand=N fieldSupply=M deficit=K`).
+    //
+    // Demand model: every bunk with a sport layer contributes 1 unit of
+    // demand at every slice within its operating hours. This is an UPPER
+    // BOUND (a bunk doesn't actually need sports at every slice — anchors
+    // fill some). The deficit it produces is the worst-case structural
+    // gap. Future v1.2 will subtract predicted anchor placements for
+    // tighter accuracy.
+    //
+    // Supply model: each physical field contributes 1 unit per slice if at
+    // least one grade can use it (rainy ✓, access ✓, time rules ✓). This
+    // matches the solver's `fieldSupply` count — one field = one usable
+    // slot at any given moment under default same-grade-sharing semantics.
+    // (Capacity > 1 only helps when multiple SAME-grade bunks share — for
+    // cross-grade contention, capacity is effectively 1.)
 
     function analyzeWindows(opts) {
         const {
@@ -329,55 +348,138 @@
         } = opts;
         const fields = (globalSettings.app1?.fields || globalSettings.fields || []);
         const disabledSet = new Set(disabledFields || []);
+        const allGrades = Array.from(new Set(Object.values(perBunk).map(b => b.grade)));
 
         const SLICE = 30;
         const out = [];
 
         for (let t = dayStart; t < dayEnd; t += SLICE) {
             const sEnd = t + SLICE;
-            const demand = {}, supply = {};
 
-            // Demand: bunks whose freeMinAfterAnchors covers [t, t+SLICE]
-            // and which still need sport slots. We treat the bunk's whole
-            // day as "available for sports" minus the time already booked
-            // by anchors — an upper bound, since we don't yet know where
-            // each anchor lands.
+            // Global demand: sum across all bunks needing sports whose
+            // operating-day covers this slice. Track per-grade breakdown
+            // for diagnostics.
+            const demandByGrade = {};
+            let totalDemand = 0;
             for (const b of Object.values(perBunk)) {
                 if (b.sportSlotsNeeded === 0) continue;
                 if (t >= b.dayEnd || sEnd <= b.dayStart) continue;
-                demand[b.grade] = (demand[b.grade] || 0) + 1;
+                demandByGrade[b.grade] = (demandByGrade[b.grade] || 0) + 1;
+                totalDemand++;
             }
 
-            // Supply: per-grade count of field-slots usable at this slice.
-            // A field with capacity C contributes up to C slots if accessible
-            // to the grade at this slice (rainy + access + timeRules).
-            const allGrades = Array.from(new Set(Object.values(perBunk).map(b => b.grade)));
-            for (const grade of allGrades) {
-                let s = 0;
-                for (const f of fields) {
-                    if (!f || !f.name) continue;
-                    if (disabledSet.has(f.name)) continue;
-                    if (isRainy && !f.isIndoor) continue;
+            // Global supply: count physical fields usable at this slice by
+            // ANY grade. Capacity > 1 doesn't help cross-grade contention,
+            // so we count 1 per field (matching solver's fieldSupply).
+            let totalSupply = 0;
+            const supplyByGrade = {};
+            for (const f of fields) {
+                if (!f || !f.name) continue;
+                if (disabledSet.has(f.name)) continue;
+                if (isRainy && !f.isIndoor) continue;
+                let usableByAnyGrade = false;
+                for (const grade of allGrades) {
                     if (!isFieldAccessibleForGrade(f, grade)) continue;
                     if (!fieldHasAvailableSliceForGrade(f, grade)) continue;
-                    // Specifically: does the field cover [t, sEnd] for this grade?
                     if (!sliceCoveredByAvailable(f, grade, t, sEnd)) continue;
-                    const cap = parseInt((f.sharableWith || {}).capacity) || (f.sharableWith?.type === 'not_sharable' ? 1 : 2);
-                    s += cap;
+                    supplyByGrade[grade] = (supplyByGrade[grade] || 0) + 1;
+                    usableByAnyGrade = true;
                 }
-                supply[grade] = s;
+                if (usableByAnyGrade) totalSupply++;
             }
 
-            const hallDeficit = {};
-            let anyDeficit = false;
-            for (const grade of allGrades) {
-                const d = demand[grade] || 0;
-                const sp = supply[grade] || 0;
-                if (d > sp) { hallDeficit[grade] = d - sp; anyDeficit = true; }
+            const deficit = Math.max(0, totalDemand - totalSupply);
+            if (deficit > 0) {
+                out.push({
+                    startMin: t, endMin: sEnd,
+                    totalDemand, totalSupply, deficit,
+                    demandByGrade, supplyByGrade,
+                    // Legacy field — keep for tests that look at hallDeficit.
+                    hallDeficit: { _global: deficit }
+                });
             }
-            if (anyDeficit) {
-                out.push({ startMin: t, endMin: sEnd, demand, supply, hallDeficit });
+        }
+        return out;
+    }
+
+    // -------------------------------------------------------------------------
+    // Per-grade swim feasibility — does the grade's swim window contain
+    // enough free bell-schedule periods to seat every bunk?
+    // -------------------------------------------------------------------------
+    // The empirical run showed every iteration log this:
+    //   [Phase2.3] ✗ Trios 1-6 — no free slot for staggered swim
+    //   [Phase3] CSP: could not place swim/Swim for bunk Trios X
+    // 6 bunks all failing means Trios's swim window has fewer viable
+    // 40-min periods than 6. That's a structural infeasibility the
+    // pre-flight should surface BEFORE the iteration loop wastes 13
+    // attempts on it.
+    //
+    // For each grade with a swim layer:
+    //   1. Compute the swim window after intersection with division hours.
+    //   2. Find candidate bell-schedule periods within the window that are
+    //      ≥ swim duration. (Falls back to ANY ≥ duration slot if no periods.)
+    //   3. For staggered mode: need ≥ bunks_count candidates.
+    //   4. For full-grade: need ≥ 1 candidate.
+
+    function analyzeSwimFeasibility(opts) {
+        const { divisions, layers, globalSettings, isRainy } = opts;
+        const campPeriods = (typeof window !== 'undefined' && window.campPeriods)
+            ? window.campPeriods
+            : (globalSettings.campPeriods || globalSettings.app1?.campPeriods || {});
+
+        const out = [];
+        for (const layer of (layers || [])) {
+            const t = (layer.type || '').toLowerCase();
+            if (t !== 'swim') continue;
+            const grade = layer.grade || layer.division;
+            if (!grade) continue;
+            const div = getDivisionRecord(divisions, grade);
+            if (!div) continue;
+
+            const bunks = Array.isArray(div.bunks) ? div.bunks.slice() : [];
+            const bunkCount = bunks.length;
+            if (bunkCount === 0) continue;
+
+            const { start: gradeStart, end: gradeEnd } = getDayBounds(div);
+            const winStart = Math.max(parseTime(layer.startMin ?? layer.startTime) ?? gradeStart, gradeStart);
+            const winEnd   = Math.min(parseTime(layer.endMin   ?? layer.endTime)   ?? gradeEnd,   gradeEnd);
+            const swimDur  = parseInt(layer.durationMin || layer.periodMin || layer.duration || 40, 10);
+            const isFullGrade = layer.fullGrade === true;
+
+            // Candidate periods — prefer bell schedule, else synthesize from window.
+            let candidates = [];
+            const gp = campPeriods[grade] || campPeriods[String(grade)] || null;
+            if (Array.isArray(gp) && gp.length > 0) {
+                for (const p of gp) {
+                    const ps = p.startMin ?? parseTime(p.startTime);
+                    const pe = p.endMin   ?? parseTime(p.endTime);
+                    if (ps == null || pe == null) continue;
+                    if (ps < winStart || pe > winEnd) continue;
+                    if (pe - ps < swimDur) continue;
+                    candidates.push({ startMin: ps, endMin: pe });
+                }
+            } else if (winEnd - winStart >= swimDur) {
+                // No bell schedule — treat the window as a single big candidate.
+                candidates.push({ startMin: winStart, endMin: winEnd });
             }
+
+            const needed = isFullGrade ? 1 : bunkCount;
+            const haveCount = candidates.length;
+            const deficit = Math.max(0, needed - haveCount);
+            const flagged = deficit > 0;
+
+            out.push({
+                grade: String(grade),
+                bunkCount,
+                swimDuration: swimDur,
+                isFullGrade,
+                windowStart: winStart,
+                windowEnd: winEnd,
+                periodsInWindow: haveCount,
+                periodsNeeded: needed,
+                deficit,
+                flagged
+            });
         }
         return out;
     }
@@ -458,7 +560,7 @@
     // Recommendations — turn flagged items into actionable suggestions.
     // -------------------------------------------------------------------------
 
-    function buildRecommendations(perBunk, perWindow, perSpecial) {
+    function buildRecommendations(perBunk, perWindow, perSpecial, perSwim) {
         const recs = [];
 
         // Cause 1 — per-bunk pool deficit.
@@ -478,27 +580,59 @@
             });
         }
 
-        // Cause 2 — window-level deficit.
+        // Cause 2a — per-grade swim feasibility (often the largest hidden infeasibility).
+        // Surfaced separately from generic window deficits because it has a specific,
+        // actionable fix (widen the window or change to fullGrade).
+        for (const sw of (perSwim || [])) {
+            if (!sw.flagged) continue;
+            recs.push({
+                severity: 'high',
+                cause: 2,
+                target: 'grade:' + sw.grade + ':swim',
+                message: 'Grade ' + sw.grade + ' swim is infeasible: ' + sw.bunkCount +
+                    ' bunk(s) need staggered ' + sw.swimDuration + '-min slots in window ' +
+                    minutesToTime(sw.windowStart) + '–' + minutesToTime(sw.windowEnd) +
+                    ' but only ' + sw.periodsInWindow + ' viable period(s) fit. ' +
+                    'Deficit: ' + sw.deficit + ' bunk(s) will not get swim.',
+                action:
+                    'Widen ' + sw.grade + '\'s swim window, shorten swim duration, switch the ' +
+                    'swim layer to fullGrade=true (all bunks at once), or remove ' + sw.deficit +
+                    ' bunk(s) from swim today via daily-disabled.',
+                detail: sw
+            });
+        }
+
+        // Cause 2b — global window deficit (Hall's margin across whole camp).
         if (perWindow.length > 0) {
-            const byGrade = {};
+            // Group consecutive deficit slices into ranges for cleaner output.
+            const ranges = [];
             for (const w of perWindow) {
-                for (const [g, def] of Object.entries(w.hallDeficit)) {
-                    if (!byGrade[g]) byGrade[g] = [];
-                    byGrade[g].push({ startMin: w.startMin, endMin: w.endMin, deficit: def });
+                const last = ranges[ranges.length - 1];
+                if (last && last.endMin === w.startMin && last.deficit === w.deficit) {
+                    last.endMin = w.endMin;
+                } else {
+                    ranges.push({ startMin: w.startMin, endMin: w.endMin, deficit: w.deficit, demandByGrade: w.demandByGrade });
                 }
             }
-            for (const [grade, windows] of Object.entries(byGrade)) {
+            for (const r of ranges) {
+                const topGrades = Object.entries(r.demandByGrade || {})
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 3)
+                    .map(([g, n]) => g + '(' + n + ')')
+                    .join(', ');
                 recs.push({
                     severity: 'high',
                     cause: 2,
-                    target: 'grade:' + grade,
-                    message: grade + ' has field-capacity deficits at ' + windows.length +
-                        ' time slice(s); peak shortfall is ' + Math.max(...windows.map(w => w.deficit)) + ' bunk(s).',
+                    target: 'window:' + r.startMin + '-' + r.endMin,
+                    message: 'Camp-wide field shortage at ' +
+                        minutesToTime(r.startMin) + '–' + minutesToTime(r.endMin) +
+                        ': ' + r.deficit + ' more bunk-slot(s) needed than fields available' +
+                        (topGrades ? ' (top demand: ' + topGrades + ')' : '') + '.',
                     action:
-                        'Enable an additional field accessible to ' + grade + ', or relax the ' +
-                        'sharing rules on an existing field (e.g. raise capacity, switch from ' +
-                        'not_sharable to same_division).',
-                    detail: { windows }
+                        'Add a field accessible during this window, relax sharing rules to ' +
+                        'allow more bunks per field, or stagger another layer so fewer bunks ' +
+                        'compete for sports at this time.',
+                    detail: r
                 });
             }
         }
@@ -525,6 +659,15 @@
         return recs;
     }
 
+    // Helper for human-readable time in recommendations.
+    function minutesToTime(min) {
+        if (min == null) return '?';
+        let h = Math.floor(min / 60), m = min % 60;
+        const ap = h >= 12 ? 'pm' : 'am';
+        h = h % 12 || 12;
+        return h + ':' + String(m).padStart(2, '0') + ap;
+    }
+
     // -------------------------------------------------------------------------
     // Console summary — one block per generation, scannable.
     // -------------------------------------------------------------------------
@@ -534,15 +677,21 @@
         log('PRE-FLIGHT FEASIBILITY REPORT v' + VERSION);
         log('═══════════════════════════════════════════════════════════');
 
-        const { perBunk, perWindow, perSpecial, recommendations, summary } = report;
+        const { perBunk, perWindow, perSpecial, perSwim, recommendations, summary } = report;
         const bunkCount = Object.keys(perBunk).length;
         const flagged   = Object.values(perBunk).filter(b => b.flagged).length;
 
-        log('Bunks analyzed:  ' + bunkCount + ' (' + flagged + ' at risk)');
-        log('Window deficits: ' + perWindow.length);
-        log('Specials:        ' + Object.keys(perSpecial).length + ' (' +
+        log('Bunks analyzed:    ' + bunkCount + ' (' + flagged + ' at risk for Cause 1)');
+        log('Swim deficits:     ' + (summary.totalGradesWithSwimDeficit || 0) +
+            ' grade(s) cannot fit swim for all bunks');
+        log('Window deficits:   ' + perWindow.length + ' time slice(s) with field shortage' +
+            (perWindow.length > 0 ? ' (peak: ' + (summary.windowDeficitMax || 0) + ' bunk-slot(s) short)' : ''));
+        log('Specials:          ' + Object.keys(perSpecial).length + ' (' +
             Object.values(perSpecial).filter(s => s.contentionRatio > 1).length + ' contended)');
-        log('Predicted min frees (Cause 1): ' + summary.predictedMinFrees);
+        log('Predicted min Frees: ' + summary.predictedMinFrees +
+            ' (pool=' + summary.poolDeficitSum +
+            ', swim=' + summary.swimDeficitSum +
+            ', windowPeak=' + summary.windowDeficitMax + ')');
 
         if (!report.feasible) {
             warn('Schedule is NOT fully fillable as currently configured.');
@@ -610,14 +759,30 @@
             divisions, layers, globalSettings
         });
 
-        const recommendations = buildRecommendations(perBunk, perWindow, perSpecial);
+        const perSwim = analyzeSwimFeasibility({
+            divisions, layers, globalSettings, isRainy
+        });
 
-        // Predicted minimum Frees = sum of bunk-level pool deficits. This is
-        // a lower bound; window-level deficits can add further but they
-        // overlap with pool deficits in subtle ways, so we report them
-        // separately as a quality signal rather than summing.
-        let predictedMinFrees = 0;
-        Object.values(perBunk).forEach(b => { predictedMinFrees += b.poolDeficit; });
+        const recommendations = buildRecommendations(perBunk, perWindow, perSpecial, perSwim);
+
+        // Predicted minimum Frees aggregates three sources:
+        //   1. Per-bunk pool deficits (Cause 1)
+        //   2. Per-grade swim deficits (Cause 2 — bunks that won't get swim)
+        //   3. Per-window global Hall deficits (Cause 2 — peak field shortage)
+        // The three can overlap, so the sum is an UPPER BOUND on predicted
+        // Frees rather than a sharp prediction. The cross-check in
+        // forensics() against actual Frees is what tells us if the prediction
+        // is too loose or too tight.
+        let poolDeficitSum = 0;
+        Object.values(perBunk).forEach(b => { poolDeficitSum += b.poolDeficit; });
+        const swimDeficitSum = (perSwim || []).reduce((s, x) => s + (x.deficit || 0), 0);
+        const windowDeficitMax = perWindow.length > 0
+            ? Math.max(...perWindow.map(w => w.deficit || 0))
+            : 0;
+        // Use max of (poolSum + swimSum) and windowMax — the latter is a
+        // single-window peak shortage, the former is sum across bunks/grades.
+        // They're different measurement axes; take whichever signals more.
+        const predictedMinFrees = Math.max(poolDeficitSum + swimDeficitSum, windowDeficitMax);
 
         const feasible = recommendations.filter(r => r.severity === 'high').length === 0;
 
@@ -627,11 +792,16 @@
             perBunk,
             perWindow,
             perSpecial,
+            perSwim,
             recommendations,
             summary: {
                 totalBunksAtRisk: Object.values(perBunk).filter(b => b.flagged).length,
                 totalWindowsAtRisk: perWindow.length,
+                totalGradesWithSwimDeficit: (perSwim || []).filter(s => s.flagged).length,
                 predictedMinFrees,
+                poolDeficitSum,
+                swimDeficitSum,
+                windowDeficitMax,
                 generatedAt: Date.now()
             }
         };
@@ -789,6 +959,7 @@
             analyzeBunk,
             analyzeWindows,
             analyzeSpecials,
+            analyzeSwimFeasibility,
             buildRecommendations
         }
     };
