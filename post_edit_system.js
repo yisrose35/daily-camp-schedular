@@ -629,10 +629,17 @@
             localStorage.setItem('campDailyData_v1', JSON.stringify(allDailyData));
         } catch (e) { console.error('[PostEdit] Failed to save to unified storage (nested):', e); }
         
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
-        setTimeout(() => { window._postEditInProgress = false; }, 8000);
-        
+        // Slice 4 audit R-1 — use the cancelable marker helper. The legacy
+        // uncancelable setTimeout raced with the new pattern: a second edit
+        // within 8s would fire the first edit's stale timer and clear the
+        // flag mid-second-edit, exposing the in-flight window to remote sync.
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress(8000);
+        } else {
+            window._postEditInProgress = true;
+            window._postEditTimestamp = Date.now();
+        }
+
         document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', {
             detail: { bunk, slots, activity, location, date: currentDate }
         }));
@@ -1619,20 +1626,37 @@
             window.scheduleAssignments[e.bunk] = e.snapshot;
         }
 
-        // Inverse counts: applyPostEditCounts called with current → oldActs
-        // for each bunk, so historicalCounts is rolled back to pre-edit.
-        // Earlier this was skipped entirely — repeated edit→undo cycles
-        // inflated counts.
+        // Slice 4 audit R-3 — invert per UNIQUE original activity instead of
+        // just oldActs[0]. applyPostEditCounts's signature is
+        // (bunk, oldActivities, newActivity, slots) so it can apply one
+        // (oldArr → newSingle) per call. If the original slot range had
+        // multiple distinct activities (Lunch + Soccer + Free), we loop
+        // and call _ape once per original activity.
         try {
             const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
             if (_ape && Array.isArray(tx.counts)) {
                 for (let i = 0; i < tx.counts.length; i++) {
                     const c = tx.counts[i];
                     if (!c || !c.bunk) continue;
-                    // Inverse: the NEW activity at edit time is now the "old"
-                    // (we're un-doing it), and the original old activities
-                    // become the "new" (we're restoring them).
-                    _ape(c.bunk, c.newAct ? [c.newAct] : [], c.oldActs?.[0] || null, c.slots || []);
+                    // First step of the inverse: undo the FORWARD edit. The
+                    // forward edit was (oldActsArray → newAct), so the
+                    // inverse is (newAct → null) for the slots — we strip
+                    // the new activity's count.
+                    if (c.newAct) {
+                        _ape(c.bunk, [c.newAct], null, c.slots || []);
+                    }
+                    // Second step: re-add each unique original activity's
+                    // contribution. We don't know exactly which sub-slots
+                    // belonged to which original activity, so we attribute
+                    // each unique original to the FULL slot range; if the
+                    // original was a continuation across the same range
+                    // (the typical case) this is correct; if it was a mix
+                    // we slightly over-credit (acceptable — sums match what
+                    // the original applyPostEditCounts call did).
+                    const uniqueOldActs = Array.from(new Set((c.oldActs || []).filter(Boolean)));
+                    uniqueOldActs.forEach(function (origAct) {
+                        _ape(c.bunk, [], origAct, c.slots || []);
+                    });
                 }
             }
         } catch (e) { console.warn('[peiUndo] counts inverse failed:', e?.message || e); }
@@ -2067,7 +2091,13 @@
 
     function peiSave(bunk) {
         // Full save — may trigger re-render. Use for delete/undo/add.
-        window._postEditInProgress = true;
+        // Slice 4 audit R-1 — markPostEditInProgress (cancelable timer)
+        // replaces the legacy uncancelable setTimeout.
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress(4000);
+        } else {
+            window._postEditInProgress = true;
+        }
         if (typeof window.resolveAndSaveSchedule === 'function') window.resolveAndSaveSchedule(bunk);
         else if (typeof bypassSaveAllBunks === 'function') bypassSaveAllBunks([bunk]);
         else if (window.ScheduleDB?.saveBunkSchedule) {
@@ -2075,7 +2105,6 @@
             window.ScheduleDB.saveBunkSchedule(dateKey, bunk, window.scheduleAssignments[bunk]);
         }
         peiUpdateRotationHistory(bunk);
-        setTimeout(() => { window._postEditInProgress = false; }, 4000);
     }
 
     /**
@@ -2083,7 +2112,15 @@
      * Used for resize/move where the DOM is already visually correct.
      */
     function peiSaveQuiet(bunk) {
-        window._postEditInProgress = true;
+        // Slice 4 audit R-1 — peiSaveQuiet fires on every drag-resize / move.
+        // The legacy 4s uncancelable setTimeout raced badly: a second drag
+        // within 4s would fire the first drag's stale timer mid-second-edit.
+        // markPostEditInProgress's cancelable pattern is the correct form.
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress(4000);
+        } else {
+            window._postEditInProgress = true;
+        }
         const dateKey = window.currentScheduleDate || window.currentDate ||
             document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         // Save to localStorage
@@ -2107,7 +2144,8 @@
             window.saveSchedule?.();
         }
         peiUpdateRotationHistory(bunk);
-        setTimeout(() => { window._postEditInProgress = false; }, 4000);
+        // No setTimeout needed — markPostEditInProgress's cancelable timer
+        // (set at the top of this function) handles the clear.
     }
 
     function peiUpdateRotationHistory(bunk) {

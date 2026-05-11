@@ -168,6 +168,18 @@
             if (opts.forceClear || activity === 'Free' || !activity) {
                 return { ok: true };
             }
+
+            // Slice 4 audit R-4 — build a Set of every slot index this
+            // write occupies so the template builder below can skip all
+            // of them, not just the first. Earlier the builder skipped
+            // only `ti === slotIdx`, so a multi-slot write that included
+            // an old Lunch at slot+1 falsely templated that Lunch as
+            // active and triggered a cooldown false-positive.
+            const _skipSlotIndices = new Set();
+            _skipSlotIndices.add(slotIdx);
+            if (Array.isArray(opts.slotRange)) {
+                opts.slotRange.forEach(function (i) { _skipSlotIndices.add(i); });
+            }
             const gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
             const fields = (gs.app1 && gs.app1.fields) || [];
             const specials = (gs.app1 && gs.app1.specialActivities) || (window.getAllSpecialActivities ? window.getAllSpecialActivities() : []);
@@ -256,7 +268,30 @@
                 }
             }
 
-            // 6. Cooldown / FieldCombos rules (SchedulingRules).
+            // 6a. FieldCombos exclusivity — HARD. Two fields can't be
+            // physically used at once when they share space (e.g. Full
+            // Gym + Gym 1 + Gym 2). Earlier the SchedulingRules call
+            // below classified this with cooldowns under SOFT, letting
+            // the user confirm-through and double-book a physical
+            // court. Split out as a hard check.
+            if (location && window.FieldCombos
+                && typeof window.FieldCombos.isBlockedByCombo === 'function'
+                && startMin != null && endMin != null) {
+                try {
+                    const _combo = window.FieldCombos.isBlockedByCombo(location, startMin, endMin, bunk);
+                    if (_combo && _combo.blocked) {
+                        return {
+                            ok: false, soft: false,
+                            reason: 'Field ' + location + ' conflicts with ' + (_combo.blockingField || 'a combined field') + ' (FieldCombos)'
+                        };
+                    }
+                } catch (_) {}
+            }
+
+            // 6b. Cooldown / other SchedulingRules — SOFT (user may want to
+            // override). Note: FieldCombos exclusivity is now handled above
+            // as a hard violation; remaining checks here are cooldowns and
+            // any other user-configurable rule.
             if (window.SchedulingRules && window.SchedulingRules.isCandidateAllowed
                 && startMin != null && endMin != null) {
                 const cand = {
@@ -268,7 +303,10 @@
                 const existing = (window.scheduleAssignments && window.scheduleAssignments[String(bunk)]) || [];
                 const template = [];
                 for (let ti = 0; ti < existing.length; ti++) {
-                    if (ti === slotIdx) continue;
+                    // Slice 4 audit R-4 — skip every slot index this write
+                    // occupies, not just slotIdx, so a multi-slot write
+                    // doesn't false-positive on its own pre-overwrite content.
+                    if (_skipSlotIndices.has(ti)) continue;
                     const w = existing[ti];
                     if (!w || w.continuation) continue;
                     if (w._startMin == null || w._endMin == null) continue;
@@ -280,11 +318,7 @@
                     });
                 }
                 if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'manual' })) {
-                    // Manual cooldowns are SOFT — user can confirm-and-override
-                    // because they may be deliberately bending the rule. The
-                    // existing modal flow (`isLocationInCooldown` confirm)
-                    // covers this; mark soft so callers can prompt.
-                    return { ok: false, soft: true, reason: 'Violates a cooldown / FieldCombos rule' };
+                    return { ok: false, soft: true, reason: 'Violates a cooldown rule' };
                 }
             }
         } catch (e) {
@@ -1564,9 +1598,25 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             const slotCount = divSlots.length || 50;
             window.scheduleAssignments[bunk] = new Array(slotCount);
         }
-        
-        slots.forEach((slotIdx, i) => { 
-            window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 }; 
+
+        // Slice 4 audit N-2 — gate through the manual rule check. Soft-
+        // override is allowed because the picker already vetted basic
+        // shape; this catches anything the picker missed (disabledSports,
+        // activity-in-field, cooldowns) at commit time.
+        if (typeof window.commitManualWriteIfLegal === 'function' && pick.activityName) {
+            const _check = window.commitManualWriteIfLegal(
+                bunk, slots[0], pick.activityName, pick.field, divName,
+                startMin, endMin,
+                { allowSoftOverride: true, slotRange: slots }
+            );
+            if (!_check.ok && !_check.soft) {
+                console.warn('[applyPickToBunk] BLOCKED:', _check.reason, 'for', bunk);
+                return;
+            }
+        }
+
+        slots.forEach((slotIdx, i) => {
+            window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 };
         });
         
         // Update field usage
@@ -2129,7 +2179,24 @@ function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySl
     if (!window.scheduleAssignments[bunk]) {
         window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
     }
-    
+
+    // Slice 4 audit N-2 — applyPickToBunkDivisionAware is the smart-regen
+    // direct-write path. Earlier this trusted findBestActivity's upstream
+    // checks, but those don't include disabledSports / activity-in-field /
+    // cooldowns at commit. Route through the manual gate; soft-override
+    // is allowed because the upstream picker already vetted basic shape.
+    if (typeof window.commitManualWriteIfLegal === 'function' && pick.activityName) {
+        const _check = window.commitManualWriteIfLegal(
+            bunk, slots[0], pick.activityName, pick.field, divName,
+            startMin, endMin,
+            { allowSoftOverride: true, slotRange: slots }
+        );
+        if (!_check.ok && !_check.soft) {
+            console.warn('[applyPickToBunkDivisionAware] BLOCKED:', _check.reason, 'for', bunk);
+            return;
+        }
+    }
+
     slots.forEach((slotIdx, i) => {
         window.scheduleAssignments[bunk][slotIdx] = { ...pickData, continuation: i > 0 };
     });
@@ -2173,9 +2240,24 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 window.scheduleAssignments[bunk] = new Array(divSlots.length || 50);
             }
             slots.forEach((slotIdx, i) => {
-                window.scheduleAssignments[bunk][slotIdx] = { 
-                    field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free', 
-                    _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation 
+                // Slice 4 audit N-3 — clear prior field's fieldUsageBySlot
+                // entry before parking at Free. Mirrors the fix at the
+                // smartRegenerateConflicts no-alternative path. Earlier
+                // the triplet invariant drifted here too.
+                const _prevEntry = window.scheduleAssignments[bunk][slotIdx];
+                const _prevField = _prevEntry ? (_prevEntry.field || _prevEntry.location || null) : null;
+                if (_prevField && _prevField !== 'Free' && window.fieldUsageBySlot && window.fieldUsageBySlot[slotIdx]) {
+                    const fu = window.fieldUsageBySlot[slotIdx][_prevField];
+                    if (fu) {
+                        if (fu.bunks && bunk in fu.bunks) delete fu.bunks[bunk];
+                        fu.count = Math.max(0, (fu.count || 1) - 1);
+                        if (fu.count === 0) delete window.fieldUsageBySlot[slotIdx][_prevField];
+                    }
+                }
+
+                window.scheduleAssignments[bunk][slotIdx] = {
+                    field: 'Free', sport: null, continuation: i > 0, _fixed: false, _activity: 'Free',
+                    _noAlternative: true, _originalActivity: originalActivity, _originalField: avoidLocation
                 };
             });
             if (window.showToast) window.showToast(`${bunk}: No alternative found`, 'warning');
@@ -3351,7 +3433,7 @@ if (bypassStatus.highlight) {
             const _eMin = _lastSlotMeta?.endMin ?? null;
             const _check = commitManualWriteIfLegal(
                 bunk, slots[0], activity, location, divName, _sMin, _eMin,
-                { allowSoftOverride: !!opts.allowSoftOverride }
+                { allowSoftOverride: !!opts.allowSoftOverride, slotRange: slots }
             );
             if (!_check.ok) {
                 if (_check.soft && opts.allowSoftOverride) {
@@ -4138,10 +4220,31 @@ if (bypassStatus.highlight) {
                 const plan = actionable[pi];
                 overlay.remove();
 
-                // Slice 4 audit fix — snapshot all touched bunks for undo.
+                // Slice 4 audit R-2 — build counts payload BEFORE writes so
+                // peiUndo can invert applyPostEditCounts correctly. We use
+                // the pre-edit scheduleAssignments state (captured here)
+                // to enumerate each bunk's old activities at the affected
+                // slot range.
                 const _mrBunks = [bunk].concat((plan.alts || []).map(function (a) { return a.bunk; }).filter(Boolean));
+                const _mrCounts = [];
+                (plan.alts || []).forEach(function (a) {
+                    if (!a || !a.alt || !a.editable) return;
+                    const cbDiv = getDivisionForBunk(a.bunk);
+                    const cbSlots = findSlotsForRange(startMin, endMin, cbDiv, a.bunk);
+                    if (!cbSlots || cbSlots.length === 0) return;
+                    const oldActsBeforeWrite = cbSlots
+                        .filter(function (i) { return window.scheduleAssignments[a.bunk]?.[i] && !window.scheduleAssignments[a.bunk][i].continuation; })
+                        .map(function (i) { return window.scheduleAssignments[a.bunk][i]._activity; })
+                        .filter(Boolean);
+                    _mrCounts.push({
+                        bunk: a.bunk,
+                        newAct: a.alt.activityName,
+                        oldActs: oldActsBeforeWrite,
+                        slots: cbSlots
+                    });
+                });
                 if (typeof window.peiSnapshotTransaction === 'function') {
-                    window.peiSnapshotTransaction(_mrBunks, 'Make Room for ' + bunk);
+                    window.peiSnapshotTransaction(_mrBunks, 'Make Room for ' + bunk, { counts: _mrCounts });
                 }
 
                 // Slice 4 audit fix — mark post-edit-in-progress so realtime
@@ -4167,7 +4270,7 @@ if (bypassStatus.highlight) {
                     const _altCheck = commitManualWriteIfLegal(
                         cb, cbSlots[0], alt.activityName, alt.field, cbDiv,
                         startMin, endMin,
-                        { allowSoftOverride: true } // user already confirmed at modal
+                        { allowSoftOverride: true, slotRange: cbSlots }
                     );
                     if (!_altCheck.ok && !_altCheck.soft) {
                         _displacedRejected.push({ bunk: cb, reason: _altCheck.reason });
@@ -5738,20 +5841,6 @@ if (softBlocks.length > 0) {
                 .filter(Boolean);
         }
 
-        // Slice 4 audit fix — undo transaction snapshot covering EVERY
-        // bunk applyMultiBunkEdit will touch (primary edits + cascade
-        // plan). Without this, Ctrl+Z after a 12-bunk action either did
-        // nothing or restored an unrelated earlier 1-bunk edit.
-        const _allTouchedBunks = [];
-        bunks.forEach(function (b) { if (_allTouchedBunks.indexOf(b) < 0) _allTouchedBunks.push(b); });
-        (plan || []).forEach(function (m) { if (m && m.bunk && _allTouchedBunks.indexOf(m.bunk) < 0) _allTouchedBunks.push(m.bunk); });
-        if (typeof window.peiSnapshotTransaction === 'function') {
-            window.peiSnapshotTransaction(
-                _allTouchedBunks,
-                'Multi-bunk edit: ' + bunks.length + ' bunks → ' + (location || activity)
-            );
-        }
-
         // Slice 4 audit fix — validate each per-bunk placement BEFORE
         // writing any. Earlier, applyMultiBunkEdit overwrote every
         // selected bunk's slot without checking access / disabledSports
@@ -5781,7 +5870,7 @@ if (softBlocks.length > 0) {
             const _check = commitManualWriteIfLegal(
                 bunk, bunkSlots[0], activity, location, divName,
                 result.timeStartMin, result.timeEndMin,
-                { allowSoftOverride: !!result.allowSoftOverride }
+                { allowSoftOverride: !!result.allowSoftOverride, slotRange: bunkSlots }
             );
             if (!_check.ok && !_check.soft) {
                 _rejectedBunks.push({ bunk: bunk, reason: _check.reason });
@@ -5800,6 +5889,41 @@ if (softBlocks.length > 0) {
             return !_rejectedBunks.some(function (r) { return r.bunk === b; })
                 && _bunkSlotsByBunk[b];
         });
+
+        // Slice 4 audit R-2 — undo transaction snapshot covering EVERY
+        // bunk we're about to touch (primary committed + cascade plan).
+        // Counts payload so peiUndo can call applyPostEditCounts in
+        // reverse and historicalCounts / rotationHistory stay correct.
+        // Snapshot MUST happen here (after rejections are known, before
+        // writes start) so the captured state is genuinely pre-edit.
+        const _allTouchedBunks = [];
+        _committedBunks.forEach(function (b) { if (_allTouchedBunks.indexOf(b) < 0) _allTouchedBunks.push(b); });
+        (plan || []).forEach(function (m) { if (m && m.bunk && _allTouchedBunks.indexOf(m.bunk) < 0) _allTouchedBunks.push(m.bunk); });
+        const _undoCounts = [];
+        _committedBunks.forEach(function (b) {
+            _undoCounts.push({
+                bunk: b,
+                newAct: activity || null,
+                oldActs: oldActivitiesByBunk[b] || [],
+                slots: _bunkSlotsByBunk[b] || []
+            });
+        });
+        (plan || []).forEach(function (m) {
+            if (!m || !m.bunk) return;
+            _undoCounts.push({
+                bunk: m.bunk,
+                newAct: m.to?.activity || null,
+                oldActs: (m.from && m.from.activity) ? [m.from.activity] : [],
+                slots: [m.slot]
+            });
+        });
+        if (typeof window.peiSnapshotTransaction === 'function' && _allTouchedBunks.length > 0) {
+            window.peiSnapshotTransaction(
+                _allTouchedBunks,
+                'Multi-bunk edit: ' + bunks.length + ' bunks → ' + (location || activity),
+                { counts: _undoCounts }
+            );
+        }
 
         for (const bunk of _committedBunks) {
             const bunkSlots = _bunkSlotsByBunk[bunk];
@@ -6041,10 +6165,27 @@ if (softBlocks.length > 0) {
         document.getElementById('ar-apply').onclick = async () => {
             closeRebalance();
             try {
-                // Slice 4 audit fix — snapshot all touched bunks for undo.
+                // Slice 4 audit R-2 — build counts payload BEFORE writes
+                // so peiUndo can invert correctly.
                 const _arBunks = suggestions.filter(function (s) { return s.alt; }).map(function (s) { return s.bunk; });
+                const _arCounts = [];
+                suggestions.forEach(function (s) {
+                    if (!s || !s.alt) return;
+                    const _arSlots = findSlotsForRange(timeStartMin, timeEndMin, divName, s.bunk);
+                    if (!_arSlots || _arSlots.length === 0) return;
+                    const oldActsBeforeWrite = _arSlots
+                        .filter(function (i) { return window.scheduleAssignments[s.bunk]?.[i] && !window.scheduleAssignments[s.bunk][i].continuation; })
+                        .map(function (i) { return window.scheduleAssignments[s.bunk][i]._activity; })
+                        .filter(Boolean);
+                    _arCounts.push({
+                        bunk: s.bunk,
+                        newAct: s.alt.activityName,
+                        oldActs: oldActsBeforeWrite,
+                        slots: _arSlots
+                    });
+                });
                 if (typeof window.peiSnapshotTransaction === 'function' && _arBunks.length > 0) {
-                    window.peiSnapshotTransaction(_arBunks, 'Auto-rebalance ' + _arBunks.length + ' bunks');
+                    window.peiSnapshotTransaction(_arBunks, 'Auto-rebalance ' + _arBunks.length + ' bunks', { counts: _arCounts });
                 }
 
                 // Slice 4 audit fix — mark post-edit-in-progress so realtime
@@ -6063,7 +6204,7 @@ if (softBlocks.length > 0) {
                     const _altCheck = commitManualWriteIfLegal(
                         bunk, bunkSlots[0], alt.activityName, alt.field, divName,
                         timeStartMin, timeEndMin,
-                        { allowSoftOverride: true } // user already confirmed at modal
+                        { allowSoftOverride: true, slotRange: bunkSlots }
                     );
                     if (!_altCheck.ok && !_altCheck.soft) {
                         _rebalRejected.push({ bunk: bunk, reason: _altCheck.reason });
@@ -6376,13 +6517,33 @@ if (softBlocks.length > 0) {
             if (oldAct) planOldActivities.get(move.bunk).push(oldAct);
         }
 
-        // Slice 4 audit fix — undo transaction snapshot covering all
-        // primary + cascade bunks affected by this proposal apply.
+        // Slice 4 audit R-2 — undo transaction snapshot WITH counts
+        // payload covering all primary + cascade bunks affected by this
+        // proposal apply. Use primaryOldActivities + planOldActivities
+        // already captured above as the inverse-counts source.
         const _propTouchedBunks = [];
         (bunks || []).forEach(function (b) { if (_propTouchedBunks.indexOf(b) < 0) _propTouchedBunks.push(b); });
         (plan || []).forEach(function (m) { if (m && m.bunk && _propTouchedBunks.indexOf(m.bunk) < 0) _propTouchedBunks.push(m.bunk); });
+        const _propCounts = [];
+        (bunks || []).forEach(function (b) {
+            _propCounts.push({
+                bunk: b,
+                newAct: activity || null,
+                oldActs: primaryOldActivities.get(b) || [],
+                slots: slots || []
+            });
+        });
+        (plan || []).forEach(function (m) {
+            if (!m || !m.bunk) return;
+            _propCounts.push({
+                bunk: m.bunk,
+                newAct: m.to?.activity || null,
+                oldActs: planOldActivities.get(m.bunk) || [],
+                slots: [m.slot]
+            });
+        });
         if (typeof window.peiSnapshotTransaction === 'function' && _propTouchedBunks.length > 0) {
-            window.peiSnapshotTransaction(_propTouchedBunks, 'Apply proposal: ' + (claim.activity || 'edit'));
+            window.peiSnapshotTransaction(_propTouchedBunks, 'Apply proposal: ' + (claim.activity || 'edit'), { counts: _propCounts });
         }
 
         // Slice 4 audit fix — validate each placement at commit. Approved
@@ -6406,7 +6567,7 @@ if (softBlocks.length > 0) {
                 const _check = commitManualWriteIfLegal(
                     bunk, slots[0], activity, location, divName,
                     _propStartMin, _propEndMin,
-                    { allowSoftOverride: true }
+                    { allowSoftOverride: true, slotRange: slots }
                 );
                 if (!_check.ok && !_check.soft) {
                     _propRejected.push({ bunk: bunk, reason: _check.reason });
