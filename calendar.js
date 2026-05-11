@@ -942,7 +942,7 @@ all[date].updated_at = new Date().toISOString();
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = {};
             Object.entries(_allDaily).forEach(function ([dk, dayData]) {
-                const _ts = new Date(dk).getTime() || Date.now();
+                const _ts = new Date(dk + 'T12:00:00').getTime() || Date.now();
                 const _sched = dayData?.scheduleAssignments || {};
                 Object.keys(_sched).forEach(function (bk) {
                     (_sched[bk] || []).forEach(function (entry) {

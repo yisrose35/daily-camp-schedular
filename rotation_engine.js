@@ -84,7 +84,7 @@
         FIVE_DAYS_AGO_PENALTY: 2500,             // 5 days ago - slight concern
         SIX_SEVEN_DAYS_PENALTY: 1200,            // 6-7 days ago - mild
         FOUR_TO_SEVEN_DAYS_PENALTY: 1200,        // Alias for compatibility
-        WEEK_PLUS_PENALTY: 0,                  // 8+ days ago - minimal
+        WEEK_PLUS_PENALTY: 600,                  // 8+ days ago - decaying baseline
 
         // =====================================================================
         // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
@@ -203,8 +203,9 @@ var _todayCacheGeneration = 0;
             // Process last 14 days
             const datesToProcess = sortedDates.slice(0, 14);
             
-            datesToProcess.forEach(function(dateKey, daysAgo) {
-                const actualDaysAgo = daysAgo + 1;  // +1 because we excluded today
+            const _todayMs = new Date(today + 'T12:00:00').getTime();
+            datesToProcess.forEach(function(dateKey) {
+                const actualDaysAgo = Math.max(1, Math.round((_todayMs - new Date(dateKey + 'T12:00:00').getTime()) / 86400000));
                 const dayData = allDaily[dateKey];
                 
                 // ★★★ FIX: Defensive checks for day data ★★★
@@ -669,11 +670,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // This prevents "done once yesterday" from getting a bonus instead of a penalty
         if (daysSince >= 4) {
             if (actHistory.count === 1) {
-                // Done only once AND last time was 4+ days ago — safe to give novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_ONCE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_ONCE_BONUS;
             } else if (actHistory.count === 2) {
-                // Done only twice AND last time was 4+ days ago — moderate novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_TWICE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_TWICE_BONUS;
             }
         }
         

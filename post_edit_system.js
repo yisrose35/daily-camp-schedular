@@ -1635,32 +1635,34 @@
         try {
             const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
             if (_ape && Array.isArray(tx.counts)) {
+                // Step 1: strip new activities via _ape (also rebuilds rotationHistory)
                 for (let i = 0; i < tx.counts.length; i++) {
                     const c = tx.counts[i];
                     if (!c || !c.bunk) continue;
-                    // First step of the inverse: undo the FORWARD edit. The
-                    // forward edit was (oldActsArray → newAct), so the
-                    // inverse is (newAct → null) for the slots — we strip
-                    // the new activity's count.
                     if (c.newAct) {
                         _ape(c.bunk, [c.newAct], null, c.slots || []);
                     }
-                    // Re-add originals by exact frequency. Direct
-                    // historicalCounts write — _ape over-credits when
-                    // multiple distinct originals share a range.
-                    // rotationHistory is already correct from the _ape
-                    // strip call above (it rebuilds from restored state).
+                }
+                // Step 2: re-add originals by exact frequency. Load once,
+                // accumulate all changes, save once — avoids stale-read
+                // race when multiple bunks are in the counts array.
+                const _gs2 = window.loadGlobalSettings?.() || {};
+                const _hc = _gs2.historicalCounts || {};
+                let _hcDirty = false;
+                for (let i = 0; i < tx.counts.length; i++) {
+                    const c = tx.counts[i];
+                    if (!c || !c.bunk) continue;
                     const _oldFreq = {};
                     (c.oldActs || []).forEach(function (a) { if (a) _oldFreq[a] = (_oldFreq[a] || 0) + 1; });
-                    const _gs2 = window.loadGlobalSettings?.() || {};
-                    const _hc = _gs2.historicalCounts || {};
+                    if (Object.keys(_oldFreq).length === 0) continue;
                     if (!_hc[c.bunk]) _hc[c.bunk] = {};
                     for (const [act, count] of Object.entries(_oldFreq)) {
                         _hc[c.bunk][act] = (_hc[c.bunk][act] || 0) + count;
                     }
-                    if (Object.keys(_oldFreq).length > 0 && window.saveGlobalSettings) {
-                        window.saveGlobalSettings('historicalCounts', _hc);
-                    }
+                    _hcDirty = true;
+                }
+                if (_hcDirty && window.saveGlobalSettings) {
+                    window.saveGlobalSettings('historicalCounts', _hc);
                 }
             }
         } catch (e) { console.warn('[peiUndo] counts inverse failed:', e?.message || e); }

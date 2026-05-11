@@ -2173,7 +2173,7 @@
 
                         // Skip "Free" and transition types
                         const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower.includes('transition')) {
+                        if (actLower === 'free' || actLower === 'free play' || actLower.includes('transition')) {
                             return;
                         }
 
@@ -2530,14 +2530,18 @@ const validActivities = Utils.getValidActivityNames();
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = _rotHist.bunks || {};
             const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate).getTime() : Date.now();
+            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate + 'T12:00:00').getTime() : Date.now();
             const _now = _schedDate || Date.now();
-            _rotHist.bunks[bunk] = {};
+            // Merge today's activities into existing timestamps instead of
+            // wiping the bunk — preserves previous-day recency data.
+            if (!_rotHist.bunks[bunk]) _rotHist.bunks[bunk] = {};
+            const _todayActs = new Set();
             _bunkSlots.forEach(entry => {
                 if (entry?._activity && !entry.continuation && !entry._isTransition) {
                     const _aLower = entry._activity.toLowerCase();
                     if (_aLower !== 'free' && !_aLower.includes('transition')) {
                         _rotHist.bunks[bunk][entry._activity] = _now;
+                        _todayActs.add(entry._activity);
                     }
                 }
             });
