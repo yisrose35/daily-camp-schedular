@@ -5253,6 +5253,7 @@
 
                     // Draft specials (only if not already pre-placed as walls)
                     var specialsAlreadyWalls = template.some(function(w) { return w._source === 'phase0' && (w.type || '').toLowerCase() === 'special'; });
+                    console.log('[MultiPeriod] bunk=' + bunk + ' specialsAlreadyWalls=' + specialsAlreadyWalls + ' draftSpecials=' + (draftResult.specials ? draftResult.specials.length : 0) + ' names=' + (draftResult.specials||[]).map(function(s){return s.name+'(dur='+s.duration+')';}).join(','));
                     if (!specialsAlreadyWalls && draftResult.specials && draftResult.specials.length > 0) {
                         var gradeSpecialLayer = (layersByGrade[grade] || []).find(function(l) { return (l.type || '').toLowerCase() === 'special'; });
                         var _specialFallbackList = (shoppingList.specials?.priorityList || []).map(function(sp) {
@@ -5267,6 +5268,7 @@
                             // ★ v11.1: Use layer window, not grade bounds, for special placement
                             var _spWinStart = Math.max((effectiveLayer && effectiveLayer.startMin) || gradeStart, gradeStart);
                             var _spWinEnd = Math.min((effectiveLayer && effectiveLayer.endMin) || gradeEnd, gradeEnd);
+                            console.log('[MultiPeriod] Special need: ' + special.name + ' dMin=' + sDMin + ' dMax=' + sDMax + ' window=' + _spWinStart + '-' + _spWinEnd + ' bunk=' + bunk);
                             needs.push({ type: 'special', event: special.name, layer: special.layer,
                                 dMin: sDMin, dMax: sDMax, windowStart: _spWinStart, windowEnd: _spWinEnd,
                                 _activityLocked: true, _assignedSpecial: special.name,
@@ -5334,6 +5336,7 @@
                     // Multi-period spanning: checks if a position [posStart, posStart+dur)
                     // fits inside a contiguous run of consecutive periods (no gaps).
                     function fitsConsecutivePeriods(posStart, dur, periods) {
+                        console.log('[MultiPeriod] fitsConsecutivePeriods called: pos=' + posStart + ' dur=' + dur + ' periods=' + JSON.stringify(periods.map(function(p){return p.startMin+'-'+p.endMin;})));
                         if (!periods || periods.length < 2) return false;
                         var posEnd = posStart + dur;
                         var sorted = periods.slice().sort(function(a, b) { return a.startMin - b.startMin; });
@@ -5431,8 +5434,10 @@
                                                     _fitsAny = true; break;
                                                 }
                                             }
+                                            console.log('[MultiPeriod] Period check: special pos=' + pos + ' dur=' + dur + ' fitsAnySingle=' + _fitsAny);
                                             if (!_fitsAny) {
                                                 _gvpFits = fitsConsecutivePeriods(pos, dur, _gvpPeriods);
+                                                console.log('[MultiPeriod] fitsConsecutive=' + _gvpFits);
                                             }
                                         }
                                         if (!_gvpFits) continue;
@@ -6006,11 +6011,13 @@
                         revertPreSolvedDurations(needs); // Restore ranges for any downstream use
                     }
 
+                    console.log('[MultiPeriod] ICS solution: ' + (solution ? solution.length + ' items' : 'FAILED') + ' for bunk=' + bunk);
                     if (solution) {
                         for (var si = 0; si < solution.length; si++) {
                             var sol = solution[si];
                             var need = sol.need;
                             var placeEnd = sol.start + sol.dur;
+                            if (need.type === 'special') console.log('[MultiPeriod] ICS placed: ' + need.event + ' at ' + sol.start + '-' + placeEnd + ' (dur=' + sol.dur + ')');
 
                             // Defensive: swim must land on a bell-schedule period start.
                             // If something slipped past getValidPositions' filter, drop
