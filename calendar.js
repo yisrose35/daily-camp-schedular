@@ -435,6 +435,20 @@ all[date].updated_at = new Date().toISOString();
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
 
+            // Reset league standings and playoff state
+            try {
+                const _leagues = window.leaguesByName || {};
+                Object.values(_leagues).forEach(function(lg) {
+                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
+                });
+                if (typeof window.saveLeaguesData === 'function') window.saveLeaguesData();
+                const _specLeagues = window.specialtyLeagues || {};
+                Object.values(_specLeagues).forEach(function(lg) {
+                    if (lg) { lg.standings = {}; if (lg.playoff) lg.playoff = { enabled: false, rounds: [] }; }
+                });
+                if (typeof window.saveSpecialtyLeaguesData === 'function') window.saveSpecialtyLeaguesData();
+            } catch (e) { console.warn('[startNewHalf] league standings reset failed:', e); }
+
             console.log("⭐ NEW HALF RESET COMPLETE ⭐");
 
             alert(
@@ -913,6 +927,15 @@ all[date].updated_at = new Date().toISOString();
             if (window.RotationCloud?.deleteDate) {
                 window.RotationCloud.deleteDate(dateKey);
             }
+            // ★ Delete stale schedule_proposals for this date
+            try {
+                const _client = window.CampistryDB?.client || window.supabase;
+                const _campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (_client && _campId) {
+                    _client.from('schedule_proposals').delete()
+                        .eq('camp_id', _campId).eq('date_key', dateKey).then(function() {});
+                }
+            } catch (e) { /* best-effort */ }
         }
         // ═══════════════════════════════════════════════════════════════
         // VIEWER: No permission

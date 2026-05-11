@@ -744,6 +744,16 @@ function renderUsedForSelector(fac) {
         chip.onclick = () => {
             if (isActive) {
                 fac.usedFor = fac.usedFor.filter(u => u !== t.key);
+                // Purge references for the removed type
+                if (t.key === 'special' && Array.isArray(fac.specialActivityNames)) {
+                    fac.specialActivityNames.forEach(n => { if (n) cleanupDeletedSpecial(n); });
+                    fac.specialActivityNames = [];
+                } else if (t.key === 'sports') {
+                    cleanupDeletedField(fac.name);
+                } else if (t.key === 'general' && Array.isArray(fac.generalActivityNames)) {
+                    fac.generalActivityNames.forEach(n => { if (n) cleanupDeletedGeneral(n); });
+                    fac.generalActivityNames = [];
+                }
             } else {
                 fac.usedFor.push(t.key);
             }
@@ -3494,6 +3504,26 @@ function cleanupDeletedField(fieldName) {
             }
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+        // ★ Pinned-tile defaults
+        const pinned = window.getPinnedTileDefaults?.() || {};
+        let pinnedChanged = false;
+        Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
+        if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // ★ Location zones — field can appear in zone.fields
+        const zones = window.getLocationZones?.() || settings.locationZones || {};
+        let zonesChanged = false;
+        Object.values(zones).forEach(zone => {
+            if (Array.isArray(zone?.fields)) {
+                const before = zone.fields.length;
+                zone.fields = zone.fields.filter(n => !matches(n));
+                if (zone.fields.length !== before) zonesChanged = true;
+            }
+        });
+        if (zonesChanged) window.saveLocationZones?.(zones);
+
+        // ★ Rotation tracking (historicalCounts, manualUsageOffsets, rotationHistory, cloud)
+        cleanupRotationTracking(fieldName);
     } catch (e) {
         console.error('[FACILITIES] Cleanup error:', e);
     }
@@ -3724,6 +3754,95 @@ function cleanupRotationTracking(activityName) {
         console.error('[FACILITIES] Cleanup error (rotation tracking):', e);
     }
 }
+
+// ★ Comprehensive purge for a deleted sport. Removes from field activity
+//   lists, scheduleAssignments, sportMetaData, daily disabled-sports,
+//   and rotation tracking so the sport is fully forgotten.
+function cleanupDeletedSport(sportName) {
+    if (!sportName) return;
+    console.log(`[FACILITIES] Cleaning up deleted sport: "${sportName}"`);
+    const norm = String(sportName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // Field activity lists — remove sport from every field's .activities
+        const fields = settings.app1?.fields || settings.fields || [];
+        let fieldsChanged = false;
+        fields.forEach(f => {
+            if (Array.isArray(f.activities)) {
+                const before = f.activities.length;
+                f.activities = f.activities.filter(a => !matches(a));
+                if (f.activities.length !== before) fieldsChanged = true;
+            }
+        });
+        if (fieldsChanged) {
+            const app1 = settings.app1 || {};
+            app1.fields = fields;
+            window.saveGlobalSettings?.('app1', app1);
+            window.saveGlobalSettings?.('fields', fields);
+            if (Array.isArray(window.fields)) {
+                window.fields.forEach(f => {
+                    if (Array.isArray(f.activities)) f.activities = f.activities.filter(a => !matches(a));
+                });
+            }
+        }
+
+        // sportMetaData
+        try {
+            if (typeof sportMetaData === 'object' && sportMetaData) {
+                Object.keys(sportMetaData).forEach(k => { if (matches(k)) delete sportMetaData[k]; });
+            }
+        } catch (e) { /* sportMetaData not always defined */ }
+
+        // Daily disabled-sports per-date
+        const dailySchedules = settings.daily_schedules || {};
+        let dailyChanged = false;
+        Object.values(dailySchedules).forEach(dayData => {
+            if (!dayData) return;
+            // overrides.disabledSports
+            if (Array.isArray(dayData.overrides?.disabledSports)) {
+                const before = dayData.overrides.disabledSports.length;
+                dayData.overrides.disabledSports = dayData.overrides.disabledSports.filter(n => !matches(n));
+                if (dayData.overrides.disabledSports.length !== before) dailyChanged = true;
+            }
+            // disabledSportsByField: { fieldName: [sportName, ...] }
+            if (dayData.overrides?.disabledSportsByField && typeof dayData.overrides.disabledSportsByField === 'object') {
+                Object.keys(dayData.overrides.disabledSportsByField).forEach(fld => {
+                    const arr = dayData.overrides.disabledSportsByField[fld];
+                    if (Array.isArray(arr)) {
+                        const before = arr.length;
+                        dayData.overrides.disabledSportsByField[fld] = arr.filter(n => !matches(n));
+                        if (dayData.overrides.disabledSportsByField[fld].length !== before) dailyChanged = true;
+                    }
+                });
+            }
+            // scheduleAssignments — null out slots where sport matches
+            if (dayData.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunk => {
+                    const slots = dayData.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot, idx) => {
+                        if (!slot) return;
+                        if (matches(slot.sport) || matches(slot._activity)) {
+                            dayData.scheduleAssignments[bunk][idx] = null;
+                            dailyChanged = true;
+                        }
+                    });
+                });
+            }
+        });
+        if (dailyChanged) window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+
+        // Rotation tracking
+        cleanupRotationTracking(sportName);
+
+        console.log(`[FACILITIES]   Sport "${sportName}" fully cleaned`);
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (sport):', e);
+    }
+}
+window.cleanupDeletedSport = cleanupDeletedSport;
 
 // ★ NEW: Sweep for orphaned references — anything in scheduleAssignments
 //   pointing to a field/special that no longer exists in the master lists.
