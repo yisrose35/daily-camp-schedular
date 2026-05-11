@@ -463,7 +463,22 @@
                 candidates.push({ startMin: winStart, endMin: winEnd });
             }
 
-            const needed = isFullGrade ? 1 : bunkCount;
+            // How many bunks can share one swim period? Scan the field list for
+            // any field hosting a swim activity and read its sharableWith.capacity.
+            // If the pool fits N bunks concurrently, we only need ceil(bunks/N)
+            // distinct period slots, not one per bunk. This prevents false-positive
+            // deficits when all bunks can share a single pool slot simultaneously.
+            let swimPoolCap = 1;
+            const allSwimFields = (globalSettings.app1?.fields || globalSettings.fields || []);
+            for (const sf of allSwimFields) {
+                if (!sf || !sf.name) continue;
+                if (isRainy && !sf.isIndoor) continue;
+                const sfActs = sf.activities || [];
+                if (!sfActs.some(a => typeof a === 'string' && /swim/i.test(a))) continue;
+                const sfCap = parseInt(sf.sharableWith?.capacity) || 1;
+                if (sfCap > swimPoolCap) swimPoolCap = sfCap;
+            }
+            const needed = isFullGrade ? 1 : Math.ceil(bunkCount / swimPoolCap);
             const haveCount = candidates.length;
             const deficit = Math.max(0, needed - haveCount);
             const flagged = deficit > 0;
@@ -473,6 +488,7 @@
                 bunkCount,
                 swimDuration: swimDur,
                 isFullGrade,
+                concurrentCapacity: swimPoolCap,
                 windowStart: winStart,
                 windowEnd: winEnd,
                 periodsInWindow: haveCount,
@@ -882,10 +898,25 @@
         // the ones that algorithm improvements can target).
         let predicted = 0, unexpected = 0;
         if (pre && pre.perBunk) {
+            // Grades whose swim window had a deficit (Cause 2a).
+            const swimFlaggedGrades = new Set(
+                (pre.perSwim || []).filter(s => s.flagged).map(s => String(s.grade))
+            );
+            // Time windows with a capacity deficit (Cause 2b).
+            const deficitWindows = (pre.perWindow || []).filter(w => w.deficit > 0);
+
             frees.forEach(f => {
                 const pb = pre.perBunk[f.bunk];
-                if (pb && pb.flagged) predicted++;
-                else unexpected++;
+                // Cause 1: pool exhaustion flagged at bunk level.
+                if (pb && pb.flagged) { predicted++; return; }
+                // Cause 2a: swim window deficit for this bunk's grade.
+                const grade = pb ? String(pb.grade) : null;
+                if (grade && swimFlaggedGrades.has(grade)) { predicted++; return; }
+                // Cause 2b: Free falls inside a pre-flight window deficit slot.
+                if (f.startMin != null && deficitWindows.some(
+                    w => w.startMin < (f.endMin ?? f.startMin + 1) && w.endMin > f.startMin
+                )) { predicted++; return; }
+                unexpected++;
             });
         }
 
