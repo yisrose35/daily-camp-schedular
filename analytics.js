@@ -228,7 +228,8 @@
 
                 const leagueName = entry.leagueName || entry.gameLabel || 'League';
                 entry.matchups.forEach(m => {
-                    const atMatch = m.match(/@\s*(.+?)\s*\(/);
+                    const raw = typeof m === 'string' ? m : m?.display || '';
+                    const atMatch = raw.match(/@\s*(.+?)\s*\(/);
                     if (!atMatch) return;
                     const fieldName = atMatch[1].trim();
                     if (!fieldName || fieldName === 'Free') return;
@@ -283,7 +284,13 @@
                 document.querySelectorAll('.league-content-pane').forEach(el => el.style.display = 'none');
                 document.getElementById(`report-${val}-content`).style.display = 'block';
                 if (val === 'availability') renderGantt();
-                else if (val === 'rotation') renderBunkRotationUI();
+                else if (val === 'rotation') {
+                    // Don't rebuild the rotation shell — that wipes the user's
+                    // selected division and table. Just refresh the table if
+                    // a division is already picked.
+                    const div = document.getElementById('rotation-div-select')?.value || '';
+                    if (div) renderRotationTable(div);
+                }
             };
         }
     }
@@ -349,7 +356,9 @@
 
             </div>
 
-            <div id="gantt-chart-area"></div>
+            <div id="gantt-chart-area">
+                <div style="padding:24px;text-align:center;color:#94a3b8;font-size:0.85rem;">Loading report…</div>
+            </div>
         `;
 
         document.getElementById('gantt-date-select').onchange = e => { selectedDate = e.target.value; renderGantt(); };
@@ -403,26 +412,35 @@
         const area = document.getElementById('gantt-chart-area');
         if (!area) return;
 
-        const items = buildUsageData(selectedDate);
-        const { startMin, endMin } = getCampTimes();
+        try {
+            const items = buildUsageData(selectedDate);
+            const { startMin, endMin } = getCampTimes();
 
-        if (!items.length) {
+            if (!items.length) {
+                area.innerHTML = `
+                    <div style="padding:48px 32px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
+                        <div style="font-size:0.95rem;font-weight:600;color:#64748b;margin-bottom:4px;">No schedule data for ${formatDateDisplay(selectedDate)}</div>
+                        <div style="font-size:0.8rem;">Build or load a schedule first.</div>
+                    </div>`;
+                return;
+            }
+
+            const today = new Date().toLocaleDateString('en-CA');
+            const showNow = selectedDate === today;
+
+            if (currentView === 'field') {
+                renderFieldGantt(area, items, startMin, endMin, showNow);
+            } else {
+                const divFilter = document.getElementById('gantt-div-select')?.value || '';
+                renderBunkGantt(area, items, startMin, endMin, divFilter, showNow);
+            }
+        } catch (err) {
+            console.error('[Analytics] renderGantt failed:', err);
             area.innerHTML = `
-                <div style="padding:48px 32px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
-                    <div style="font-size:0.95rem;font-weight:600;color:#64748b;margin-bottom:4px;">No schedule data for ${formatDateDisplay(selectedDate)}</div>
-                    <div style="font-size:0.8rem;">Build or load a schedule first.</div>
+                <div style="padding:24px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:0.85rem;">
+                    <div style="font-weight:700;margin-bottom:6px;">Could not render the report.</div>
+                    <div style="font-family:ui-monospace,monospace;white-space:pre-wrap;font-size:0.78rem;">${(err && err.message) || err}</div>
                 </div>`;
-            return;
-        }
-
-        const today = new Date().toLocaleDateString('en-CA');
-        const showNow = selectedDate === today;
-
-        if (currentView === 'field') {
-            renderFieldGantt(area, items, startMin, endMin, showNow);
-        } else {
-            const divFilter = document.getElementById('gantt-div-select')?.value || '';
-            renderBunkGantt(area, items, startMin, endMin, divFilter, showNow);
         }
     }
 
@@ -1133,6 +1151,10 @@
             const cur = divSelect.value;
             if (cur) renderRotationTable(cur, true); // ★ force cloud refresh
         };
+
+        // Show the "Select a division" placeholder so the report area isn't
+        // a blank empty box on first open.
+        renderRotationTable('');
     }
 
     function populateRotationBunkFilter(divName) {
