@@ -520,7 +520,7 @@
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) {
             warn('No candidates available — all blocks will be Free');
-            blocks.forEach(b => writeFree(b));
+            blocks.forEach(b => writeFree(b, 'no_candidates'));
             return { filled: 0, free: blocks.length, elapsed: '0.00' };
         }
 
@@ -744,7 +744,7 @@
             const endMin = parseTime(block.endTime);
 
             if (startMin == null || endMin == null || !bunk) {
-                writeFree(block);
+                writeFree(block, 'invalid_block');
                 free++;
                 continue;
             }
@@ -779,22 +779,26 @@
                 }
             }
 
-            // Score all candidates for this block
+            // Score all candidates for this block.
+            // Phase A2 (forensics): tally why each rejected candidate fails so
+            // a Free block can carry a meaningful `_blockers` summary instead
+            // of an opaque "all_disqualified".
             const scored = [];
+            const blockerTally = { same_day_repeat: 0, back_to_back: 0, field_unavailable: 0, rainy_outdoor: 0 };
             for (const cand of candidates) {
                 // Same-day repeat check (HARD rule)
-                if (doneToday.has(cand.sportNorm)) continue;
+                if (doneToday.has(cand.sportNorm)) { blockerTally.same_day_repeat++; continue; }
 
                 // ★ Back-to-back consecutive sport skip — prevents placing the same sport
                 //   as the immediately adjacent filled slot in this bunk.
                 if ((prevAdjacentSport && prevAdjacentSport === cand.sportNorm) ||
-                    (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) continue;
+                    (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) { blockerTally.back_to_back++; continue; }
 
                 // Field availability (time-based)
-                if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
+                if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) { blockerTally.field_unavailable++; continue; }
 
                 // Rainy day: skip outdoor
-                if (isRainy && !cand.isIndoor) continue;
+                if (isRainy && !cand.isIndoor) { blockerTally.rainy_outdoor++; continue; }
 
                 // Score: rotation + draft hint
                 let score = getCachedRotation(bunk, cand.sport, grade);
@@ -873,8 +877,21 @@
             }
 
             if (scored.length === 0) {
-                // No valid candidate — Free
-                writeFree(block);
+                // No valid candidate — Free.
+                // Phase A2: derive the most specific freeReason from the
+                // blocker tally. When repeats/back-to-back dominate, the
+                // unique-sport pool is exhausted for this bunk-slot (Cause 1
+                // territory). When field/rainy dominate, it's a capacity
+                // deficit (Cause 2 territory).
+                const _bt = blockerTally;
+                const _poolPressure = _bt.same_day_repeat + _bt.back_to_back;
+                const _supplyPressure = _bt.field_unavailable + _bt.rainy_outdoor;
+                let _reason = 'all_disqualified';
+                if (_poolPressure > 0 && _supplyPressure === 0) _reason = 'pool_exhausted';
+                else if (_supplyPressure > 0 && _poolPressure === 0) _reason = 'capacity_deficit';
+                else if (_poolPressure > _supplyPressure) _reason = 'pool_exhausted';
+                else if (_supplyPressure > _poolPressure) _reason = 'capacity_deficit';
+                writeFree(block, _reason, _bt);
                 free++;
                 continue;
             }
@@ -1195,7 +1212,7 @@
         }
     }
 
-    function writeFree(block) {
+    function writeFree(block, freeReason, blockers) {
         const bunk = block.bunk;
         const slotIdx = block.slots?.[0];
         if (!window.scheduleAssignments?.[bunk]) return;
@@ -1212,6 +1229,15 @@
         // pass also benefits — earlier this fix only landed for the
         // repair-phase `collectFreeBlocks` callers and silently emitted
         // null on the main path.
+        //
+        // Phase A2 (forensics): stamp _freeReason + _blockers so the
+        // post-solve summary and the user can see WHY each Free occurred.
+        // freeReason values: 'no_candidates' | 'invalid_block' |
+        // 'all_disqualified' | 'pool_exhausted' | 'capacity_deficit' |
+        // 'rule_violation_cleared' | 'constraint_demoted' |
+        // 'back_to_back_cleared' | 'no_augmenting_path' | 'unknown'.
+        // blockers: optional array of { sport, field?, reason } or a
+        // tally object like { same_day_repeat: 3, field_unavailable: 5 }.
         let _sMin = block.startMin;
         let _eMin = block.endMin;
         const _ptm = window.SchedulerCoreUtils?.parseTimeToMinutes;
@@ -1221,7 +1247,9 @@
             field: 'Free', sport: null, _activity: 'Free',
             _autoMode: true, _autoSolved: true, continuation: false,
             _startMin: _sMin ?? null,
-            _endMin: _eMin ?? null
+            _endMin: _eMin ?? null,
+            _freeReason: freeReason || 'unknown',
+            _blockers: blockers || null
         };
     }
 

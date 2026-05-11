@@ -22,6 +22,7 @@ node --test tests/auto_rules_check.test.js
 - `auto_rules_check.test.js` — `rules.js` cooldown gate. Asserts the anchor-type fix (Slice 3 N4 / third-pass batch) holds: a Lunch anchor write is not blocked by a "no Sport within 30 min of Lunch" cooldown.
 - `auto_rotation_determinism.test.js` — `rotation_engine.js` tie-breaker (Slice 3 N8). Asserts identical inputs produce identical rankings. Math.random() in tie-break is forbidden.
 - `auto_commit_write_guard.test.js` — `auto_solver_engine.js` `commitWriteIfLegal` central trust point. Asserts the guard rejects illegal writes (out-of-grade, cooldown violations) and invalidates the rotation cache on success.
+- `auto_feasibility.test.js` — Phase A diagnostic. Asserts pre-flight `check()` correctly identifies Cause 1 (pool exhaustion), Cause 2 (window deficit), Cause 3 (special contention), produces deterministic output, and `forensics()` correctly categorizes Free blocks by `_freeReason` and cross-references against the pre-flight report.
 
 ### Cloud sync + persistence (Slice 1)
 - (existing) `calendar_delete_reset.test.js` — erase / reset paths.

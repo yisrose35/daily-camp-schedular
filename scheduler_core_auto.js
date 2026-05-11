@@ -750,6 +750,31 @@
 
         log('[STEP 1.5] ' + pinnedLayers.length + ' pinned, ' + windowedLayers.length + ' windowed, ' + openLayers.length + ' open');
 
+        // ─── PRE-FLIGHT FEASIBILITY (Phase A1) ────────────────────────────────
+        // Phase A diagnostic pass. Runs ONCE before iteration. Identifies
+        // structural infeasibilities (bunk-level pool exhaustion, window
+        // capacity deficits, special contention) and surfaces actionable
+        // recommendations. Pure observation — does not modify any state.
+        // The report is stamped at window._lastFeasibilityReport for
+        // downstream consumers and post-gen diagnostics.
+        try {
+            if (typeof window !== 'undefined' && window.AutoFeasibility && typeof window.AutoFeasibility.check === 'function') {
+                window.AutoFeasibility.check({
+                    divisions,
+                    layers: classified,
+                    globalSettings,
+                    activityProperties,
+                    currentDate,
+                    dayName,
+                    isRainy,
+                    disabledFields: window.currentDisabledFields || (globalSettings.app1 && globalSettings.app1.disabledFields) || [],
+                    disabledSportsByField: (dailyData && (dailyData.dailyDisabledSportsByField || dailyData.overrides?.dailyDisabledSportsByField)) || {}
+                });
+            }
+        } catch (_feasErr) {
+            warn('[FeasibilityPreflight] non-fatal error: ' + _feasErr.message);
+        }
+
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
         // ★ PRIORITY ORDERING: sort grades so higher-priority grades are processed first.
@@ -14658,7 +14683,8 @@
                             ' | sa._fixed=' + !!sa._fixed + ' _pinned=' + !!sa._pinned + ' _league=' + !!sa._league + ' _autoSpecial=' + !!sa._autoSpecial);
                         postSolveSA[u.bunk][u.idx] = {
                             field: 'Free', sport: null, _activity: 'Free',
-                            _autoMode: true, _constraintDemoted: true, continuation: false
+                            _autoMode: true, _constraintDemoted: true, continuation: false,
+                            _freeReason: 'constraint_demoted'
                         };
                         fixes++;
                     }
@@ -15220,6 +15246,7 @@
                                     field: 'Free', sport: null, _activity: 'Free',
                                     _autoMode: true, _fixed: true, _ruleViolationCleared: true,
                                     _violationReason: v.reason + ' (rescue rejected)',
+                                    _freeReason: 'rule_violation_cleared',
                                     continuation: false
                                 };
                                 clearedCount++;
@@ -15650,6 +15677,7 @@
                         // Consecutive same-sport — free this slot so fallbackSweep can replace it
                         slots[si] = { field: 'Free', sport: null, _activity: 'Free',
                                       _autoMode: true, _autoSolved: true, _bbCleared: true,
+                                      _freeReason: 'back_to_back_cleared',
                                       continuation: false };
                         cleared++;
                         lastSport = null; // reset: if next is same sport again it gets cleared too
@@ -15676,6 +15704,22 @@
 
         // ★ v7.0: Mark local generation time — prevents cloud sync from overwriting fresh results
         window._localGenerationTimestamp = Date.now();
+
+        // ─── POST-SOLVE FREE BLOCK FORENSICS (Phase A2) ───────────────────────
+        // Categorize remaining Free blocks by `_freeReason`. Cross-references
+        // against the pre-flight feasibility report to separate "predicted by
+        // config" Frees (Cause 1/2) from "unexpected" Frees (Cause 3 / algorithm
+        // miss). The latter are the targets for future Phase B/C work.
+        try {
+            if (window.AutoFeasibility && typeof window.AutoFeasibility.forensics === 'function') {
+                window.AutoFeasibility.forensics({
+                    scheduleAssignments: window.scheduleAssignments,
+                    preflight: window._lastFeasibilityReport
+                });
+            }
+        } catch (_forErr) {
+            warn('[FreeForensics] non-fatal error: ' + _forErr.message);
+        }
 
         // Expose for post-gen diagnostics (console tools)
         window._diagBunkTimelines = bunkTimelines;

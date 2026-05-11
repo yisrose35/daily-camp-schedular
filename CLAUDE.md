@@ -22,6 +22,7 @@ Touching anything in these files needs care; they are the most-audited code in t
 |---|---|---|
 | `scheduler_core_auto.js` | 15.6K | Phase orchestration, anchor placement, safety-net |
 | `auto_solver_engine.js` | 2.5K | Main CSP solver + repair phases |
+| `auto_feasibility.js` | 0.5K | Phase A diagnostic: pre-flight report + post-solve forensics |
 | `rules.js` | 1.1K | Cooldown / FieldCombos rule engine |
 | `rotation_engine.js` | 1.3K | Per-bunk-per-activity rotation scoring |
 | `pinned_activity_preservation.js` | 0.6K | Pin gate (drop pins that violate current rules) |
@@ -30,14 +31,16 @@ Touching anything in these files needs care; they are the most-audited code in t
 ### Execution order
 
 ```
-Phase 0  — Overrides applied (disabledFields/disabledSports/customBlocks)
-Phase 1  — Anchor placement (Lunch/Swim/Snack from layer config)
-Phase 2  — Specials placement (todaysSpecials, sorted narrowness-first)
-Step 2.7 — Direct writes (specials, sport overrides, capacity-checked, anchors)
-Phase 3  — Main solve via auto_solver_engine.solve()
-Repair   — lnsRepair / colocateFreeBlocks / ejectionChainRepair / bfsAugmentingRepair
-Step 4.95 — Rule safety net (fixed-point loop, max 3 iterations)
-Phase 5  — Save (schedule + rotation history + cloud sync)
+Pre-flight  — AutoFeasibility.check (Phase A1: structural feasibility report)
+Phase 0     — Overrides applied (disabledFields/disabledSports/customBlocks)
+Phase 1     — Anchor placement (Lunch/Swim/Snack from layer config)
+Phase 2     — Specials placement (todaysSpecials, sorted narrowness-first)
+Step 2.7    — Direct writes (specials, sport overrides, capacity-checked, anchors)
+Phase 3     — Main solve via auto_solver_engine.solve()
+Repair      — lnsRepair / colocateFreeBlocks / ejectionChainRepair / bfsAugmentingRepair
+Step 4.95   — Rule safety net (fixed-point loop, max 3 iterations)
+Forensics   — AutoFeasibility.forensics (Phase A2: post-solve Free breakdown)
+Phase 5     — Save (schedule + rotation history + cloud sync)
 ```
 
 ### The cardinal rule
@@ -64,6 +67,27 @@ Any write that touches one MUST touch the other two. The repair phases each main
 ### Determinism
 
 Slice 3 introduced deterministic tie-breaking (djb2 hash of `bunkName+activity+dayKey`). Same input + same `_iterSeed` → same schedule. Exception: `seedShuffle` for bunks whose name has no digits silently uses seed 0 (pre-existing minor issue).
+
+### Phase A — diagnostic / observability layer
+
+`auto_feasibility.js` is observation-only. It does NOT write to `scheduleAssignments`, mutate layers, or block generation. It produces two reports per run:
+
+- **Pre-flight (`window._lastFeasibilityReport`)**: structural feasibility verdict, per-bunk unique-sport-pool analysis, per-window field capacity check (Hall's margin), per-special contention. Includes ranked recommendations the user can act on (enable a field, raise capacity, etc.).
+- **Post-solve (`window._lastFreeForensicsReport`)**: categorizes every remaining Free block by `_freeReason`, cross-references against the pre-flight report to separate predicted-by-config Frees from unexpected ones (algorithm misses / Cause 3 layout problems).
+
+**Free block `_freeReason` taxonomy** — every write that produces a Free should stamp one of:
+- `pool_exhausted` — bunk's unique-sport pool ran out (Cause 1 territory)
+- `capacity_deficit` — no field had capacity at this time (Cause 2 territory)
+- `all_disqualified` — mixed pool/capacity pressure
+- `no_candidates` — solver received zero candidates (Cause 1 / config)
+- `invalid_block` — block had null bunk/time data
+- `constraint_demoted` — Step 4.5 demoted for violation
+- `rule_violation_cleared` — Step 4.95 rescue rejected
+- `back_to_back_cleared` — consecutive same-sport cleared
+- `no_augmenting_path` — repair phase couldn't find a swap
+- `unknown` — fallback for unstamped Frees (should not occur in steady state)
+
+Any new code path that writes Free MUST stamp `_freeReason` so the forensics summary stays accurate.
 
 ## Known gaps (intentionally deferred)
 
