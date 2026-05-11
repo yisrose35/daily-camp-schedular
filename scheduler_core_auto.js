@@ -5128,6 +5128,8 @@
                             }
                         }
                         // ── Period containment: snap pre-placed blocks to a single period ──
+                        // Multi-period specials whose duration exceeds every single period
+                        // are exempt — they span consecutive periods by design.
                         var _p0Start = b.startMin, _p0End = b.endMin;
                         var _p0Periods = window.campPeriods && window.campPeriods[grade];
                         if (_p0Periods && _p0Periods.length > 0) {
@@ -5140,11 +5142,48 @@
                             }
                             // Check if block overflows the period boundary
                             if (_p0PS && _p0End > _p0PS.endMin) {
-                                // Try to fit duration in current period (startMin period)
-                                if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
+                                // Multi-period exemption: if this is a special and no single
+                                // period can hold its duration, check if it spans consecutive
+                                // periods cleanly — if so, don't snap it.
+                                var _p0IsSpecial = (bType === 'special');
+                                var _p0FitsAnySingle = false;
+                                if (_p0IsSpecial) {
+                                    for (var _pi0s = 0; _pi0s < _p0Periods.length; _pi0s++) {
+                                        if (_p0Periods[_pi0s].endMin - _p0Periods[_pi0s].startMin >= _p0Duration) {
+                                            _p0FitsAnySingle = true; break;
+                                        }
+                                    }
+                                }
+                                var _p0SpansConsecutive = false;
+                                if (_p0IsSpecial && !_p0FitsAnySingle) {
+                                    // Check if [_p0Start, _p0End) fits inside contiguous consecutive periods
+                                    var _p0Sorted = _p0Periods.slice().sort(function(a, b2) { return a.startMin - b2.startMin; });
+                                    var _p0SI = -1;
+                                    for (var _pi0c = 0; _pi0c < _p0Sorted.length; _pi0c++) {
+                                        if (_p0Sorted[_pi0c].startMin <= _p0Start && _p0Sorted[_pi0c].endMin > _p0Start) {
+                                            _p0SI = _pi0c; break;
+                                        }
+                                    }
+                                    if (_p0SI !== -1) {
+                                        var _p0Cov = _p0Sorted[_p0SI].endMin;
+                                        for (var _pi0d = _p0SI + 1; _pi0d < _p0Sorted.length && _p0Cov < _p0End; _pi0d++) {
+                                            if (_p0Sorted[_pi0d].startMin !== _p0Cov) break;
+                                            _p0Cov = _p0Sorted[_pi0d].endMin;
+                                        }
+                                        _p0SpansConsecutive = (_p0Cov >= _p0End);
+                                    }
+                                }
+
+                                if (_p0SpansConsecutive) {
+                                    log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
+                                } else if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
                                     // Block fits if we push startMin back to period start
                                     _p0Start = _p0PS.startMin;
                                     _p0End = _p0PS.startMin + _p0Duration;
+                                    log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' from ' + b.startMin + '-' + b.endMin +
+                                        ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                                 } else {
                                     // Try the next period whose size can accommodate the duration
                                     var _p0Fixed = false;
@@ -5169,10 +5208,10 @@
                                             _p0Start = Math.max(_p0PS.startMin, _p0Ideal);
                                         }
                                     }
+                                    log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' from ' + b.startMin + '-' + b.endMin +
+                                        ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                                 }
-                                log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
-                                    ' from ' + b.startMin + '-' + b.endMin +
-                                    ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                             }
                         }
                         template.push(makeBlock({
