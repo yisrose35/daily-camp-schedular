@@ -2014,7 +2014,10 @@
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
-                activities.add(entry._activity.toLowerCase().trim());
+                const _al = entry._activity.toLowerCase().trim();
+                if (_al !== 'free' && _al !== 'free play' && !_al.includes('transition')) {
+                    activities.add(_al);
+                }
             }
         }
 

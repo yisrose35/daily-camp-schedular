@@ -196,8 +196,9 @@ var _todayCacheGeneration = 0;
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
+            const _dateRe = /^\d{4}-\d{2}-\d{2}$/;
             const sortedDates = Object.keys(allDaily)
-                .filter(function(d) { return d < today; })
+                .filter(function(d) { return _dateRe.test(d) && d < today; })
                 .sort(function(a, b) { return b.localeCompare(a); });
             
             // Process last 14 days

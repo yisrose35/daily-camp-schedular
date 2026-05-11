@@ -96,10 +96,6 @@
         // saves (or a regen-then-save race) don't fail with 409.
         // The previous delete-then-insert sequence was racing with itself
         // when two RotationCloud.save calls overlapped during one generation.
-        // Build set of (bunk|activity) keys for orphan cleanup after upsert
-        var _liveKeys = {};
-        rows.forEach(function(r) { _liveKeys[r.bunk + '|' + r.activity] = true; });
-
         return client
             .from(TABLE)
             .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
@@ -108,22 +104,9 @@
                     console.error('[RotationCloud] Upsert error:', result.error.message);
                     return false;
                 }
-                // Clean up orphaned rows from prior schedule for this date.
-                // Runs after upsert so no race with concurrent saves.
-                client.from(TABLE)
-                    .select('bunk,activity')
-                    .eq('camp_id', campId)
-                    .eq('date_key', dateKey)
-                    .then(function(sel) {
-                        if (sel.error || !sel.data) return;
-                        var toDelete = sel.data.filter(function(r) { return !_liveKeys[r.bunk + '|' + r.activity]; });
-                        toDelete.forEach(function(r) {
-                            client.from(TABLE).delete()
-                                .eq('camp_id', campId).eq('date_key', dateKey)
-                                .eq('bunk', r.bunk).eq('activity', r.activity)
-                                .then(function() {});
-                        });
-                    });
+                // Orphan cleanup is handled by deleteDate() before regen,
+                // not here — async cleanup after upsert races with
+                // concurrent saves and can delete valid rows.
                 console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey);
                 _cache = null;
                 _loadGen++;
