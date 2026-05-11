@@ -327,6 +327,170 @@ describe('AutoFeasibility.forensics', () => {
     });
 });
 
+describe('AutoFeasibility.check — swim feasibility (Cause 2a)', () => {
+    it('flags a grade where swim window can\'t fit all bunks', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // 5 bunks need staggered 40-min swim, but only 1 viable period exists.
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '11:00am',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        // Configure bell-schedule periods (one fits swim, others don't)
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 },   // 10:00-10:40 — fits 40-min swim
+                { startMin: 640, endMin: 680 }    // 10:40-11:20 — fits, but outside window (extends past 11:00)
+            ]
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry, 'perSwim entry must exist for grade 1');
+        assert.equal(swimEntry.bunkCount, 5);
+        assert.equal(swimEntry.isFullGrade, false);
+        assert.equal(swimEntry.periodsInWindow, 1, 'only the first period fits within window');
+        assert.equal(swimEntry.periodsNeeded, 5);
+        assert.equal(swimEntry.deficit, 4);
+        assert.equal(swimEntry.flagged, true);
+        // Recommendation produced
+        const swimRecs = report.recommendations.filter(r => r.target === 'grade:1:swim');
+        assert.equal(swimRecs.length, 1);
+        assert.equal(swimRecs[0].severity, 'high');
+        assert.match(swimRecs[0].message, /staggered/);
+    });
+
+    it('does NOT flag a fullGrade swim layer with one fitting period', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '11:00am',
+              periodMin: 40, durationMin: 40, fullGrade: true }
+        ];
+        sb.window.campPeriods = {
+            '1': [
+                { startMin: 600, endMin: 640 }   // one fitting period suffices for fullGrade
+            ]
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        assert.equal(swimEntry.isFullGrade, true);
+        assert.equal(swimEntry.periodsNeeded, 1);
+        assert.equal(swimEntry.flagged, false);
+    });
+
+    it('flags zero-period swim window even when fullGrade=true', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '10:20am',
+              periodMin: 40, durationMin: 40, fullGrade: true }
+        ];
+        sb.window.campPeriods = {
+            '1': [{ startMin: 600, endMin: 640 }]   // 40-min period, but ends at 10:40 = outside layer window 10:00-10:20
+        };
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        assert.equal(swimEntry.periodsInWindow, 0);
+        assert.equal(swimEntry.flagged, true);
+    });
+
+    it('falls back to single-window candidate when no bell schedule', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '1', type: 'swim', startTime: '10:00am', endTime: '12:00pm',
+              periodMin: 40, durationMin: 40, fullGrade: false }
+        ];
+        sb.window.campPeriods = {};   // explicitly no bell schedule
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const swimEntry = (report.perSwim || []).find(s => s.grade === '1');
+        assert.ok(swimEntry);
+        // No bell schedule → one big window candidate. 2 bunks staggered needs 2 candidates;
+        // we synthesize 1, so it should flag for staggered with bunkCount > 1.
+        assert.equal(swimEntry.periodsInWindow, 1);
+        assert.equal(swimEntry.deficit, 1);
+        assert.equal(swimEntry.flagged, true);
+    });
+});
+
+describe('AutoFeasibility.check — global Hall check (Cause 2b)', () => {
+    it('flags a window where total demand exceeds total field count', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        // 10 bunks across two grades, 2 fields → demand 10, supply 2 at every slice
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2','B3','B4','B5'], startTime: '9:00am', endTime: '3:00pm' },
+            '2': { bunks: ['B6','B7','B8','B9','B10'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '2', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 }
+        ];
+        const report = sb.window.AutoFeasibility.check(cfg);
+        assert.ok(report.perWindow.length > 0, 'should detect global window deficit');
+        const peakDeficit = Math.max(...report.perWindow.map(w => w.deficit));
+        assert.equal(peakDeficit, 8, '10 bunks demanding, 2 fields available → deficit 8');
+        // Recommendation should be at-window granularity
+        const winRecs = report.recommendations.filter(r => r.cause === 2 && /^window:/.test(r.target));
+        assert.ok(winRecs.length > 0);
+        assert.equal(winRecs[0].severity, 'high');
+        assert.match(winRecs[0].message, /field shortage/);
+    });
+
+    it('does NOT flag when supply meets demand', () => {
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 }
+        ];
+        // 2 bunks need sport, 2 fields available → no deficit
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const deficitWindows = report.perWindow.filter(w => w.deficit > 0);
+        assert.equal(deficitWindows.length, 0);
+    });
+
+    it('previous-version per-grade supply over-count regression: NOT flagged', () => {
+        // Regression for v1.0 → v1.1: 2 grades each thinking they have all 2 fields.
+        // Per-grade supply would say supply=2 ≥ demand=1 per grade → no deficit.
+        // Global supply correctly says supply=2 < demand=2 (1 per grade × 2 grades).
+        const sb = setup();
+        const cfg = buildBaseConfig();
+        cfg.divisions = {
+            '1': { bunks: ['B1','B2'], startTime: '9:00am', endTime: '3:00pm' },
+            '2': { bunks: ['B3','B4','B5'], startTime: '9:00am', endTime: '3:00pm' }
+        };
+        cfg.layers = [
+            { grade: '1', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 },
+            { grade: '2', type: 'sport', qty: 1, op: '=', periodMin: 40, durationMin: 40 }
+        ];
+        // 5 bunks → 5 demand, 2 fields → deficit 3
+        const report = sb.window.AutoFeasibility.check(cfg);
+        const peak = Math.max(...report.perWindow.map(w => w.deficit), 0);
+        assert.equal(peak, 3, 'global Hall must see 5 bunks vs 2 fields');
+    });
+});
+
 describe('AutoFeasibility — internal helpers', () => {
     // Note: assert.deepEqual against vm-sandbox return values fails on
     // prototype-identity in strict mode. Field-by-field comparison instead.
