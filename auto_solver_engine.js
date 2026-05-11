@@ -41,7 +41,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '11.0.0'; // ★ v11.0: regret-ordering, BFS augmenting, SA-guided elite pool, depth-5 ejection
+    const VERSION = '12.0.0'; // ★ v12.0: forward-checking, dynamic re-sort, capacity-relax repair, enhanced colocate
     const TAG = '[AutoSolver]';
 
     function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
@@ -727,8 +727,8 @@
         });
 
         // ── Backtracking infrastructure ─────────────────────────────
-        const MAX_BACKTRACKS = 15;
-        const BACKTRACK_TIME_BUDGET = 5000;
+        const MAX_BACKTRACKS = 30;
+        const BACKTRACK_TIME_BUDGET = 10000;
         let backtrackCount = 0;
         const assignmentStack = [];
 
@@ -1051,6 +1051,75 @@
             });
 
             filled++;
+
+            // ★ v12.0: Forward checking — detect domain wipeouts immediately.
+            var fcWipeout = false;
+            if (backtrackCount < MAX_BACKTRACKS && (performance.now() - startTime) < BACKTRACK_TIME_BUDGET) {
+                for (var fi = blockIdx + 1; fi < blocks.length; fi++) {
+                    var fb = blocks[fi];
+                    if (fb._locked) continue;
+                    var fbSM = parseTime(fb.startTime), fbEM = parseTime(fb.endTime);
+                    if (fbSM !== startMin || fbEM !== endMin) continue;
+                    var fbBunk = fb.bunk;
+                    var fbGrade = fb.divName || '';
+                    var fbSlotIdx = fb.slots?.[0];
+                    var fbEx = window.scheduleAssignments?.[fbBunk]?.[fbSlotIdx];
+                    if (fbEx && (fbEx._fixed || fbEx._locked)) continue;
+                    var fbDone = bunkActivities.get(fbBunk) || new Set();
+                    var fcCount = 0;
+                    for (var ci = 0; ci < candidates.length && fcCount === 0; ci++) {
+                        var fc = candidates[ci];
+                        if (fbDone.has(fc.sportNorm)) continue;
+                        if (!isFieldAvailableByTime(fc.field, fbSM, fbEM, fbBunk, fbGrade, fieldIndex, fc)) continue;
+                        if (isRainy && !fc.isIndoor) continue;
+                        fcCount++;
+                    }
+                    if (fcCount === 0) { fcWipeout = true; break; }
+                }
+            }
+            if (fcWipeout && assignmentStack.length > 0) {
+                var lastEntry = assignmentStack[assignmentStack.length - 1];
+                if (lastEntry.candidateIdx + 1 < lastEntry.scored.length) {
+                    log('FORWARD-CHECK: wipeout after ' + bunk + ' → ' + pick.sport + ', backtracking');
+                    restoreState(lastEntry.snapshot);
+                    for (var abi = assignmentStack.length - 1; abi >= 0; abi--) {
+                        var ab2 = assignmentStack[abi].bunk;
+                        if (window.RotationEngine?.invalidateBunkTodayCache) window.RotationEngine.invalidateBunkTodayCache(ab2);
+                        invalidateRotationCacheForBunk(ab2);
+                    }
+                    rebuildAutoFieldLocks();
+                    forceStartCandidate = lastEntry.candidateIdx + 1;
+                    blockIdx = lastEntry.blockIdx;
+                    filled = lastEntry.filledBefore;
+                    free = lastEntry.freeBefore;
+                    assignmentStack.length = assignmentStack.length - 1;
+                    backtrackCount++;
+                    continue;
+                }
+            }
+
+            // ★ v12.0: Dynamic re-sort every 8 assignments
+            if (filled > 0 && filled % 8 === 0 && blockIdx + 1 < blocks.length) {
+                var remaining = blocks.slice(blockIdx + 1);
+                remaining.sort(function(a, b) {
+                    var aHint = a._draftActivity ? -1 : 0;
+                    var bHint = b._draftActivity ? -1 : 0;
+                    if (aHint !== bHint) return aHint - bHint;
+                    var aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
+                    var bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
+                    if (aSM !== bSM) return (aSM || 0) - (bSM || 0);
+                    var aG = a.divName || '', bG = b.divName || '';
+                    var aOpts = gradeFieldOptions.get(aG + '|' + aSM + '-' + aEM) || 999;
+                    var bOpts = gradeFieldOptions.get(bG + '|' + bSM + '-' + bEM) || 999;
+                    if (aOpts !== bOpts) return aOpts - bOpts;
+                    var aRegret = regretMap.get(aG + '|' + (aSM||0) + '-' + (aEM||0)) || 0;
+                    var bRegret = regretMap.get(bG + '|' + (bSM||0) + '-' + (bEM||0)) || 0;
+                    if (Math.abs(aRegret - bRegret) > 0.001) return bRegret - aRegret;
+                    return 0;
+                });
+                for (var ri = 0; ri < remaining.length; ri++) blocks[blockIdx + 1 + ri] = remaining[ri];
+            }
+
             blockIdx++;
         }
 
@@ -1081,6 +1150,10 @@
         const colocFixed = colocateFreeBlocks(colocCands);
         free = Math.max(0, free - colocFixed);
 
+        // ★ v12.0: Capacity relaxation — last resort, allow cap+1 for remaining Free ──
+        const capRelaxFixed = capacityRelaxRepair(config);
+        free = Math.max(0, free - capRelaxFixed);
+
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
         log('║  SOLVE COMPLETE in ' + elapsed + 's');
@@ -1090,10 +1163,11 @@
         if (ejectionFixed > 0) log('║  ' + ejectionFixed + ' Free blocks recovered by ejection chains');
         if (bfsFixed > 0)      log('║  ' + bfsFixed + ' Free blocks recovered by BFS augmenting');
         if (colocFixed > 0)    log('║  ' + colocFixed + ' Free blocks recovered by colocate (sharing)');
+        if (capRelaxFixed > 0) log('║  ' + capRelaxFixed + ' Free blocks recovered by capacity relaxation');
         if (swapCount > 0)     log('║  ' + swapCount + ' rotation-improving swaps');
         log('╚═══════════════════════════════════════════════════════════╝');
 
-        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed, swapCount };
+        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed, swapCount, capRelaxFixed };
     }
 
 
@@ -1951,17 +2025,18 @@
 
         const fieldIndex = buildFieldTimeIndex();
 
-        // Build a quick lookup: field → candidate config (for shareType/capacity)
-        const candByField = {};
-        candidates.forEach(c => {
-            if (!candByField[normName(c.field)]) candByField[normName(c.field)] = c;
+        // Build ALL candidates per field so we can try different sports
+        var candsByField = {};
+        candidates.forEach(function(c) {
+            var fn = normName(c.field);
+            if (!candsByField[fn]) candsByField[fn] = [];
+            candsByField[fn].push(c);
         });
 
         let fixed = 0;
         for (const fb of freeBlocks) {
             let placed = false;
-            // Walk every field that has at least one occupant with EXACTLY the same time window
-            // (user requirement: shared bunks must have identical start AND end — no partial overlap)
+            const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
             for (const [fn, entries] of fieldIndex) {
                 if (placed) break;
                 const overlapping = entries.filter(e =>
@@ -1969,28 +2044,83 @@
                 );
                 if (overlapping.length === 0) continue;
 
-                const cand = candByField[fn];
-                if (!cand) continue; // field not in candidate list for any known sport
+                var fieldCands = candsByField[fn];
+                if (!fieldCands || fieldCands.length === 0) continue;
 
-                // Check sharing rules and capacity
-                if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
+                for (var ci = 0; ci < fieldCands.length; ci++) {
+                    var cand = fieldCands[ci];
+                    if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
+                    if (doneToday.has(cand.sportNorm)) continue;
 
-                // Don't repeat same activity this bunk already has today
-                const doneToday = new Set();
-                (sa[fb.bunk] || []).forEach((e, i) => {
-                    if (i === fb.slotIdx || !e || e.continuation) return;
-                    const act = normName(e._activity || e.sport || e.field);
-                    if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
-                });
+                    const _coEntry = {
+                        field: cand.field, sport: cand.sport, _activity: cand.sport,
+                        _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
+                        _startMin: fb.startMin, _endMin: fb.endMin
+                    };
+                    if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _coEntry)) continue;
+                    if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
+                    fieldIndex.get(fn).push({
+                        startMin: fb.startMin, endMin: fb.endMin,
+                        bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
+                        activity: cand.sportNorm
+                    });
+                    fixed++;
+                    placed = true;
+                    break;
+                }
+            }
+        }
+        if (fixed > 0) log('Colocate pass: ' + fixed + ' Free block(s) filled via aggressive sharing');
+        return fixed;
+    }
+
+    // =========================================================================
+    // ★ v12.0: CAPACITY RELAXATION REPAIR
+    // =========================================================================
+    // Last-resort: for remaining Free blocks, allow cap+1 sharing on same-division.
+    function capacityRelaxRepair(config) {
+        config = config || {};
+        var { candidates } = buildCandidates(config);
+        if (candidates.length === 0) return 0;
+
+        var freeBlocks = collectFreeBlocks();
+        if (freeBlocks.length === 0) return 0;
+
+        var fieldIndex = buildFieldTimeIndex();
+        var fixed = 0;
+
+        for (var i = 0; i < freeBlocks.length; i++) {
+            var fb = freeBlocks[i];
+            var doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
+            var placed = false;
+
+            var sortedCands = _sortCandidatesByPressure(candidates, fb, fieldIndex);
+            for (var ci = 0; ci < sortedCands.length; ci++) {
+                if (placed) break;
+                var cand = sortedCands[ci];
+                if (window.isRainyDay && !cand.isIndoor) continue;
                 if (doneToday.has(cand.sportNorm)) continue;
 
-                // Place it — co-locate with the existing occupant(s)
-                const _coEntry = {
+                var fn = cand.fieldNorm;
+                var cap = cand.capacity || 2;
+                var overlap = (fieldIndex.get(fn) || []).filter(function(e) {
+                    return e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk;
+                });
+
+                var st = cand.shareType || 'same_division';
+                if (st === 'not_sharable') continue;
+                if (overlap.length !== cap) continue; // only relax by exactly +1
+
+                if (st === 'same_division') {
+                    if (overlap.some(function(e) { return e.grade !== fb.grade; })) continue;
+                }
+
+                var _crEntry = {
                     field: cand.field, sport: cand.sport, _activity: cand.sport,
-                    _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
+                    _autoMode: true, _autoSolved: true, _capacityRelaxed: true, continuation: false,
                     _startMin: fb.startMin, _endMin: fb.endMin
                 };
-                if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _coEntry)) continue;
+                if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _crEntry)) continue;
                 if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                 fieldIndex.get(fn).push({
                     startMin: fb.startMin, endMin: fb.endMin,
@@ -2001,7 +2131,7 @@
                 placed = true;
             }
         }
-        if (fixed > 0) log('Colocate pass: ' + fixed + ' Free block(s) filled via aggressive sharing');
+        if (fixed > 0) log('Capacity-relax repair: ' + fixed + ' Free block(s) filled by allowing cap+1');
         return fixed;
     }
 
@@ -2788,6 +2918,7 @@
         ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu (DFS)
         bfsAugmentingRepair,     // ★ v11.0: Hopcroft-Karp BFS shortest augmenting paths
         colocateFreeBlocks,      // ★ v12.1: Aggressive sharing — piggyback on placed fields
+        capacityRelaxRepair,     // ★ v12.0: Last resort — allow cap+1 for remaining Free blocks
         report,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {
