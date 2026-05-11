@@ -1117,10 +1117,11 @@ function handleMidDayRainStart(rainStartMinutes, resourceOverrides) {
     
     console.log(`[RainStacker] Pre-rebuild snapshot: ${Object.keys(preRebuildAssignments).length} bunks, ${preservedCount} morning slots to preserve`);
     
-    // Store for use by prePlaceMorningAssignments() after skeleton rebuild
+    // Store for use by prePlaceMorningAssignments() and Step 1.1 after skeleton rebuild
     window._midDayPreRebuild = {
         assignments: preRebuildAssignments,
         times: preRebuildTimes,
+        divisionTimes: JSON.parse(JSON.stringify(window.divisionTimes || {})),
         transitionMinutes: rainStartMinutes
     };
 
@@ -1181,6 +1182,7 @@ function handleMidDayRainClear(clearTimeMinutes, regularSkeletonName, resourceOv
     window._midDayPreRebuild = {
         assignments: preRebuildAssignments,
         times: preRebuildTimes,
+        divisionTimes: JSON.parse(JSON.stringify(window.divisionTimes || {})),
         transitionMinutes: clearTimeMinutes
     };
 
@@ -1632,16 +1634,15 @@ function triggerMidDayGeneration() {
         // Enforce indoor-only before the optimizer runs
         window.isRainyDay = true;
 
-        // Dispatch events for PinnedPreservation
-        window.dispatchEvent(new CustomEvent('campistry-generation-starting', {
-            detail: { source: 'midday-rain-stacker' }
-        }));
+        // NOTE: Do NOT dispatch campistry-generation-starting/complete events here.
+        // PinnedPreservation captures entries at pre-rebuild slot indices and
+        // restores them at those same (now-stale) indices after the optimizer
+        // rebuilds divisionTimes from the rainy skeleton. This overwrites the
+        // correct time-mapped morning entries that Step 1.1 places.
+        // Step 1.1 in runSkeletonOptimizer handles morning preservation via
+        // time-based re-mapping when _skipGenerationWipe + _midDayPreRebuild are set.
 
         window.runSkeletonOptimizer(skeleton);
-        
-        window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
-            detail: { source: 'midday-rain-stacker' }
-        }));
 
         // Clean up wipe-skip flag
         delete window._skipGenerationWipe;

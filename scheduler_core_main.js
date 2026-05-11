@@ -1812,20 +1812,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             
             (divisions[divName].bunks || []).forEach(bunk => {
                 if (isBeingGenerated) {
-                    if (window._skipGenerationWipe && Array.isArray(window.scheduleAssignments[bunk])) {
-                        // Mid-day rain path: keep _fixed/_pinned morning entries, null the rest
-                        const existing = window.scheduleAssignments[bunk];
-                        const arr = new Array(slotCount).fill(null);
-                        for (let i = 0; i < Math.min(existing.length, slotCount); i++) {
-                            if (existing[i] && (existing[i]._fixed || existing[i]._pinned)) {
-                                arr[i] = existing[i];
-                            }
-                        }
-                        window.scheduleAssignments[bunk] = arr;
-                    } else {
-                        // Normal generation — create fresh empty array
-                        window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
-                    }
+                    // Always create fresh empty arrays. For mid-day rain,
+                    // Step 1.1 re-places morning entries by TIME after
+                    // divisionTimes is rebuilt (index-based copy is wrong
+                    // because slot indices change with the rainy skeleton).
+                    window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
                 } else {
                     // This division is NOT being generated — PRESERVE existing data
                     if (!window.scheduleAssignments[bunk]) {
@@ -1860,7 +1851,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         if (window._skipGenerationWipe && window._midDayPreRebuild) {
             const _mdr = window._midDayPreRebuild;
             const _oldAssign = _mdr.assignments || {};
-            const _oldTimes = _mdr.times || [];
+            const _oldDivTimes = _mdr.divisionTimes || {};
+            const _oldUnifiedTimes = _mdr.times || [];
             const _transMin = _mdr.transitionMinutes || 810;
             let _placed = 0;
 
@@ -1875,10 +1867,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 if (!newDivSlots.length) return;
                 if (!window.scheduleAssignments[bunk]) return;
 
+                // Use per-division old times (correct indices), fall back to unified
+                const oldDivSlots = _oldDivTimes[divName] || _oldDivTimes[String(divName)] || _oldUnifiedTimes;
+
                 oldSlots.forEach((entry, oldIdx) => {
                     if (!entry) return;
                     if (entry.continuation) return;
-                    const oldSlot = _oldTimes[oldIdx];
+                    const oldSlot = oldDivSlots[oldIdx] || _oldUnifiedTimes[oldIdx];
                     if (!oldSlot) return;
 
                     const oStart = oldSlot.startMin !== undefined ? oldSlot.startMin
