@@ -9715,6 +9715,81 @@
             iterationScoreBreakdown = bd;
             return score;
         }
+
+        // =====================================================================
+        // LNS: PER-BLOCK QUALITY SCORING
+        // =====================================================================
+        function scoreBlock(bunk, slotIdx, entry, timeline, grade) {
+            var score = 0;
+            var act = entry._assignedSport || entry.event || entry._activity || '';
+            var actNorm = act ? act.toLowerCase().trim() : '';
+
+            if (entry.field === 'Free' || actNorm === 'free') return 50000;
+
+            if (window.RotationEngine?.calculateRotationScore && act) {
+                var rot = window.RotationEngine.calculateRotationScore({
+                    bunkName: bunk, activityName: act, divisionName: grade,
+                    beforeSlotIndex: slotIdx || 0, allActivities: null,
+                    activityProperties: window.activityProperties || {}
+                });
+                if (rot === Infinity) rot = 999999;
+                score += rot;
+            }
+
+            var sorted = [...timeline].sort(function(a, b) { return a.startMin - b.startMin; });
+            for (var i = 0; i < sorted.length; i++) {
+                if (sorted[i] === entry || (sorted[i].startMin === entry.startMin && sorted[i].endMin === entry.endMin)) {
+                    var prevAct = i > 0 ? (sorted[i-1]._assignedSport || sorted[i-1].event || '') : '';
+                    var nextAct = i < sorted.length - 1 ? (sorted[i+1]._assignedSport || sorted[i+1].event || '') : '';
+                    if (prevAct && prevAct === act) score += 5000;
+                    if (nextAct && nextAct === act) score += 5000;
+                    break;
+                }
+            }
+
+            var dupCount = 0;
+            for (var j = 0; j < timeline.length; j++) {
+                var tAct = timeline[j]._assignedSport || timeline[j].event || timeline[j]._activity || '';
+                if (tAct && tAct.toLowerCase().trim() === actNorm && timeline[j] !== entry) dupCount++;
+            }
+            if (dupCount > 0) score += 3000 * dupCount;
+
+            return score;
+        }
+
+        function computeBlockQuality(timelines) {
+            var qualityMap = {};
+            var _bunkGradeCache = {};
+            allGrades.forEach(function(g) { getBunksForGrade(g, divisions).forEach(function(b) { _bunkGradeCache[String(b)] = g; }); });
+
+            Object.entries(timelines).forEach(function(pair) {
+                var bunk = pair[0], timeline = pair[1];
+                var grade = _bunkGradeCache[String(bunk)] || '';
+                if (!Array.isArray(timeline)) return;
+                timeline.forEach(function(entry, idx) {
+                    if (!entry) return;
+                    var key = bunk + '|' + idx;
+                    qualityMap[key] = scoreBlock(bunk, idx, entry, timeline, grade);
+                });
+            });
+            return qualityMap;
+        }
+
+        function computeLockSet(blockQualityMap, destroyRatio) {
+            var entries = Object.entries(blockQualityMap);
+            entries.sort(function(a, b) { return b[1] - a[1]; });
+            var destroyCount = Math.ceil(entries.length * destroyRatio);
+            var lockSet = {};
+            for (var i = destroyCount; i < entries.length; i++) {
+                lockSet[entries[i][0]] = true;
+            }
+            return lockSet;
+        }
+
+        var _lnsBlockQuality = null;
+        var _lnsLockSet = null;
+        var _lnsDestroyRatio = 0.4;
+
         // =====================================================================
         // SWIM ROTATION
         // =====================================================================
@@ -12178,6 +12253,7 @@
                 allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bestTimelines[bunk] = bunkTimelines[bunk].map(b => ({ ...b })); }));
                 bestWarnings = [...warnings];
                 staleCount = 0;
+                _lnsBlockQuality = computeBlockQuality(bestTimelines);
             } else staleCount++;
 
             // ★ v14.0: Update elite pool with this iteration's result
@@ -12247,6 +12323,15 @@
                     // Normal: increment but skip tabu seeds
                     _iterSeed = getNextSeed(_iterSeed);
                 }
+                // LNS: every 4th iteration after warmup, lock good blocks
+                if (totalIters > 5 && totalIters % 4 === 0 && _lnsBlockQuality) {
+                    _lnsDestroyRatio = Math.max(0.2, 0.4 - (totalIters / MAX_ITERATIONS) * 0.2);
+                    _lnsLockSet = computeLockSet(_lnsBlockQuality, _lnsDestroyRatio);
+                    log('[LNS] Locking ' + Object.keys(_lnsLockSet).length + ' blocks (destroy ' + Math.round(_lnsDestroyRatio * 100) + '%)');
+                } else {
+                    _lnsLockSet = null;
+                }
+
                 warnings.length = 0;
                 resetIterState();
             }
@@ -14206,23 +14291,37 @@
             };
         })();
 
-        // Clear non-fixed assignments before solving
+        // Clear non-fixed assignments before solving (respect LNS locks)
         Object.keys(window.scheduleAssignments).forEach(bk => {
             (window.scheduleAssignments[bk] || []).forEach((s, i) => {
-                if (s && !s._fixed && !s._league && !s._autoSpecial) window.scheduleAssignments[bk][i] = null;
+                if (s && !s._fixed && !s._league && !s._autoSpecial) {
+                    if (_lnsLockSet && _lnsLockSet[bk + '|' + i] && s.field !== 'Free') {
+                        s._locked = true;
+                    } else {
+                        window.scheduleAssignments[bk][i] = null;
+                    }
+                }
             });
         });
         window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
-        // Build solver input blocks
-        const solverInputBlocks = solverBlocks.map(b => ({
-            bunk: b.bunk, divName: b.divName, slots: b.slots,
-            startTime: b.startTime, endTime: b.endTime,
-            type: b.type || 'slot',
-            event: (b.event && b.event !== 'General Activity Slot') ? b.event : 'Free',
-            _autoGenerated: true, _autoMode: true,
-            _draftActivity: b._draftActivity, _draftField: b._draftField
-        }));
+        // Build solver input blocks (mark LNS-locked blocks)
+        const solverInputBlocks = solverBlocks.map(b => {
+            var slotIdx = b.slots ? b.slots[0] : null;
+            var isLocked = _lnsLockSet && slotIdx != null && _lnsLockSet[b.bunk + '|' + slotIdx]
+                && window.scheduleAssignments[b.bunk]
+                && window.scheduleAssignments[b.bunk][slotIdx]
+                && window.scheduleAssignments[b.bunk][slotIdx]._locked;
+            return {
+                bunk: b.bunk, divName: b.divName, slots: b.slots,
+                startTime: b.startTime, endTime: b.endTime,
+                type: b.type || 'slot',
+                event: (b.event && b.event !== 'General Activity Slot') ? b.event : 'Free',
+                _autoGenerated: true, _autoMode: true,
+                _draftActivity: b._draftActivity, _draftField: b._draftField,
+                _locked: isLocked || false
+            };
+        });
 
         if (window.AutoSolverEngine && typeof window.AutoSolverEngine.solve === 'function') {
             // ★ PRIMARY: Auto Solver Engine — purpose-built for auto mode
