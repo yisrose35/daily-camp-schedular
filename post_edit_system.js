@@ -1645,12 +1645,11 @@
                     if (c.newAct) {
                         _ape(c.bunk, [c.newAct], null, c.slots || []);
                     }
-                    // Second step: re-add each original activity by its
-                    // exact frequency in oldActs. We can't use _ape here
-                    // because _ape counts non-continuation slots in the
-                    // range regardless of which activity occupies them,
-                    // which over-credits when multiple distinct originals
-                    // shared the range.
+                    // Re-add originals by exact frequency. Direct
+                    // historicalCounts write — _ape over-credits when
+                    // multiple distinct originals share a range.
+                    // rotationHistory is already correct from the _ape
+                    // strip call above (it rebuilds from restored state).
                     const _oldFreq = {};
                     (c.oldActs || []).forEach(function (a) { if (a) _oldFreq[a] = (_oldFreq[a] || 0) + 1; });
                     const _gs2 = window.loadGlobalSettings?.() || {};
@@ -1674,6 +1673,7 @@
             for (let i = 0; i < tx.bunks.length; i++) peiSave(tx.bunks[i].bunk);
         }
         peiShowBanner('↩ Undid: ' + tx.description + ' (' + tx.bunks.length + ' bunk' + (tx.bunks.length > 1 ? 's' : '') + ')', 'success');
+        document.dispatchEvent(new CustomEvent('campistry-post-edit-complete', { detail: { undo: true } }));
     }
     window.peiUndo = peiUndo;
 

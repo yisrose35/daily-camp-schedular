@@ -2191,6 +2191,11 @@
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
             window.saveGlobalSettings('historicalCounts', counts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
+            const _countedDates = {};
+            Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
             // Trigger cloud sync if available
@@ -2525,7 +2530,8 @@ const validActivities = Utils.getValidActivityNames();
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = _rotHist.bunks || {};
             const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
+            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate).getTime() : Date.now();
+            const _now = _schedDate || Date.now();
             _rotHist.bunks[bunk] = {};
             _bunkSlots.forEach(entry => {
                 if (entry?._activity && !entry.continuation && !entry._isTransition) {

@@ -935,6 +935,31 @@ all[date].updated_at = new Date().toISOString();
             window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
             console.log('🗑️ Rebuilt historicalCounts after date deletion');
         }
+        // Rebuild rotationHistory.bunks from remaining saved days so stale
+        // timestamps from the deleted day don't bias the rotation engine.
+        try {
+            const _allDaily = window.loadAllDailyData?.() || {};
+            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            _rotHist.bunks = {};
+            Object.entries(_allDaily).forEach(function ([dk, dayData]) {
+                const _ts = new Date(dk).getTime() || Date.now();
+                const _sched = dayData?.scheduleAssignments || {};
+                Object.keys(_sched).forEach(function (bk) {
+                    (_sched[bk] || []).forEach(function (entry) {
+                        if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                            const _aLower = entry._activity.toLowerCase();
+                            if (_aLower !== 'free' && !_aLower.includes('transition')) {
+                                if (!_rotHist.bunks[bk]) _rotHist.bunks[bk] = {};
+                                if (!_rotHist.bunks[bk][entry._activity] || _rotHist.bunks[bk][entry._activity] < _ts) {
+                                    _rotHist.bunks[bk][entry._activity] = _ts;
+                                }
+                            }
+                        }
+                    });
+                });
+            });
+            window.saveRotationHistory?.(_rotHist);
+        } catch (e) { console.warn('[calendar] rotationHistory rebuild after deletion failed:', e); }
 
         // ═══════════════════════════════════════════════════════════════
         // REFRESH UI

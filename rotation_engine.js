@@ -1015,7 +1015,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var coverageScore = RotationEngine.calculateCoverageScore(bunkName, activityName);
 
         // LIMIT
-        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties);
+        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties, divisionName);
 
         if (limitScore === Infinity) {
             return Infinity;
