@@ -9665,6 +9665,84 @@
             }
         };
 
+        // ★ v12.0: WALL-GAP FEEDBACK — analyze which walls cause gaps and nudge them
+        // After each iteration, identify gaps adjacent to movable walls (swim/snack/special).
+        // Feed wall nudge hints into the next iteration's buildRotationMatrix so the
+        // stagger plan actively tries to move problematic walls.
+        var wallGapFeedback = {
+            nudgeHints: {},   // grade → { type → nudgeMin (positive = later, negative = earlier) }
+            solverFreeZones: {},  // grade → [{ bunk, startMin, endMin }] from solver results
+
+            analyzeGaps: function(timelines) {
+                var hints = {};
+                var _bunkGrade = {};
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(b) { _bunkGrade[String(b)] = g; });
+                });
+
+                Object.keys(timelines).forEach(function(bunk) {
+                    var grade = _bunkGrade[String(bunk)] || '';
+                    if (!grade) return;
+                    var tl = (timelines[bunk] || []).slice();
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                    for (var i = 0; i < tl.length - 1; i++) {
+                        var gap = tl[i + 1].startMin - tl[i].endMin;
+                        if (gap <= 0 || gap >= 25) continue; // only care about dead gaps (< 25 min)
+
+                        // Which blocks border this gap?
+                        var before = tl[i], after = tl[i + 1];
+                        var bType = (before.type || '').toLowerCase();
+                        var aType = (after.type || '').toLowerCase();
+
+                        if (!hints[grade]) hints[grade] = {};
+
+                        // If the block BEFORE the gap is a movable wall, nudge it earlier
+                        if (['swim', 'snacks', 'snack', 'special'].indexOf(bType) >= 0) {
+                            var key = bType === 'snack' ? 'snacks' : bType;
+                            hints[grade][key] = (hints[grade][key] || 0) - gap;
+                        }
+                        // If the block AFTER the gap is a movable wall, nudge it later
+                        if (['swim', 'snacks', 'snack', 'special'].indexOf(aType) >= 0) {
+                            var key2 = aType === 'snack' ? 'snacks' : aType;
+                            hints[grade][key2] = (hints[grade][key2] || 0) + gap;
+                        }
+                    }
+                });
+
+                this.nudgeHints = hints;
+            },
+
+            recordSolverFrees: function(solverResult, solverBlocks) {
+                var zones = {};
+                if (!solverBlocks) return;
+                var _bunkGrade = {};
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(b) { _bunkGrade[String(b)] = g; });
+                });
+                solverBlocks.forEach(function(b) {
+                    var slotIdx = b.slots ? b.slots[0] : null;
+                    if (slotIdx == null) return;
+                    var entry = (window.scheduleAssignments[b.bunk] || [])[slotIdx];
+                    if (!entry || entry.field !== 'Free') return;
+                    var grade = _bunkGrade[String(b.bunk)] || b.divName || '';
+                    if (!zones[grade]) zones[grade] = [];
+                    zones[grade].push({
+                        bunk: b.bunk,
+                        startMin: entry._startMin || parseTimeToMinutes(b.startTime),
+                        endMin: entry._endMin || parseTimeToMinutes(b.endTime)
+                    });
+                });
+                this.solverFreeZones = zones;
+            },
+
+            getNudge: function(grade, type) {
+                var h = this.nudgeHints[grade];
+                if (!h) return 0;
+                return h[type] || 0;
+            }
+        };
+
         // Seeded jitter for iteration variation
         function seedJitter(seed, index) {
             return (((seed * 2654435761 + index * 1597) >>> 0) % 1000) / 1000;
@@ -10251,8 +10329,19 @@
                 const sequence = [];
                 permutedOffField.forEach((type, typeIdx) => {
                     const bandPos = (typeIdx + idx) % bandCount;
-                    const bandStart = bandStarts[bandPos];
-                    const bandEnd = bandPos === bandCount - 1 ? info.end : bandStarts[bandPos + 1];
+                    var bandStart = bandStarts[bandPos];
+                    var bandEnd = bandPos === bandCount - 1 ? info.end : bandStarts[bandPos + 1];
+
+                    // ★ v12.0: Apply wall-gap feedback nudges from previous iteration.
+                    // If the previous iteration found dead gaps adjacent to this wall type,
+                    // shift the band to eliminate the gap. Clamp to grade boundaries.
+                    var nudge = wallGapFeedback.getNudge(grade, type);
+                    if (nudge !== 0 && totalIters > 0) {
+                        var bandWidth = bandEnd - bandStart;
+                        bandStart = Math.max(info.start, Math.min(info.end - bandWidth, bandStart + nudge));
+                        bandEnd = bandStart + bandWidth;
+                    }
+
                     typeBands[type] = { start: bandStart, end: bandEnd };
                     sequence.push(type);
                 });
@@ -12319,6 +12408,7 @@
             // Mirrors auto_solver_engine logic exactly: sharing rules, capacity,
             // cross-division, exact time match, same-day repeat
             let iterFreeEstimate = 0;
+            var iterFreeLocations = []; // ★ v12.0: track WHERE estimated Frees are
             {
                 // Build time-based field index from all packer claims
                 const simFieldIndex = new Map();
@@ -12432,7 +12522,10 @@
                                 if (found) break;
                             }
 
-                            if (!found) iterFreeEstimate++;
+                            if (!found) {
+                                iterFreeEstimate++;
+                                iterFreeLocations.push({ bunk: bunkStr, grade: grade, startMin: startMin, endMin: endMin });
+                            }
                         });
                     });
                 });
@@ -12492,6 +12585,18 @@
 
             // ★ v10.0: Update repair targets for next iteration
             repairTargets.update(bunkTimelines);
+
+            // ★ v12.0: Analyze gap-wall adjacency to nudge walls in next iteration
+            wallGapFeedback.analyzeGaps(bunkTimelines);
+            // ★ v12.0: Record estimated Free zones from this iteration's simulation
+            if (iterFreeLocations.length > 0) {
+                var freeByGrade = {};
+                iterFreeLocations.forEach(function(fl) {
+                    if (!freeByGrade[fl.grade]) freeByGrade[fl.grade] = [];
+                    freeByGrade[fl.grade].push(fl);
+                });
+                wallGapFeedback.solverFreeZones = freeByGrade;
+            }
 
             // ★ v11.0: Compute iteration bias from score breakdown
             computeIterationBias(iterationScoreBreakdown, iterScore);
@@ -14712,6 +14817,11 @@
                         if (window.AutoSolverEngine.bfsAugmentingRepair) {
                             const bfs2 = window.AutoSolverEngine.bfsAugmentingRepair(solverConfig);
                             if (bfs2 > 0) log('[4] BFS augmenting recovered ' + bfs2 + ' more slots');
+                        }
+                        // ★ v12.0: Capacity relaxation — last resort cap+1 for remaining Free
+                        if (window.AutoSolverEngine.capacityRelaxRepair) {
+                            const cr2 = window.AutoSolverEngine.capacityRelaxRepair(solverConfig);
+                            if (cr2 > 0) log('[4] Capacity-relax recovered ' + cr2 + ' more slots');
                         }
                     } catch(e2) { /* non-fatal */ }
                 }
