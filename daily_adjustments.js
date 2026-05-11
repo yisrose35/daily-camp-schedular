@@ -940,9 +940,7 @@ function bindRainyDayEvents() {
   if (midDayBtn) {
     midDayBtn.onclick = function(e) {
       e.stopPropagation();
-      // TODO: Re-enable when mid-day mode is finalized
-      // showMidDayRainModal();
-      alert('Mid-Day Mode — feature coming soon!');
+      showMidDayRainModal();
     };
   }
   const rainClearsBtn = document.getElementById('da-rain-clears-btn');
@@ -1136,18 +1134,12 @@ function activateMidDayRainyMode(customStartTime = null) {
   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
   
-  // ★★★ FIX: Trigger generation AFTER all rainy state is configured ★★★
-  // The stacker rebuilt the skeleton but deferred generation because:
-  //   - window.isRainyDay must be true (set above)
-  //   - outdoor fields must be disabled (set above)
-  //   - leagueAssignments must be cleared (set above)
-  // Now all state is ready, so we trigger generation.
+  // Trigger generation now — all rainy state is configured above
+  // (isRainyDay, disabled fields, cleared leagues). No setTimeout
+  // so the optimizer sees the correct state immediately.
   if (window.MidDayRainStacker?.triggerMidDayGeneration) {
-    // Small delay to let saves propagate
-    setTimeout(() => {
-      window.MidDayRainStacker.triggerMidDayGeneration();
-      renderGrid();
-    }, 300);
+    window.MidDayRainStacker.triggerMidDayGeneration();
+    renderGrid();
   }
 }
 

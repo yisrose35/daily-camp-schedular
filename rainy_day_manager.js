@@ -1237,8 +1237,13 @@ function createRainyDayToggleUI(container, onToggle) {
     const midDayBtn = container.querySelector('#rainy-midday-btn');
     if (midDayBtn) {
         midDayBtn.addEventListener('click', function() {
-            // TODO: Re-enable when mid-day mode is finalized
-            alert('⏰ Mid-Day Mode — feature coming soon!');
+            if (typeof showMidDayRainModal === 'function') {
+                showMidDayRainModal();
+            } else if (window.MidDayRainStacker?.handleMidDayRainStart) {
+                showMidDayRainModal();
+            } else {
+                alert('Mid-day rain module not loaded.');
+            }
         });
     }
 }
