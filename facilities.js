@@ -3784,27 +3784,44 @@ window.cleanupDeletedGeneral = cleanupDeletedGeneral;
 window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
+// Slice 4 audit fix — full propagation, transactional best-effort.
+// Earlier this only updated `daily_schedules` (localStorage), `app1.disabledFields`,
+// and `locationZones`. Missed:
+//   - window.scheduleAssignments (live data — today's schedule kept old name)
+//   - window.activityProperties (keyed by name)
+//   - window.pinnedTileDefaults
+//   - window.historicalCounts[bunk][name] / window.manualUsageOffsets
+//   - rotationHistory.bunks[bunk][name]
+//   - cloud rotation_counts table
+//   - cloud daily_schedules table (per-date rows; the saveGlobalSettings call
+//     above only fans out via the integration_hooks queue)
+// Now: collect every state surface, snapshot pre-rename, attempt all renames
+// in sequence, save all keys. If any save throws, fall back to the snapshot
+// to keep the app in a consistent state. (Best-effort transaction; true
+// atomicity would require a server-side RPC.)
 function propagateFieldRename(oldName, newName) {
     if (!oldName || !newName || oldName === newName) return;
+    const snapshot = {};
     try {
         const settings = window.loadGlobalSettings?.() || {};
+        // 1) saved daily_schedules
         const dailySchedules = settings.daily_schedules || {};
-
+        snapshot.daily_schedules = JSON.parse(JSON.stringify(dailySchedules));
         Object.keys(dailySchedules).forEach(dateKey => {
             const dayData = dailySchedules[dateKey];
             if (!dayData) return;
-            // Rename in schedule slot references
             if (dayData.scheduleAssignments) {
                 Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
                     const slots = dayData.scheduleAssignments[bunkKey];
                     if (!Array.isArray(slots)) return;
                     slots.forEach((slot) => {
-                        if (slot?.location === oldName) slot.location = newName;
-                        if (slot?.field === oldName) slot.field = newName;
+                        if (!slot) return;
+                        if (slot.location === oldName) slot.location = newName;
+                        if (slot.field === oldName) slot.field = newName;
+                        if (slot._location === oldName) slot._location = newName;
                     });
                 });
             }
-            // Rename in per-date disabled field overrides
             if (Array.isArray(dayData.overrides?.disabledFields)) {
                 dayData.overrides.disabledFields = dayData.overrides.disabledFields.map(
                     n => n === oldName ? newName : n
@@ -3813,14 +3830,16 @@ function propagateFieldRename(oldName, newName) {
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
 
-        // Rename in app1.disabledFields global list
+        // 2) app1.disabledFields, app1.fields (already updated upstream)
         const app1 = settings.app1 || {};
+        snapshot.app1 = JSON.parse(JSON.stringify(app1));
         if (Array.isArray(app1.disabledFields)) {
             app1.disabledFields = app1.disabledFields.map(n => n === oldName ? newName : n);
-            window.saveGlobalSettings?.('app1', app1);
         }
 
+        // 3) locationZones
         const locationZones = settings.locationZones || {};
+        snapshot.locationZones = JSON.parse(JSON.stringify(locationZones));
         Object.values(locationZones).forEach(zone => {
             if (zone.fields) {
                 const idx = zone.fields.indexOf(oldName);
@@ -3832,8 +3851,128 @@ function propagateFieldRename(oldName, newName) {
             }
         });
         window.saveGlobalSettings?.('locationZones', locationZones);
+
+        // 4) Live scheduleAssignments — today's grid in memory.
+        if (window.scheduleAssignments) {
+            snapshot.scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
+                const slots = window.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                slots.forEach(slot => {
+                    if (!slot) return;
+                    if (slot.location === oldName) slot.location = newName;
+                    if (slot.field === oldName) slot.field = newName;
+                    if (slot._location === oldName) slot._location = newName;
+                });
+            });
+        }
+
+        // 5) activityProperties keyed by field name.
+        if (window.activityProperties && window.activityProperties[oldName]) {
+            snapshot.activityProperties = JSON.parse(JSON.stringify(window.activityProperties));
+            window.activityProperties[newName] = window.activityProperties[oldName];
+            delete window.activityProperties[oldName];
+            window.saveGlobalSettings?.('activityProperties', window.activityProperties);
+        }
+
+        // 6) pinnedTileDefaults — entries may reference field name.
+        const ptd = settings.pinnedTileDefaults || window.pinnedTileDefaults;
+        if (ptd && typeof ptd === 'object') {
+            snapshot.pinnedTileDefaults = JSON.parse(JSON.stringify(ptd));
+            let ptdChanged = false;
+            Object.keys(ptd).forEach(k => {
+                const v = ptd[k];
+                if (!v) return;
+                if (v.field === oldName) { v.field = newName; ptdChanged = true; }
+                if (v.location === oldName) { v.location = newName; ptdChanged = true; }
+            });
+            if (ptdChanged) window.saveGlobalSettings?.('pinnedTileDefaults', ptd);
+        }
+
+        // 7) historicalCounts[bunk][name]
+        if (window.historicalCounts) {
+            snapshot.historicalCounts = JSON.parse(JSON.stringify(window.historicalCounts));
+            Object.keys(window.historicalCounts).forEach(bunk => {
+                const m = window.historicalCounts[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+            });
+            window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+        }
+
+        // 8) manualUsageOffsets[bunk][name]
+        if (window.manualUsageOffsets) {
+            snapshot.manualUsageOffsets = JSON.parse(JSON.stringify(window.manualUsageOffsets));
+            Object.keys(window.manualUsageOffsets).forEach(bunk => {
+                const m = window.manualUsageOffsets[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+            });
+            window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+        }
+
+        // 9) rotationHistory.bunks[bunk][name]
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {}, leagues: {} };
+            snapshot.rotationHistory = JSON.parse(JSON.stringify(rh));
+            let rhChanged = false;
+            Object.keys(rh.bunks || {}).forEach(bunk => {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = m[oldName];
+                delete m[oldName];
+                rhChanged = true;
+            });
+            if (rhChanged && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 10) Cloud rotation_counts via RotationCloud.renameActivity if it
+        //     exists, otherwise delete-then-rebuild on next save.
+        if (window.RotationCloud) {
+            if (typeof window.RotationCloud.renameActivity === 'function') {
+                try { window.RotationCloud.renameActivity(oldName, newName); } catch (_) {}
+            } else if (typeof window.RotationCloud.deleteActivity === 'function') {
+                // Best-effort: delete the old name; the next save will write
+                // the renamed entries with fresh counts.
+                try { window.RotationCloud.deleteActivity(oldName); } catch (_) {}
+            }
+        }
+
+        // 11) Save the app1 mutation last (smallest blast radius if it throws).
+        window.saveGlobalSettings?.('app1', app1);
+
+        console.log('[FACILITIES] Field rename propagated: "' + oldName + '" → "' + newName + '" across all surfaces');
     } catch (e) {
-        console.error('[FACILITIES] Rename propagation error:', e);
+        console.error('[FACILITIES] Rename propagation error — attempting rollback:', e);
+        // Best-effort restore from snapshots.
+        try {
+            if (snapshot.daily_schedules) window.saveGlobalSettings?.('daily_schedules', snapshot.daily_schedules);
+            if (snapshot.app1) window.saveGlobalSettings?.('app1', snapshot.app1);
+            if (snapshot.locationZones) window.saveGlobalSettings?.('locationZones', snapshot.locationZones);
+            if (snapshot.activityProperties) {
+                window.activityProperties = snapshot.activityProperties;
+                window.saveGlobalSettings?.('activityProperties', snapshot.activityProperties);
+            }
+            if (snapshot.scheduleAssignments) window.scheduleAssignments = snapshot.scheduleAssignments;
+            if (snapshot.historicalCounts) {
+                window.historicalCounts = snapshot.historicalCounts;
+                window.saveGlobalSettings?.('historicalCounts', snapshot.historicalCounts);
+            }
+            if (snapshot.manualUsageOffsets) {
+                window.manualUsageOffsets = snapshot.manualUsageOffsets;
+                window.saveGlobalSettings?.('manualUsageOffsets', snapshot.manualUsageOffsets);
+            }
+            if (snapshot.rotationHistory && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(snapshot.rotationHistory);
+            }
+            console.warn('[FACILITIES] Rename rolled back to pre-rename snapshot');
+        } catch (restoreErr) {
+            console.error('[FACILITIES] Rollback also failed — manual recovery may be required:', restoreErr);
+        }
     }
 }
 

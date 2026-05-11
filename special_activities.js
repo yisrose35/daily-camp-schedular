@@ -2288,7 +2288,156 @@ function cleanupDeletedSpecialActivity(name) {
         } catch (_) {}
     } catch (e) { console.error('[SPECIAL_ACTIVITIES] Cleanup error:', e); }
 }
-function propagateSpecialActivityRename(oldN,newN) { if(!oldN||!newN||oldN===newN)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===oldN){dd.scheduleAssignments[bk][i]._activity=newN;c++;} if(s?.activity===oldN){dd.scheduleAssignments[bk][i].activity=newN;c++;} if(s?.event===oldN){dd.scheduleAssignments[bk][i].event=newN;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.activityProperties?.[oldN]){window.activityProperties[newN]={...window.activityProperties[oldN]};delete window.activityProperties[oldN];} } catch(e){console.error('[SPECIAL_ACTIVITIES] Rename error:',e);} }
+// Slice 4 audit fix — full propagation, transactional best-effort.
+// Earlier this only updated saved daily_schedules and activityProperties.
+// Missed:
+//   - window.scheduleAssignments (live data)
+//   - window.historicalCounts[bunk][name] / window.manualUsageOffsets
+//   - rotationHistory.bunks[bunk][name]
+//   - pinnedTileDefaults
+//   - cloud rotation_counts
+// Same shape as facilities.js propagateFieldRename — see its comment for
+// the rationale.
+function propagateSpecialActivityRename(oldN, newN) {
+    if (!oldN || !newN || oldN === newN) return;
+    const snapshot = {};
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // 1) saved daily_schedules
+        const ds = settings.daily_schedules || {};
+        snapshot.daily_schedules = JSON.parse(JSON.stringify(ds));
+        let c = 0;
+        Object.keys(ds).forEach(function (dk) {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(function (bk) {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (s, i) {
+                    if (!s) return;
+                    if (s._activity === oldN) { sl[i]._activity = newN; c++; }
+                    if (s.activity === oldN) { sl[i].activity = newN; c++; }
+                    if (s.event === oldN) { sl[i].event = newN; c++; }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+
+        // 2) live scheduleAssignments
+        if (window.scheduleAssignments) {
+            snapshot.scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            Object.keys(window.scheduleAssignments).forEach(function (bk) {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (slot) {
+                    if (!slot) return;
+                    if (slot._activity === oldN) slot._activity = newN;
+                    if (slot.activity === oldN) slot.activity = newN;
+                    if (slot.event === oldN) slot.event = newN;
+                });
+            });
+        }
+
+        // 3) activityProperties keyed by name
+        if (window.activityProperties && window.activityProperties[oldN]) {
+            snapshot.activityProperties = JSON.parse(JSON.stringify(window.activityProperties));
+            window.activityProperties[newN] = window.activityProperties[oldN];
+            delete window.activityProperties[oldN];
+            window.saveGlobalSettings?.('activityProperties', window.activityProperties);
+        }
+
+        // 4) pinnedTileDefaults
+        const ptd = settings.pinnedTileDefaults || window.pinnedTileDefaults;
+        if (ptd && typeof ptd === 'object') {
+            snapshot.pinnedTileDefaults = JSON.parse(JSON.stringify(ptd));
+            let changed = false;
+            Object.keys(ptd).forEach(function (k) {
+                const v = ptd[k];
+                if (!v) return;
+                if (v.activity === oldN) { v.activity = newN; changed = true; }
+                if (v._activity === oldN) { v._activity = newN; changed = true; }
+            });
+            if (changed) window.saveGlobalSettings?.('pinnedTileDefaults', ptd);
+        }
+
+        // 5) historicalCounts[bunk][name]
+        if (window.historicalCounts) {
+            snapshot.historicalCounts = JSON.parse(JSON.stringify(window.historicalCounts));
+            Object.keys(window.historicalCounts).forEach(function (bunk) {
+                const m = window.historicalCounts[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+        }
+
+        // 6) manualUsageOffsets[bunk][name]
+        if (window.manualUsageOffsets) {
+            snapshot.manualUsageOffsets = JSON.parse(JSON.stringify(window.manualUsageOffsets));
+            Object.keys(window.manualUsageOffsets).forEach(function (bunk) {
+                const m = window.manualUsageOffsets[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+        }
+
+        // 7) rotationHistory.bunks
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {}, leagues: {} };
+            snapshot.rotationHistory = JSON.parse(JSON.stringify(rh));
+            let rhChanged = false;
+            Object.keys(rh.bunks || {}).forEach(function (bunk) {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = m[oldN];
+                delete m[oldN];
+                rhChanged = true;
+            });
+            if (rhChanged && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 8) Cloud rotation_counts
+        if (window.RotationCloud) {
+            if (typeof window.RotationCloud.renameActivity === 'function') {
+                try { window.RotationCloud.renameActivity(oldN, newN); } catch (_) {}
+            } else if (typeof window.RotationCloud.deleteActivity === 'function') {
+                try { window.RotationCloud.deleteActivity(oldN); } catch (_) {}
+            }
+        }
+
+        console.log('[SPECIAL_ACTIVITIES] Rename propagated: "' + oldN + '" → "' + newN + '"');
+    } catch (e) {
+        console.error('[SPECIAL_ACTIVITIES] Rename propagation error — attempting rollback:', e);
+        try {
+            if (snapshot.daily_schedules) window.saveGlobalSettings?.('daily_schedules', snapshot.daily_schedules);
+            if (snapshot.activityProperties) {
+                window.activityProperties = snapshot.activityProperties;
+                window.saveGlobalSettings?.('activityProperties', snapshot.activityProperties);
+            }
+            if (snapshot.scheduleAssignments) window.scheduleAssignments = snapshot.scheduleAssignments;
+            if (snapshot.historicalCounts) {
+                window.historicalCounts = snapshot.historicalCounts;
+                window.saveGlobalSettings?.('historicalCounts', snapshot.historicalCounts);
+            }
+            if (snapshot.manualUsageOffsets) {
+                window.manualUsageOffsets = snapshot.manualUsageOffsets;
+                window.saveGlobalSettings?.('manualUsageOffsets', snapshot.manualUsageOffsets);
+            }
+            if (snapshot.rotationHistory && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(snapshot.rotationHistory);
+            }
+            console.warn('[SPECIAL_ACTIVITIES] Rename rolled back to pre-rename snapshot');
+        } catch (restoreErr) {
+            console.error('[SPECIAL_ACTIVITIES] Rollback also failed:', restoreErr);
+        }
+    }
+}
 
 function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
 function makeEditable(el,save) { if(!el)return; el.ondblclick=()=>{ const inp=document.createElement("input"); inp.value=el.textContent; inp.style.cssText="font-size:inherit;font-weight:inherit;border:1px solid #147D91;outline:none;border-radius:4px;padding:2px 6px;width:"+Math.max(100,el.offsetWidth+20)+"px;"; el.replaceWith(inp); inp.focus(); inp.select(); const finish=()=>{const v=inp.value.trim();if(v&&v!==el.textContent)save(v);else if(inp.parentNode)inp.replaceWith(el);}; inp.onblur=finish; inp.onkeyup=e=>{if(e.key==="Enter")finish();if(e.key==="Escape")inp.replaceWith(el);}; }; }

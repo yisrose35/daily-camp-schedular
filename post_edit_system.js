@@ -66,9 +66,42 @@
     let _peiSuppressClick = false;
     let _peiSetupDone = false;
 
-    // Undo stack: array of { bunk, snapshot (deep copy of assignments[bunk]), description }
+    // Undo stack — Slice 4 audit promoted this from { bunk, snapshot } to a
+    // transaction shape so multi-bunk edits and displacements can also be
+    // undone atomically. Each entry is now:
+    //   { bunks: [{ bunk, snapshot }, ...],
+    //     counts: [{ bunk, newAct, oldActs, slots }, ...],   // for inverse applyPostEditCounts
+    //     description, timestamp, dateKey }
+    //
+    // Persisted to sessionStorage so page reload doesn't lose history.
     const _peiUndoStack = [];
     const PEI_MAX_UNDO = 30;
+    const PEI_UNDO_STORAGE_KEY = '_peiUndoStack_v2';
+
+    function _peiSaveUndoStack() {
+        try {
+            const dateKey = window.currentScheduleDate || '';
+            const payload = { dateKey: dateKey, stack: _peiUndoStack };
+            sessionStorage.setItem(PEI_UNDO_STORAGE_KEY, JSON.stringify(payload));
+        } catch (_) { /* sessionStorage may be unavailable / over quota */ }
+    }
+    function _peiRestoreUndoStack() {
+        try {
+            const raw = sessionStorage.getItem(PEI_UNDO_STORAGE_KEY);
+            if (!raw) return;
+            const payload = JSON.parse(raw);
+            // Only restore if the saved stack belongs to the date the user
+            // is viewing — otherwise an undo would clobber a different day.
+            const dateKey = window.currentScheduleDate || '';
+            if (payload.dateKey !== dateKey) return;
+            if (Array.isArray(payload.stack)) {
+                _peiUndoStack.length = 0;
+                payload.stack.forEach(function (e) { _peiUndoStack.push(e); });
+            }
+        } catch (_) {}
+    }
+    // Restore on next tick so currentScheduleDate is populated.
+    setTimeout(_peiRestoreUndoStack, 0);
 
     // =========================================================================
     // DEBUG LOGGING
@@ -1519,28 +1552,101 @@
 
     // ── Undo system ──
 
+    // Single-bunk snapshot — back-compat wrapper around peiSnapshotTransaction.
     function peiSnapshotBunk(bunk, description) {
-        const assignments = window.scheduleAssignments?.[bunk];
-        if (!assignments) return;
-        // Deep copy via JSON (safe for our data)
-        const snapshot = JSON.parse(JSON.stringify(assignments));
-        _peiUndoStack.push({ bunk, snapshot, description, timestamp: Date.now() });
-        if (_peiUndoStack.length > PEI_MAX_UNDO) _peiUndoStack.shift();
-        debugLog('Undo snapshot saved:', description, '(stack size:', _peiUndoStack.length + ')');
+        peiSnapshotTransaction([bunk], description);
     }
+    window.peiSnapshotBunk = peiSnapshotBunk;
+
+    // Multi-bunk transaction snapshot. Captures the FULL pre-edit state of
+    // every affected bunk plus the historicalCounts delta inverse needed
+    // to roll counts back. Without this, undoing a multi-bunk edit either
+    // did nothing or — worse — silently popped an earlier 1-bunk edit and
+    // restored its state.
+    function peiSnapshotTransaction(bunks, description, opts) {
+        opts = opts || {};
+        if (!Array.isArray(bunks) || bunks.length === 0) return;
+        const tx = {
+            description: description,
+            timestamp: Date.now(),
+            dateKey: window.currentScheduleDate || '',
+            bunks: [],
+            counts: opts.counts || []  // [{ bunk, newAct, oldActs, slots }, ...]
+        };
+        for (let i = 0; i < bunks.length; i++) {
+            const b = bunks[i];
+            const assignments = window.scheduleAssignments?.[b];
+            if (!assignments) continue;
+            try {
+                tx.bunks.push({ bunk: b, snapshot: JSON.parse(JSON.stringify(assignments)) });
+            } catch (_) {}
+        }
+        if (tx.bunks.length === 0) return;
+        _peiUndoStack.push(tx);
+        if (_peiUndoStack.length > PEI_MAX_UNDO) _peiUndoStack.shift();
+        _peiSaveUndoStack();
+        debugLog('Undo transaction saved:', description, '(bunks:', tx.bunks.length, 'stack size:', _peiUndoStack.length + ')');
+    }
+    window.peiSnapshotTransaction = peiSnapshotTransaction;
 
     function peiUndo() {
         if (_peiUndoStack.length === 0) {
             peiShowBanner('Nothing to undo', 'warning');
             return;
         }
-        const last = _peiUndoStack.pop();
-        window.scheduleAssignments[last.bunk] = last.snapshot;
-        debugLog('Undo:', last.description, 'for', last.bunk);
+        const tx = _peiUndoStack.pop();
+        _peiSaveUndoStack();
+
+        // Mark post-edit-in-progress so realtime sync doesn't race the restore.
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress();
+        } else {
+            window._postEditInProgress = true;
+        }
+
+        // Back-compat: old { bunk, snapshot } shape.
+        if (tx.bunk && tx.snapshot) {
+            window.scheduleAssignments[tx.bunk] = tx.snapshot;
+            peiTriggerReRender();
+            peiSave(tx.bunk);
+            peiShowBanner('↩ Undid: ' + tx.description, 'success');
+            return;
+        }
+
+        // New transaction shape.
+        for (let i = 0; i < tx.bunks.length; i++) {
+            const e = tx.bunks[i];
+            window.scheduleAssignments[e.bunk] = e.snapshot;
+        }
+
+        // Inverse counts: applyPostEditCounts called with current → oldActs
+        // for each bunk, so historicalCounts is rolled back to pre-edit.
+        // Earlier this was skipped entirely — repeated edit→undo cycles
+        // inflated counts.
+        try {
+            const _ape = window.SchedulerCoreUtils?.applyPostEditCounts;
+            if (_ape && Array.isArray(tx.counts)) {
+                for (let i = 0; i < tx.counts.length; i++) {
+                    const c = tx.counts[i];
+                    if (!c || !c.bunk) continue;
+                    // Inverse: the NEW activity at edit time is now the "old"
+                    // (we're un-doing it), and the original old activities
+                    // become the "new" (we're restoring them).
+                    _ape(c.bunk, c.newAct ? [c.newAct] : [], c.oldActs?.[0] || null, c.slots || []);
+                }
+            }
+        } catch (e) { console.warn('[peiUndo] counts inverse failed:', e?.message || e); }
+
         peiTriggerReRender();
-        peiSave(last.bunk);
-        peiShowBanner('↩ Undid: ' + last.description, 'success');
+        // Cloud sync via bypass save covers all affected bunks.
+        if (typeof window.bypassSaveAllBunks === 'function') {
+            window.bypassSaveAllBunks(tx.bunks.map(function (e) { return e.bunk; }));
+        } else {
+            for (let i = 0; i < tx.bunks.length; i++) peiSave(tx.bunks[i].bunk);
+        }
+        peiShowBanner('↩ Undid: ' + tx.description + ' (' + tx.bunks.length + ' bunk' + (tx.bunks.length > 1 ? 's' : '') + ')', 'success');
     }
+    window.peiUndo = peiUndo;
 
     // ── Apply changes (safe slot management) ──
 
@@ -1564,6 +1670,33 @@
         const origEntry = assignments[origSlotIdx];
         if (!origEntry) return;
 
+        // Slice 4 audit fix — drag-resize / drag-move had ZERO validation
+        // before. A user could drag a block onto a window outside the
+        // field's Available time-rule and it would stick. Route through
+        // the manual gate. Free / null activities are exempt.
+        const _actName = origEntry._activity || origEntry.field || '';
+        const _location = origEntry._location || origEntry.field || null;
+        if (_actName && _actName !== 'Free' && typeof window.commitManualWriteIfLegal === 'function') {
+            const _check = window.commitManualWriteIfLegal(
+                bunk, origSlotIdx, _actName, _location, divName,
+                newStart, newEnd, { allowSoftOverride: false }
+            );
+            if (!_check.ok) {
+                if (_check.soft && typeof window.confirm === 'function') {
+                    if (!window.confirm('Heads up: ' + _check.reason + '.\n\nApply anyway?')) {
+                        return;
+                    }
+                } else if (!_check.soft) {
+                    if (typeof peiShowBanner === 'function') {
+                        peiShowBanner('Cannot place: ' + _check.reason, 'error');
+                    } else {
+                        console.warn('[peiApplyTimeChange] BLOCKED:', _check.reason);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Snapshot for undo BEFORE any changes
         const actName = origEntry._activity || origEntry.field || 'block';
         if (newStart !== origStart || newEnd !== origEnd) {
@@ -1572,8 +1705,13 @@
                 : `Move ${actName} to ${peiToLabel(newStart)}`);
         }
 
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
+        // Use the centralized marker (defined in unified_schedule_system).
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress();
+        } else {
+            window._postEditInProgress = true;
+            window._postEditTimestamp = Date.now();
+        }
 
         // 1) Find ALL slots the original entry occupies
         const oldSlots = peiFindEntrySlots(assignments, origSlotIdx);
@@ -1678,9 +1816,39 @@
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = new Array(divSlots.length);
         const assignments = window.scheduleAssignments[bunk];
 
+        // Slice 4 audit fix — double-click Add was the easiest path to
+        // plant a violation. Route through the manual gate.
+        if (activity && activity !== 'Free' && typeof window.commitManualWriteIfLegal === 'function') {
+            // Resolve slotIdx for the gate (first overlapping slot).
+            let _firstIdx = -1;
+            for (let i = 0; i < divSlots.length; i++) {
+                if (divSlots[i].endMin > startMin && divSlots[i].startMin < endMin) { _firstIdx = i; break; }
+            }
+            const _check = window.commitManualWriteIfLegal(
+                bunk, _firstIdx, activity, location, divName,
+                startMin, endMin, { allowSoftOverride: false }
+            );
+            if (!_check.ok) {
+                if (_check.soft && typeof window.confirm === 'function') {
+                    if (!window.confirm('Heads up: ' + _check.reason + '.\n\nAdd anyway?')) return;
+                } else if (!_check.soft) {
+                    if (typeof peiShowBanner === 'function') {
+                        peiShowBanner('Cannot add: ' + _check.reason, 'error');
+                    } else {
+                        console.warn('[peiApplyNewBlock] BLOCKED:', _check.reason);
+                    }
+                    return;
+                }
+            }
+        }
+
         peiSnapshotBunk(bunk, `Add ${activity} at ${peiToLabel(startMin)}`);
-        window._postEditInProgress = true;
-        window._postEditTimestamp = Date.now();
+        if (typeof window.markPostEditInProgress === 'function') {
+            window.markPostEditInProgress();
+        } else {
+            window._postEditInProgress = true;
+            window._postEditTimestamp = Date.now();
+        }
 
         // Find slots that overlap with new block's time and are free
         const targetSlots = [];

@@ -61,6 +61,45 @@ Three structures must stay synchronized:
 
 Any write that touches one MUST touch the other two. The repair phases each maintain their own local invariants; if you add a new phase, study `executeChain` for the rollback pattern (snapshot before mutate, atomic restore on rejection).
 
+### Slot entry flags
+
+Every entry in `scheduleAssignments[bunk][slotIdx]` may carry these flags. They are NOT mutually exclusive. Precedence (highest → lowest) when multiple are present:
+
+| Flag | Set by | Read by | Semantics |
+|---|---|---|---|
+| `_league` | League scheduler | Solver, repair, safety net, pinned-preserve | League game. Never evicted, never overwritten by manual edit without explicit league flow. |
+| `_activityLocked` | Auto-builder for `_isPrep` continuations | Solver, repair | Slot's activity cannot change. Field can change via repair-rescue if rule fails. |
+| `_fixed` | Almost every writer | Solver, repair (skip eviction) | "Don't move this." Survives repair phases. Manual-edit writers set this universally. |
+| `_pinned` | User pin, manual edits, multi-bunk edits, displacements, proposals | `pinned_activity_preservation`, safety net | Survives auto-gen via `capturePinnedActivities`. Validated against current access (Slice 3 N7 extended to timeRules + disabledSports + disabledFields). |
+| `_bunkOverride` | Auto-builder Step 2, sport-override writes, manual edits | Solver pre-place | "User intent — solver may not touch this." |
+| `_autoSpecial` | Auto-builder Step 1 | Solver | This anchor came from a layer config; the auto-builder owns it. |
+| `_postEdit` | Manual edits, `_madeRoom`, `_rebalanced`, `_fromProposal`, `_cascadeReassigned` | Solver | "This was edited after generation; the next auto-gen should respect it." |
+| `_madeRoom` / `_rebalanced` / `_cascadeReassigned` | Make Room / AutoRebalance / multi-bunk plan | Diagnostics only | Source labels for the entry. |
+
+**Cardinal rule for manual writers:** If your edit represents user intent that should survive the next auto-gen, set BOTH `_fixed: true` AND `_pinned: true`. Setting only `_fixed` makes the entry "stable within this gen" but doesn't shield it from being overwritten when the user clicks Regenerate.
+
+### Manual write paths (Slice 4)
+
+The auto pipeline has `AutoSolverEngine.commitWriteIfLegal` as its single trust point. The manual side has its **own** trust point: `commitManualWriteIfLegal` exposed on `window` by `unified_schedule_system.js`. Every manual write site MUST route through it. Slice 4 audit hardened the following 7 entry points:
+
+- `applyDirectEdit` (single-bunk edits from the modal)
+- `applyMultiBunkEdit` (multi-bunk + cascade plan)
+- `showMakeRoomModal` (displacement)
+- AutoRebalance ar-apply
+- `applyApprovedProposal` (primary + plan moves)
+- `peiApplyTimeChange` (drag-resize / drag-move)
+- `peiApplyNewBlock` (double-click Add)
+
+The gate returns `{ ok: true }` or `{ ok: false, reason, soft }`. Soft violations (cooldowns) prompt the user; hard violations (access, disabledFields, disabledSports, activity-not-in-field) reject outright with a toast.
+
+### Undo (Slice 4)
+
+Promoted to a transaction shape. `peiSnapshotTransaction(bunks, description, opts)` captures the FULL pre-edit state of every affected bunk plus an inverse-counts payload. Persisted to sessionStorage per dateKey. Multi-bunk edits, displacements, rebalances, and proposal applies all snapshot via this helper. Earlier the undo stack was per-bunk single-snapshot only — Ctrl+Z after a 12-bunk action silently popped a prior 1-bunk action.
+
+### Post-edit-in-progress marker
+
+`window.markPostEditInProgress(ms = 8000)` is the only correct way to suppress realtime sync during a manual write. It uses a cancelable clear-timer pattern; legacy `setTimeout(() => _postEditInProgress = false, 8000)` is forbidden (a second edit racing with the stale timer clears the flag mid-second-edit and exposes the in-flight window to remote sync).
+
 ### Determinism
 
 Slice 3 introduced deterministic tie-breaking (djb2 hash of `bunkName+activity+dayKey`). Same input + same `_iterSeed` → same schedule. Exception: `seedShuffle` for bunks whose name has no digits silently uses seed 0 (pre-existing minor issue).

@@ -186,6 +186,37 @@
                     if (ds && actName && (ds.has?.(actName) || (Array.isArray(ds) && ds.includes(actName)))) return false;
                 }
 
+                // 4. Slice 4 audit fix — also check cooldown / FieldCombos
+                // rules. Earlier the gate stopped at access + timeRules +
+                // disabledFields/Sports. A pin could survive even if a
+                // newly-added cooldown made the placement illegal — the
+                // pin then resurrected the violation on the next auto-gen.
+                if (window.SchedulingRules?.isCandidateAllowed
+                    && sMin != null && eMin != null && actName) {
+                    try {
+                        const sp = _allSpecials.find(s => s && s.name === actName);
+                        const cand = {
+                            startMin: sMin, endMin: eMin,
+                            type: sp ? 'special' : 'sport',
+                            event: actName,
+                            field: fieldName
+                        };
+                        const template = [];
+                        for (let ti = 0; ti < slots.length; ti++) {
+                            const w = slots[ti];
+                            if (!w || w === entry || w.continuation) continue;
+                            if (w._startMin == null || w._endMin == null) continue;
+                            template.push({
+                                startMin: w._startMin, endMin: w._endMin,
+                                type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                                event: w.event || w._activity || w.sport || '',
+                                field: w.field
+                            });
+                        }
+                        if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'auto' })) return false;
+                    } catch (_) { /* rule-engine error never blocks a legal pin */ }
+                }
+
                 return true;
             };
 
