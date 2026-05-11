@@ -61,9 +61,16 @@
     // Unified scheduling-rules check. Every phase that places or extends a
     // block should call this before committing. Returns true if placement is
     // OK (no rule loaded, or candidate passes all active cooldown rules).
-    function rulesAllow(candidate, template) {
+    // When `bunk` is provided and _previousDayEndBlocks is populated, cross-day
+    // cooldowns are checked by injecting yesterday's end-of-day blocks.
+    var _previousDayEndBlocks = {};
+    function rulesAllow(candidate, template, bunk) {
         if (!window.SchedulingRules) return true;
-        return window.SchedulingRules.isCandidateAllowed(candidate, template, { mode: 'auto' });
+        var opts = { mode: 'auto' };
+        if (bunk && _previousDayEndBlocks[bunk]) {
+            opts.previousDayBlocks = _previousDayEndBlocks[bunk];
+        }
+        return window.SchedulingRules.isCandidateAllowed(candidate, template, opts);
     }
 
     function parseTimeToMinutes(str) {
@@ -585,6 +592,47 @@
 
         const allDailyData = window.loadAllDailyData ? window.loadAllDailyData() : {};
 
+        // ── Cross-day cooldown: load yesterday's end-of-day blocks ───
+        // Express yesterday's times as negative offsets from today's 00:00
+        // so the cooldown engine can measure the gap correctly.
+        _previousDayEndBlocks = {};
+        if (currentDate) {
+            var _ydParts = currentDate.split('-').map(Number);
+            var _ydDate = new Date(_ydParts[0], _ydParts[1] - 1, _ydParts[2]);
+            _ydDate.setDate(_ydDate.getDate() - 1);
+            var _yesterdayKey = _ydDate.getFullYear() + '-' +
+                String(_ydDate.getMonth() + 1).padStart(2, '0') + '-' +
+                String(_ydDate.getDate()).padStart(2, '0');
+            var _ydData = allDailyData[_yesterdayKey];
+            var _ydAssign = _ydData && _ydData.scheduleAssignments;
+            if (_ydAssign) {
+                Object.keys(_ydAssign).forEach(function(_ydBunk) {
+                    var _ydSlots = _ydAssign[_ydBunk];
+                    if (!Array.isArray(_ydSlots)) return;
+                    var blocks = [];
+                    for (var _ydi = _ydSlots.length - 1; _ydi >= 0 && blocks.length < 3; _ydi--) {
+                        var _yde = _ydSlots[_ydi];
+                        if (!_yde || _yde.continuation || _yde.field === 'Free') continue;
+                        var _ydSMin = _yde._startMin;
+                        var _ydEMin = _yde._endMin;
+                        if (_ydSMin == null || _ydEMin == null) continue;
+                        blocks.push({
+                            startMin: _ydSMin - 1440,
+                            endMin: _ydEMin - 1440,
+                            type: _yde._type || 'sport',
+                            event: _yde._activity || _yde.sport || '',
+                            field: typeof _yde.field === 'object' ? _yde.field?.name : _yde.field,
+                            _assignedSpecial: _yde._assignedSpecial || null,
+                            _specialLocation: _yde._specialLocation || null
+                        });
+                    }
+                    if (blocks.length > 0) _previousDayEndBlocks[_ydBunk] = blocks;
+                });
+                window._previousDayEndBlocks = _previousDayEndBlocks;
+                log('[CrossDay] Loaded ' + Object.keys(_previousDayEndBlocks).length + ' bunks with yesterday blocks from ' + _yesterdayKey);
+            }
+        }
+
         // ── Period helpers ────────────────────────────────────────────
         function getMondayOfWeek(dateStr, weeksBack) {
             if (!dateStr) return null;
@@ -678,11 +726,13 @@
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
-        // ★ pickFillActivity — choose the longest real special that fits inside a gap.
-        // Used everywhere "General Activity Slot" was previously hard-coded.
+        // ★ pickFillActivity — choose the best real special that fits inside a gap.
+        // Considers rotation score (prefer least-recently-used) with a tiebreak
+        // favoring longer duration so the gap is filled as completely as possible.
         // Returns the special's name, or null if nothing fits (caller falls back gracefully).
         function pickFillActivity(gapDur, grade, bunk) {
-            var best = null, bestDur = 0;
+            var best = null, bestScore = Infinity, bestDur = 0;
+            var hasRotation = bunk != null && window.RotationEngine && window.RotationEngine.calculateRotationScore;
             for (var _pfi = 0; _pfi < todaysSpecials.length; _pfi++) {
                 var _s = todaysSpecials[_pfi];
                 if (grade) {
@@ -693,7 +743,18 @@
                 var _dur = getSpecialDuration(_s.name, activityProperties, globalSettings) ||
                            _s.defaultDuration || _s.duration || _s.durationMin || _s.periodMin || 0;
                 if (_dur <= 0 || _dur > gapDur) continue;
-                if (_dur > bestDur) { best = _s.name; bestDur = _dur; }
+                var _rot = 0;
+                if (hasRotation) {
+                    _rot = window.RotationEngine.calculateRotationScore({
+                        bunkName: bunk, activityName: _s.name, divisionName: grade,
+                        beforeSlotIndex: 0, allActivities: null,
+                        activityProperties: activityProperties || {}
+                    });
+                    if (_rot === Infinity) _rot = 999999;
+                }
+                if (_rot < bestScore || (_rot === bestScore && _dur > bestDur)) {
+                    best = _s.name; bestScore = _rot; bestDur = _dur;
+                }
             }
             return best;
         }
@@ -3864,7 +3925,7 @@
                                     for (let t = win.start; t + dur <= win.end; t += 5) {
                                         if (special.location && !isFieldAvailable(special.location, t, t + dur, bunk, grade)) continue;
                                         if (!canAssignSpecialToGrade(special.name, grade, t, t + dur)) continue;
-                                        if (!rulesAllow({ startMin: t, endMin: t + dur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: special.location }, bunkTimelines[bunk] || [])) continue;
+                                        if (!rulesAllow({ startMin: t, endMin: t + dur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: special.location }, bunkTimelines[bunk] || [], bunk)) continue;
                                         // Score: left + right remainders within this window
                                         const leftRem = t - win.start;
                                         const rightRem = win.end - (t + dur);
@@ -11812,7 +11873,7 @@
                                 // Resource check: can this special run at this time?
                                 if (!canUseSpecialAtTime(special.name, grade, pos, pos + specialDur)) { _sp25_rtBlockCount++; continue; }
                                 // Scheduling rules check (cooldowns, etc.)
-                                if (!rulesAllow({ startMin: pos, endMin: pos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) continue;
+                                if (!rulesAllow({ startMin: pos, endMin: pos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [], bunk)) continue;
 
                                 // Simulate adding special at this position
                                 var withSpecial = existingWalls.concat([{ s: pos, e: pos + specialDur }]);
@@ -11939,7 +12000,7 @@
                                 if (!_p25EPReject
                                     && !sp25CrossesBoundary(endPos, endPos + specialDur)
                                     && canUseSpecialAtTime(special.name, grade, endPos, endPos + specialDur)
-                                    && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) {
+                                    && rulesAllow({ startMin: endPos, endMin: endPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [], bunk)) {
                                     var withSpecialEnd = existingWalls.concat([{ s: endPos, e: endPos + specialDur }]);
                                     var gapsAfterEnd = spComputeGaps(withSpecialEnd, gradeStart, gradeEnd);
                                     var layersFitEnd = true;
@@ -11995,7 +12056,7 @@
                                     }
                                     if (_fbChgBlk) continue;
                                     if (!canUseSpecialAtTime(special.name, grade, _fbPos, _fbPos + specialDur)) continue;
-                                    if (!rulesAllow({ startMin: _fbPos, endMin: _fbPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) continue;
+                                    if (!rulesAllow({ startMin: _fbPos, endMin: _fbPos + specialDur, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [], bunk)) continue;
                                     var _fbLRem = _fbPos - _fbGap.s;
                                     var _fbRRem = _fbGap.e - (_fbPos + specialDur);
                                     // Fallback still must not create a gap this bunk has no activity to fill.
@@ -15260,6 +15321,41 @@
                                 const r3 = checkAccess(sp.accessRestrictions, grade, bunk);
                                 if (r3) {
                                     violations.push({ bunk, grade, idx, fieldName, activity: actName, reason: 'special access: ' + r3 });
+                                    return;
+                                }
+                            }
+
+                            // Cooldown rule violations
+                            if (window.SchedulingRules?.isCandidateAllowed && sMin != null && eMin != null) {
+                                const cand = {
+                                    startMin: sMin, endMin: eMin,
+                                    type: entry._type || (entry._assignedSpecial ? 'special' : 'sport'),
+                                    event: actName || entry.sport || '',
+                                    field: fieldName,
+                                    _assignedSpecial: entry._assignedSpecial,
+                                    _specialLocation: entry._specialLocation
+                                };
+                                const tmpl = [];
+                                for (let _si = 0; _si < slotsArr.length; _si++) {
+                                    if (_si === idx) continue;
+                                    const w = slotsArr[_si];
+                                    if (!w || w.continuation || w.field === 'Free') continue;
+                                    if (w._startMin == null || w._endMin == null) continue;
+                                    tmpl.push({
+                                        startMin: w._startMin, endMin: w._endMin,
+                                        type: w._type || (w._assignedSpecial ? 'special' : 'sport'),
+                                        event: w._activity || w.sport || '',
+                                        field: typeof w.field === 'object' ? w.field?.name : w.field,
+                                        _assignedSpecial: w._assignedSpecial,
+                                        _specialLocation: w._specialLocation
+                                    });
+                                }
+                                const _snOpts = { mode: 'auto' };
+                                if (_previousDayEndBlocks[bunk]) {
+                                    _snOpts.previousDayBlocks = _previousDayEndBlocks[bunk];
+                                }
+                                if (!window.SchedulingRules.isCandidateAllowed(cand, tmpl, _snOpts)) {
+                                    violations.push({ bunk, grade, idx, fieldName, activity: actName, reason: 'cooldown rule violation' });
                                     return;
                                 }
                             }

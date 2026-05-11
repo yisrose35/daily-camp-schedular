@@ -414,7 +414,7 @@
     // ROTATION SCORING
     // =========================================================================
 
-    function getRotationScore(bunk, activityName, grade) {
+    function getRotationScore(bunk, activityName, grade, slotIdx) {
         if (!activityName || normName(activityName) === 'free') return 0;
 
         if (window.RotationEngine?.calculateRotationScore) {
@@ -422,7 +422,7 @@
                 bunkName: bunk,
                 activityName: activityName,
                 divisionName: grade,
-                beforeSlotIndex: 0,
+                beforeSlotIndex: slotIdx || 0,
                 allActivities: null,
                 activityProperties: window.activityProperties || {}
             });
@@ -567,10 +567,10 @@
         // Rotation score cache — invalidated per-bunk after each assignment
         // so scores reflect what was already placed today
         const rotationCache = new Map();
-        function getCachedRotation(bunk, sport, grade) {
-            const key = bunk + '|' + sport;
+        function getCachedRotation(bunk, sport, grade, slotIdx) {
+            const key = bunk + '|' + sport + '|' + (slotIdx || 0);
             if (rotationCache.has(key)) return rotationCache.get(key);
-            const score = getRotationScore(bunk, sport, grade);
+            const score = getRotationScore(bunk, sport, grade, slotIdx);
             rotationCache.set(key, score);
             return score;
         }
@@ -797,7 +797,7 @@
                 if (isRainy && !cand.isIndoor) continue;
 
                 // Score: rotation + draft hint
-                let score = getCachedRotation(bunk, cand.sport, grade);
+                let score = getCachedRotation(bunk, cand.sport, grade, slotIdx);
                 score += getDraftBonus(block, cand);
 
                 // Prefer filling fields to capacity (same activity co-location)
@@ -1142,7 +1142,11 @@
                         _specialLocation: w._specialLocation
                     });
                 }
-                if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'auto' })) {
+                const _cdOpts = { mode: 'auto' };
+                if (window._previousDayEndBlocks && window._previousDayEndBlocks[bunk]) {
+                    _cdOpts.previousDayBlocks = window._previousDayEndBlocks[bunk];
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(cand, template, _cdOpts)) {
                     log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + (sport || '?') + ' @ ' + (fieldName || '?') + ' — cooldown rule');
                     return false;
                 }
@@ -2183,7 +2187,11 @@
                         _specialLocation: w._specialLocation
                     });
                 }
-                if (!window.SchedulingRules.isCandidateAllowed(candCheck, template, { mode: 'auto' })) return false;
+                const _cdOpts2 = { mode: 'auto' };
+                if (window._previousDayEndBlocks && window._previousDayEndBlocks[bunk]) {
+                    _cdOpts2.previousDayBlocks = window._previousDayEndBlocks[bunk];
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(candCheck, template, _cdOpts2)) return false;
             }
         } catch (_) { /* never let rule-engine bug hide legal moves */ }
 
