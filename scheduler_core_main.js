@@ -3240,8 +3240,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // =========================================================================
         try {
             if (window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlotSilent === 'function') {
+                const _allowedBunks = (function() {
+                    if (!allowedDivisions || allowedDivisions.length === 0) return null;
+                    const s = new Set();
+                    allowedDivisions.forEach(d => {
+                        (divisions[d]?.bunks || divisions[String(d)]?.bunks || []).forEach(b => s.add(b));
+                    });
+                    return s;
+                })();
                 const _freeFills = [];
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                    if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
                     for (let si = 0; si < arr.length; si++) {
                         const e = arr[si];
