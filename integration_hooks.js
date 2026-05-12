@@ -1662,9 +1662,16 @@
                     // on Device A while Device B's local has a newer overall
                     // stamp (from editing some unrelated key).
                     if (cloudPerKeyTime) {
+                        // Camp-wide config keys owned by the owner — always
+                        // prefer cloud so schedulers see the latest structure.
+                        const cloudPreferredKeys = new Set([
+                            'campStructure', 'divisions', 'bunks',
+                            'fields', 'specialActivities', 'activityProperties'
+                        ]);
                         mergedState = { ...cloudState };
                         for (const k of Object.keys(localState)) {
                             if (k === 'updated_at') continue;
+                            if (cloudPreferredKeys.has(k) && k in cloudState) continue;
                             const cloudKeyTime = cloudPerKeyTime[k] || 0;
                             if (!(k in cloudState) || localTime > cloudKeyTime) {
                                 mergedState[k] = localState[k];
