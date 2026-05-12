@@ -9762,6 +9762,7 @@
             swimFailures: {},       // grade → count of iterations where swim failed
             swimBlockers: {},       // grade → { blockerGrade → count } — who blocks pool
             specialFailures: {},    // grade → { specialName → count }
+            specialPlacementFails: {}, // specialName → count of failed placements
             deadGapZones: {},       // grade → [{ bunk, startMin, endMin, gap }]
             freeHotspots: {},       // grade → [{ bunk, startMin, endMin }]
             deferredSpecials: {},   // grade → Set of special names to skip
@@ -9941,6 +9942,83 @@
                 if (Object.keys(freePriorityBunks).length > 0) {
                     summary.push('free-priority:' + Object.keys(freePriorityBunks).length + ' bunks');
                 }
+
+                // ── Lever 6: Specials sort strategy ──
+                // Varies how todaysSpecials are ordered before Phase 2.5 placement.
+                var specialsSortStrategies = ['narrowness', 'biggest-first', 'smallest-first', 'shuffle'];
+                var _ssIdx;
+                if (iter <= 2) {
+                    _ssIdx = 0; // baseline: narrowness
+                } else if (this._iterPhase === 'explore') {
+                    _ssIdx = iter % specialsSortStrategies.length;
+                } else if (this._bestStructure && this._bestStructure.specialsSort != null) {
+                    _ssIdx = this._bestStructure.specialsSort;
+                } else {
+                    _ssIdx = 0;
+                }
+                this._specialsSortStrategy = specialsSortStrategies[_ssIdx];
+                summary.push('specials=' + this._specialsSortStrategy);
+
+                // ── Lever 7: Solver block sort strategy ──
+                // Varies the primary sort in auto_solver_engine to try different
+                // orderings: time-sweep (default), reverse-time, grade-grouped, MRV-first.
+                var solverSortStrategies = ['time-sweep', 'reverse-time', 'grade-grouped', 'mrv-first', 'duration-first'];
+                var _slIdx;
+                if (iter <= 2) {
+                    _slIdx = 0; // baseline: time-sweep
+                } else if (this._iterPhase === 'explore') {
+                    _slIdx = iter % solverSortStrategies.length;
+                } else if (this._bestStructure && this._bestStructure.solverSort != null) {
+                    _slIdx = this._bestStructure.solverSort;
+                } else {
+                    _slIdx = 0;
+                }
+                this._solverSortStrategy = solverSortStrategies[_slIdx];
+                summary.push('solver=' + this._solverSortStrategy);
+
+                // ── Lever 8: Duration preference ──
+                // Hints whether to prefer shorter or longer blocks within dMin-dMax.
+                var durationPrefs = ['balanced', 'prefer-short', 'prefer-long'];
+                var _dpIdx;
+                if (iter <= 2) {
+                    _dpIdx = 0;
+                } else if (this._iterPhase === 'explore') {
+                    _dpIdx = Math.floor(iter / 2) % durationPrefs.length;
+                } else if (this._bestStructure && this._bestStructure.durationPref != null) {
+                    _dpIdx = this._bestStructure.durationPref;
+                } else {
+                    _dpIdx = 0;
+                }
+                this._durationPref = durationPrefs[_dpIdx];
+                summary.push('duration=' + this._durationPref);
+
+                // ── Lever 9: Field scoring bias ──
+                // Varies field candidate scoring: rotation-focused (default),
+                // spread (prefer empty fields), concentrate (reuse fields).
+                var fieldBiases = ['rotation', 'spread', 'concentrate'];
+                var _fbIdx;
+                if (iter <= 2) {
+                    _fbIdx = 0;
+                } else if (this._iterPhase === 'explore') {
+                    _fbIdx = Math.floor(iter / 3) % fieldBiases.length;
+                } else if (this._bestStructure && this._bestStructure.fieldBias != null) {
+                    _fbIdx = this._bestStructure.fieldBias;
+                } else {
+                    _fbIdx = 0;
+                }
+                this._fieldBias = fieldBiases[_fbIdx];
+                summary.push('fields=' + this._fieldBias);
+
+                // ★ Publish full strategy to window for solver to read
+                window._brainStrategy = {
+                    solverSort: this._solverSortStrategy,
+                    durationPref: this._durationPref,
+                    fieldBias: this._fieldBias,
+                    specialsSort: this._specialsSortStrategy,
+                    iterPhase: this._iterPhase,
+                    iter: iter
+                };
+
                 log('[BRAIN] ★ Strategy summary: ' + summary.join(' | '));
             },
 
@@ -10779,6 +10857,12 @@
         log('══════════════════════════════════════════════════════════');
 
         let todaysSwimmers = {};
+        // Initialize brain strategy for iter 0 (before preIterStrategy runs)
+        window._brainStrategy = {
+            solverSort: 'time-sweep', durationPref: 'balanced',
+            fieldBias: 'rotation', specialsSort: 'narrowness',
+            iterPhase: 'explore', iter: 0
+        };
 
         do {
             // ★ v12.1: Every iteration gets a unique type-order seed so the tabu search
@@ -12427,6 +12511,38 @@
             // ★ v10.0: SMART SPECIAL PLACEMENT — multi-position search with full feasibility simulation
             // Instead of trying ONE position and giving up, tries ALL valid positions and picks the best.
             {
+                // ★ BRAIN: Re-sort todaysSpecials per brain strategy each iteration
+                var _brainSS = adaptiveBrain._specialsSortStrategy || 'narrowness';
+                if (_brainSS === 'biggest-first') {
+                    todaysSpecials.sort(function(a, b) { return (b.duration || 30) - (a.duration || 30); });
+                } else if (_brainSS === 'smallest-first') {
+                    todaysSpecials.sort(function(a, b) { return (a.duration || 30) - (b.duration || 30); });
+                } else if (_brainSS === 'shuffle') {
+                    var _ssSeed = totalIters * 48271 + 7;
+                    for (var _ssI = todaysSpecials.length - 1; _ssI > 0; _ssI--) {
+                        _ssSeed = (_ssSeed * 1664525 + 1013904223) & 0x7fffffff;
+                        var _ssJ = _ssSeed % (_ssI + 1);
+                        var _ssTmp = todaysSpecials[_ssI]; todaysSpecials[_ssI] = todaysSpecials[_ssJ]; todaysSpecials[_ssJ] = _ssTmp;
+                    }
+                } else {
+                    // narrowness (default) — already sorted at init, re-sort to restore
+                    try {
+                        var _allFieldsForWidth2 = globalSettings.app1?.fields || [];
+                        todaysSpecials.sort(function(a, b) {
+                            function _rw(s) {
+                                var ng = 0;
+                                if (s?.accessRestrictions?.enabled) { ng = Object.keys(s.accessRestrictions.divisions || {}).length; }
+                                else { ng = Object.keys(globalSettings.divisions || {}).length || 99; }
+                                var nl = 1;
+                                if (Array.isArray(s?.locations)) nl = Math.max(1, s.locations.length);
+                                else if (Array.isArray(s?.availableFields)) nl = Math.max(1, s.availableFields.length);
+                                return Math.max(1, ng) * nl;
+                            }
+                            return _rw(a) - _rw(b);
+                        });
+                    } catch (_) {}
+                }
+
                 let preplacedCount = 0;
                 let preplacedByGrade = {};
 
@@ -12982,6 +13098,8 @@
                                 // ★ BRAIN: Track special placement failures
                                 if (!adaptiveBrain.specialFailures[grade]) adaptiveBrain.specialFailures[grade] = {};
                                 adaptiveBrain.specialFailures[grade][special.name || special.event || ''] = (adaptiveBrain.specialFailures[grade][special.name || special.event || ''] || 0) + 1;
+                                var _spName = special.name || special.event || '';
+                                adaptiveBrain.specialPlacementFails[_spName] = (adaptiveBrain.specialPlacementFails[_spName] || 0) + 1;
                                 continue; // truly no placement possible → defer to CSP
                             }
                         }
@@ -13293,11 +13411,19 @@
                         _deferSnapshot[g] = [...adaptiveBrain.deferredSpecials[g]];
                     }
                 });
+                var _ssStrats = ['narrowness', 'biggest-first', 'smallest-first', 'shuffle'];
+                var _slStrats = ['time-sweep', 'reverse-time', 'grade-grouped', 'mrv-first', 'duration-first'];
+                var _dpStrats = ['balanced', 'prefer-short', 'prefer-long'];
+                var _fbStrats = ['rotation', 'spread', 'concentrate'];
                 adaptiveBrain._bestStructure = {
                     gradeOrder: adaptiveBrain.swimGradeOrder ? adaptiveBrain.swimGradeOrder.slice() : null,
                     poolHints: JSON.parse(JSON.stringify(adaptiveBrain.poolShiftHints)),
                     evictionTarget: adaptiveBrain._evictionTarget,
-                    deferred: _deferSnapshot
+                    deferred: _deferSnapshot,
+                    specialsSort: _ssStrats.indexOf(adaptiveBrain._specialsSortStrategy),
+                    solverSort: _slStrats.indexOf(adaptiveBrain._solverSortStrategy),
+                    durationPref: _dpStrats.indexOf(adaptiveBrain._durationPref),
+                    fieldBias: _fbStrats.indexOf(adaptiveBrain._fieldBias)
                 };
                 log('[BRAIN] ★ New best! Saving structural decisions for exploitation phase');
             } else staleCount++;
@@ -13450,6 +13576,24 @@
             if (_freeHotspotTotal > 0) _brainSummary.push('free-hotspots: ' + _freeHotspotTotal);
             if (window._brainFreePriorityBunks && Object.keys(window._brainFreePriorityBunks).length > 0) {
                 _brainSummary.push('free-priority-bunks: ' + Object.keys(window._brainFreePriorityBunks).join(','));
+            }
+            var _spfEntries = Object.entries(adaptiveBrain.specialPlacementFails);
+            if (_spfEntries.length > 0) {
+                _spfEntries.sort(function(a, b) { return b[1] - a[1]; });
+                _brainSummary.push('special-fails: ' + _spfEntries.slice(0, 5).map(function(e) { return e[0] + '×' + e[1]; }).join(', '));
+            }
+            var _bsmEntries = Object.entries(adaptiveBrain._bunkSwimMissing);
+            if (_bsmEntries.length > 0) {
+                _brainSummary.push('bunk-swim-missing: ' + _bsmEntries.map(function(e) { return e[0] + '×' + e[1]; }).join(', '));
+            }
+            if (adaptiveBrain._bestStructure) {
+                var _bs = adaptiveBrain._bestStructure;
+                var _bsParts = [];
+                if (_bs.specialsSort != null) _bsParts.push('specials=' + ['narrowness','biggest-first','smallest-first','shuffle'][_bs.specialsSort]);
+                if (_bs.solverSort != null) _bsParts.push('solver=' + ['time-sweep','reverse-time','grade-grouped','mrv-first','duration-first'][_bs.solverSort]);
+                if (_bs.durationPref != null) _bsParts.push('duration=' + ['balanced','prefer-short','prefer-long'][_bs.durationPref]);
+                if (_bs.fieldBias != null) _bsParts.push('fields=' + ['rotation','spread','concentrate'][_bs.fieldBias]);
+                if (_bsParts.length > 0) _brainSummary.push('best-structure: ' + _bsParts.join(', '));
             }
             if (_brainSummary.length > 0) {
                 log('[BRAIN] ★ Final report: ' + _brainSummary.join(' | '));
@@ -13871,6 +14015,21 @@
                     if (!cands.length) break;
                     let packing = null;
                     try {
+                        var _brainDP = (window._brainStrategy || {}).durationPref || 'balanced';
+                        var _packScoreFn;
+                        if (_brainDP === 'prefer-short') {
+                            // More segments, shorter each — fills more precisely
+                            _packScoreFn = function(p) { return p.segments.length * 500 -
+                                p.segments.reduce(function(a,s) { return a + s.durationMin; }, 0) / p.segments.length; };
+                        } else if (_brainDP === 'prefer-long') {
+                            // Fewer segments, longer each — fewer gaps
+                            _packScoreFn = function(p) { return -p.segments.length * 2000 +
+                                p.segments.reduce(function(a,s) { return a + s.durationMin; }, 0) / p.segments.length; };
+                        } else {
+                            // balanced (default)
+                            _packScoreFn = function(p) { return -p.segments.length * 1000 +
+                                p.segments.reduce(function(a,s) { return a + s.durationMin; }, 0) / p.segments.length; };
+                        }
                         const results = window.PeriodPacker.pack({
                             periodLengthMin: dur,
                             candidates: cands,
@@ -13878,10 +14037,7 @@
                             minSegmentMin: floor,
                             granularityMin: PACKER_STEP,
                             allowRepeat: true,
-                            // Prefer fewest segments first; tie-break by larger
-                            // average segment (more room for solver picks).
-                            scoreFn: (p) => -p.segments.length * 1000 +
-                                            p.segments.reduce((a,s) => a + s.durationMin, 0) / p.segments.length,
+                            scoreFn: _packScoreFn,
                             topN: 1
                         });
                         packing = results?.[0];
