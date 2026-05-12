@@ -1150,7 +1150,7 @@
             eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
             
             newBtn.addEventListener("click", async () => {
-                if (!window.AccessControl?.canEraseData?.()) {
+                if (!window.AccessControl?.canEraseAllCampData?.()) {
                     window.AccessControl?.showPermissionDenied?.('erase all camp data');
                     return;
                 }

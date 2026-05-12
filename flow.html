@@ -356,14 +356,7 @@
                                     </button>
                                     <button id="eraseHistoryBtn"
                                             style="background:#5e35b1;color:#fff;border:none;"
-                                            onclick="
-                                                if(confirm('Reset rotation history and League counters?')) {
-                                                    window.eraseRotationHistory?.();
-                                                    window.leagueRoundState = {};
-                                                    window.saveGlobalSettings?.('leagueRoundState', {});
-                                                    alert('Activity History and Game Counters reset!');
-                                                }
-                                            ">
+                                            onclick="window.eraseRotationHistory?.();">
                                         Reset Activity History
                                     </button>
                                     <button id="newHalfBtn"
