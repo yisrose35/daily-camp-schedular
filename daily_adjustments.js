@@ -4334,9 +4334,15 @@ async function runOptimizer() {
    
     
 
-    // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+    // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
+  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  const allDivKeys = Object.keys(window.divisions || {});
+  const isPartialWipe = scopeDivsForWipe &&
+      scopeDivsForWipe.length > 0 &&
+      scopeDivsForWipe.length < allDivKeys.length;
+
+  console.log('[Optimizer] ★ PRE-GENERATION WIPE for', dateKey, '(partial:', isPartialWipe, ')');
 
   // Preserve user-defined inputs across the wipe — these are not generated data
   const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
@@ -4351,39 +4357,62 @@ async function runOptimizer() {
     disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
   };
 
-  // 1. Clear window globals
-  window.scheduleAssignments = {};
-  window.leagueAssignments = {};
+  if (isPartialWipe) {
+    // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+    const divisions = window.divisions || {};
+    const myBunks = new Set();
+    scopeDivsForWipe.forEach(divName => {
+      (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+    });
+    console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + scopeDivsForWipe.join(', ') + ']');
+    myBunks.forEach(bunk => {
+      delete window.scheduleAssignments?.[bunk];
+      delete window.leagueAssignments?.[bunk];
+    });
 
-  // 2. NUKE today's entry from ALL localStorage keys that store schedule data
-  try {
-      // Primary daily data store
+    // Partial localStorage clear — only remove selected bunks, not the whole date
+    try {
+      const DAILY_KEY = 'campDailyData_v1';
+      const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+      if (allData[dateKey]) {
+        myBunks.forEach(bunk => {
+          delete allData[dateKey]?.scheduleAssignments?.[bunk];
+          delete allData[dateKey]?.leagueAssignments?.[bunk];
+        });
+        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+      }
+      console.log('[Optimizer] Partial localStorage clear for', myBunks.size, 'bunks');
+    } catch (e) {
+      console.warn('[Optimizer] localStorage partial clear failed:', e);
+    }
+  } else {
+    // ═══ FULL: Wipe everything ═══
+    window.scheduleAssignments = {};
+    window.leagueAssignments = {};
+
+    try {
       const DAILY_KEY = 'campDailyData_v1';
       const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
       if (allData[dateKey]) {
           delete allData[dateKey];
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
       }
-      
-      // Also check the orchestrator's key
       const ORCH_KEY = 'campistry_schedule_data';
       const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
       if (orchData[dateKey]) {
           delete orchData[dateKey];
           localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
       }
-      
       console.log('[Optimizer] Nuked localStorage entries for', dateKey);
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] localStorage nuke failed:', e);
-  }
+    }
 
-  // 3. Delete from cloud so no system can rehydrate stale data
-  try {
+    // Delete from cloud (full wipe only)
+    try {
       const client = window.CampistryDB?.getClient?.() || window.supabase;
       const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
       if (client && campId) {
-          // Await this one — we need cloud clean BEFORE generation starts
           const { error } = await client
               .from('daily_schedules')
               .delete()
@@ -4392,20 +4421,21 @@ async function runOptimizer() {
           if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
           else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
       }
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] Cloud delete failed:', e);
+    }
   }
 
-  // 4. Clear GlobalFieldLocks
+  // Clear GlobalFieldLocks
   if (window.GlobalFieldLocks?.clearAllLocks) {
       window.GlobalFieldLocks.clearAllLocks();
   }
 
-  // 5. Block rehydration during generation
+  // Block rehydration during generation
   window._preGenClearActive = true;
   window._generationInProgress = true;
 
-  console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  console.log('[Optimizer] ★ WIPE COMPLETE. Running optimizer...');
 
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
