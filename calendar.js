@@ -502,7 +502,7 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // OWNER/ADMIN: Full new half
         // ═══════════════════════════════════════════════════════════════
-        const confirmed = confirm(
+        if (!confirm(
             "🏕️ START NEW HALF\n\n" +
             "This will reset:\n" +
             "  ✓ Bunk activity usage counters\n" +
@@ -516,8 +516,7 @@ all[date].updated_at = new Date().toISOString();
             "  • Master Schedule templates\n" +
             "  • Divisions and Bunks\n\n" +
             "Are you sure you want to start a new half?"
-        );
-        if (!confirmed) return;
+        )) return;
 
         logAuditEvent('start_new_half');
         try {
