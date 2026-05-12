@@ -9819,7 +9819,10 @@
                 // ── Lever 4: Free-hotspot bunk priority ──
                 // Bunks that consistently get Free blocks should be solved earlier
                 // so they claim scarce fields before other bunks.
+                // Use top-25% worst offenders (not absolute threshold) so the boost
+                // is meaningful — if every bunk is boosted, no one is.
                 var freePriorityBunks = {};
+                var _fpAllCounts = [];
                 Object.keys(this.freeHotspots).forEach(function(g) {
                     var spots = self.freeHotspots[g] || [];
                     var bunkCounts = {};
@@ -9827,16 +9830,25 @@
                         bunkCounts[s.bunk] = (bunkCounts[s.bunk] || 0) + 1;
                     });
                     Object.keys(bunkCounts).forEach(function(bk) {
-                        if (bunkCounts[bk] >= 2) {
-                            freePriorityBunks[bk] = bunkCounts[bk];
-                        }
+                        _fpAllCounts.push({ bunk: bk, count: bunkCounts[bk] });
                     });
                 });
+                if (_fpAllCounts.length > 0) {
+                    _fpAllCounts.sort(function(a, b) { return b.count - a.count; });
+                    var _fpCutoff = Math.max(1, Math.ceil(_fpAllCounts.length * 0.25));
+                    var _fpMinCount = _fpAllCounts[Math.min(_fpCutoff - 1, _fpAllCounts.length - 1)].count;
+                    _fpAllCounts.forEach(function(e) {
+                        if (e.count >= _fpMinCount && Object.keys(freePriorityBunks).length < _fpCutoff) {
+                            freePriorityBunks[e.bunk] = e.count;
+                        }
+                    });
+                }
                 if (Object.keys(freePriorityBunks).length > 0) {
                     window._brainFreePriorityBunks = freePriorityBunks;
-                    log('[BRAIN] Free-priority bunks: ' + Object.keys(freePriorityBunks).map(function(b) {
-                        return b + '(' + freePriorityBunks[b] + 'x)';
-                    }).join(', '));
+                    log('[BRAIN] Free-priority bunks (' + Object.keys(freePriorityBunks).length + '): ' +
+                        Object.keys(freePriorityBunks).map(function(b) {
+                            return b + '(' + freePriorityBunks[b] + 'x)';
+                        }).join(', '));
                 } else {
                     window._brainFreePriorityBunks = null;
                 }
@@ -13207,86 +13219,6 @@
         }
 
         // =====================================================================
-        // ★ BRAIN: FINAL GAP ABSORBER
-        // The POST-GAP micro-absorber runs during iterations and fixes 10-15min
-        // dead gaps by extending neighbors. But the final elite restore loads a
-        // schedule where those absorptions didn't happen. Run the same logic here
-        // on the final schedule so dead gaps between Shiur/Slush/Change are closed.
-        // Unlike the self-healing (which only extends sport/slot), this extends
-        // ANY block that isn't hard-fixed (swim/lunch/snack/dismissal/league/change).
-        // =====================================================================
-        (function _finalGapAbsorber() {
-            var HARD_FIXED_TYPES = { swim:1, lunch:1, snack:1, snacks:1, dismissal:1,
-                league:1, specialty_league:1, 'pre-change':1, 'post-change':1, change:1, trip:1 };
-            var fgaClosed = 0;
-
-            allGrades.forEach(function(grade) {
-                var div = divisions[grade] || divisions[String(grade)];
-                if (!div) return;
-                var fillMin = getMinFillable(grade) || 25;
-
-                getBunksForGrade(grade, divisions).forEach(function(bunk) {
-                    var tl = bunkTimelines[bunk];
-                    if (!tl || tl.length < 2) return;
-                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
-
-                    var changed = true, passes = 0;
-                    while (changed && passes < 10) {
-                        changed = false;
-                        passes++;
-                        for (var i = 0; i < tl.length - 1; i++) {
-                            var gapStart = tl[i].endMin;
-                            var gapEnd = tl[i + 1].startMin;
-                            var gapSize = gapEnd - gapStart;
-                            if (gapSize <= 0 || gapSize >= fillMin) continue;
-                            if (isInDeadZone(gapStart, gapEnd, grade)) continue;
-
-                            var prev = tl[i], next = tl[i + 1];
-                            var prevT = (prev.type || '').toLowerCase();
-                            var nextT = (next.type || '').toLowerCase();
-
-                            // Strategy A: extend prev rightward (if not hard-fixed and stays in period)
-                            if (!HARD_FIXED_TYPES[prevT] && staysInPeriod(prev.startMin, prev.endMin + gapSize, grade)) {
-                                prev.endMin += gapSize;
-                                fgaClosed++;
-                                changed = true;
-                                log('[FINAL-GAP] ' + bunk + ': extended "' + (prev.event || prevT) + '" +' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
-                                break;
-                            }
-
-                            // Strategy B: extend next leftward
-                            if (!HARD_FIXED_TYPES[nextT] && staysInPeriod(next.startMin - gapSize, next.endMin, grade)) {
-                                next.startMin -= gapSize;
-                                fgaClosed++;
-                                changed = true;
-                                log('[FINAL-GAP] ' + bunk + ': extended "' + (next.event || nextT) + '" -' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
-                                break;
-                            }
-
-                            // Strategy C: split between both
-                            if (!HARD_FIXED_TYPES[prevT] && !HARD_FIXED_TYPES[nextT]) {
-                                var givePrev = Math.floor(gapSize / 2 / 5) * 5;
-                                var giveNext = gapSize - givePrev;
-                                if (givePrev > 0 && giveNext > 0 &&
-                                    staysInPeriod(prev.startMin, prev.endMin + givePrev, grade) &&
-                                    staysInPeriod(next.startMin - giveNext, next.endMin, grade)) {
-                                    prev.endMin += givePrev;
-                                    next.startMin -= giveNext;
-                                    fgaClosed++;
-                                    changed = true;
-                                    log('[FINAL-GAP] ' + bunk + ': split gap ' + gapSize + 'min @' + gapStart + ' (' + givePrev + '/' + giveNext + ')');
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                });
-            });
-
-            if (fgaClosed > 0) log('[FINAL-GAP] ★ Absorbed ' + fgaClosed + ' dead gap(s) in final schedule');
-        })();
-
-        // =====================================================================
         // STEP 2.6 — VALIDATE
         // =====================================================================
         log('\n[STEP 2.6] Validating...');
@@ -13335,6 +13267,78 @@
         } else {
             log('[2.6] ✅ All durations within dMin/dMax');
         }
+
+        // ★ BRAIN: FINAL GAP ABSORBER
+        // Runs AFTER ensureTimelineIntegrity (which clamps to dMax) so our
+        // extensions aren't undone. Absorbs sub-fillMin dead gaps by extending
+        // adjacent non-hard-fixed blocks (specials like Shiur, Slush, etc.).
+        (function _finalGapAbsorber() {
+            var HARD_FIXED_TYPES = { swim:1, lunch:1, snack:1, snacks:1, dismissal:1,
+                league:1, specialty_league:1, 'pre-change':1, 'post-change':1, change:1, trip:1 };
+            var fgaClosed = 0;
+
+            allGrades.forEach(function(grade) {
+                var div = divisions[grade] || divisions[String(grade)];
+                if (!div) return;
+                var fillMin = getMinFillable(grade) || 25;
+
+                getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                    var tl = bunkTimelines[bunk];
+                    if (!tl || tl.length < 2) return;
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                    var changed = true, passes = 0;
+                    while (changed && passes < 10) {
+                        changed = false;
+                        passes++;
+                        for (var i = 0; i < tl.length - 1; i++) {
+                            var gapStart = tl[i].endMin;
+                            var gapEnd = tl[i + 1].startMin;
+                            var gapSize = gapEnd - gapStart;
+                            if (gapSize <= 0 || gapSize >= fillMin) continue;
+                            if (isInDeadZone(gapStart, gapEnd, grade)) continue;
+
+                            var prev = tl[i], next = tl[i + 1];
+                            var prevT = (prev.type || '').toLowerCase();
+                            var nextT = (next.type || '').toLowerCase();
+
+                            if (!HARD_FIXED_TYPES[prevT] && staysInPeriod(prev.startMin, prev.endMin + gapSize, grade)) {
+                                prev.endMin += gapSize;
+                                fgaClosed++;
+                                changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': extended "' + (prev.event || prevT) + '" +' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
+                                break;
+                            }
+
+                            if (!HARD_FIXED_TYPES[nextT] && staysInPeriod(next.startMin - gapSize, next.endMin, grade)) {
+                                next.startMin -= gapSize;
+                                fgaClosed++;
+                                changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': extended "' + (next.event || nextT) + '" -' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
+                                break;
+                            }
+
+                            if (!HARD_FIXED_TYPES[prevT] && !HARD_FIXED_TYPES[nextT]) {
+                                var givePrev = Math.floor(gapSize / 2 / 5) * 5;
+                                var giveNext = gapSize - givePrev;
+                                if (givePrev > 0 && giveNext > 0 &&
+                                    staysInPeriod(prev.startMin, prev.endMin + givePrev, grade) &&
+                                    staysInPeriod(next.startMin - giveNext, next.endMin, grade)) {
+                                    prev.endMin += givePrev;
+                                    next.startMin -= giveNext;
+                                    fgaClosed++;
+                                    changed = true;
+                                    log('[FINAL-GAP] ' + bunk + ': split gap ' + gapSize + 'min @' + gapStart + ' (' + givePrev + '/' + giveNext + ')');
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+
+            if (fgaClosed > 0) log('[FINAL-GAP] ★ Absorbed ' + fgaClosed + ' dead gap(s) in final schedule');
+        })();
 
         let validationPassed = true;
         allGrades.forEach(grade => {
