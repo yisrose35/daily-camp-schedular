@@ -759,12 +759,11 @@
             _subscriptionChannel = client.channel(channelName);
             
             _subscription = _subscriptionChannel
-                .on('postgres_changes', 
+                .on('postgres_changes',
                     {
                         event: '*',
                         schema: 'public',
-                        table: 'daily_schedules',
-                        filter: `camp_id=eq.${campId}`
+                        table: 'daily_schedules'
                     },
                     handleRealtimeChange
                 )
@@ -869,8 +868,16 @@
 
     function handleRealtimeChange(payload) {
         const myUserId = window.CampistryDB?.getUserId?.();
+        const myCampId = window.CampistryDB?.getCampId?.();
         const record = payload.new || payload.old || {};
         const eventType = payload.eventType;
+
+        // Client-side camp_id filter (server-side filter removed because
+        // DELETE events with default REPLICA IDENTITY lack camp_id in
+        // payload.old, causing them to be silently dropped).
+        if (record.camp_id && myCampId && record.camp_id !== myCampId) {
+            return;
+        }
 
         // For INSERT/UPDATE, skip if this is our own save bouncing back.
         // For DELETE, always process — scheduler_id on a deleted record
