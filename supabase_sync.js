@@ -400,8 +400,11 @@
                             allData[dateKey]._perBunkSlotsData = _cloudPbs;
                         }
                         localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                        log('☁️ Updated localStorage from cloud:',
-                            Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
+                        log('☁️ Cloud merge result:',
+                            cloudResult.recordCount, 'records,',
+                            Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks,',
+                            'divisionTimes grades:', Object.keys(_cloudDT || {}),
+                            'perBunkSlots grades:', Object.keys(_cloudPbs));
                     }
                 }
             }
@@ -414,7 +417,12 @@
         if (!_cloudEmpty) {
             forceHydrateFromLocalStorage(dateKey, forceOverwrite);
         }
-        
+
+        log('📊 Post-hydration state:',
+            'assignments:', Object.keys(window.scheduleAssignments || {}).length, 'bunks,',
+            'divisionTimes:', Object.keys(window.divisionTimes || {}),
+            'divisions:', Object.keys(window.divisions || {}));
+
         // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
         
