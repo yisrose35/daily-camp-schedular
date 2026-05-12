@@ -300,24 +300,69 @@ all[date].updated_at = new Date().toISOString();
     // ==========================================================
     window.eraseRotationHistory = async function() {
         var _role = window.AccessControl?.getCurrentRole?.();
-        if (_role === 'scheduler') {
-            alert('Only owners and admins can reset rotation history.');
-            return;
-        }
         if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('erase rotation history');
             return;
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SCHEDULER: Clear rotation history only for assigned divisions
+        // ═══════════════════════════════════════════════════════════════
+        if (_role === 'scheduler') {
+            var myDivisions = window.AccessControl?.getGeneratableDivisions?.() || [];
+            if (myDivisions.length === 0) { alert("You don't have any divisions assigned."); return; }
+            var myBunks = getBunksForDivisions(myDivisions);
+            if (!confirm('Reset rotation history for your divisions (' + myDivisions.join(', ') + ')?\n\nThis cannot be undone.')) return;
+
+            logAuditEvent('erase_rotation_history_partial', { divisions: myDivisions });
+            try {
+                console.log('🔄 Scheduler: erasing rotation history for', myDivisions);
+
+                // Clear rotation_counts for our bunks only
+                await window.RotationCloud?.clearForBunks?.(myBunks);
+
+                // Scrub rotationHistory.bunks for our bunks only
+                var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+                var bunkSet = new Set(myBunks);
+                Object.keys(_rotHist.bunks || {}).forEach(function(bk) {
+                    if (bunkSet.has(bk)) delete _rotHist.bunks[bk];
+                });
+                window.saveRotationHistory?.(_rotHist);
+
+                // Scrub historicalCounts for our bunks
+                var _hist = window.loadGlobalSettings?.('historicalCounts') || {};
+                Object.keys(_hist).forEach(function(bk) { if (bunkSet.has(bk)) delete _hist[bk]; });
+                window.saveGlobalSettings?.('historicalCounts', _hist);
+
+                // Scrub smartTileHistory for our bunks
+                var _smartHist = JSON.parse(localStorage.getItem(SMART_TILE_HISTORY_KEY) || '{}');
+                Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
+                safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
+                window.saveGlobalSettings?.('smartTileHistory', _smartHist);
+
+                console.log('✅ Scheduler rotation history cleared for', myBunks.length, 'bunks');
+                alert('Rotation history reset for your divisions!');
+                window.location.reload();
+            } catch (e) {
+                console.error('Failed to reset scheduler rotation history:', e);
+                alert('Error resetting history. Check console.');
+            }
+            return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // OWNER/ADMIN: Clear everything
+        // ═══════════════════════════════════════════════════════════════
         if (!confirm('Reset rotation history and League counters?\n\nThis action cannot be undone.')) return;
 
         logAuditEvent('erase_rotation_history');
         try {
             console.log("🔄 Erasing rotation history...");
-            
+
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_SPECIAL_HISTORY_KEY);
-            
+
             if (typeof window.clearCloudKeys === 'function') {
                 console.log("☁️ Clearing cloud keys for rotation history...");
                 await window.clearCloudKeys([
@@ -360,14 +405,103 @@ all[date].updated_at = new Date().toISOString();
     // ==========================================================
     window.startNewHalf = async function() {
         var _role = window.AccessControl?.getCurrentRole?.();
-        if (_role === 'scheduler') {
-            alert('Only owners and admins can start a new half.');
-            return;
-        }
         if (!window.AccessControl?.canEraseData?.()) {
             window.AccessControl?.showPermissionDenied?.('start new half');
             return;
         }
+
+        // ═══════════════════════════════════════════════════════════════
+        // SCHEDULER: Scoped new half — only their assigned divisions
+        // ═══════════════════════════════════════════════════════════════
+        if (_role === 'scheduler') {
+            var myDivisions = window.AccessControl?.getGeneratableDivisions?.() || [];
+            if (myDivisions.length === 0) { alert("You don't have any divisions assigned."); return; }
+            var myBunks = getBunksForDivisions(myDivisions);
+            var confirmed = confirm(
+                "🏕️ START NEW HALF for your divisions (" + myDivisions.join(', ') + ")\n\n" +
+                "This will reset:\n" +
+                "  ✓ Activity usage counters for your bunks\n" +
+                "  ✓ Rotation history for your bunks\n" +
+                "  ✓ Daily schedules for your divisions\n\n" +
+                "Other divisions will NOT be affected.\n\n" +
+                "Are you sure?"
+            );
+            if (!confirmed) return;
+
+            logAuditEvent('start_new_half_partial', { divisions: myDivisions });
+            try {
+                console.log('⭐ SCHEDULER NEW HALF for:', myDivisions);
+
+                // 1. Delete our bunks from all schedule records
+                var client = window.CampistryDB?.getClient?.() || window.supabase;
+                var campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
+                if (client && campId && myBunks.length > 0) {
+                    var { data: allRecords } = await client.from('daily_schedules').select('*').eq('camp_id', campId);
+                    for (var record of (allRecords || [])) {
+                        var scheduleData = record.schedule_data || {};
+                        var assignments = { ...(scheduleData.scheduleAssignments || {}) };
+                        var leagues = { ...(scheduleData.leagueAssignments || {}) };
+                        var modified = false;
+                        myBunks.forEach(function(bunk) {
+                            if (assignments[bunk] !== undefined) { delete assignments[bunk]; modified = true; }
+                            if (leagues[bunk] !== undefined) { delete leagues[bunk]; }
+                        });
+                        if (!modified) continue;
+                        if (Object.keys(assignments).length === 0) {
+                            await client.from('daily_schedules').delete().eq('id', record.id);
+                        } else {
+                            await client.from('daily_schedules')
+                                .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
+                                .eq('id', record.id);
+                        }
+                    }
+                }
+
+                // 2. Clear localStorage — remove only our bunks from each date
+                var allData = window.loadAllDailyData?.() || {};
+                Object.keys(allData).forEach(function(dk) {
+                    var dateData = allData[dk];
+                    if (!dateData) return;
+                    myBunks.forEach(function(bunk) {
+                        if (dateData.scheduleAssignments) delete dateData.scheduleAssignments[bunk];
+                        if (dateData.leagueAssignments) delete dateData.leagueAssignments[bunk];
+                    });
+                });
+                safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(allData));
+
+                // 3. Clear rotation counts for our bunks
+                await window.RotationCloud?.clearForBunks?.(myBunks);
+
+                // 4. Scrub local rotation history for our bunks
+                var bunkSet = new Set(myBunks);
+                var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+                Object.keys(_rotHist.bunks || {}).forEach(function(bk) { if (bunkSet.has(bk)) delete _rotHist.bunks[bk]; });
+                window.saveRotationHistory?.(_rotHist);
+
+                var _hist = window.loadGlobalSettings?.('historicalCounts') || {};
+                Object.keys(_hist).forEach(function(bk) { if (bunkSet.has(bk)) delete _hist[bk]; });
+                window.saveGlobalSettings?.('historicalCounts', _hist);
+
+                var _smartHist = JSON.parse(localStorage.getItem(SMART_TILE_HISTORY_KEY) || '{}');
+                Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
+                safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
+                window.saveGlobalSettings?.('smartTileHistory', _smartHist);
+
+                clearBunksFromGlobals(myBunks);
+
+                console.log('⭐ SCHEDULER NEW HALF COMPLETE');
+                alert('New half started for your divisions!\n\nReloading page...');
+                window.location.reload();
+            } catch (e) {
+                console.error('Failed to start new half:', e);
+                alert('Error starting new half. Check console.');
+            }
+            return;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // OWNER/ADMIN: Full new half
+        // ═══════════════════════════════════════════════════════════════
         const confirmed = confirm(
             "🏕️ START NEW HALF\n\n" +
             "This will reset:\n" +
@@ -384,13 +518,13 @@ all[date].updated_at = new Date().toISOString();
             "Are you sure you want to start a new half?"
         );
         if (!confirmed) return;
-        
+
         logAuditEvent('start_new_half');
         try {
             console.log("=".repeat(50));
             console.log("⭐ STARTING NEW HALF - Resetting Counters ⭐");
             console.log("=".repeat(50));
-            
+
             // Clear localStorage
             localStorage.removeItem(ROTATION_HISTORY_KEY);
             localStorage.removeItem(SMART_TILE_HISTORY_KEY);
@@ -398,10 +532,8 @@ all[date].updated_at = new Date().toISOString();
             localStorage.removeItem(LEAGUE_HISTORY_KEY);
             localStorage.removeItem(SPECIALTY_LEAGUE_HISTORY_KEY);
             localStorage.removeItem(DAILY_DATA_KEY);
-            
+
             // ★★★ CRITICAL: Directly delete all daily_schedules records from Supabase ★★★
-            // clearCloudKeys('daily_schedules') routes through saveGlobalSettings which skips
-            // the Supabase delete when given {} — we must hit the table directly.
             {
                 const client = window.CampistryDB?.getClient?.() || window.supabase;
                 const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
@@ -421,9 +553,9 @@ all[date].updated_at = new Date().toISOString();
                 console.log("☁️ Clearing cloud keys for new half...");
                 await window.clearCloudKeys([
                     'leagueRoundState',
-                    'leagueHistory',              // ★ Regular league history (gamesPerDate)
-                    'specialtyLeagueHistory',     // ★ Specialty league history
-                    'daily_schedules',            // ★ Clear saved schedules from cloud
+                    'leagueHistory',
+                    'specialtyLeagueHistory',
+                    'daily_schedules',
                     'manualUsageOffsets',
                     'historicalCounts',
                     'historicalCountedDates',
@@ -432,7 +564,6 @@ all[date].updated_at = new Date().toISOString();
                 ]);
                 console.log("☁️ Cloud keys cleared");
             } else {
-                // Fallback: Set empty objects
                 window.saveGlobalSettings?.('leagueRoundState', {});
                 window.saveGlobalSettings?.('leagueHistory', {});
                 window.saveGlobalSettings?.('specialtyLeagueHistory', {});
@@ -442,12 +573,12 @@ all[date].updated_at = new Date().toISOString();
                 window.saveGlobalSettings?.('historicalCountedDates', {});
                 window.saveGlobalSettings?.('smartTileHistory', {});
                 window.saveGlobalSettings?.('rotationHistory', { bunks: {}, leagues: {} });
-                
+
                 if (typeof window.forceSyncToCloud === 'function') {
                     await window.forceSyncToCloud();
                 }
             }
-            
+
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
 

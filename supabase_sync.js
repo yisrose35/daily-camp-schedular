@@ -362,7 +362,7 @@
     // Pulls cloud data and adds NEW bunks/divisionTimes without touching existing ones.
     // =========================================================================
 
-    async function additiveMergeFromCloud(dateKey) {
+    async function syncMergeFromCloud(dateKey) {
         if (!dateKey) dateKey = getCurrentDateKey();
         try {
             if (!window.ScheduleDB?.loadSchedule || !navigator.onLine) return;
@@ -372,22 +372,45 @@
 
             const cloudAssignments = cloudResult.data.scheduleAssignments || {};
             const localAssignments = window.scheduleAssignments || {};
-            let added = 0;
 
-            // Add bunks that exist in cloud but not locally
-            Object.keys(cloudAssignments).forEach(function(bunk) {
-                if (!localAssignments[bunk]) {
-                    localAssignments[bunk] = cloudAssignments[bunk];
-                    added++;
+            // Identify which bunks belong to the LOCAL user's live generation
+            // (they have _perBunkSlots). Those bunks are protected from overwrite.
+            var myBunks = new Set();
+            var localDT = window.divisionTimes || {};
+            Object.keys(localDT).forEach(function(grade) {
+                if (localDT[grade] && localDT[grade]._isPerBunk && localDT[grade]._perBunkSlots) {
+                    var divInfo = (window.divisions || {})[grade];
+                    if (divInfo && divInfo.bunks) {
+                        divInfo.bunks.forEach(function(b) { myBunks.add(b); });
+                    }
                 }
             });
+
+            var changed = false;
+
+            // Add or update remote bunks (skip our own live bunks)
+            Object.keys(cloudAssignments).forEach(function(bunk) {
+                if (myBunks.has(bunk)) return;
+                if (!localAssignments[bunk] || JSON.stringify(localAssignments[bunk]) !== JSON.stringify(cloudAssignments[bunk])) {
+                    localAssignments[bunk] = cloudAssignments[bunk];
+                    changed = true;
+                }
+            });
+
+            // Remove bunks that exist locally but NOT in cloud and are NOT ours
+            Object.keys(localAssignments).forEach(function(bunk) {
+                if (!myBunks.has(bunk) && !cloudAssignments[bunk]) {
+                    delete localAssignments[bunk];
+                    changed = true;
+                }
+            });
+
             window.scheduleAssignments = localAssignments;
 
-            // Merge divisionTimes — add grades that don't exist locally
+            // Merge divisionTimes — add/update grades that aren't ours
             var cloudDT = cloudResult.data.divisionTimes || {};
-            var localDT = window.divisionTimes || {};
             Object.keys(cloudDT).forEach(function(grade) {
-                if (!localDT[grade]) {
+                if (!localDT[grade] || !localDT[grade]._isPerBunk) {
                     localDT[grade] = cloudDT[grade];
                 }
             });
@@ -409,15 +432,15 @@
             if (window.unifiedTimes) allData[dateKey].unifiedTimes = window.unifiedTimes;
             localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
 
-            if (added > 0) {
-                log('Additive merge: added ' + added + ' new bunks from remote');
+            if (changed) {
+                log('Sync merge: schedule updated from remote');
                 ensureEmptyStateForUnscheduledDivisions();
                 if (window.updateTable) window.updateTable();
             } else {
-                log('Additive merge: no new bunks from remote');
+                log('Sync merge: no changes from remote');
             }
         } catch (e) {
-            logError('Additive merge failed:', e.message);
+            logError('Sync merge failed:', e.message);
         }
     }
 
@@ -773,47 +796,57 @@
 
     function handleRealtimeChange(payload) {
         const myUserId = window.CampistryDB?.getUserId?.();
-        
-        if (payload.new?.scheduler_id === myUserId) {
+        const record = payload.new || payload.old || {};
+        const eventType = payload.eventType;
+
+        if (record.scheduler_id === myUserId) {
             log('Ignoring own change');
             return;
         }
 
-        if (payload.new?.date_key !== _currentDateKey) {
-            log('Ignoring change for different date:', payload.new?.date_key);
+        if (record.date_key !== _currentDateKey) {
+            log('Ignoring change for different date:', record.date_key);
             return;
         }
 
-        log('Remote change received:', payload.eventType, 'from', payload.new?.scheduler_name);
+        log('Remote change received:', eventType, 'from', record.scheduler_name);
 
         _lastSyncTime = Date.now();
 
         notifyRemoteChange({
-            type: payload.eventType,
-            scheduler: payload.new?.scheduler_name || 'Unknown',
-            schedulerId: payload.new?.scheduler_id,
-            dateKey: payload.new?.date_key,
+            type: eventType,
+            scheduler: record.scheduler_name || 'Unknown',
+            schedulerId: record.scheduler_id,
+            dateKey: record.date_key,
             data: payload.new?.schedule_data,
             divisions: payload.new?.divisions
         });
 
-        showSyncToast(`📥 Update from ${payload.new?.scheduler_name || 'another scheduler'}`);
-        
+        var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
+        showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
+
+        // DELETE or UPDATE-with-removals: always do a full cloud reload so
+        // removed bunks disappear from the local view.
+        if (eventType === 'DELETE') {
+            log('Remote DELETE — full reload from cloud');
+            setTimeout(function() {
+                refreshMultiSchedulerView(_currentDateKey, true);
+            }, 500);
+            return;
+        }
+
         // ★★★ AUTO MODE GUARD: Additive merge when _perBunkSlots are live ★★★
         var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
         var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
 
         if (_isAutoMode && _hasLivePerBunk) {
-            // Don't do a full refresh (would wipe live _perBunkSlots), but DO
-            // pull remote data and additively merge NEW bunks/divisions so that
-            // schedules generated by other users for different grades appear.
-            log('Auto mode active — doing additive merge for remote bunks');
-            setTimeout(() => {
-                additiveMergeFromCloud(_currentDateKey);
+            log('Auto mode active — doing sync merge for remote changes');
+            setTimeout(function() {
+                syncMergeFromCloud(_currentDateKey);
             }, 500);
         } else {
             // Full refresh — safe, no per-bunk data to lose
-            setTimeout(() => {
+            setTimeout(function() {
                 refreshMultiSchedulerView(_currentDateKey, true);
             }, 500);
         }
