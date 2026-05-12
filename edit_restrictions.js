@@ -30,11 +30,12 @@
     // =========================================================================
 
     function _isOwnerOrAdmin() {
-        if (_currentRole === 'owner' || _currentRole === 'admin') return true;
+        // ★★★ v3.13: Scheduler has same permissions as admin — no edit restrictions ★★★
+        if (_currentRole === 'owner' || _currentRole === 'admin' || _currentRole === 'scheduler') return true;
         const acRole = window.AccessControl?.getCurrentRole?.();
-        if (acRole === 'owner' || acRole === 'admin') return true;
+        if (acRole === 'owner' || acRole === 'admin' || acRole === 'scheduler') return true;
         const lsRole = localStorage.getItem('campistry_role');
-        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        if (lsRole === 'owner' || lsRole === 'admin' || lsRole === 'scheduler') return true;
         return false;
     }
 

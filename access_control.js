@@ -31,7 +31,7 @@
 // Permission model:
 // - OWNER: Full access to everything
 // - ADMIN: Full access except delete camp data and invite users
-// - SCHEDULER: Edit only assigned divisions, view all (greyed out for others)
+// - SCHEDULER: Same as admin, but Generate is scoped to assigned divisions only
 // - VIEWER: View only, but can use Print Center and Camper Locator
 //
 // Division assignment methods (scheduler):
@@ -847,8 +847,8 @@
 
     function canEditDivision(divisionName) {
         if (!divisionName) return false;
-        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         return _editableDivisions.includes(divisionName);
@@ -856,8 +856,8 @@
 
     function canEditBunk(bunkName) {
         if (!bunkName) return false;
-        // ★★★ v3.12: Owner/Admin bypass — role is known before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass — schedulers have full edit access ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         
@@ -893,8 +893,8 @@
     }
 
     function canManageSubdivisions() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return false;
     }
@@ -915,8 +915,8 @@
 
     // ★★★ FIXED v3.6: Admin can now erase schedules/history ★★★
     function canEraseData() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return false;
     }
@@ -934,8 +934,8 @@
      * Owner and Admin can edit templates; Scheduler and Viewer cannot.
      */
     function canEditPrintTemplates() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized || !_currentRole) return false;
         return false;
     }
@@ -963,48 +963,51 @@
     }
 
     function canEditSetup() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        return _currentRole === ROLES.SCHEDULER;
+        return false;
     }
 
     function canEditFields() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canEditGlobalFields() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return false;
     }
 
     function canEditAnything() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         return _editableDivisions.length > 0;
     }
-    
+
     function canSave() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return _currentRole !== ROLES.VIEWER;
     }
 
     function canGenerateDivision(divisionName) {
-        return canEditDivision(divisionName);
+        // ★★★ v3.13: Scheduler can only generate assigned divisions ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (_currentRole === ROLES.SCHEDULER) return _editableDivisions.includes(divisionName);
+        return false;
     }
 
     function canRunGenerator() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         if (_currentRole === ROLES.VIEWER) return false;
         return _editableDivisions.length > 0;
@@ -1034,16 +1037,14 @@
     // =========================================================================
 
     function canAddFieldAvailability(divisionName) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
     }
 
     function canRemoveFieldAvailability(divisionName) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
-        if (_currentRole === ROLES.SCHEDULER) return canEditDivision(divisionName);
         return false;
     }
 
@@ -1063,11 +1064,10 @@
     // =========================================================================
 
     function getEditableDivisions() {
-        // ★★★ v3.11/v3.12 FIX: Owner/Admin always gets ALL current divisions dynamically ★★★
-        // _editableDivisions may be empty if window.divisions wasn't loaded at init time.
-        // The polling interval recalculates eventually, but there's a gap where
-        // getEditableDivisions() returns [] causing cells to render as non-editable.
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+        // ★★★ v3.13: Owner/Admin/Scheduler always gets ALL current divisions dynamically ★★★
+        // Schedulers now have full edit access to all divisions (same as admin).
+        // The only difference is generation — see getGeneratableDivisions().
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) {
             const allDivs = Object.keys(window.divisions || {});
             return allDivs.length > 0 ? allDivs : [..._editableDivisions];
         }
@@ -1075,13 +1075,18 @@
     }
 
     function getUserManagedDivisions() {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+        // ★★★ v3.13: Scheduler returns null (no restrictions) like admin ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) {
             return null;
         }
         return getEditableDivisions();
     }
 
     function getGeneratableDivisions() {
+        // ★★★ v3.13: Scheduler can only generate their assigned divisions ★★★
+        if (_currentRole === ROLES.SCHEDULER) {
+            return [..._editableDivisions];
+        }
         return getEditableDivisions();
     }
 
@@ -1151,7 +1156,7 @@
     }
 
     function isDivisionInUserSubdivisions(divisionName) {
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) {
             return true;
         }
         const userSubs = getUserSubdivisions();
@@ -1213,40 +1218,40 @@
         if (_currentRole === ROLES.ADMIN) {
             return 'Full editing access (except team management)';
         }
-        
+
         if (_currentRole === ROLES.VIEWER) {
             return 'View-only access (can print and lookup campers)';
         }
-        
+
         if (_currentRole === ROLES.SCHEDULER) {
             if (_editableDivisions.length === 0) {
-                return 'Scheduler (no divisions assigned - contact owner)';
+                return 'Full editing access (no divisions assigned for generation - contact owner)';
             }
-            
+
             let names = [];
-            
+
             if (_userSubdivisionDetails && _userSubdivisionDetails.length > 0) {
                 names = _userSubdivisionDetails.map(s => s.name);
             } else if (_directDivisionAssignments && _directDivisionAssignments.length > 0) {
                 if (_directDivisionAssignments.length <= 3) {
-                    return `Scheduler for ${_directDivisionAssignments.join(', ')}`;
+                    return `Full editing access — generates ${_directDivisionAssignments.join(', ')}`;
                 } else {
-                    return `Scheduler for ${_directDivisionAssignments.length} divisions`;
+                    return `Full editing access — generates ${_directDivisionAssignments.length} divisions`;
                 }
             } else if (_userSubdivisionIds && _userSubdivisionIds.length > 0) {
                 const subs = _subdivisions.filter(s => _userSubdivisionIds.includes(s.id));
                 names = subs.map(s => s.name);
             }
-            
+
             if (names.length === 0) {
-                return 'Scheduler (no divisions assigned)';
+                return 'Full editing access (no divisions assigned for generation)';
             } else if (names.length === 1) {
-                return `Scheduler for ${names[0]}`;
+                return `Full editing access — generates ${names[0]}`;
             } else if (names.length === 2) {
-                return `Scheduler for ${names[0]} and ${names[1]}`;
+                return `Full editing access — generates ${names[0]} and ${names[1]}`;
             } else {
                 const last = names.pop();
-                return `Scheduler for ${names.join(', ')}, and ${last}`;
+                return `Full editing access — generates ${names.join(', ')}, and ${last}`;
             }
         }
         
@@ -1271,7 +1276,7 @@
         const roleDescriptions = {
             owner: 'Full access to all features and team management',
             admin: 'Full editing access to all divisions (no team management)',
-            scheduler: 'Edit access to assigned divisions only',
+            scheduler: 'Full editing access — generates assigned divisions only',
             viewer: 'View-only access (can print and lookup campers)'
         };
         
@@ -1297,10 +1302,10 @@
             permissions.push({ icon: '🖨️', text: 'Print and export' });
             permissions.push({ icon: '🔒', text: 'Cannot manage team members' });
         } else if (_currentRole === ROLES.SCHEDULER) {
-            permissions.push({ icon: '✏️', text: `Edit ${_editableDivisions.length} division(s)` });
-            permissions.push({ icon: '👁️', text: 'View all schedules' });
+            permissions.push({ icon: '✏️', text: 'Edit all divisions and schedules' });
+            permissions.push({ icon: '⚡', text: `Generate ${_editableDivisions.length} assigned division(s)` });
             permissions.push({ icon: '🖨️', text: 'Print and export' });
-            permissions.push({ icon: '🎨', text: 'View print templates (cannot save)' });
+            permissions.push({ icon: '🔒', text: 'Cannot manage team members' });
         } else if (_currentRole === ROLES.VIEWER) {
             permissions.push({ icon: '👁️', text: 'View all schedules' });
             permissions.push({ icon: '🖨️', text: 'Print Center access' });
@@ -1426,17 +1431,16 @@
             descEl.style.color = '#1E40AF';
             descEl.textContent = 'Full editing access. Team management requires Owner role.';
         } else if (_currentRole === ROLES.SCHEDULER) {
-            const permText = getPermissionsText();
-            const editableDivsList = _editableDivisions.length > 0 
+            const generatableDivsList = _editableDivisions.length > 0
                 ? _editableDivisions.join(', ')
                 : 'None assigned';
-            
+
             banner.style.background = 'linear-gradient(135deg, #D1FAE5, #A7F3D0)';
             banner.style.borderColor = '#10B981';
             icon.textContent = '📅';
-            titleEl.textContent = permText;
+            titleEl.textContent = 'Scheduler Mode';
             descEl.style.color = '#065F46';
-            descEl.textContent = `Editable: ${editableDivsList}`;
+            descEl.textContent = `Full editing access. Generate scoped to: ${generatableDivsList}`;
         }
 
         textContainer.appendChild(titleEl);
@@ -1455,8 +1459,8 @@
     // =========================================================================
 
     function canEdit() {
-        // ★★★ v3.12: Owner/Admin bypass before _initialized ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
+        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
         if (!_initialized) return false;
         return canEditAnything();
     }
@@ -1513,7 +1517,7 @@
 
     function filterEditableBunks(bunks) {
         if (!Array.isArray(bunks)) return [];
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return bunks;
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return bunks;
         if (!_initialized) return [];
         if (!canEdit()) return [];
         return bunks.filter(b => canEditBunk(b));
@@ -1521,7 +1525,7 @@
 
     function filterEditableDivisions(divisionNames) {
         if (!Array.isArray(divisionNames)) return [];
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return divisionNames;
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return divisionNames;
         if (!_initialized) return [];
         if (!canEdit()) return [];
         return divisionNames.filter(d => canEditDivision(d));
@@ -1532,17 +1536,25 @@
     // =========================================================================
 
     function filterDivisionsForGeneration(requestedDivisions) {
+        // ★★★ v3.13: Check window.selectedDivisionsForGeneration as fallback ★★★
+        // The division selector sets this global before generation starts.
+        const selected = requestedDivisions ||
+            (window.selectedDivisionsForGeneration && window.selectedDivisionsForGeneration.length > 0
+                ? window.selectedDivisionsForGeneration
+                : null);
+
         if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) {
-            return requestedDivisions || Object.keys(window.divisions || {});
+            return selected || Object.keys(window.divisions || {});
         }
-        
-        const myDivisions = getEditableDivisions();
-        
-        if (!requestedDivisions || requestedDivisions.length === 0) {
-            return myDivisions;
+
+        // Scheduler uses assigned divisions for generation
+        const myGeneratableDivisions = getGeneratableDivisions();
+
+        if (!selected || selected.length === 0) {
+            return myGeneratableDivisions;
         }
-        
-        return requestedDivisions.filter(d => myDivisions.includes(d));
+
+        return selected.filter(d => myGeneratableDivisions.includes(d));
     }
 
     async function deleteMyDivisionsOnly(dateKey) {

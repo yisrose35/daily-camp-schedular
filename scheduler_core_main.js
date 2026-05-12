@@ -1183,30 +1183,33 @@
                 alert("No divisions assigned. Contact camp owner.");
                 return false;
             }
-            console.log(`[RBAC] ★ SCHEDULER RESTRICTION APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
+            console.log(`[RBAC] ★ DIVISION FILTER APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
         }
 // ★★★ v17.12: Set flag to prevent remote merges during generation ★★★
         window._generationInProgress = true;
 
        // ★★★ STEP 0: FULL DAILY SCHEDULE WIPE (RBAC-AWARE) ★★★
         // Before ANY generation, wipe today's schedule for the divisions being generated.
-        // Schedulers only wipe THEIR bunks. Owners/admins wipe everything.
+        // ★★★ v3.13: Partial wipe when generating a SUBSET of divisions (any role) ★★★
         // This prevents stale data (old leagues, ghost assignments) from bleeding in.
         {// ★ AUTO BUILD: Skip wipe — AutoBuildPrep already did a full wipe
             if (window._skipGenerationWipe) {
                 console.log('[STEP 0] ⏭️ Skipping wipe — AutoBuildPrep already wiped');
             } else {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            const role = window.AccessControl?.getCurrentRole?.() || 
+            const role = window.AccessControl?.getCurrentRole?.() ||
                         window.CampistryDB?.getRole?.() || 'owner';
-            const isScheduler = role === 'scheduler';
-            
-            console.log(`[STEP 0] ★ DAILY SCHEDULE WIPE for ${dateKey} (role: ${role})`);
+            const allDivisionKeys = Object.keys(window.divisions || {});
+            const isPartialGeneration = allowedDivisions &&
+                allowedDivisions.length > 0 &&
+                allowedDivisions.length < allDivisionKeys.length;
 
-            if (isScheduler) {
-                // ═══ SCHEDULER: Only wipe MY divisions' bunks ═══
-                const myDivisions = allowedDivisions || 
-                                    window.AccessControl?.getEditableDivisions?.() || [];
+            console.log(`[STEP 0] ★ DAILY SCHEDULE WIPE for ${dateKey} (role: ${role}, partial: ${isPartialGeneration})`);
+
+            if (isPartialGeneration) {
+                // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+                const myDivisions = allowedDivisions ||
+                                    window.AccessControl?.getGeneratableDivisions?.() || [];
                 const divisions = window.divisions || {};
                 const myBunks = new Set();
                 
@@ -1214,7 +1217,7 @@
                     (divisions[divName]?.bunks || []).forEach(b => myBunks.add(b));
                 });
                 
-                console.log(`[STEP 0] Scheduler mode: wiping ${myBunks.size} bunks from [${myDivisions.join(', ')}]`);
+                console.log(`[STEP 0] Partial mode (${role}): wiping ${myBunks.size} bunks from [${myDivisions.join(', ')}]`);
                 
                 // 0a. Clear only MY bunks from window globals
                 myBunks.forEach(bunk => {
@@ -1266,8 +1269,8 @@
                 }
                 
             } else {
-                // ═══ OWNER/ADMIN: Wipe everything ═══
-                console.log('[STEP 0] Owner/Admin mode: full wipe');
+                // ═══ FULL GENERATION: Wipe everything ═══
+                console.log('[STEP 0] Full generation mode: wiping all divisions');
                 
                 // 0a. Clear all window globals
                 window.scheduleAssignments = {};

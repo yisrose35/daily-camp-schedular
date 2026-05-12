@@ -835,7 +835,8 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // SCHEDULER: Delete only their divisions from ALL records
         // ═══════════════════════════════════════════════════════════════
-        if (role === 'scheduler') {
+        // ★★★ v3.13: Scheduler has admin permissions — uses admin erase path below ★★★
+        if (false) { // Legacy scheduler-only erase — kept for reference
             const myDivisions = window.AccessControl?.getEditableDivisions?.() || [];
             
             if (myDivisions.length === 0) {

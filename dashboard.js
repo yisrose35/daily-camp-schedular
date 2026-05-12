@@ -411,7 +411,7 @@
         
         welcomeSection.appendChild(roleBadge);
         
-        // For schedulers, update with subdivision names
+        // For schedulers, show assigned generation divisions
         if (userRole === 'scheduler' && membership?.subdivision_ids?.length > 0) {
             loadSubdivisionNamesForBadge(roleBadge);
         }
@@ -427,7 +427,7 @@
             if (subdivisions && subdivisions.length > 0) {
                 const names = subdivisions.map(s => s.name).join(', ');
                 badgeElement.innerHTML = `
-                    <span class="role-text">Scheduler for ${names}</span>
+                    <span class="role-text">Scheduler — generates ${names}</span>
                 `;
             }
         } catch (e) {
@@ -455,7 +455,7 @@
         } else if (userRole === 'viewer') {
             divisionsHtml = '<p style="color: var(--slate-500);">View-only access to all divisions</p>';
         } else if (userRole === 'scheduler') {
-            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — No restrictions</p>';
+            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — Full editing access (generate scoped to assigned divisions)</p>';
         }
         
         permissionsCard.innerHTML = `

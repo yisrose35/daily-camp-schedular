@@ -53,8 +53,8 @@
         // Get all divisions
         const allDivisions = Object.keys(window.divisions || {});
         
-        // Get editable divisions (based on access control)
-        const editableDivisions = window.AccessControl?.getEditableDivisions() || allDivisions;
+        // ★★★ v3.13: Use getGeneratableDivisions — schedulers generate assigned divisions only ★★★
+        const editableDivisions = window.AccessControl?.getGeneratableDivisions() || allDivisions;
         
         // Create modal
         const modal = document.createElement('div');
