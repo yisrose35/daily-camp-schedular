@@ -1178,7 +1178,7 @@
 
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
-            allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
+            allowedDivisions = await window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
             if (allowedDivisions.length === 0) {
                 alert("No divisions assigned. Contact camp owner.");
                 return false;

@@ -453,27 +453,74 @@
         });
     }
 
+    let _subdivisionResolutionDone = false;
+
     function setupDivisionChangeObserver() {
         setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
-            
-            // ★★★ FIX: Recalculate when divisions first become available ★★★
+            let recalculated = false;
+
             if (_lastDivisionsHash === '[]' && currentHash !== '[]') {
                 debugLog("window.divisions populated, recalculating editable divisions");
                 calculateEditableDivisions();
-                
-                // Dispatch event so UI can update
+                recalculated = true;
+
                 window.dispatchEvent(new CustomEvent('campistry-divisions-updated', {
                     detail: { editableDivisions: _editableDivisions }
                 }));
             }
-            // Also recalculate if divisions changed
             else if (currentHash !== _lastDivisionsHash && _lastDivisionsHash !== null) {
                 debugLog("window.divisions changed, recalculating editable divisions");
                 calculateEditableDivisions();
+                recalculated = true;
             }
-            
+
             _lastDivisionsHash = currentHash;
+
+            if (!_subdivisionResolutionDone &&
+                _currentRole === ROLES.SCHEDULER &&
+                _editableDivisions.length === 0 &&
+                _userSubdivisionIds.length > 0 &&
+                currentHash !== '[]') {
+                _subdivisionResolutionDone = true;
+                console.log("🔐 Observer: scheduler has subdivision IDs but no editable divisions — resolving now");
+                (async () => {
+                    try {
+                        const { data: subRows } = await window.supabase
+                            .from('subdivisions')
+                            .select('divisions')
+                            .in('id', _userSubdivisionIds);
+                        if (subRows) {
+                            const divs = new Set();
+                            subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                            if (divs.size > 0) {
+                                _directDivisionAssignments = [...divs];
+                                console.log("🔐 Observer resolved divisions:", _directDivisionAssignments);
+                                calculateEditableDivisions();
+                                if (_editableDivisions.length > 0) {
+                                    const warn = document.getElementById('no-access-warning');
+                                    if (warn) warn.remove();
+                                    window.dispatchEvent(new CustomEvent('campistry-access-loaded', {
+                                        detail: {
+                                            role: _currentRole,
+                                            editableDivisions: _editableDivisions,
+                                            subdivisions: _subdivisions,
+                                            isTeamMember: _isTeamMember,
+                                            userName: _userName,
+                                            campName: _campName,
+                                            userSubdivisionDetails: _userSubdivisionDetails,
+                                            userSubdivisionIds: _userSubdivisionIds,
+                                            directDivisionAssignments: _directDivisionAssignments
+                                        }
+                                    }));
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("🔐 Observer subdivision resolution failed:", e);
+                    }
+                })();
+            }
         }, 1000);
     }
 
@@ -1163,9 +1210,18 @@
     }
 
     function getGeneratableDivisions() {
-        // ★★★ v3.13: Scheduler can only generate their assigned divisions ★★★
         if (_currentRole === ROLES.SCHEDULER) {
-            return [..._editableDivisions];
+            if (_editableDivisions.length > 0) {
+                return [..._editableDivisions];
+            }
+            if (_directDivisionAssignments.length > 0) {
+                const allDivs = Object.keys(window.divisions || {});
+                if (allDivs.length > 0) {
+                    return allDivs.filter(d => _directDivisionAssignments.includes(d));
+                }
+                return [..._directDivisionAssignments];
+            }
+            return [];
         }
         return getEditableDivisions();
     }
@@ -1615,9 +1671,7 @@
     // SCHEDULER ENFORCEMENT
     // =========================================================================
 
-    function filterDivisionsForGeneration(requestedDivisions) {
-        // ★★★ v3.13: Check window.selectedDivisionsForGeneration as fallback ★★★
-        // The division selector sets this global before generation starts.
+    async function filterDivisionsForGeneration(requestedDivisions) {
         const selected = requestedDivisions ||
             (window.selectedDivisionsForGeneration && window.selectedDivisionsForGeneration.length > 0
                 ? window.selectedDivisionsForGeneration
@@ -1627,8 +1681,29 @@
             return selected || Object.keys(window.divisions || {});
         }
 
-        // Scheduler uses assigned divisions for generation
-        const myGeneratableDivisions = getGeneratableDivisions();
+        let myGeneratableDivisions = getGeneratableDivisions();
+
+        if (myGeneratableDivisions.length === 0 && _userSubdivisionIds.length > 0) {
+            console.log("🔐 filterDivisionsForGeneration: resolving subdivision IDs on demand");
+            try {
+                const { data: subRows } = await window.supabase
+                    .from('subdivisions')
+                    .select('divisions')
+                    .in('id', _userSubdivisionIds);
+                if (subRows) {
+                    const divs = new Set();
+                    subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                    if (divs.size > 0) {
+                        _directDivisionAssignments = [...divs];
+                        calculateEditableDivisions();
+                        myGeneratableDivisions = getGeneratableDivisions();
+                        console.log("🔐 On-demand resolution found:", myGeneratableDivisions);
+                    }
+                }
+            } catch (e) {
+                console.warn("🔐 On-demand subdivision resolution failed:", e);
+            }
+        }
 
         if (!selected || selected.length === 0) {
             return myGeneratableDivisions;
