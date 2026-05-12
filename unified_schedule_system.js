@@ -496,9 +496,7 @@ function disableBypassRBACView() {
 }
 
     function shouldShowDivision(divName) {
-    const role = window.AccessControl?.getCurrentRole?.();
-    if (role === 'owner' || role === 'admin') return true;
-    return window.AccessControl?.canAccessDivision?.(divName) ?? true;
+    return true;
 }
 
 function shouldHighlightBunk(bunkName) {
