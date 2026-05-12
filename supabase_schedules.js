@@ -501,14 +501,21 @@
      */
     function mergeSchedules(records) {
         if (!records || records.length === 0) return null;
-        
+
         const mergedAssignments = {};
         const mergedSegments = {};
         const mergedLeagues = {};
-        let mergedUnifiedTimes = [];  // ★★★ FIX: Track unifiedTimes ★★★
+        let mergedUnifiedTimes = [];
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
+
+        // Sort by updated_at ascending so the most recently saved record wins
+        records.sort((a, b) => {
+            const ta = a.updated_at || a.created_at || '';
+            const tb = b.updated_at || b.created_at || '';
+            return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
 
         records.forEach(record => {
             const data = record.schedule_data || {};
