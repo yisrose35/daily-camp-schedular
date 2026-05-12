@@ -233,6 +233,23 @@
                     _isTeamMember = true;
                     _userSubdivisionIds = dbSubIds;
                     _directDivisionAssignments = dbAssignedDivs;
+                    // Resolve subdivision UUIDs to division names if not already set
+                    if (_directDivisionAssignments.length === 0 && _userSubdivisionIds.length > 0) {
+                        try {
+                            const { data: subRows } = await window.supabase
+                                .from('subdivisions')
+                                .select('divisions')
+                                .in('id', _userSubdivisionIds);
+                            if (subRows) {
+                                const divs = new Set();
+                                subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                                _directDivisionAssignments = [...divs];
+                                console.log("🔐 Resolved subdivision divisions:", _directDivisionAssignments);
+                            }
+                        } catch (e) {
+                            console.warn("🔐 Could not resolve subdivision divisions:", e);
+                        }
+                    }
                     calculateEditableDivisions();
                     localStorage.setItem('campistry_role', _currentRole);
                     sessionStorage.removeItem('campistry_rbac_cache');
@@ -537,12 +554,30 @@
                 
                 if (_userSubdivisionIds.length > 0) {
                     console.log("🔐 User has subdivision assignments:", _userSubdivisionIds);
+                    // Resolve subdivision UUIDs to division names immediately so
+                    // calculateEditableDivisions works before background load
+                    if (_directDivisionAssignments.length === 0) {
+                        try {
+                            const { data: subRows } = await window.supabase
+                                .from('subdivisions')
+                                .select('divisions')
+                                .in('id', _userSubdivisionIds);
+                            if (subRows) {
+                                const divs = new Set();
+                                subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                                _directDivisionAssignments = [...divs];
+                                console.log("🔐 Resolved subdivision divisions:", _directDivisionAssignments);
+                            }
+                        } catch (e) {
+                            console.warn("🔐 Could not resolve subdivision divisions:", e);
+                        }
+                    }
                 } else if (_directDivisionAssignments.length > 0) {
                     console.log("🔐 User has direct division assignments:", _directDivisionAssignments);
                 } else if (_currentRole === ROLES.SCHEDULER) {
                     console.warn("🔐 ⚠️ SCHEDULER HAS NO DIVISION ASSIGNMENTS!");
                 }
-                
+
                 return;
             }
         } catch (e) {
@@ -725,8 +760,27 @@
                 if (_editableDivisions.length !== prevCount) {
                     console.log("🔐 Subdivision data refined permissions:", prevCount, "→", _editableDivisions.length, "divisions");
                     window.VisualRestrictions?.refresh?.();
+                    // Remove stale "no access" warning if divisions are now found
+                    if (_editableDivisions.length > 0) {
+                        const warn = document.getElementById('no-access-warning');
+                        if (warn) warn.remove();
+                    }
+                    // Re-dispatch access event so all UI components refresh
+                    window.dispatchEvent(new CustomEvent('campistry-access-loaded', {
+                        detail: {
+                            role: _currentRole,
+                            editableDivisions: _editableDivisions,
+                            subdivisions: _subdivisions,
+                            isTeamMember: _isTeamMember,
+                            userName: _userName,
+                            campName: _campName,
+                            userSubdivisionDetails: _userSubdivisionDetails,
+                            userSubdivisionIds: _userSubdivisionIds,
+                            directDivisionAssignments: _directDivisionAssignments
+                        }
+                    }));
                 }
-                
+
                 // Dispatch event so UI modules can update subdivision labels/colors
                 window.dispatchEvent(new CustomEvent('campistry-subdivisions-loaded', {
                     detail: { subdivisions: _subdivisions }
@@ -1836,6 +1890,22 @@
         }
 
         try {
+            // When subdivision_ids are updated, also sync assigned_divisions
+            // so the scheduler's permissions work immediately (before subdivisions
+            // table is loaded in the background).
+            if (updates.subdivision_ids && Array.isArray(updates.subdivision_ids)) {
+                const divNames = new Set();
+                for (const subId of updates.subdivision_ids) {
+                    const sub = _subdivisions.find(s => s.id === subId);
+                    if (sub && Array.isArray(sub.divisions)) {
+                        sub.divisions.forEach(d => divNames.add(d));
+                    }
+                }
+                if (divNames.size > 0) {
+                    updates.assigned_divisions = [...divNames];
+                }
+            }
+
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .update(updates)
