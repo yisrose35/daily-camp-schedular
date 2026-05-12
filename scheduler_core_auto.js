@@ -9766,70 +9766,129 @@
             freeHotspots: {},       // grade → [{ bunk, startMin, endMin }]
             deferredSpecials: {},   // grade → Set of special names to skip
             swimGradeOrder: null,   // override for Phase 2.3 grade ordering
-            poolShiftHints: {},     // grade → shiftDirection ('early'|'late') for swim time
+            poolShiftHints: {},     // grade → shiftDirection ('early'|'late'|'mid') for swim time
             _extendedOnce: false,
+            _bunkSwimMissing: {},   // bunk → count of iters where this bunk lost swim
+            _evictionTarget: null,  // grade to sacrifice for swim rescue (varies per iter)
+            _iterPhase: 'explore',  // 'explore' (0-14) or 'exploit' (15+)
+            _bestStructure: null,   // { gradeOrder, poolHints, deferred } from best iteration
+            _gapBunks: {},          // bunk → count of iters with unfillable gaps
 
             preIterStrategy: function(iter) {
                 if (iter < 1) return;
-
-                // ── Lever 1: Swim grade priority ──
-                // Grades that consistently fail swim get processed FIRST in Phase 2.3
-                var failGrades = [];
-                var successGrades = [];
                 var self = this;
-                allGrades.forEach(function(g) {
-                    if (self.swimFailures[g] >= 2) {
-                        failGrades.push({ grade: g, failures: self.swimFailures[g] });
-                    } else {
-                        successGrades.push(g);
-                    }
-                });
-                if (failGrades.length > 0) {
-                    failGrades.sort(function(a, b) { return b.failures - a.failures; });
-                    this.swimGradeOrder = failGrades.map(function(f) { return f.grade; }).concat(successGrades);
-                    log('[BRAIN] Swim priority: ' + this.swimGradeOrder.join(' → '));
-                } else {
+                this._iterPhase = iter < 15 ? 'explore' : 'exploit';
+
+                // ── EXPLORATION PHASE: try genuinely different structural decisions ──
+                // Each iteration band tries a different approach so the brain isn't
+                // stuck making the same Phase 2.3/2.3.5 decisions 25 times.
+
+                // ── Lever 1: Swim grade ordering (varies every iteration) ──
+                // Instead of waiting for failures to accumulate (which Phase 2.3.5
+                // rescue masks), proactively shuffle grade order using iter-based seed.
+                var gradeArr = allGrades.slice();
+                if (iter <= 2) {
+                    // Baseline: default order
                     this.swimGradeOrder = null;
+                } else if (this._iterPhase === 'explore') {
+                    // Fisher-Yates shuffle with iter-based seed
+                    var _seed = iter * 2654435761;
+                    for (var _si = gradeArr.length - 1; _si > 0; _si--) {
+                        _seed = (_seed * 1664525 + 1013904223) & 0x7fffffff;
+                        var _sj = _seed % (_si + 1);
+                        var _tmp = gradeArr[_si]; gradeArr[_si] = gradeArr[_sj]; gradeArr[_sj] = _tmp;
+                    }
+                    // Boost grades with swim failures to the front
+                    gradeArr.sort(function(a, b) {
+                        var af = self.swimFailures[a] || 0;
+                        var bf = self.swimFailures[b] || 0;
+                        if (af !== bf) return bf - af;
+                        return 0; // preserve shuffle for ties
+                    });
+                    this.swimGradeOrder = gradeArr;
+                    log('[BRAIN] Swim order (iter ' + iter + '): ' + gradeArr.join(' → '));
+                } else if (this._bestStructure && this._bestStructure.gradeOrder) {
+                    // Exploit: use the order from best iteration
+                    this.swimGradeOrder = this._bestStructure.gradeOrder;
                 }
 
-                // ── Lever 2: Special deferral for swim-starved grades ──
-                // When swim fails 3+ times for a grade, defer its lowest-priority special
-                // to free up timeline space for swim placement
-                allGrades.forEach(function(g) {
-                    if (self.swimFailures[g] >= 3 && self.specialFailures[g]) {
-                        var specials = Object.keys(self.specialFailures[g]);
-                        if (specials.length > 0 && (!self.deferredSpecials[g] || self.deferredSpecials[g].size === 0)) {
-                            // Pick the special that failed least (lowest priority to keep)
-                            specials.sort(function(a, b) {
-                                return (self.specialFailures[g][a] || 0) - (self.specialFailures[g][b] || 0);
-                            });
-                            if (!self.deferredSpecials[g]) self.deferredSpecials[g] = new Set();
-                            self.deferredSpecials[g].add(specials[0]);
-                            log('[BRAIN] Deferring special "' + specials[0] + '" for ' + g + ' (swim failed ' + self.swimFailures[g] + 'x)');
-                        }
-                    }
-                });
-
-                // ── Lever 3: Pool time shifting ──
-                // When a grade consistently blocks another's swim, hint that blocker
-                // should shift its swim to a different period
-                Object.keys(this.swimBlockers).forEach(function(failedGrade) {
-                    var blockers = self.swimBlockers[failedGrade];
-                    if (!blockers) return;
-                    Object.keys(blockers).forEach(function(blockerGrade) {
-                        if (blockers[blockerGrade] >= 2) {
-                            var currentShift = self.poolShiftHints[blockerGrade] || null;
-                            self.poolShiftHints[blockerGrade] = currentShift === 'early' ? 'late' : 'early';
-                            log('[BRAIN] Pool shift: ' + blockerGrade + ' → ' + self.poolShiftHints[blockerGrade] + ' (blocks ' + failedGrade + ' swim ' + blockers[blockerGrade] + 'x)');
+                // ── Lever 2: Pool time position (early/mid/late) ──
+                // Cycles through positions so swim lands in different period slots
+                var positions = ['early', 'mid', 'late'];
+                if (iter <= 2) {
+                    this.poolShiftHints = {};
+                } else if (this._iterPhase === 'explore') {
+                    // Every 3 iterations, shift all grades to a different pool position
+                    var posIdx = Math.floor(iter / 3) % 3;
+                    allGrades.forEach(function(g) {
+                        self.poolShiftHints[g] = positions[posIdx];
+                    });
+                    // Override: grades with high swim failure get the opposite of what's been tried
+                    allGrades.forEach(function(g) {
+                        if ((self.swimFailures[g] || 0) >= 2) {
+                            self.poolShiftHints[g] = positions[(posIdx + iter) % 3];
                         }
                     });
-                });
+                    log('[BRAIN] Pool positions: ' + allGrades.map(function(g) { return g + '=' + self.poolShiftHints[g]; }).join(', '));
+                } else if (this._bestStructure && this._bestStructure.poolHints) {
+                    this.poolShiftHints = JSON.parse(JSON.stringify(this._bestStructure.poolHints));
+                }
 
-                // ── Lever 4: Free-hotspot bunk priority ──
-                // Bunks that consistently get Free blocks should be solved earlier
-                // so they claim scarce fields before other bunks.
-                // Use top-25% worst offenders (not absolute threshold) so the boost
-                // is meaningful — if every bunk is boosted, no one is.
+                // ── Lever 3: Eviction target for Phase 2.3.5 ──
+                // Instead of always evicting the same grade for Trios rescue,
+                // try different sacrifice grades. The brain remembers which worked best.
+                if (iter <= 2) {
+                    this._evictionTarget = null;
+                } else if (this._iterPhase === 'explore') {
+                    // Rotate through grades that have enough bunks to sacrifice
+                    var evictCandidates = allGrades.filter(function(g) {
+                        return getBunksForGrade(g, divisions).length >= 3;
+                    });
+                    if (evictCandidates.length > 0) {
+                        this._evictionTarget = evictCandidates[iter % evictCandidates.length];
+                        log('[BRAIN] Eviction target: ' + this._evictionTarget + ' (iter ' + iter + ')');
+                    }
+                } else if (this._bestStructure) {
+                    this._evictionTarget = this._bestStructure.evictionTarget || null;
+                }
+
+                // ── Lever 4: Special deferral ──
+                // Aggressively defer large specials (80min+) for grades with swim/gap issues
+                if (iter <= 2) {
+                    this.deferredSpecials = {};
+                } else if (this._iterPhase === 'explore' && iter % 4 === 0) {
+                    // Every 4th iteration: defer largest specials for problem grades
+                    this.deferredSpecials = {};
+                    allGrades.forEach(function(g) {
+                        var gapCount = 0;
+                        Object.keys(self._gapBunks).forEach(function(b) {
+                            var bg = '';
+                            allGrades.forEach(function(gg) {
+                                getBunksForGrade(gg, divisions).forEach(function(bb) { if (String(bb) === b) bg = gg; });
+                            });
+                            if (bg === g) gapCount += self._gapBunks[b] || 0;
+                        });
+                        if (gapCount >= 3 || (self.swimFailures[g] || 0) >= 1) {
+                            if (!self.deferredSpecials[g]) self.deferredSpecials[g] = new Set();
+                            // Find the largest specials for this grade
+                            var todaySpecials = (window.todaysSpecials || []).filter(function(s) {
+                                return (s.grades || []).indexOf(g) >= 0 || (s.grade === g);
+                            });
+                            todaySpecials.sort(function(a, b) { return (b.duration || 0) - (a.duration || 0); });
+                            if (todaySpecials.length > 0 && (todaySpecials[0].duration || 0) >= 60) {
+                                self.deferredSpecials[g].add(todaySpecials[0].name || todaySpecials[0].event || '');
+                                log('[BRAIN] Deferring "' + (todaySpecials[0].name || todaySpecials[0].event) + '" (' + todaySpecials[0].duration + 'min) for ' + g);
+                            }
+                        }
+                    });
+                } else if (this._iterPhase === 'exploit' && this._bestStructure && this._bestStructure.deferred) {
+                    this.deferredSpecials = {};
+                    Object.keys(this._bestStructure.deferred).forEach(function(g) {
+                        self.deferredSpecials[g] = new Set(self._bestStructure.deferred[g]);
+                    });
+                }
+
+                // ── Lever 5: Free-hotspot bunk priority ──
                 var freePriorityBunks = {};
                 var _fpAllCounts = [];
                 Object.keys(this.freeHotspots).forEach(function(g) {
@@ -9841,6 +9900,10 @@
                     Object.keys(bunkCounts).forEach(function(bk) {
                         _fpAllCounts.push({ bunk: bk, count: bunkCounts[bk] });
                     });
+                });
+                // Also include bunks with persistent gaps
+                Object.keys(this._gapBunks).forEach(function(bk) {
+                    _fpAllCounts.push({ bunk: bk, count: self._gapBunks[bk] || 0 });
                 });
                 if (_fpAllCounts.length > 0) {
                     _fpAllCounts.sort(function(a, b) { return b.count - a.count; });
@@ -9864,21 +9927,21 @@
 
                 // Log strategy summary
                 var summary = [];
-                if (this.swimGradeOrder) summary.push('swim-order');
+                summary.push('phase=' + this._iterPhase);
+                if (this.swimGradeOrder) summary.push('swim-order=' + this.swimGradeOrder.slice(0, 3).join('→') + '…');
+                var poolHintStr = Object.keys(this.poolShiftHints).length > 0
+                    ? Object.values(this.poolShiftHints)[0] : null;
+                if (poolHintStr) summary.push('pool=' + poolHintStr);
+                if (this._evictionTarget) summary.push('evict=' + this._evictionTarget);
                 Object.keys(this.deferredSpecials).forEach(function(g) {
                     if (self.deferredSpecials[g] && self.deferredSpecials[g].size > 0) {
                         summary.push('defer-' + g + ':' + [...self.deferredSpecials[g]].join(','));
                     }
                 });
-                Object.keys(this.poolShiftHints).forEach(function(g) {
-                    summary.push('pool-' + g + ':' + self.poolShiftHints[g]);
-                });
                 if (Object.keys(freePriorityBunks).length > 0) {
                     summary.push('free-priority:' + Object.keys(freePriorityBunks).length + ' bunks');
                 }
-                if (summary.length > 0) {
-                    log('[BRAIN] ★ Strategy summary: ' + summary.join(' | '));
-                }
+                log('[BRAIN] ★ Strategy summary: ' + summary.join(' | '));
             },
 
             postIterAnalyze: function(timelines, freeEstimate, freeLocations, _todaysSwimmers) {
@@ -9913,10 +9976,12 @@
                     // Check if bunk was supposed to swim (use passed-in swimmers map)
                     if (_todaysSwimmers && _todaysSwimmers[grade] && _todaysSwimmers[grade].has(String(bunk)) && !hasSwim) {
                         gradeSwimOk[grade] = false;
+                        self._bunkSwimMissing[String(bunk)] = (self._bunkSwimMissing[String(bunk)] || 0) + 1;
                     }
 
-                    // Track dead gaps
+                    // Track dead gaps + unfillable gap bunks
                     tl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    var _bunkGapCount = 0;
                     for (var i = 0; i < tl.length - 1; i++) {
                         var gap = tl[i + 1].startMin - tl[i].endMin;
                         if (gap > 0 && gap < 25) {
@@ -9924,7 +9989,11 @@
                             self.deadGapZones[grade].push({
                                 bunk: bunk, startMin: tl[i].endMin, endMin: tl[i + 1].startMin, gap: gap
                             });
+                            _bunkGapCount++;
                         }
+                    }
+                    if (_bunkGapCount > 0) {
+                        self._gapBunks[String(bunk)] = (self._gapBunks[String(bunk)] || 0) + _bunkGapCount;
                     }
                 });
 
@@ -10076,6 +10145,23 @@
             });
 
             iterWarnings.forEach(w => { if (w.type === 'placement_failure') { score += 500; bd.missingLayers += 500; } if (w.type === 'overlap') { score += 1000; bd.gaps += 1000; } });
+
+            // ★ BRAIN: Swim-missing penalty — bunks that should swim but don't get a massive
+            // penalty so the elite pool strongly prefers swim-complete schedules.
+            if (todaysSwimmers) {
+                allGrades.forEach(function(_smG) {
+                    if (!todaysSwimmers[_smG] || todaysSwimmers[_smG].size === 0) return;
+                    getBunksForGrade(_smG, divisions).forEach(function(_smB) {
+                        if (!todaysSwimmers[_smG].has(String(_smB))) return;
+                        var _smTl = timelines[_smB] || [];
+                        var _smHas = _smTl.some(function(b) { return (b.type || '').toLowerCase() === 'swim'; });
+                        if (!_smHas) {
+                            score += 200000;
+                            bd.missingLayers += 200000;
+                        }
+                    });
+                });
+            }
 
             // ★ v9.3 LEVEL 3: SCHEDULE QUALITY SCORING
             Object.entries(timelines).forEach(([bunk, timeline]) => {
@@ -11046,11 +11132,13 @@
                                 _p23AllFree.push({ period: _p23P, start: _p23tryS, score: _p23Score });
                             }
                         }
-                        // Pick best: highest score first, then earliest/latest per brain hint
+                        // Pick best: highest score first, then position per brain hint
                         var _p23PoolShift = adaptiveBrain.getPoolShift(grade);
+                        var _p23MidPoint = (_p23WinStart + _p23WinEnd) / 2;
                         _p23AllFree.sort(function(a, b) {
                             if (b.score !== a.score) return b.score - a.score;
                             if (_p23PoolShift === 'late') return b.start - a.start;
+                            if (_p23PoolShift === 'mid') return Math.abs(a.start - _p23MidPoint) - Math.abs(b.start - _p23MidPoint);
                             return a.start - b.start;
                         });
                         var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[0].period : null;
@@ -11284,8 +11372,13 @@
                     });
 
                     // For each missing bunk, try to evict a blocker's staggered swim bunk
-                    // Priority: evict from grade with MOST bunks swimming (least impact per bunk lost)
+                    // Priority: brain's eviction target first, then grade with MOST bunks (least impact)
+                    var _brainEvictTarget = adaptiveBrain._evictionTarget;
                     var blockerGrades = Object.keys(blockerSlots).sort(function(a, b) {
+                        if (_brainEvictTarget) {
+                            if (a === _brainEvictTarget && b !== _brainEvictTarget) return -1;
+                            if (b === _brainEvictTarget && a !== _brainEvictTarget) return 1;
+                        }
                         return blockerSlots[b].length - blockerSlots[a].length;
                     });
 
@@ -13193,6 +13286,20 @@
                 bestWarnings = [...warnings];
                 staleCount = 0;
                 _lnsBlockQuality = computeBlockQuality(bestTimelines);
+                // ★ BRAIN: Save the structural decisions that led to this best score
+                var _deferSnapshot = {};
+                Object.keys(adaptiveBrain.deferredSpecials).forEach(function(g) {
+                    if (adaptiveBrain.deferredSpecials[g] && adaptiveBrain.deferredSpecials[g].size > 0) {
+                        _deferSnapshot[g] = [...adaptiveBrain.deferredSpecials[g]];
+                    }
+                });
+                adaptiveBrain._bestStructure = {
+                    gradeOrder: adaptiveBrain.swimGradeOrder ? adaptiveBrain.swimGradeOrder.slice() : null,
+                    poolHints: JSON.parse(JSON.stringify(adaptiveBrain.poolShiftHints)),
+                    evictionTarget: adaptiveBrain._evictionTarget,
+                    deferred: _deferSnapshot
+                };
+                log('[BRAIN] ★ New best! Saving structural decisions for exploitation phase');
             } else staleCount++;
 
             // ★ v14.0: Update elite pool with this iteration's result
