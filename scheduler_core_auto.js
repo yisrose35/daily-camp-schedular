@@ -9357,6 +9357,7 @@
             // (Slush 10min, Neranitas 20min) or rotation events that fit exactly.
             // ══════════════════════════════════════════════════════════════════════
             var _mfCount = 0;
+            var _mfGapFill = (window._brainStrategy || {}).gapFillMode || 'moderate';
             for (var _mfi = 0; _mfi < allBunkIds.length; _mfi++) {
                 var _mfBunk = allBunkIds[_mfi];
                 var _mfMeta = bunkMeta[_mfBunk];
@@ -9372,16 +9373,37 @@
                     if (_mfEvt !== 'free' && _mfType !== 'free') continue;
                     var _mfDur = _mfBlk.endMin - _mfBlk.startMin;
                     if (_mfDur <= 0 || _mfDur >= _mfFillMin) continue;
-                    // Try to find a short special that fits exactly
                     var _mfActivity = pickFillActivity(_mfDur, _mfGrade, _mfBunk);
                     if (_mfActivity) {
                         var _mfActDur = getSpecialDuration(_mfActivity, activityProperties, globalSettings) || _mfDur;
                         if (_mfActDur <= _mfDur) {
+                            // Conservative: only accept exact-duration fits
+                            if (_mfGapFill === 'conservative' && _mfActDur < _mfDur) continue;
+                            var _mfOrigEnd = _mfBlk.endMin;
                             _mfBlk.event = _mfActivity;
                             _mfBlk.type = 'slot';
                             _mfBlk._source = 'micro-fill';
                             if (_mfActDur < _mfDur) {
                                 _mfBlk.endMin = _mfBlk.startMin + _mfActDur;
+                                // Aggressive: try to absorb remainder into adjacent non-pinned block
+                                var _mfAbsorbed = false;
+                                if (_mfGapFill === 'aggressive' && _mfj + 1 < _mfTmpl.length) {
+                                    var _mfNext = _mfTmpl[_mfj + 1];
+                                    if (_mfNext && !_mfNext._fixed && !_mfNext._pinned && !_mfNext._league) {
+                                        var _mfRemDur = _mfOrigEnd - _mfBlk.endMin;
+                                        _mfNext.startMin = _mfBlk.endMin;
+                                        _mfAbsorbed = true;
+                                        log('[MICRO-FILL] aggressive: absorbed ' + _mfRemDur + 'min remainder into next block');
+                                    }
+                                }
+                                if (!_mfAbsorbed) {
+                                    var _mfRemainder = {
+                                        event: 'Free', type: 'free',
+                                        startMin: _mfBlk.endMin, endMin: _mfOrigEnd,
+                                        _source: 'micro-fill-remainder'
+                                    };
+                                    _mfTmpl.splice(_mfj + 1, 0, _mfRemainder);
+                                }
                             }
                             _mfCount++;
                             log('[MICRO-FILL] bunk=' + _mfBunk + ' replaced Free with "' +
@@ -9391,7 +9413,7 @@
                     }
                 }
             }
-            if (_mfCount > 0) log('[MICRO-FILL] ★ replaced ' + _mfCount + ' sub-dMin Free block(s) with real activities');
+            if (_mfCount > 0) log('[MICRO-FILL] ★ (' + _mfGapFill + ') replaced ' + _mfCount + ' sub-dMin Free block(s)');
 
             // ══════════════════════════════════════════════════════════════════════
             // ★ COMPONENT 3 — COVERAGE VALIDATION (budget-first assertion)
@@ -9846,6 +9868,11 @@
         var adaptiveBrain = {
             swimFailures: {},       // grade → count of iterations where swim failed
             swimBlockers: {},       // grade → { blockerGrade → count } — who blocks pool
+            _iterResults: [],       // per-iteration { freeCount, freeByBunk, strategy }
+            _chronicFreeBunks: {},  // bunk → count if Free in >60% of iterations
+            _candidateDiversity: 0, // % of blocks where solver tries non-top candidate
+            _gapFillMode: 'moderate', // micro-fill aggression level
+            _exploreBand: null,     // focused exploration dimension
             specialFailures: {},    // grade → { specialName → count }
             specialPlacementFails: {}, // specialName → count of failed placements
             deadGapZones: {},       // grade → [{ bunk, startMin, endMin, gap }]
@@ -10001,6 +10028,12 @@
                         }
                     });
                 }
+                // Boost chronic-Free bunks into priority (they fail >60% of iterations)
+                if (this._chronicFreeBunks) {
+                    Object.keys(this._chronicFreeBunks).forEach(function(bk) {
+                        freePriorityBunks[bk] = Math.max(freePriorityBunks[bk] || 0, self._chronicFreeBunks[bk] * 2);
+                    });
+                }
                 if (Object.keys(freePriorityBunks).length > 0) {
                     window._brainFreePriorityBunks = freePriorityBunks;
                     log('[BRAIN] Free-priority bunks (' + Object.keys(freePriorityBunks).length + '): ' +
@@ -10111,6 +10144,65 @@
                 this._bunkSpecialsOrder = bunkSpecialsOrders[_bsoIdx];
                 summary.push('bunk-spec=' + this._bunkSpecialsOrder);
 
+                // ── Lever 11: Candidate diversity % ──
+                // Controls how often the solver skips the top-scored candidate
+                // to try a close alternative — breaks out of local optima.
+                var diversityLevels = [0, 10, 20, 35];
+                var _cdIdx;
+                if (iter <= 2) {
+                    _cdIdx = 0;
+                } else if (this._iterPhase === 'explore') {
+                    _cdIdx = Math.floor(iter / 3) % diversityLevels.length;
+                } else if (this._bestStructure && this._bestStructure.candidateDiversity != null) {
+                    _cdIdx = this._bestStructure.candidateDiversity;
+                } else {
+                    _cdIdx = 0;
+                }
+                this._candidateDiversity = diversityLevels[_cdIdx];
+                summary.push('diversity=' + this._candidateDiversity + '%');
+
+                // ── Lever 12: Gap-fill aggression ──
+                // Controls MICRO-FILL and enforcement: 'conservative' (exact-fit only),
+                // 'moderate' (allow short remainder), 'aggressive' (stretch/shrink adjacent).
+                var gapFillModes = ['moderate', 'conservative', 'aggressive'];
+                var _gfIdx;
+                if (iter <= 2) {
+                    _gfIdx = 0;
+                } else if (this._iterPhase === 'explore') {
+                    _gfIdx = iter % gapFillModes.length;
+                } else if (this._bestStructure && this._bestStructure.gapFillMode != null) {
+                    _gfIdx = this._bestStructure.gapFillMode;
+                } else {
+                    _gfIdx = 0;
+                }
+                this._gapFillMode = gapFillModes[_gfIdx];
+                summary.push('gap-fill=' + this._gapFillMode);
+
+                // ── Lever 13: Exploration band (structured exploration) ──
+                // Instead of varying everything randomly, each band focuses on one dimension:
+                // 'structural' (swim/pool/eviction), 'ordering' (sort/specials), 'scoring' (field/duration/diversity)
+                var expBands = ['structural', 'ordering', 'scoring'];
+                if (this._iterPhase === 'explore' && iter > 2) {
+                    this._exploreBand = expBands[Math.floor(iter / 5) % expBands.length];
+                } else {
+                    this._exploreBand = null;
+                }
+                if (this._exploreBand) summary.push('band=' + this._exploreBand);
+
+                // ★ Build cross-iteration failure memory for solver
+                var _failMem = {};
+                if (iter > 3) {
+                    var _freeHots = this.freeHotspots || {};
+                    Object.keys(_freeHots).forEach(function(grade) {
+                        var spots = _freeHots[grade] || [];
+                        spots.forEach(function(fl) {
+                            var fmKey = fl.bunk + '|' + fl.startMin + '-' + fl.endMin;
+                            if (!_failMem[fmKey]) _failMem[fmKey] = { count: 0, failedFields: {} };
+                            _failMem[fmKey].count++;
+                        });
+                    });
+                }
+
                 // ★ Publish full strategy to window for solver to read
                 window._brainStrategy = {
                     solverSort: this._solverSortStrategy,
@@ -10118,6 +10210,10 @@
                     fieldBias: this._fieldBias,
                     specialsSort: this._specialsSortStrategy,
                     bunkSpecialsOrder: this._bunkSpecialsOrder,
+                    candidateDiversity: this._candidateDiversity,
+                    gapFillMode: this._gapFillMode,
+                    exploreBand: this._exploreBand,
+                    failureMemory: _failMem,
                     iterPhase: this._iterPhase,
                     iter: iter
                 };
@@ -10213,6 +10309,51 @@
                     freeLocations.forEach(function(fl) {
                         if (!self.freeHotspots[fl.grade]) self.freeHotspots[fl.grade] = [];
                         self.freeHotspots[fl.grade].push(fl);
+                    });
+                }
+
+                // ★ Track per-bunk Free block counts for strategy correlation
+                if (!this._iterResults) this._iterResults = [];
+                var _iterFreeByBunk = {};
+                var _iterTotalFree = 0;
+                Object.keys(timelines).forEach(function(bunk) {
+                    var tl = timelines[bunk] || [];
+                    var fc = 0;
+                    tl.forEach(function(b) {
+                        var evt = (b.event || '').toLowerCase();
+                        var typ = (b.type || '').toLowerCase();
+                        if (evt === 'free' || typ === 'free') fc++;
+                    });
+                    if (fc > 0) _iterFreeByBunk[bunk] = fc;
+                    _iterTotalFree += fc;
+                });
+                this._iterResults.push({
+                    freeCount: _iterTotalFree,
+                    freeByBunk: _iterFreeByBunk,
+                    strategy: {
+                        solverSort: this._solverSortStrategy,
+                        fieldBias: this._fieldBias,
+                        diversity: this._candidateDiversity,
+                        gapFill: this._gapFillMode,
+                        bunkSpec: this._bunkSpecialsOrder,
+                        band: this._exploreBand
+                    }
+                });
+
+                // ★ Identify chronically-Free bunks (Free in >60% of iterations)
+                if (this._iterResults.length >= 5) {
+                    var _chronicThreshold = Math.ceil(this._iterResults.length * 0.6);
+                    if (!this._chronicFreeBunks) this._chronicFreeBunks = {};
+                    var _bunkFreeCounts = {};
+                    this._iterResults.forEach(function(ir) {
+                        Object.keys(ir.freeByBunk).forEach(function(b) {
+                            _bunkFreeCounts[b] = (_bunkFreeCounts[b] || 0) + 1;
+                        });
+                    });
+                    Object.keys(_bunkFreeCounts).forEach(function(b) {
+                        if (_bunkFreeCounts[b] >= _chronicThreshold) {
+                            self._chronicFreeBunks[b] = _bunkFreeCounts[b];
+                        }
                     });
                 }
             },
@@ -10964,7 +11105,9 @@
         window._brainStrategy = {
             solverSort: 'time-sweep', durationPref: 'balanced',
             fieldBias: 'rotation', specialsSort: 'narrowness',
-            bunkSpecialsOrder: 'draft',
+            bunkSpecialsOrder: 'draft', candidateDiversity: 0,
+            gapFillMode: 'moderate', exploreBand: null,
+            failureMemory: {},
             iterPhase: 'explore', iter: 0
         };
 
@@ -13572,7 +13715,9 @@
                     solverSort: _slStrats.indexOf(adaptiveBrain._solverSortStrategy),
                     durationPref: _dpStrats.indexOf(adaptiveBrain._durationPref),
                     fieldBias: _fbStrats.indexOf(adaptiveBrain._fieldBias),
-                    bunkSpecialsOrder: _bsoStrats.indexOf(adaptiveBrain._bunkSpecialsOrder)
+                    bunkSpecialsOrder: _bsoStrats.indexOf(adaptiveBrain._bunkSpecialsOrder),
+                    candidateDiversity: [0, 10, 20, 35].indexOf(adaptiveBrain._candidateDiversity),
+                    gapFillMode: ['moderate', 'conservative', 'aggressive'].indexOf(adaptiveBrain._gapFillMode)
                 };
                 log('[BRAIN] ★ New best! Saving structural decisions for exploitation phase');
             } else staleCount++;
@@ -13743,8 +13888,41 @@
                 if (_bs.durationPref != null) _bsParts.push('duration=' + ['balanced','prefer-short','prefer-long'][_bs.durationPref]);
                 if (_bs.fieldBias != null) _bsParts.push('fields=' + ['rotation','spread','concentrate'][_bs.fieldBias]);
                 if (_bs.bunkSpecialsOrder != null) _bsParts.push('bunk-spec=' + ['draft','longest-first','shortest-first','most-failed-first'][_bs.bunkSpecialsOrder]);
+                if (_bs.candidateDiversity != null) _bsParts.push('diversity=' + [0,10,20,35][_bs.candidateDiversity] + '%');
+                if (_bs.gapFillMode != null) _bsParts.push('gap-fill=' + ['moderate','conservative','aggressive'][_bs.gapFillMode]);
                 if (_bsParts.length > 0) _brainSummary.push('best-structure: ' + _bsParts.join(', '));
             }
+            // Report chronic-Free bunks
+            if (adaptiveBrain._chronicFreeBunks && Object.keys(adaptiveBrain._chronicFreeBunks).length > 0) {
+                _brainSummary.push('chronic-free: ' + Object.entries(adaptiveBrain._chronicFreeBunks)
+                    .sort(function(a, b) { return b[1] - a[1]; })
+                    .map(function(e) { return e[0] + '(' + e[1] + '/' + (adaptiveBrain._iterResults || []).length + ')'; })
+                    .join(', '));
+            }
+
+            // Report strategy correlation: which strategy dimensions had the best/worst outcomes
+            if (adaptiveBrain._iterResults && adaptiveBrain._iterResults.length >= 5) {
+                var _stratCorr = {};
+                adaptiveBrain._iterResults.forEach(function(ir) {
+                    Object.keys(ir.strategy).forEach(function(dim) {
+                        var val = ir.strategy[dim];
+                        if (val == null) return;
+                        var key = dim + '=' + val;
+                        if (!_stratCorr[key]) _stratCorr[key] = { total: 0, count: 0 };
+                        _stratCorr[key].total += ir.freeCount;
+                        _stratCorr[key].count++;
+                    });
+                });
+                var _corrPairs = Object.entries(_stratCorr)
+                    .filter(function(e) { return e[1].count >= 2; })
+                    .map(function(e) { return { key: e[0], avg: (e[1].total / e[1].count).toFixed(1) }; })
+                    .sort(function(a, b) { return a.avg - b.avg; });
+                if (_corrPairs.length >= 2) {
+                    _brainSummary.push('best-strat: ' + _corrPairs[0].key + '(avg ' + _corrPairs[0].avg + ' free)');
+                    _brainSummary.push('worst-strat: ' + _corrPairs[_corrPairs.length - 1].key + '(avg ' + _corrPairs[_corrPairs.length - 1].avg + ' free)');
+                }
+            }
+
             if (_brainSummary.length > 0) {
                 log('[BRAIN] ★ Final report: ' + _brainSummary.join(' | '));
             } else {

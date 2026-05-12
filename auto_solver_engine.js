@@ -999,12 +999,24 @@
                 // ★ Brain field bias: adjust scoring to spread or concentrate field usage
                 const _brainFieldBias = (window._brainStrategy || {}).fieldBias || 'rotation';
                 if (_brainFieldBias === 'spread') {
-                    // Prefer empty fields (no existing occupants) to spread activity across more fields
                     if (existing.length === 0) score -= 800;
                     else score += existing.length * 400;
                 } else if (_brainFieldBias === 'concentrate') {
-                    // Prefer busy fields (reuse same fields, reduce cross-field conflicts)
                     if (existing.length > 0) score -= 600;
+                }
+
+                // ★ Brain failure memory: penalize candidates on fields where this
+                // bunk+timeWindow has consistently failed across iterations
+                const _brainFailMem = (window._brainStrategy || {}).failureMemory;
+                if (_brainFailMem) {
+                    const fmKey = bunk + '|' + startMin + '-' + endMin;
+                    const fmData = _brainFailMem[fmKey];
+                    if (fmData && fmData.failedFields) {
+                        const fnKey = normName(cand.field);
+                        if (fmData.failedFields[fnKey]) {
+                            score += fmData.failedFields[fnKey] * 200;
+                        }
+                    }
                 }
 
                 scored.push({ cand, score });
@@ -1016,6 +1028,21 @@
                 const bq = (b.cand?.qualityRank ?? b.cand?.field?.qualityRank ?? 999);
                 return aq - bq;
             });
+
+            // ★ Brain candidate diversity: occasionally skip top pick to escape local optima
+            const _brainDiversity = (window._brainStrategy || {}).candidateDiversity || 0;
+            if (_brainDiversity > 0 && scored.length > 1 && forceStartCandidate < 0) {
+                const _divHash = ((blockIdx * 2654435761) ^ ((window._brainStrategy || {}).iter || 0)) >>> 0;
+                if ((_divHash % 100) < _brainDiversity) {
+                    const topScore = scored[0].score;
+                    let altIdx = 1;
+                    while (altIdx < scored.length && scored[altIdx].score <= topScore + 500) altIdx++;
+                    if (altIdx > 1) {
+                        const pick2 = 1 + (_divHash % (altIdx - 1));
+                        scored.unshift(scored.splice(pick2, 1)[0]);
+                    }
+                }
+            }
 
             // Determine starting candidate index (for backtracking retries)
             let startCandIdx = 0;
