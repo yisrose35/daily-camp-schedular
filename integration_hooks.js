@@ -2164,6 +2164,25 @@
                         return;
                     }
                     
+                    if (result?.success && result.recordCount === 0) {
+                        // ★ Cloud empty = owner deleted everything → full clear
+                        console.log('🔗 Cloud is empty — clearing all local data');
+                        window.scheduleAssignments = {};
+                        window.leagueAssignments = {};
+                        window.divisionTimes = {};
+                        window.unifiedTimes = [];
+                        window._localGenerationTimestamp = 0;
+                        try {
+                            var DAILY_KEY = 'campDailyData_v1';
+                            var allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            delete allData[change.dateKey];
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        } catch (e) { /* ignore */ }
+                        if (window.updateTable) window.updateTable();
+                        console.log('🔗 ✅ Cleared — cloud had 0 records');
+                        return;
+                    }
+
                     if (result?.success && result.data) {
                         // ★★★ v6.9 CRITICAL FIX: Properly merge — keep MY data, add THEIR data ★★★
                         const myBunks = new Set(
@@ -2208,13 +2227,7 @@
                             window.unifiedTimes = result.data.unifiedTimes;
                         }
                         if (result.data.divisionTimes) {
-                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
-                            var localGenTime = window._localGenerationTimestamp || 0;
-                            if (Date.now() - localGenTime > 60000) {
-                                window.divisionTimes = result.data.divisionTimes;
-                            } else {
-                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
-                            }
+                            window.divisionTimes = result.data.divisionTimes;
                         }
                         
                         // Update localStorage with merged data
@@ -2233,28 +2246,6 @@
                         
                         const totalBunks = Object.keys(merged).length;
                         console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
-                        const myAssignments = {};
-                        
-                        // Keep my current assignments
-                        Object.entries(window.scheduleAssignments || {}).forEach(([bunk, data]) => {
-                            if (myBunks.has(String(bunk))) {
-                                myAssignments[bunk] = data;
-                            }
-                        });
-                        
-                        const remoteAssignments = result.data.scheduleAssignments || {};
-
-                        window.scheduleAssignments = {
-                            ...remoteAssignments,
-                            ...myAssignments
-                        };
-
-                        window.leagueAssignments = result.data.leagueAssignments || window.leagueAssignments;
-                        
-                        // ★★★ FIX: Also update unifiedTimes from remote ★★★
-                        if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
-                            window.unifiedTimes = result.data.unifiedTimes;
-                        }
 
                         // ★★★ FIX v6.5: Also update rainy day state from remote ★★★
                         if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
