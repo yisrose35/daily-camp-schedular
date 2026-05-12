@@ -181,15 +181,54 @@
             if (dateData.scheduleAssignments) {
                 const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
                 const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
-                
-                const localGenTime = window._localGenerationTimestamp || 0;
-                const timeSinceGen = Date.now() - localGenTime;
-                if ((forceOverwrite && timeSinceGen > 60000) || windowBunkCount === 0) {
-                    window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
-                    hydrated = true;
-                    log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
-                } else if (timeSinceGen <= 60000) {
-                    log('⏭️ Skipped scheduleAssignments hydration — local generation is fresh');
+
+                if (forceOverwrite || windowBunkCount === 0) {
+                    // Smart merge: protect the LOCAL user's in-flight generation
+                    // (bunks whose grade has _isPerBunk); sync everything else
+                    // from cloud immediately — no delay window.
+                    var myBunks = new Set();
+                    var localDT = window.divisionTimes || {};
+                    Object.keys(localDT).forEach(function(grade) {
+                        if (localDT[grade] && localDT[grade]._isPerBunk && localDT[grade]._perBunkSlots) {
+                            var divInfo = (window.divisions || {})[grade];
+                            if (divInfo && divInfo.bunks) {
+                                divInfo.bunks.forEach(function(b) { myBunks.add(b); });
+                            }
+                        }
+                    });
+
+                    if (myBunks.size === 0) {
+                        // No live generation — full replace is safe
+                        window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
+                        hydrated = true;
+                        log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks (full replace)');
+                    } else {
+                        var addedBunks = 0;
+                        var updatedBunks = 0;
+                        var removedBunks = 0;
+                        var cloudAssign = dateData.scheduleAssignments;
+                        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+                        // Add/update remote bunks
+                        Object.keys(cloudAssign).forEach(function(bunk) {
+                            if (myBunks.has(bunk)) return;
+                            if (!window.scheduleAssignments[bunk]) {
+                                addedBunks++;
+                            } else {
+                                updatedBunks++;
+                            }
+                            window.scheduleAssignments[bunk] = JSON.parse(JSON.stringify(cloudAssign[bunk]));
+                        });
+                        // Remove local bunks NOT in cloud AND NOT ours (DELETE propagation)
+                        Object.keys(window.scheduleAssignments).forEach(function(bunk) {
+                            if (myBunks.has(bunk)) return;
+                            if (!cloudAssign[bunk]) {
+                                delete window.scheduleAssignments[bunk];
+                                removedBunks++;
+                            }
+                        });
+                        hydrated = (addedBunks + updatedBunks + removedBunks) > 0;
+                        log('✅ Smart merge: +' + addedBunks + ' added, ~' + updatedBunks + ' updated, -' + removedBunks + ' removed (protected ' + myBunks.size + ' local bunks)');
+                    }
                 }
             } else {
                 window.scheduleAssignments = window.scheduleAssignments || {};
@@ -215,16 +254,17 @@
                 }
             }
             
-            // Hydrate divisionTimes if present — but ONLY if not freshly generated locally
-            // A local generation sets _localGenerationTimestamp. If it's recent (< 60s),
-            // cloud data is stale and must NOT overwrite the local divisionTimes.
+            // Hydrate divisionTimes — smart merge protects grades with live
+            // _isPerBunk (local user's in-flight generation) while syncing
+            // everything else from cloud immediately.
             if (dateData.divisionTimes && window.DivisionTimesSystem?.deserialize) {
-                const localGenTime = window._localGenerationTimestamp || 0;
-                const timeSinceGen = Date.now() - localGenTime;
-                if (timeSinceGen > 60000 || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
+                var hasLivePerBunk = window.divisionTimes && Object.keys(window.divisionTimes).some(function(g) {
+                    return window.divisionTimes[g] && window.divisionTimes[g]._isPerBunk;
+                });
+
+                if ((forceOverwrite || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) && !hasLivePerBunk) {
+                    // No live generation — full replace is safe
                     window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
-                    // Reattach _perBunkSlots from sidecar — JSON.stringify strips custom
-                    // array properties, so per-bunk data is stored separately.
                     if (dateData._perBunkSlotsData) {
                         Object.keys(dateData._perBunkSlotsData).forEach(function(g) {
                             if (window.divisionTimes[g]) {
@@ -233,9 +273,38 @@
                             }
                         });
                     }
-                    log('✅ Hydrated divisionTimes from cloud');
-                } else {
-                    log('⏭️ Skipped divisionTimes hydration — local generation is fresh (' + Math.round(timeSinceGen / 1000) + 's ago)');
+                    log('✅ Hydrated divisionTimes from cloud (full replace)');
+                } else if (forceOverwrite) {
+                    // Smart merge: protect _isPerBunk grades, sync everything else
+                    var cloudDT = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
+                    var addedGrades = 0;
+                    var updatedGrades = 0;
+                    var removedGrades = 0;
+                    Object.keys(cloudDT).forEach(function(grade) {
+                        if (window.divisionTimes[grade] && window.divisionTimes[grade]._isPerBunk) return;
+                        if (!window.divisionTimes[grade]) {
+                            addedGrades++;
+                        } else {
+                            updatedGrades++;
+                        }
+                        window.divisionTimes[grade] = cloudDT[grade];
+                        if (dateData._perBunkSlotsData && dateData._perBunkSlotsData[grade]) {
+                            window.divisionTimes[grade]._isPerBunk = true;
+                            window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                        }
+                    });
+                    Object.keys(window.divisionTimes).forEach(function(grade) {
+                        if (window.divisionTimes[grade] && window.divisionTimes[grade]._isPerBunk) return;
+                        if (!cloudDT[grade]) {
+                            delete window.divisionTimes[grade];
+                            removedGrades++;
+                        }
+                    });
+                    if (addedGrades > 0 || updatedGrades > 0 || removedGrades > 0) {
+                        log('✅ Smart merge divisionTimes: +' + addedGrades + ' added, ~' + updatedGrades + ' updated, -' + removedGrades + ' removed');
+                    } else {
+                        log('⏭️ Smart merge: no remote divisionTimes changes');
+                    }
                 }
             }
             
@@ -291,44 +360,60 @@
         log('Refreshing Multi-Scheduler view for:', dateKey);
         
         // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
+        var _cloudEmpty = false;
         try {
             if (window.ScheduleDB?.loadSchedule && navigator.onLine) {
                 const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
                 if (cloudResult?.success && cloudResult.data) {
-                    const DAILY_KEY = 'campDailyData_v1';
-                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    // cloudResult.data.divisionTimes is deserialized — flat arrays with
-                    // _perBunkSlots as a custom array property. JSON.stringify strips
-                    // those props, so extract into a sidecar _perBunkSlotsData field
-                    // (same convention as scheduler_core_auto.js save).
-                    var _cloudDT = cloudResult.data.divisionTimes;
-                    var _cloudPbs = {};
-                    if (_cloudDT && typeof _cloudDT === 'object') {
-                        Object.keys(_cloudDT).forEach(function(g) {
-                            if (_cloudDT[g] && _cloudDT[g]._perBunkSlots) _cloudPbs[g] = _cloudDT[g]._perBunkSlots;
-                        });
+                    // If cloud returned 0 records, everything was deleted —
+                    // clear all local state unconditionally (no smart-merge protection).
+                    if (cloudResult.recordCount === 0) {
+                        _cloudEmpty = true;
+                        log('☁️ Cloud has 0 records — full clear');
+                        window.scheduleAssignments = {};
+                        window.leagueAssignments = {};
+                        window.divisionTimes = {};
+                        window.unifiedTimes = [];
+                        window._localGenerationTimestamp = 0;
+                        const DAILY_KEY = 'campDailyData_v1';
+                        const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                        delete allData[dateKey];
+                        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                    } else {
+                        const DAILY_KEY = 'campDailyData_v1';
+                        const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                        var _cloudDT = cloudResult.data.divisionTimes;
+                        var _cloudPbs = {};
+                        if (_cloudDT && typeof _cloudDT === 'object') {
+                            Object.keys(_cloudDT).forEach(function(g) {
+                                if (_cloudDT[g] && _cloudDT[g]._perBunkSlots) _cloudPbs[g] = _cloudDT[g]._perBunkSlots;
+                            });
+                        }
+                        allData[dateKey] = {
+                            ...allData[dateKey],
+                            scheduleAssignments: cloudResult.data.scheduleAssignments || {},
+                            leagueAssignments: cloudResult.data.leagueAssignments || {},
+                            unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
+                            divisionTimes: _cloudDT || allData[dateKey]?.divisionTimes || {}
+                        };
+                        if (Object.keys(_cloudPbs).length > 0) {
+                            allData[dateKey]._perBunkSlotsData = _cloudPbs;
+                        }
+                        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        log('☁️ Updated localStorage from cloud:',
+                            Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
                     }
-                    allData[dateKey] = {
-                        ...allData[dateKey],
-                        scheduleAssignments: cloudResult.data.scheduleAssignments || {},
-                        leagueAssignments: cloudResult.data.leagueAssignments || {},
-                        unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
-                        divisionTimes: _cloudDT || allData[dateKey]?.divisionTimes || {}
-                    };
-                    if (Object.keys(_cloudPbs).length > 0) {
-                        allData[dateKey]._perBunkSlotsData = _cloudPbs;
-                    }
-                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                    log('☁️ Updated localStorage from cloud:', 
-                        Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
                 }
             }
         } catch (e) {
             log('Cloud refresh failed, using localStorage:', e.message);
         }
-        
+
         // Step 1: Force hydrate from localStorage (now contains cloud data)
-        forceHydrateFromLocalStorage(dateKey, forceOverwrite);
+        // Skip if cloud was empty — we already cleared everything above.
+        if (!_cloudEmpty) {
+            forceHydrateFromLocalStorage(dateKey, forceOverwrite);
+        }
         
         // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
@@ -767,23 +852,11 @@
                 
                 // Process any queued saves
                 await processOfflineQueue();
-                
-                // ★★★ AUTO MODE GUARD: Skip cloud refresh if local schedule is fresh ★★★
-                var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-                var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-                var _hasFreshGeneration = window._localGenerationTimestamp && (Date.now() - window._localGenerationTimestamp) < 300000; // 5 min
 
-                if (_isAutoMode && (_hasLivePerBunk || _hasFreshGeneration)) {
-                    log('Skipping cloud refresh on reconnect — local schedule is fresh');
-                } else {
-                    // Refresh data from cloud (safe — no per-bunk data to lose)
-                    if (window.ScheduleDB?.loadSchedule) {
-                        const result = await window.ScheduleDB.loadSchedule(dateKey);
-                        if (result?.success && result.data) {
-                            refreshMultiSchedulerView(dateKey, true);
-                        }
-                    }
-                }
+                // Always refresh from cloud on reconnect — the smart merge
+                // in forceHydrateFromLocalStorage protects local-gen bunks
+                // while syncing remote changes.
+                refreshMultiSchedulerView(dateKey, true);
             } else if (_reconnectAttempts < CONFIG.MAX_RETRY_ATTEMPTS) {
                 scheduleReconnect();
             } else {
@@ -799,7 +872,11 @@
         const record = payload.new || payload.old || {};
         const eventType = payload.eventType;
 
-        if (record.scheduler_id === myUserId) {
+        // For INSERT/UPDATE, skip if this is our own save bouncing back.
+        // For DELETE, always process — scheduler_id on a deleted record
+        // identifies who OWNED the record, not who deleted it. The owner
+        // may have deleted the scheduler's record.
+        if (eventType !== 'DELETE' && record.scheduler_id === myUserId) {
             log('Ignoring own change');
             return;
         }
