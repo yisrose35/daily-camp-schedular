@@ -2163,80 +2163,38 @@
                         console.log('🔗 Skipping merge - operation in progress');
                         return;
                     }
-
-                    if (!result?.success) return;
-
-                    // ★ Cloud empty = owner deleted everything → full clear
-                    if (result.recordCount === 0) {
-                        console.log('🔗 Cloud is empty — clearing all local data');
-                        window.scheduleAssignments = {};
-                        window.leagueAssignments = {};
-                        window.divisionTimes = {};
-                        window.unifiedTimes = [];
-                        window._localGenerationTimestamp = 0;
-                        window.isRainyDay = false;
-                        window.rainyDayStartTime = null;
-                        const dateKey = change.dateKey;
-                        try {
-                            const DAILY_KEY = 'campDailyData_v1';
-                            const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                            delete allData[dateKey];
-                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                        } catch (e) { /* ignore */ }
-                        if (window.updateTable) window.updateTable();
-                        console.log('🔗 ✅ Cleared — cloud had 0 records');
-                        return;
-                    }
-
-                    if (!result.data) return;
-
-                    // Determine which bunks belong to the LOCAL user's active generation
-                    const myBunks = new Set();
-                    const localDT = window.divisionTimes || {};
-                    Object.keys(localDT).forEach(grade => {
-                        if (localDT[grade] && localDT[grade]._isPerBunk && localDT[grade]._perBunkSlots) {
-                            const divInfo = (window.divisions || {})[grade] || (window.divisions || {})[String(grade)];
-                            if (divInfo && divInfo.bunks) {
-                                divInfo.bunks.forEach(b => myBunks.add(b));
+                    
+                    if (result?.success && result.data) {
+                        // ★★★ v6.9 CRITICAL FIX: Properly merge — keep MY data, add THEIR data ★★★
+                        const myBunks = new Set(
+                            window.AccessControl?.getEditableBunks?.() ||
+                            window.CloudPermissions?.getEditableBunks?.() || []
+                        );
+                        
+                        const cloudAssignments = result.data.scheduleAssignments || {};
+                        const currentAssignments = window.scheduleAssignments || {};
+                        
+                        // Start with cloud data (has ALL schedulers merged)
+                        const merged = { ...cloudAssignments };
+                        
+                        // Overlay MY current bunks (preserve my in-progress work)
+                        for (const [bunk, slots] of Object.entries(currentAssignments)) {
+                            if (myBunks.has(bunk) || myBunks.has(String(bunk))) {
+                                merged[bunk] = slots;
                             }
                         }
-                    });
-
-                    const cloudAssignments = result.data.scheduleAssignments || {};
-
-                    if (myBunks.size === 0) {
-                        // No local generation in progress — full replace from cloud
-                        window.scheduleAssignments = JSON.parse(JSON.stringify(cloudAssignments));
-                    } else {
-                        // Smart merge: cloud is truth for non-my bunks, preserve my bunks
-                        const merged = {};
-                        // Add all cloud bunks (except mine)
-                        Object.keys(cloudAssignments).forEach(bunk => {
-                            if (!myBunks.has(bunk)) {
-                                merged[bunk] = JSON.parse(JSON.stringify(cloudAssignments[bunk]));
-                            }
-                        });
-                        // Preserve my bunks from current state
-                        const current = window.scheduleAssignments || {};
-                        Object.keys(current).forEach(bunk => {
-                            if (myBunks.has(bunk)) {
-                                merged[bunk] = current[bunk];
-                            }
-                        });
+                        
                         window.scheduleAssignments = merged;
-                    }
-
-                    // Merge league assignments
-                    if (result.data.leagueAssignments) {
-                        const cloudLeagues = result.data.leagueAssignments || {};
-                        const myDivisions = new Set(
-                            window.AccessControl?.getEditableDivisions?.() || []
-                        );
-                        if (myBunks.size === 0) {
-                            window.leagueAssignments = JSON.parse(JSON.stringify(cloudLeagues));
-                        } else {
-                            const mergedLeagues = { ...cloudLeagues };
+                        
+                        // Also merge league assignments (keyed by DIVISION NAME, not bunk)
+                        if (result.data.leagueAssignments) {
+                            const cloudLeagues = result.data.leagueAssignments || {};
                             const currentLeagues = window.leagueAssignments || {};
+                            const myDivisions = new Set(
+                                window.AccessControl?.getEditableDivisions?.() || []
+                            );
+                            const mergedLeagues = { ...cloudLeagues };
+                            // Overlay MY divisions' league data
                             for (const [divName, divData] of Object.entries(currentLeagues)) {
                                 if (myDivisions.has(divName)) {
                                     mergedLeagues[divName] = divData;
@@ -2244,63 +2202,77 @@
                             }
                             window.leagueAssignments = mergedLeagues;
                         }
-                    }
-
-                    // Merge divisionTimes — same smart merge pattern
-                    if (result.data.divisionTimes) {
-                        const cloudDT = result.data.divisionTimes;
-                        if (myBunks.size === 0) {
-                            window.divisionTimes = JSON.parse(JSON.stringify(cloudDT));
-                        } else {
-                            // Keep my _isPerBunk grades, take everything else from cloud
-                            const mergedDT = {};
-                            Object.keys(cloudDT).forEach(grade => {
-                                if (!localDT[grade] || !localDT[grade]._isPerBunk) {
-                                    mergedDT[grade] = JSON.parse(JSON.stringify(cloudDT[grade]));
-                                }
-                            });
-                            Object.keys(localDT).forEach(grade => {
-                                if (localDT[grade] && localDT[grade]._isPerBunk) {
-                                    mergedDT[grade] = localDT[grade];
-                                }
-                            });
-                            window.divisionTimes = mergedDT;
+                        
+                        // Hydrate times
+                        if (result.data.unifiedTimes?.length > 0) {
+                            window.unifiedTimes = result.data.unifiedTimes;
                         }
-                    }
+                        if (result.data.divisionTimes) {
+                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
+                            var localGenTime = window._localGenerationTimestamp || 0;
+                            if (Date.now() - localGenTime > 60000) {
+                                window.divisionTimes = result.data.divisionTimes;
+                            } else {
+                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
+                            }
+                        }
+                        
+                        // Update localStorage with merged data
+                        const dateKey = change.dateKey;
+                        try {
+                            const DAILY_KEY = 'campDailyData_v1';
+                            const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            allData[dateKey] = {
+                                scheduleAssignments: merged,
+                                leagueAssignments: window.leagueAssignments || {},
+                                unifiedTimes: window.unifiedTimes || [],
+                                divisionTimes: window.divisionTimes || {}
+                            };
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        } catch (e) { /* ignore localStorage errors */ }
+                        
+                        const totalBunks = Object.keys(merged).length;
+                        console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
+                        const myAssignments = {};
+                        
+                        // Keep my current assignments
+                        Object.entries(window.scheduleAssignments || {}).forEach(([bunk, data]) => {
+                            if (myBunks.has(String(bunk))) {
+                                myAssignments[bunk] = data;
+                            }
+                        });
+                        
+                        const remoteAssignments = result.data.scheduleAssignments || {};
 
-                    // Unified times
-                    if (result.data.unifiedTimes?.length > 0) {
-                        window.unifiedTimes = result.data.unifiedTimes;
-                    }
-
-                    // Rainy day state
-                    if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
-                        window.isRainyDay = true;
-                    } else if (result.data.isRainyDay === false) {
-                        window.isRainyDay = false;
-                    }
-                    if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
-                        window.rainyDayStartTime = result.data.rainyDayStartTime;
-                    }
-
-                    // Persist merged state to localStorage
-                    const dateKey = change.dateKey;
-                    try {
-                        const DAILY_KEY = 'campDailyData_v1';
-                        const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                        allData[dateKey] = {
-                            scheduleAssignments: window.scheduleAssignments,
-                            leagueAssignments: window.leagueAssignments || {},
-                            unifiedTimes: window.unifiedTimes || [],
-                            divisionTimes: window.divisionTimes || {}
+                        window.scheduleAssignments = {
+                            ...remoteAssignments,
+                            ...myAssignments
                         };
-                        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                    } catch (e) { /* ignore */ }
 
-                    const totalBunks = Object.keys(window.scheduleAssignments).length;
-                    console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
+                        window.leagueAssignments = result.data.leagueAssignments || window.leagueAssignments;
+                        
+                        // ★★★ FIX: Also update unifiedTimes from remote ★★★
+                        if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
+                            window.unifiedTimes = result.data.unifiedTimes;
+                        }
 
-                    if (window.updateTable) window.updateTable();
+                        // ★★★ FIX v6.5: Also update rainy day state from remote ★★★
+                        if (result.data.isRainyDay === true || result.data.rainyDayMode === true) {
+                            window.isRainyDay = true;
+                        } else if (result.data.isRainyDay === false) {
+                            window.isRainyDay = false;
+                        }
+                        
+                        if (result.data.rainyDayStartTime !== null && result.data.rainyDayStartTime !== undefined) {
+                            window.rainyDayStartTime = result.data.rainyDayStartTime;
+                        }
+
+                        if (window.updateTable) {
+                            window.updateTable();
+                        }
+
+                        console.log('🔗 Merged remote changes');
+                    }
                 });
             }
         });
