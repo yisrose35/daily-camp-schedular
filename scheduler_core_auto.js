@@ -9832,7 +9832,7 @@
                 }
             },
 
-            postIterAnalyze: function(timelines, freeEstimate, freeLocations) {
+            postIterAnalyze: function(timelines, freeEstimate, freeLocations, _todaysSwimmers) {
                 var self = this;
                 var _bunkGrade = {};
                 allGrades.forEach(function(g) {
@@ -9861,12 +9861,12 @@
                     var tl = timelines[bunk] || [];
                     var hasSwim = tl.some(function(b) { return (b.type || '').toLowerCase() === 'swim'; });
 
-                    // Check if bunk was supposed to swim
-                    if (todaysSwimmers[grade] && todaysSwimmers[grade].has(String(bunk)) && !hasSwim) {
+                    // Check if bunk was supposed to swim (use passed-in swimmers map)
+                    if (_todaysSwimmers && _todaysSwimmers[grade] && _todaysSwimmers[grade].has(String(bunk)) && !hasSwim) {
                         gradeSwimOk[grade] = false;
                     }
 
-                    // Track special failures — blocks in shopping list not in timeline
+                    // Track dead gaps
                     tl.sort(function(a, b) { return a.startMin - b.startMin; });
                     for (var i = 0; i < tl.length - 1; i++) {
                         var gap = tl[i + 1].startMin - tl[i].endMin;
@@ -9880,9 +9880,11 @@
                 });
 
                 // Update swim failure counts and identify blockers
+                var swimFailedThisIter = [];
                 allGrades.forEach(function(g) {
                     if (!gradeSwimOk[g]) {
                         self.swimFailures[g] = (self.swimFailures[g] || 0) + 1;
+                        swimFailedThisIter.push(g + '(' + self.swimFailures[g] + ')');
 
                         // Identify which grade is blocking the pool for this grade
                         var swimLayer = (layersByGrade[g] || []).find(function(l) {
@@ -9903,6 +9905,9 @@
                         }
                     }
                 });
+                if (swimFailedThisIter.length > 0) {
+                    log('[BRAIN] Swim failed this iter: ' + swimFailedThisIter.join(', '));
+                }
 
                 // Track free hotspots
                 if (freeLocations && freeLocations.length > 0) {
@@ -11075,6 +11080,196 @@
                     log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change blocks as walls');
                     allGrades.forEach(function(grade) {
                         getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                }
+            }
+
+            // ── Phase 2.3.5: BRAIN POOL RESCUE ──
+            // When Phase 2.3 leaves grades without swim (pool fully blocked by other grades),
+            // the brain goes BACK: finds which other grade's per-bunk stagger occupies a pool
+            // window the failing grade could use, evicts that ONE bunk's swim (it will be
+            // re-solved as a sport slot by Phase 3), and gives the window to the failing grade.
+            // This is the "multi-directional" pipeline — Phase 2.3 ran forward, detected a
+            // problem, and now Phase 2.3.5 goes backward to fix it.
+            {
+                var _p235RescueCount = 0;
+                var _p235FailedGrades = [];
+                _p23GradeOrder.forEach(function(grade) {
+                    var swimLayer = (layersByGrade[grade] || []).find(function(l) {
+                        return (l.type || '').toLowerCase() === 'swim';
+                    });
+                    if (!swimLayer) return;
+                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
+
+                    // Check if ANY bunk in this grade is missing swim
+                    var missingBunks = [];
+                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                        if (!todaysSwimmers[grade].has(String(bunk))) return;
+                        var hasSwim = (bunkTimelines[bunk] || []).some(function(b) {
+                            return (b.type || '').toLowerCase() === 'swim';
+                        });
+                        if (!hasSwim) missingBunks.push(bunk);
+                    });
+                    if (missingBunks.length > 0) {
+                        _p235FailedGrades.push({ grade: grade, missingBunks: missingBunks, swimLayer: swimLayer });
+                    }
+                });
+
+                // Precompute bunk→grade map for fast lookup
+                var _p235BunkGrade = {};
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(bk) { _p235BunkGrade[String(bk)] = g; });
+                });
+
+                // Precompute swim blocks per grade for fast victim lookup
+                var _p235SwimByGrade = {}; // grade → [{ bunk, startMin, endMin, block }]
+                Object.keys(bunkTimelines).forEach(function(bk) {
+                    var bkGrade = _p235BunkGrade[String(bk)] || '';
+                    (bunkTimelines[bk] || []).forEach(function(b) {
+                        if ((b.type || '').toLowerCase() === 'swim' && b._source && b._source.indexOf('phase2.3') === 0) {
+                            if (!_p235SwimByGrade[bkGrade]) _p235SwimByGrade[bkGrade] = [];
+                            _p235SwimByGrade[bkGrade].push({ bunk: bk, startMin: b.startMin, endMin: b.endMin, block: b });
+                        }
+                    });
+                });
+
+                _p235FailedGrades.forEach(function(fg) {
+                    var grade = fg.grade;
+                    var swimLayer = fg.swimLayer;
+                    var swimDur = resolveConstraints(swimLayer, 'swim').dMin || 40;
+                    var gradeStart = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
+                    var gradeEnd   = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime)   || 960;
+                    var winStart = Math.max(swimLayer.startMin || 0, gradeStart);
+                    var winEnd   = Math.min(swimLayer.endMin   || 1440, gradeEnd);
+
+                    var poolKey = _rtKey('pool', '_pool');
+                    var poolBuckets = _resourceBuckets[poolKey] || {};
+
+                    // Find all swim blocks from other grades that overlap our swim window
+                    var blockerSlots = {}; // blockerGrade → [{ startMin, endMin, bunk, block }]
+                    Object.keys(_p235SwimByGrade).forEach(function(bg) {
+                        if (bg === grade) return;
+                        (_p235SwimByGrade[bg] || []).forEach(function(sb) {
+                            if (sb.endMin <= winStart || sb.startMin >= winEnd) return;
+                            if (!blockerSlots[bg]) blockerSlots[bg] = [];
+                            var exists = blockerSlots[bg].some(function(bs) {
+                                return bs.bunk === sb.bunk && bs.startMin === sb.startMin;
+                            });
+                            if (!exists) {
+                                blockerSlots[bg].push({ startMin: sb.startMin, endMin: sb.endMin, bunk: sb.bunk, block: sb.block });
+                            }
+                        });
+                    });
+
+                    // For each missing bunk, try to evict a blocker's staggered swim bunk
+                    // Priority: evict from grade with MOST bunks swimming (least impact per bunk lost)
+                    var blockerGrades = Object.keys(blockerSlots).sort(function(a, b) {
+                        return blockerSlots[b].length - blockerSlots[a].length;
+                    });
+
+                    fg.missingBunks.forEach(function(bunk) {
+                        // Already rescued?
+                        if ((bunkTimelines[bunk] || []).some(function(b) { return (b.type || '').toLowerCase() === 'swim'; })) return;
+
+                        for (var bi = 0; bi < blockerGrades.length; bi++) {
+                            var blockerGrade = blockerGrades[bi];
+                            var slots = blockerSlots[blockerGrade];
+                            if (!slots || slots.length === 0) continue;
+
+                            // Pick the LAST bunk in the blocker's stagger (most expendable)
+                            var victim = slots[slots.length - 1];
+
+                            // Check: can the failed bunk actually use this pool window?
+                            // The victim's time must be within our swim window AND the bunk must be free there
+                            var tryS = victim.startMin, tryE = victim.startMin + swimDur;
+                            if (tryE > victim.endMin) tryE = victim.endMin;
+                            if (tryE - tryS < swimDur) continue;
+                            if (tryS < winStart || tryE > winEnd) continue;
+
+                            // Check bunk timeline is free at this time
+                            var bunkFree = true;
+                            var tl = bunkTimelines[bunk] || [];
+                            for (var ti = 0; ti < tl.length && bunkFree; ti++) {
+                                var tb = tl[ti];
+                                if (!tb) continue;
+                                if (!(tb._activityLocked || tb._fixed || tb._classification === 'pinned')) continue;
+                                var tbt = (tb.type || '').toLowerCase();
+                                if (tbt === 'pre-change' || tbt === 'post-change') continue;
+                                if (tb.startMin < tryE && tb.endMin > tryS) bunkFree = false;
+                            }
+                            if (!bunkFree) continue;
+
+                            // EVICT: Remove victim's swim + change blocks from their bunk timeline
+                            var victimSwimGroupId = victim.block._swimGroupId;
+                            bunkTimelines[victim.bunk] = (bunkTimelines[victim.bunk] || []).filter(function(b) {
+                                if (victimSwimGroupId && b._swimGroupId === victimSwimGroupId) return false;
+                                return true;
+                            });
+
+                            // Unregister victim's pool usage
+                            var victimPoolKey = _rtKey('pool', '_pool');
+                            for (var vm = victim.startMin; vm < victim.endMin; vm += 5) {
+                                var vb = (_resourceBuckets[victimPoolKey] || {})[vm];
+                                if (vb) {
+                                    vb.grades.delete(blockerGrade);
+                                    vb.count = Math.max(0, vb.count - 1);
+                                }
+                            }
+
+                            // PLACE: Give the window to the failing bunk
+                            var rescueGId = nextSwimGroupId();
+                            var rescueAnch = computeSwimChangeAnchors(
+                                tryS, tryE, swimLayer, grade,
+                                bunkTimelines[bunk] || [], tryS, tryE
+                            );
+
+                            if (rescueAnch.pre) {
+                                bunkTimelines[bunk].push({
+                                    startMin: rescueAnch.pre.startMin, endMin: rescueAnch.pre.endMin,
+                                    type: 'pre-change', event: 'Change', layer: null,
+                                    dMin: rescueAnch.pre.endMin - rescueAnch.pre.startMin,
+                                    dMax: rescueAnch.pre.endMin - rescueAnch.pre.startMin,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _noBacktrack: false,
+                                    _source: 'phase2.3.5-brain-rescue-pre', _swimGroupId: rescueGId
+                                });
+                            }
+                            bunkTimelines[bunk].push({
+                                startMin: tryS, endMin: tryE,
+                                type: 'swim', event: swimLayer.event || 'Swim',
+                                layer: swimLayer, _classification: 'pinned', _committed: true,
+                                _fixed: true, _activityLocked: true, _noBacktrack: false,
+                                _changeAttached: true, _swimGroupId: rescueGId, _source: 'phase2.3.5-brain-rescue'
+                            });
+                            if (rescueAnch.post) {
+                                bunkTimelines[bunk].push({
+                                    startMin: rescueAnch.post.startMin, endMin: rescueAnch.post.endMin,
+                                    type: 'post-change', event: 'Change', layer: null,
+                                    dMin: rescueAnch.post.endMin - rescueAnch.post.startMin,
+                                    dMax: rescueAnch.post.endMin - rescueAnch.post.startMin,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _noBacktrack: false,
+                                    _source: 'phase2.3.5-brain-rescue-post', _swimGroupId: rescueGId
+                                });
+                            }
+
+                            registerPoolUsage(grade, tryS, tryE);
+                            _p235RescueCount++;
+                            log('[BRAIN] [Phase2.3.5] ★ RESCUE: ' + bunk + '/' + grade + ' swim → ' +
+                                minutesToTimeLabel(tryS) + '-' + minutesToTimeLabel(tryE) +
+                                ' (evicted ' + victim.bunk + '/' + blockerGrade + ')');
+
+                            // Remove used slot from blockerSlots so next missing bunk picks a different victim
+                            slots.pop();
+                            break;
+                        }
+                    });
+                });
+
+                if (_p235RescueCount > 0) {
+                    log('[BRAIN] [Phase2.3.5] ★ RESCUED ' + _p235RescueCount + ' swim blocks via pool eviction');
+                    allGrades.forEach(function(g) {
+                        getBunksForGrade(g, divisions).forEach(function(b) { ensureTimelineIntegrity(b); });
                     });
                 }
             }
@@ -12818,7 +13013,7 @@
             repairTargets.update(bunkTimelines);
 
             // ★ BRAIN: Analyze this iteration's results for cross-iteration learning
-            adaptiveBrain.postIterAnalyze(bunkTimelines, iterFreeEstimate, iterFreeLocations);
+            adaptiveBrain.postIterAnalyze(bunkTimelines, iterFreeEstimate, iterFreeLocations, todaysSwimmers);
 
             // ★ v12.0: Analyze gap-wall adjacency to nudge walls in next iteration
             wallGapFeedback.analyzeGaps(bunkTimelines);
