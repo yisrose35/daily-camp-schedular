@@ -216,17 +216,45 @@
 
             if (memberData) {
                 const dbRole = memberData.role || ROLES.VIEWER;
-                if (dbRole !== _currentRole) {
-                    console.warn("🔐 🚨 ROLE MISMATCH! Cache said", _currentRole, "but DB says", dbRole);
+                const dbSubIds = memberData.subdivision_ids || [];
+                const dbAssignedDivs = memberData.assigned_divisions || [];
+                const roleChanged = dbRole !== _currentRole;
+                const divsChanged = JSON.stringify(dbSubIds) !== JSON.stringify(_userSubdivisionIds) ||
+                                    JSON.stringify(dbAssignedDivs) !== JSON.stringify(_directDivisionAssignments);
+                if (roleChanged || divsChanged) {
+                    if (roleChanged) {
+                        console.warn("🔐 🚨 ROLE MISMATCH! Cache said", _currentRole, "but DB says", dbRole);
+                    }
+                    if (divsChanged) {
+                        console.log("🔐 Division assignments updated from DB");
+                    }
                     _currentRole = dbRole;
                     _campId = memberData.camp_id;
                     _isTeamMember = true;
-                    _userSubdivisionIds = memberData.subdivision_ids || [];
-                    _directDivisionAssignments = memberData.assigned_divisions || [];
+                    _userSubdivisionIds = dbSubIds;
+                    _directDivisionAssignments = dbAssignedDivs;
                     calculateEditableDivisions();
-                    // Update cache with correct values
                     localStorage.setItem('campistry_role', _currentRole);
                     sessionStorage.removeItem('campistry_rbac_cache');
+                    // Remove stale "no access" warning if divisions are now assigned
+                    if (_editableDivisions.length > 0) {
+                        const warn = document.getElementById('no-access-warning');
+                        if (warn) warn.remove();
+                    }
+                    // Notify UI of updated permissions
+                    window.dispatchEvent(new CustomEvent('campistry-access-loaded', {
+                        detail: {
+                            role: _currentRole,
+                            editableDivisions: _editableDivisions,
+                            subdivisions: _subdivisions,
+                            isTeamMember: _isTeamMember,
+                            userName: _userName,
+                            campName: _campName,
+                            userSubdivisionDetails: _userSubdivisionDetails,
+                            userSubdivisionIds: _userSubdivisionIds,
+                            directDivisionAssignments: _directDivisionAssignments
+                        }
+                    }));
                 }
                 _roleVerifiedFromDB = true;
                 return true;
