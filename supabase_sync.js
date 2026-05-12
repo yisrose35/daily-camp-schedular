@@ -825,31 +825,14 @@
         var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
         showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
 
-        // DELETE or UPDATE-with-removals: always do a full cloud reload so
-        // removed bunks disappear from the local view.
-        if (eventType === 'DELETE') {
-            log('Remote DELETE — full reload from cloud');
-            setTimeout(function() {
-                refreshMultiSchedulerView(_currentDateKey, true);
-            }, 500);
-            return;
-        }
-
-        // ★★★ AUTO MODE GUARD: Additive merge when _perBunkSlots are live ★★★
-        var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-        var _hasLivePerBunk = window.divisionTimes && Object.values(window.divisionTimes).some(function(dt) { return dt && dt._isPerBunk; });
-
-        if (_isAutoMode && _hasLivePerBunk) {
-            log('Auto mode active — doing sync merge for remote changes');
-            setTimeout(function() {
-                syncMergeFromCloud(_currentDateKey);
-            }, 500);
-        } else {
-            // Full refresh — safe, no per-bunk data to lose
-            setTimeout(function() {
-                refreshMultiSchedulerView(_currentDateKey, true);
-            }, 500);
-        }
+        // Always do a full cloud reload so the view reflects the latest state.
+        // refreshMultiSchedulerView loads all scheduler records, merges them,
+        // and hydrates window globals. The 60-second generation guard in
+        // forceHydrateFromLocalStorage protects against overwriting during
+        // an active local generation.
+        setTimeout(function() {
+            refreshMultiSchedulerView(_currentDateKey, true);
+        }, 500);
     }
 
     // =========================================================================
