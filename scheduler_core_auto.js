@@ -4623,24 +4623,33 @@
             if (!tl || tl.length === 0) return;
 
             // Pass 1: Sort and fix overlaps
+            // ★ Priority hierarchy for overlap resolution:
+            //   swim/change > league > special > sport/slot
+            //   Swim+change blocks are the most immovable anchors.
             tl.sort(function(a, b) { return a.startMin - b.startMin; });
             for (var i = 0; i < tl.length - 1; i++) {
                 if (tl[i].endMin > tl[i+1].startMin) {
-                    if (!tl[i]._fixed && tl[i+1]._fixed) {
+                    var _t0 = (tl[i].type||'').toLowerCase();
+                    var _t1 = (tl[i+1].type||'').toLowerCase();
+                    var _isSwimLike = function(t) { return t === 'swim' || t === 'pre-change' || t === 'post-change' || t === 'change'; };
+                    var _s0 = _isSwimLike(_t0), _s1 = _isSwimLike(_t1);
+
+                    if (_s0 && !_s1) {
+                        tl[i+1].startMin = tl[i].endMin;
+                    } else if (_s1 && !_s0) {
+                        tl[i].endMin = tl[i+1].startMin;
+                    } else if (!tl[i]._fixed && tl[i+1]._fixed) {
                         tl[i].endMin = tl[i+1].startMin;
                     } else if (!tl[i+1]._fixed && tl[i]._fixed) {
                         tl[i+1].startMin = tl[i].endMin;
                     } else if (!tl[i]._fixed && !tl[i+1]._fixed) {
-                        // Both flexible — keep longer, trim shorter
                         var dur1 = tl[i].endMin - tl[i].startMin;
                         var dur2 = tl[i+1].endMin - tl[i+1].startMin;
                         if (dur1 >= dur2) tl[i+1].startMin = tl[i].endMin;
                         else tl[i].endMin = tl[i+1].startMin;
                     } else {
-                        // Both fixed — Change blocks win; trim the non-change block.
-                        // If neither or both are change, force trim the later one.
-                        var _iIsChg = ['pre-change','post-change','change'].includes((tl[i].type||'').toLowerCase());
-                        var _i1IsChg = ['pre-change','post-change','change'].includes((tl[i+1].type||'').toLowerCase());
+                        var _iIsChg = ['pre-change','post-change','change'].includes(_t0);
+                        var _i1IsChg = ['pre-change','post-change','change'].includes(_t1);
                         if (_i1IsChg && !_iIsChg) tl[i].endMin = tl[i+1].startMin;
                         else tl[i+1].startMin = tl[i].endMin;
                     }
@@ -11124,6 +11133,79 @@
                 }
             }
 
+            // ── Phase 2.3.4: CHANGE BLOCK REPAIR ──
+            // Scan every swim block. If it lacks pre/post-change blocks (because
+            // computeSwimChangeAnchors returned null), try to attach them now.
+            // This catches the case where swim was placed but change blocks were
+            // silently skipped (no campPeriods, no room, etc.).
+            {
+                var _p234Fixed = 0;
+                allGrades.forEach(function(grade) {
+                    var swimLayer = (layersByGrade[grade] || []).find(function(l) {
+                        return (l.type || '').toLowerCase() === 'swim';
+                    });
+                    if (!swimLayer) return;
+                    var preChangeDur  = swimLayer.preChangeMin  || 0;
+                    var postChangeDur = swimLayer.postChangeMin || 0;
+                    if (preChangeDur <= 0 && postChangeDur <= 0) return;
+
+                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                        var tl = bunkTimelines[bunk] || [];
+                        tl.forEach(function(blk) {
+                            if ((blk.type || '').toLowerCase() !== 'swim') return;
+                            var gid = blk._swimGroupId;
+                            if (!gid) return;
+
+                            var hasPre  = tl.some(function(b) { return b._swimGroupId === gid && (b.type || '').toLowerCase() === 'pre-change'; });
+                            var hasPost = tl.some(function(b) { return b._swimGroupId === gid && (b.type || '').toLowerCase() === 'post-change'; });
+
+                            if (hasPre && hasPost) return;
+
+                            var anch = computeSwimChangeAnchors(
+                                blk.startMin, blk.endMin, swimLayer, grade, tl, blk.startMin, blk.endMin
+                            );
+
+                            if (!hasPre && anch.pre && preChangeDur > 0) {
+                                var overlap = tl.some(function(b) {
+                                    return b !== blk && b.startMin < anch.pre.endMin && b.endMin > anch.pre.startMin;
+                                });
+                                if (!overlap) {
+                                    tl.push({
+                                        startMin: anch.pre.startMin, endMin: anch.pre.endMin,
+                                        type: 'pre-change', event: 'Change', layer: null,
+                                        dMin: anch.pre.endMin - anch.pre.startMin,
+                                        dMax: anch.pre.endMin - anch.pre.startMin,
+                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                        _activityLocked: true, _noBacktrack: false,
+                                        _source: 'phase2.3.4-change-repair', _swimGroupId: gid
+                                    });
+                                    _p234Fixed++;
+                                }
+                            }
+                            if (!hasPost && anch.post && postChangeDur > 0) {
+                                var overlap2 = tl.some(function(b) {
+                                    return b !== blk && b.startMin < anch.post.endMin && b.endMin > anch.post.startMin;
+                                });
+                                if (!overlap2) {
+                                    tl.push({
+                                        startMin: anch.post.startMin, endMin: anch.post.endMin,
+                                        type: 'post-change', event: 'Change', layer: null,
+                                        dMin: anch.post.endMin - anch.post.startMin,
+                                        dMax: anch.post.endMin - anch.post.startMin,
+                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                        _activityLocked: true, _noBacktrack: false,
+                                        _source: 'phase2.3.4-change-repair', _swimGroupId: gid
+                                    });
+                                    _p234Fixed++;
+                                }
+                            }
+                        });
+                        if (_p234Fixed > 0) ensureTimelineIntegrity(bunk);
+                    });
+                });
+                if (_p234Fixed > 0) log('[Phase2.3.4] ★ Repaired ' + _p234Fixed + ' missing change block(s)');
+            }
+
             // ── Phase 2.3.5: BRAIN POOL RESCUE ──
             // When Phase 2.3 leaves grades without swim (pool fully blocked by other grades),
             // the brain goes BACK: finds which other grade's per-bunk stagger occupies a pool
@@ -11312,6 +11394,103 @@
                         getBunksForGrade(g, divisions).forEach(function(b) { ensureTimelineIntegrity(b); });
                     });
                 }
+            }
+
+            // ── Phase 2.3.6: SWIM RE-PLACEMENT ──
+            // After Phase 2.3 + 2.3.5, some bunks may still lack swim because:
+            // - Their swim was placed at the only available slot but a later phase
+            //   (rotation event, ensureTimelineIntegrity, etc.) displaced it
+            // - Phase 2.3.5 only evicts from OTHER grades; it can't help when the
+            //   pool IS available but the time slot got claimed by something else
+            // Fix: for each bunk still missing swim, try ALL positions in the swim
+            // window (not just the one Phase 2.3 originally picked).
+            {
+                var _p236Count = 0;
+                allGrades.forEach(function(grade) {
+                    var swimLayer = (layersByGrade[grade] || []).find(function(l) {
+                        return (l.type || '').toLowerCase() === 'swim';
+                    });
+                    if (!swimLayer) return;
+                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
+                    var swimDur = resolveConstraints(swimLayer, 'swim').dMin || 40;
+                    var div = divisions[grade] || divisions[String(grade)];
+                    if (!div) return;
+                    var gradeStart = parseTimeToMinutes(div.startTime) || 540;
+                    var gradeEnd   = parseTimeToMinutes(div.endTime)   || 960;
+                    var winStart = Math.max(swimLayer.startMin || 0, gradeStart);
+                    var winEnd   = Math.min(swimLayer.endMin || 1440, gradeEnd);
+
+                    getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                        if (!todaysSwimmers[grade].has(String(bunk))) return;
+                        var tl = bunkTimelines[bunk] || [];
+                        var hasSwim = tl.some(function(b) { return (b.type || '').toLowerCase() === 'swim'; });
+                        if (hasSwim) return;
+
+                        // Try every 5-min offset in the swim window
+                        for (var tryS = winStart; tryS + swimDur <= winEnd; tryS += 5) {
+                            var tryE = tryS + swimDur;
+                            if (!canUsePoolAtTime(grade, tryS, tryE)) continue;
+
+                            // Check bunk timeline is free at this time
+                            var free = true;
+                            for (var ti = 0; ti < tl.length && free; ti++) {
+                                var tb = tl[ti];
+                                if (!tb) continue;
+                                if (tb.startMin < tryE && tb.endMin > tryS) free = false;
+                            }
+                            if (!free) continue;
+
+                            // Place swim + change blocks
+                            var gid = nextSwimGroupId();
+                            var anch = computeSwimChangeAnchors(tryS, tryE, swimLayer, grade, tl, tryS, tryE);
+
+                            if (anch.pre) {
+                                var preOverlap = tl.some(function(b) { return b.startMin < anch.pre.endMin && b.endMin > anch.pre.startMin; });
+                                if (!preOverlap) {
+                                    tl.push({
+                                        startMin: anch.pre.startMin, endMin: anch.pre.endMin,
+                                        type: 'pre-change', event: 'Change', layer: null,
+                                        dMin: anch.pre.endMin - anch.pre.startMin,
+                                        dMax: anch.pre.endMin - anch.pre.startMin,
+                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                        _activityLocked: true, _noBacktrack: false,
+                                        _source: 'phase2.3.6-swim-replace-pre', _swimGroupId: gid
+                                    });
+                                }
+                            }
+                            tl.push({
+                                startMin: tryS, endMin: tryE,
+                                type: 'swim', event: swimLayer.event || 'Swim',
+                                layer: swimLayer, _classification: 'pinned', _committed: true,
+                                _fixed: true, _activityLocked: true, _noBacktrack: false,
+                                _changeAttached: true, _swimGroupId: gid,
+                                _source: 'phase2.3.6-swim-replace'
+                            });
+                            if (anch.post) {
+                                var postOverlap = tl.some(function(b) { return b.startMin < anch.post.endMin && b.endMin > anch.post.startMin; });
+                                if (!postOverlap) {
+                                    tl.push({
+                                        startMin: anch.post.startMin, endMin: anch.post.endMin,
+                                        type: 'post-change', event: 'Change', layer: null,
+                                        dMin: anch.post.endMin - anch.post.startMin,
+                                        dMax: anch.post.endMin - anch.post.startMin,
+                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                        _activityLocked: true, _noBacktrack: false,
+                                        _source: 'phase2.3.6-swim-replace-post', _swimGroupId: gid
+                                    });
+                                }
+                            }
+
+                            registerPoolUsage(grade, tryS, tryE);
+                            ensureTimelineIntegrity(bunk);
+                            _p236Count++;
+                            log('[Phase2.3.6] ★ RE-PLACED swim for ' + bunk + '/' + grade + ' → ' +
+                                minutesToTimeLabel(tryS) + '-' + minutesToTimeLabel(tryE));
+                            break;
+                        }
+                    });
+                });
+                if (_p236Count > 0) log('[Phase2.3.6] ★ Re-placed ' + _p236Count + ' displaced swim block(s)');
             }
 
             // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
