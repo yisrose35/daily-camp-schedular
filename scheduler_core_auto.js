@@ -9743,6 +9743,190 @@
             }
         };
 
+        // =====================================================================
+        // ★ ADAPTIVE BRAIN — control center that learns across iterations
+        // Tracks failures, adjusts strategy levers (ordering, pool allocation,
+        // special deferral), and extends iteration budget when persistent
+        // problems are detected. Does NOT touch durations or constraints.
+        // =====================================================================
+        var adaptiveBrain = {
+            swimFailures: {},       // grade → count of iterations where swim failed
+            swimBlockers: {},       // grade → { blockerGrade → count } — who blocks pool
+            specialFailures: {},    // grade → { specialName → count }
+            deadGapZones: {},       // grade → [{ bunk, startMin, endMin, gap }]
+            freeHotspots: {},       // grade → [{ bunk, startMin, endMin }]
+            deferredSpecials: {},   // grade → Set of special names to skip
+            swimGradeOrder: null,   // override for Phase 2.3 grade ordering
+            poolShiftHints: {},     // grade → shiftDirection ('early'|'late') for swim time
+            _extendedOnce: false,
+
+            preIterStrategy: function(iter) {
+                if (iter < 1) return;
+
+                // ── Lever 1: Swim grade priority ──
+                // Grades that consistently fail swim get processed FIRST in Phase 2.3
+                var failGrades = [];
+                var successGrades = [];
+                var self = this;
+                allGrades.forEach(function(g) {
+                    if (self.swimFailures[g] >= 2) {
+                        failGrades.push({ grade: g, failures: self.swimFailures[g] });
+                    } else {
+                        successGrades.push(g);
+                    }
+                });
+                if (failGrades.length > 0) {
+                    failGrades.sort(function(a, b) { return b.failures - a.failures; });
+                    this.swimGradeOrder = failGrades.map(function(f) { return f.grade; }).concat(successGrades);
+                    log('[BRAIN] Swim priority: ' + this.swimGradeOrder.join(' → '));
+                } else {
+                    this.swimGradeOrder = null;
+                }
+
+                // ── Lever 2: Special deferral for swim-starved grades ──
+                // When swim fails 3+ times for a grade, defer its lowest-priority special
+                // to free up timeline space for swim placement
+                allGrades.forEach(function(g) {
+                    if (self.swimFailures[g] >= 3 && self.specialFailures[g]) {
+                        var specials = Object.keys(self.specialFailures[g]);
+                        if (specials.length > 0 && (!self.deferredSpecials[g] || self.deferredSpecials[g].size === 0)) {
+                            // Pick the special that failed least (lowest priority to keep)
+                            specials.sort(function(a, b) {
+                                return (self.specialFailures[g][a] || 0) - (self.specialFailures[g][b] || 0);
+                            });
+                            if (!self.deferredSpecials[g]) self.deferredSpecials[g] = new Set();
+                            self.deferredSpecials[g].add(specials[0]);
+                            log('[BRAIN] Deferring special "' + specials[0] + '" for ' + g + ' (swim failed ' + self.swimFailures[g] + 'x)');
+                        }
+                    }
+                });
+
+                // ── Lever 3: Pool time shifting ──
+                // When a grade consistently blocks another's swim, hint that blocker
+                // should shift its swim to a different period
+                Object.keys(this.swimBlockers).forEach(function(failedGrade) {
+                    var blockers = self.swimBlockers[failedGrade];
+                    if (!blockers) return;
+                    Object.keys(blockers).forEach(function(blockerGrade) {
+                        if (blockers[blockerGrade] >= 2) {
+                            var currentShift = self.poolShiftHints[blockerGrade] || null;
+                            self.poolShiftHints[blockerGrade] = currentShift === 'early' ? 'late' : 'early';
+                            log('[BRAIN] Pool shift: ' + blockerGrade + ' → ' + self.poolShiftHints[blockerGrade] + ' (blocks ' + failedGrade + ' swim ' + blockers[blockerGrade] + 'x)');
+                        }
+                    });
+                });
+
+                // Log strategy summary
+                var summary = [];
+                if (this.swimGradeOrder) summary.push('swim-order');
+                Object.keys(this.deferredSpecials).forEach(function(g) {
+                    if (self.deferredSpecials[g] && self.deferredSpecials[g].size > 0) {
+                        summary.push('defer-' + g + ':' + [...self.deferredSpecials[g]].join(','));
+                    }
+                });
+                Object.keys(this.poolShiftHints).forEach(function(g) {
+                    summary.push('pool-' + g + ':' + self.poolShiftHints[g]);
+                });
+                if (summary.length > 0) {
+                    log('[BRAIN] ★ Strategy summary: ' + summary.join(' | '));
+                }
+            },
+
+            postIterAnalyze: function(timelines, freeEstimate, freeLocations) {
+                var self = this;
+                var _bunkGrade = {};
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(b) { _bunkGrade[String(b)] = g; });
+                });
+
+                // Track swim failures per grade
+                var gradeSwimOk = {};
+                allGrades.forEach(function(g) { gradeSwimOk[g] = true; });
+
+                // Track pool occupants per time bucket for blocker analysis
+                var poolOccupants = {}; // minute → grade
+                Object.keys(timelines).forEach(function(bunk) {
+                    var grade = _bunkGrade[String(bunk)] || '';
+                    (timelines[bunk] || []).forEach(function(b) {
+                        if ((b.type || '').toLowerCase() === 'swim') {
+                            for (var m = b.startMin; m < b.endMin; m += 5) {
+                                poolOccupants[m] = grade;
+                            }
+                        }
+                    });
+                });
+
+                Object.keys(timelines).forEach(function(bunk) {
+                    var grade = _bunkGrade[String(bunk)] || '';
+                    var tl = timelines[bunk] || [];
+                    var hasSwim = tl.some(function(b) { return (b.type || '').toLowerCase() === 'swim'; });
+
+                    // Check if bunk was supposed to swim
+                    if (todaysSwimmers[grade] && todaysSwimmers[grade].has(String(bunk)) && !hasSwim) {
+                        gradeSwimOk[grade] = false;
+                    }
+
+                    // Track special failures — blocks in shopping list not in timeline
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    for (var i = 0; i < tl.length - 1; i++) {
+                        var gap = tl[i + 1].startMin - tl[i].endMin;
+                        if (gap > 0 && gap < 25) {
+                            if (!self.deadGapZones[grade]) self.deadGapZones[grade] = [];
+                            self.deadGapZones[grade].push({
+                                bunk: bunk, startMin: tl[i].endMin, endMin: tl[i + 1].startMin, gap: gap
+                            });
+                        }
+                    }
+                });
+
+                // Update swim failure counts and identify blockers
+                allGrades.forEach(function(g) {
+                    if (!gradeSwimOk[g]) {
+                        self.swimFailures[g] = (self.swimFailures[g] || 0) + 1;
+
+                        // Identify which grade is blocking the pool for this grade
+                        var swimLayer = (layersByGrade[g] || []).find(function(l) {
+                            return (l.type || '').toLowerCase() === 'swim';
+                        });
+                        if (swimLayer) {
+                            var winStart = Math.max(swimLayer.startMin || 0,
+                                parseTimeToMinutes((divisions[g] || divisions[String(g)]) && (divisions[g] || divisions[String(g)]).startTime) || 540);
+                            var winEnd = Math.min(swimLayer.endMin || 1440,
+                                parseTimeToMinutes((divisions[g] || divisions[String(g)]) && (divisions[g] || divisions[String(g)]).endTime) || 960);
+
+                            for (var m = winStart; m < winEnd; m += 5) {
+                                if (poolOccupants[m] && poolOccupants[m] !== g) {
+                                    if (!self.swimBlockers[g]) self.swimBlockers[g] = {};
+                                    self.swimBlockers[g][poolOccupants[m]] = (self.swimBlockers[g][poolOccupants[m]] || 0) + 1;
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Track free hotspots
+                if (freeLocations && freeLocations.length > 0) {
+                    freeLocations.forEach(function(fl) {
+                        if (!self.freeHotspots[fl.grade]) self.freeHotspots[fl.grade] = [];
+                        self.freeHotspots[fl.grade].push(fl);
+                    });
+                }
+            },
+
+            getSwimGradeOrder: function() {
+                return this.swimGradeOrder;
+            },
+
+            isSpecialDeferred: function(grade, specialName) {
+                var ds = this.deferredSpecials[grade];
+                return ds && ds.has(specialName);
+            },
+
+            getPoolShift: function(grade) {
+                return this.poolShiftHints[grade] || null;
+            }
+        };
+
         // Seeded jitter for iteration variation
         function seedJitter(seed, index) {
             return (((seed * 2654435761 + index * 1597) >>> 0) % 1000) / 1000;
@@ -10302,6 +10486,23 @@
                         : info.offField;
                 }
 
+                // ★ BRAIN: Force swim to earliest band for grades with persistent swim failures
+                if (adaptiveBrain.swimFailures[grade] >= 2 && permutedOffField.indexOf('swim') > 0) {
+                    permutedOffField = permutedOffField.filter(function(t) { return t !== 'swim'; });
+                    permutedOffField.unshift('swim');
+                }
+
+                // ★ BRAIN: Pool shift — when brain says a grade should shift its swim timing,
+                // move swim to the last band position (late) to free up early pool windows
+                var _brainPoolShift = adaptiveBrain.getPoolShift(grade);
+                if (_brainPoolShift === 'late' && permutedOffField.indexOf('swim') >= 0 && permutedOffField.indexOf('swim') < permutedOffField.length - 1) {
+                    permutedOffField = permutedOffField.filter(function(t) { return t !== 'swim'; });
+                    permutedOffField.push('swim');
+                } else if (_brainPoolShift === 'early' && permutedOffField.indexOf('swim') > 0) {
+                    permutedOffField = permutedOffField.filter(function(t) { return t !== 'swim'; });
+                    permutedOffField.unshift('swim');
+                }
+
                 // ★ v5.0b — Variable-width bands.
                 // Compute band widths proportional to expected activity durations so that
                 // swim (40 min) gets a ~40-min search window and league (82 min) gets ~82 min.
@@ -10445,6 +10646,7 @@
             // grade assignment within the same ordering.  Using a large prime stride ensures
             // no two iterations within 35 repeats accidentally pick the same permutation.
             const _typeOrderSeed = totalIters * 7919 + 1;
+            adaptiveBrain.preIterStrategy(totalIters);
             staggerPlan = buildRotationMatrix(allGrades, _iterSeed, _typeOrderSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
@@ -10686,7 +10888,8 @@
             // naturally works around them, just like it does for fullGrade swim.
             {
                 var _p23Count = 0;
-                allGrades.forEach(function(grade) {
+                var _p23GradeOrder = adaptiveBrain.getSwimGradeOrder() || allGrades;
+                _p23GradeOrder.forEach(function(grade) {
                     // Find any swim layer not yet placed by Phase 0.
                     // Don't filter on !fullGrade — some fullGrade:true layers are not pinned
                     // and therefore skipped by Phase 0, landing in Phase 3 as "needs".
@@ -10789,16 +10992,36 @@
                                 _p23AllFree.push({ period: _p23P, start: _p23tryS, score: _p23Score });
                             }
                         }
-                        // Pick best: highest score first, then earliest start
+                        // Pick best: highest score first, then earliest/latest per brain hint
+                        var _p23PoolShift = adaptiveBrain.getPoolShift(grade);
                         _p23AllFree.sort(function(a, b) {
                             if (b.score !== a.score) return b.score - a.score;
+                            if (_p23PoolShift === 'late') return b.start - a.start;
                             return a.start - b.start;
                         });
                         var _p23Chosen = _p23AllFree.length > 0 ? _p23AllFree[0].period : null;
                         var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
 
                         if (!_p23Chosen) {
-                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
+                            // Diagnostic: identify which grades block the pool at candidate times
+                            var _p23Blockers = {};
+                            var _p23PoolKey = _rtKey('pool', '_pool');
+                            var _p23PoolBuckets = _resourceBuckets[_p23PoolKey] || {};
+                            for (var _p23di = 0; _p23di < _p23Candidates.length; _p23di++) {
+                                var _p23dP = _p23Candidates[_p23di];
+                                for (var _p23dm = _p23dP.startMin; _p23dm < _p23dP.endMin; _p23dm += 5) {
+                                    var _p23db = _p23PoolBuckets[_p23dm];
+                                    if (_p23db && _p23db.grades.size > 0) {
+                                        _p23db.grades.forEach(function(bg) {
+                                            if (bg !== grade) _p23Blockers[bg] = (_p23Blockers[bg] || 0) + 1;
+                                        });
+                                    }
+                                }
+                            }
+                            var _p23BlockerStr = Object.keys(_p23Blockers).length > 0
+                                ? ' (pool blocked by: ' + Object.entries(_p23Blockers).map(function(e) { return e[0] + ' ' + (e[1] * 5) + 'min'; }).join(', ') + ')'
+                                : ' (no pool conflicts — timeline blocked)';
+                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim' + _p23BlockerStr);
                             return;
                         }
 
@@ -11811,6 +12034,11 @@
                         for (var _sIdx = 0; _sIdx < draft.specials.length; _sIdx++) {
                         const special = draft.specials[_sIdx];
                         if (!special || !special.claimedTime) continue;
+                        // ★ BRAIN: Skip deferred specials to free timeline for swim
+                        if (adaptiveBrain.isSpecialDeferred(grade, special.name || special.event || '')) {
+                            if (totalIters < 3) log('[Phase2.5] [BRAIN] Deferred special "' + (special.name || special.event) + '" for ' + bunk);
+                            continue;
+                        }
                         // ★ v14.0: Always use configured duration from special_activities config.
                         // Draft duration may be wrong; getSpecialDuration() is authoritative.
                         const configuredDur = getSpecialDuration(special.name || special.event || '', activityProperties, globalSettings);
@@ -12244,6 +12472,9 @@
                                     warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
                                         ' — gaps: [' + gapSummary + '] | blocked: RT=' + _sp25_rtBlockCount + ' layers=' + _sp25_layerBlockCount + ' gapTooSmall=' + _sp25_gapTooSmall);
                                 }
+                                // ★ BRAIN: Track special placement failures
+                                if (!adaptiveBrain.specialFailures[grade]) adaptiveBrain.specialFailures[grade] = {};
+                                adaptiveBrain.specialFailures[grade][special.name || special.event || ''] = (adaptiveBrain.specialFailures[grade][special.name || special.event || ''] || 0) + 1;
                                 continue; // truly no placement possible → defer to CSP
                             }
                         }
@@ -12586,6 +12817,9 @@
             // ★ v10.0: Update repair targets for next iteration
             repairTargets.update(bunkTimelines);
 
+            // ★ BRAIN: Analyze this iteration's results for cross-iteration learning
+            adaptiveBrain.postIterAnalyze(bunkTimelines, iterFreeEstimate, iterFreeLocations);
+
             // ★ v12.0: Analyze gap-wall adjacency to nudge walls in next iteration
             wallGapFeedback.analyzeGaps(bunkTimelines);
             // ★ v12.0: Record estimated Free zones from this iteration's simulation
@@ -12642,6 +12876,16 @@
                 resetIterState();
             }
 
+            // ★ BRAIN: Extend iteration budget when persistent swim failures detected
+            var _brainSwimProblems = Object.keys(adaptiveBrain.swimFailures).some(function(g) {
+                return adaptiveBrain.swimFailures[g] >= 2;
+            });
+            if (_brainSwimProblems && !adaptiveBrain._extendedOnce && staleCount >= STALE_STOP && totalIters < MAX_ITERATIONS) {
+                adaptiveBrain._extendedOnce = true;
+                staleCount = 0;
+                log('[BRAIN] ★ Extending iterations — persistent swim failures detected, resetting stale counter');
+            }
+
         } while (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
 
         log('══════════════════════════════════════════════════════════');
@@ -12651,6 +12895,41 @@
             log('Elite scores: ' + elitePool.map(function(e) { return e.score + '(seed=' + e.seed + ')'; }).join(', '));
         }
         log('══════════════════════════════════════════════════════════');
+
+        // ★ BRAIN: End-of-run diagnostic summary
+        {
+            var _brainSummary = [];
+            var _swimFailGrades = Object.entries(adaptiveBrain.swimFailures).filter(function(e) { return e[1] > 0; });
+            if (_swimFailGrades.length > 0) {
+                _brainSummary.push('swim-failures: ' + _swimFailGrades.map(function(e) { return e[0] + '×' + e[1]; }).join(', '));
+            }
+            var _deferredGrades = Object.entries(adaptiveBrain.deferredSpecials).filter(function(e) { return e[1] && e[1].size > 0; });
+            if (_deferredGrades.length > 0) {
+                _brainSummary.push('deferred: ' + _deferredGrades.map(function(e) { return e[0] + ':' + [...e[1]].join(','); }).join('; '));
+            }
+            if (adaptiveBrain._extendedOnce) _brainSummary.push('extended-iterations');
+            if (adaptiveBrain.swimGradeOrder) {
+                _brainSummary.push('swim-order: ' + adaptiveBrain.swimGradeOrder.join('→'));
+            }
+            var _deadGapTotal = 0;
+            Object.values(adaptiveBrain.deadGapZones).forEach(function(z) { _deadGapTotal += z.length; });
+            if (_deadGapTotal > 0) _brainSummary.push('dead-gaps: ' + _deadGapTotal);
+            var _poolShifts = Object.entries(adaptiveBrain.poolShiftHints);
+            if (_poolShifts.length > 0) {
+                _brainSummary.push('pool-shifts: ' + _poolShifts.map(function(e) { return e[0] + '→' + e[1]; }).join(', '));
+            }
+            var _blockerInfo = Object.entries(adaptiveBrain.swimBlockers);
+            if (_blockerInfo.length > 0) {
+                _brainSummary.push('swim-blockers: ' + _blockerInfo.map(function(e) {
+                    return e[0] + ' blocked by ' + Object.entries(e[1]).map(function(b) { return b[0] + '×' + b[1]; }).join(',');
+                }).join('; '));
+            }
+            if (_brainSummary.length > 0) {
+                log('[BRAIN] ★ Final report: ' + _brainSummary.join(' | '));
+            } else {
+                log('[BRAIN] No issues detected — all strategies dormant');
+            }
+        }
 
         // ★ v14.0: Restore from best elite (which may be better than bestTimelines
         // if a later iteration improved an elite via breeding)
