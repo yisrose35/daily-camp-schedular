@@ -8938,68 +8938,92 @@
                             }
                         }
                         // ★ v14.0: If neither extension worked, merge into nearest sport/slot neighbor
+                        // Two-pass: pass 0 respects dMax, pass 1 overrides dMax to TYPE_CEILING.
                         if (!eFixed && ['sport', 'slot'].includes(eType)) {
                             var eMerged = false;
-                            // Try merging into previous sport/slot
-                            if (ej > 0 && ['sport','slot'].includes((eTmpl[ej-1].type||'').toLowerCase())) {
-                                var ePrevMax = eTmpl[ej-1].dMax || (TYPE_CEILINGS[(eTmpl[ej-1].type||'').toLowerCase()] || 60);
-                                if ((eTmpl[ej-1].endMin - eTmpl[ej-1].startMin) + eDur <= ePrevMax) {
-                                    eTmpl[ej-1].endMin = eBlk.endMin;
-                                    eTmpl.splice(ej, 1); ej--;
-                                    eMerged = true;
-                                    enforceFixCount++;
-                                    log('[Phase3] ENFORCE: merged sub-dMin ' + eType + ' into prev for bunk ' + eBunk);
+                            for (var _emPass = 0; _emPass < 2 && !eMerged; _emPass++) {
+                                // Try merging into previous sport/slot
+                                if (ej > 0 && ['sport','slot'].includes((eTmpl[ej-1].type||'').toLowerCase())) {
+                                    var _emPrevType = (eTmpl[ej-1].type||'').toLowerCase();
+                                    var ePrevMax = _emPass === 0
+                                        ? (eTmpl[ej-1].dMax || (TYPE_CEILINGS[_emPrevType] || GAP_MAX_DUR))
+                                        : (TYPE_CEILINGS[_emPrevType] || GAP_MAX_DUR);
+                                    if ((eTmpl[ej-1].endMin - eTmpl[ej-1].startMin) + eDur <= ePrevMax) {
+                                        eTmpl[ej-1].endMin = eBlk.endMin;
+                                        if (_emPass === 1) eTmpl[ej-1].dMax = ePrevMax;
+                                        eTmpl.splice(ej, 1); ej--;
+                                        eMerged = true;
+                                        enforceFixCount++;
+                                        log('[Phase3] ENFORCE: merged' + (_emPass === 1 ? ' (dMax-override)' : '') +
+                                            ' sub-dMin ' + eType + ' into prev for bunk ' + eBunk);
+                                    }
                                 }
-                            }
-                            // Try merging into next sport/slot
-                            if (!eMerged && ej < eTmpl.length - 1 && ['sport','slot'].includes((eTmpl[ej+1].type||'').toLowerCase())) {
-                                var eNextMax = eTmpl[ej+1].dMax || (TYPE_CEILINGS[(eTmpl[ej+1].type||'').toLowerCase()] || 60);
-                                if ((eTmpl[ej+1].endMin - eTmpl[ej+1].startMin) + eDur <= eNextMax) {
-                                    eTmpl[ej+1].startMin = eBlk.startMin;
-                                    eTmpl.splice(ej, 1); ej--;
-                                    eMerged = true;
-                                    enforceFixCount++;
-                                    log('[Phase3] ENFORCE: merged sub-dMin ' + eType + ' into next for bunk ' + eBunk);
+                                // Try merging into next sport/slot
+                                if (!eMerged && ej < eTmpl.length - 1 && ['sport','slot'].includes((eTmpl[ej+1].type||'').toLowerCase())) {
+                                    var _emNextType = (eTmpl[ej+1].type||'').toLowerCase();
+                                    var eNextMax = _emPass === 0
+                                        ? (eTmpl[ej+1].dMax || (TYPE_CEILINGS[_emNextType] || GAP_MAX_DUR))
+                                        : (TYPE_CEILINGS[_emNextType] || GAP_MAX_DUR);
+                                    if ((eTmpl[ej+1].endMin - eTmpl[ej+1].startMin) + eDur <= eNextMax) {
+                                        eTmpl[ej+1].startMin = eBlk.startMin;
+                                        if (_emPass === 1) eTmpl[ej+1].dMax = eNextMax;
+                                        eTmpl.splice(ej, 1); ej--;
+                                        eMerged = true;
+                                        enforceFixCount++;
+                                        log('[Phase3] ENFORCE: merged' + (_emPass === 1 ? ' (dMax-override)' : '') +
+                                            ' sub-dMin ' + eType + ' into next for bunk ' + eBunk);
+                                    }
                                 }
                             }
                             // Last resort: absorb sub-dMin gap into adjacent neighbor
                             // even if it crosses a period boundary — a 55min sport
                             // is better than a 25min Free trapped between walls.
+                            // Allow absorption into _fixed (solver-written) but NOT _pinned/_league.
+                            // ★ Two-pass: first respect dMax, then override dMax as emergency.
                             if (!eMerged) {
                                 var _lrAbsorbed = false;
-                                // Try prev neighbor absorption
-                                if (ej > 0) {
-                                    var _lrPrev = eTmpl[ej - 1];
-                                    var _lrPrevType = (_lrPrev.type || '').toLowerCase();
-                                    if (['sport', 'slot', 'sports'].includes(_lrPrevType) &&
-                                        !_lrPrev._fixed && !_lrPrev._pinned && !_lrPrev._league) {
-                                        var _lrPrevDur = _lrPrev.endMin - _lrPrev.startMin;
-                                        var _lrPrevMax = _lrPrev.dMax || (TYPE_CEILINGS[_lrPrevType] || GAP_MAX_DUR);
-                                        if (_lrPrevDur + eDur <= _lrPrevMax) {
-                                            _lrPrev.endMin += eDur;
-                                            eTmpl.splice(ej, 1); ej--;
-                                            _lrAbsorbed = true;
-                                            enforceFixCount++;
-                                            log('[Phase3] ENFORCE: last-resort absorbed ' + eDur + 'min into prev "' +
-                                                (_lrPrev.event || _lrPrevType) + '" for bunk ' + eBunk);
+                                for (var _lrPass = 0; _lrPass < 2 && !_lrAbsorbed; _lrPass++) {
+                                    // Pass 0: respect dMax. Pass 1: override dMax (use TYPE_CEILINGS).
+                                    if (ej > 0) {
+                                        var _lrPrev = eTmpl[ej - 1];
+                                        var _lrPrevType = (_lrPrev.type || '').toLowerCase();
+                                        if (['sport', 'slot', 'sports'].includes(_lrPrevType) &&
+                                            !_lrPrev._pinned && !_lrPrev._league) {
+                                            var _lrPrevDur = _lrPrev.endMin - _lrPrev.startMin;
+                                            var _lrPrevMax = _lrPass === 0
+                                                ? (_lrPrev.dMax || (TYPE_CEILINGS[_lrPrevType] || GAP_MAX_DUR))
+                                                : (TYPE_CEILINGS[_lrPrevType] || GAP_MAX_DUR);
+                                            if (_lrPrevDur + eDur <= _lrPrevMax) {
+                                                _lrPrev.endMin += eDur;
+                                                if (_lrPass === 1) _lrPrev.dMax = _lrPrevMax;
+                                                eTmpl.splice(ej, 1); ej--;
+                                                _lrAbsorbed = true;
+                                                enforceFixCount++;
+                                                log('[Phase3] ENFORCE: last-resort' + (_lrPass === 1 ? ' (dMax-override)' : '') +
+                                                    ' absorbed ' + eDur + 'min into prev "' +
+                                                    (_lrPrev.event || _lrPrevType) + '" for bunk ' + eBunk);
+                                            }
                                         }
                                     }
-                                }
-                                // Try next neighbor absorption
-                                if (!_lrAbsorbed && ej < eTmpl.length - 1) {
-                                    var _lrNext = eTmpl[ej + 1];
-                                    var _lrNextType = (_lrNext.type || '').toLowerCase();
-                                    if (['sport', 'slot', 'sports'].includes(_lrNextType) &&
-                                        !_lrNext._fixed && !_lrNext._pinned && !_lrNext._league) {
-                                        var _lrNextDur = _lrNext.endMin - _lrNext.startMin;
-                                        var _lrNextMax = _lrNext.dMax || (TYPE_CEILINGS[_lrNextType] || GAP_MAX_DUR);
-                                        if (_lrNextDur + eDur <= _lrNextMax) {
-                                            _lrNext.startMin -= eDur;
-                                            eTmpl.splice(ej, 1); ej--;
-                                            _lrAbsorbed = true;
-                                            enforceFixCount++;
-                                            log('[Phase3] ENFORCE: last-resort absorbed ' + eDur + 'min into next "' +
-                                                (_lrNext.event || _lrNextType) + '" for bunk ' + eBunk);
+                                    if (!_lrAbsorbed && ej < eTmpl.length - 1) {
+                                        var _lrNext = eTmpl[ej + 1];
+                                        var _lrNextType = (_lrNext.type || '').toLowerCase();
+                                        if (['sport', 'slot', 'sports'].includes(_lrNextType) &&
+                                            !_lrNext._pinned && !_lrNext._league) {
+                                            var _lrNextDur = _lrNext.endMin - _lrNext.startMin;
+                                            var _lrNextMax = _lrPass === 0
+                                                ? (_lrNext.dMax || (TYPE_CEILINGS[_lrNextType] || GAP_MAX_DUR))
+                                                : (TYPE_CEILINGS[_lrNextType] || GAP_MAX_DUR);
+                                            if (_lrNextDur + eDur <= _lrNextMax) {
+                                                _lrNext.startMin -= eDur;
+                                                if (_lrPass === 1) _lrNext.dMax = _lrNextMax;
+                                                eTmpl.splice(ej, 1); ej--;
+                                                _lrAbsorbed = true;
+                                                enforceFixCount++;
+                                                log('[Phase3] ENFORCE: last-resort' + (_lrPass === 1 ? ' (dMax-override)' : '') +
+                                                    ' absorbed ' + eDur + 'min into next "' +
+                                                    (_lrNext.event || _lrNextType) + '" for bunk ' + eBunk);
+                                            }
                                         }
                                     }
                                 }
