@@ -221,20 +221,23 @@
                 const roleChanged = dbRole !== _currentRole;
                 const divsChanged = JSON.stringify(dbSubIds) !== JSON.stringify(_userSubdivisionIds) ||
                                     JSON.stringify(dbAssignedDivs) !== JSON.stringify(_directDivisionAssignments);
-                if (roleChanged || divsChanged) {
+                const needsResolution = dbRole === ROLES.SCHEDULER && dbSubIds.length > 0 && _editableDivisions.length === 0;
+                if (roleChanged || divsChanged || needsResolution) {
                     if (roleChanged) {
                         console.warn("🔐 🚨 ROLE MISMATCH! Cache said", _currentRole, "but DB says", dbRole);
                     }
                     if (divsChanged) {
                         console.log("🔐 Division assignments updated from DB");
                     }
+                    if (needsResolution) {
+                        console.log("🔐 Scheduler has subdivision IDs but no editable divisions — resolving");
+                    }
                     _currentRole = dbRole;
                     _campId = memberData.camp_id;
                     _isTeamMember = true;
                     _userSubdivisionIds = dbSubIds;
                     _directDivisionAssignments = dbAssignedDivs;
-                    // Resolve subdivision UUIDs to division names if not already set
-                    if (_directDivisionAssignments.length === 0 && _userSubdivisionIds.length > 0) {
+                    if (_userSubdivisionIds.length > 0) {
                         try {
                             const { data: subRows } = await window.supabase
                                 .from('subdivisions')
@@ -253,12 +256,10 @@
                     calculateEditableDivisions();
                     localStorage.setItem('campistry_role', _currentRole);
                     sessionStorage.removeItem('campistry_rbac_cache');
-                    // Remove stale "no access" warning if divisions are now assigned
                     if (_editableDivisions.length > 0) {
                         const warn = document.getElementById('no-access-warning');
                         if (warn) warn.remove();
                     }
-                    // Notify UI of updated permissions
                     window.dispatchEvent(new CustomEvent('campistry-access-loaded', {
                         detail: {
                             role: _currentRole,
@@ -554,23 +555,19 @@
                 
                 if (_userSubdivisionIds.length > 0) {
                     console.log("🔐 User has subdivision assignments:", _userSubdivisionIds);
-                    // Resolve subdivision UUIDs to division names immediately so
-                    // calculateEditableDivisions works before background load
-                    if (_directDivisionAssignments.length === 0) {
-                        try {
-                            const { data: subRows } = await window.supabase
-                                .from('subdivisions')
-                                .select('divisions')
-                                .in('id', _userSubdivisionIds);
-                            if (subRows) {
-                                const divs = new Set();
-                                subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
-                                _directDivisionAssignments = [...divs];
-                                console.log("🔐 Resolved subdivision divisions:", _directDivisionAssignments);
-                            }
-                        } catch (e) {
-                            console.warn("🔐 Could not resolve subdivision divisions:", e);
+                    try {
+                        const { data: subRows } = await window.supabase
+                            .from('subdivisions')
+                            .select('divisions')
+                            .in('id', _userSubdivisionIds);
+                        if (subRows) {
+                            const divs = new Set();
+                            subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                            _directDivisionAssignments = [...divs];
+                            console.log("🔐 Resolved subdivision divisions:", _directDivisionAssignments);
                         }
+                    } catch (e) {
+                        console.warn("🔐 Could not resolve subdivision divisions:", e);
                     }
                 } else if (_directDivisionAssignments.length > 0) {
                     console.log("🔐 User has direct division assignments:", _directDivisionAssignments);
@@ -1854,6 +1851,19 @@
                 return { error: `${email} has already been invited to this camp.` };
             }
 
+            let assignedDivisions = [];
+            if (subdivisionIds.length > 0) {
+                const { data: subRows } = await window.supabase
+                    .from('subdivisions')
+                    .select('divisions')
+                    .in('id', subdivisionIds);
+                if (subRows) {
+                    const divs = new Set();
+                    subRows.forEach(s => (s.divisions || []).forEach(d => divs.add(d)));
+                    assignedDivisions = [...divs];
+                }
+            }
+
             const { data, error } = await window.supabase
                 .from('camp_users')
                 .insert([{
@@ -1862,6 +1872,7 @@
                     name: name || null,
                     role: role,
                     subdivision_ids: subdivisionIds,
+                    assigned_divisions: assignedDivisions,
                     invited_by: _currentUser.id,
                     invite_token: inviteToken
                 }])
@@ -1890,19 +1901,19 @@
         }
 
         try {
-            // When subdivision_ids are updated, also sync assigned_divisions
-            // so the scheduler's permissions work immediately (before subdivisions
-            // table is loaded in the background).
             if (updates.subdivision_ids && Array.isArray(updates.subdivision_ids)) {
-                const divNames = new Set();
-                for (const subId of updates.subdivision_ids) {
-                    const sub = _subdivisions.find(s => s.id === subId);
-                    if (sub && Array.isArray(sub.divisions)) {
-                        sub.divisions.forEach(d => divNames.add(d));
+                if (updates.subdivision_ids.length > 0) {
+                    const { data: subRows } = await window.supabase
+                        .from('subdivisions')
+                        .select('divisions')
+                        .in('id', updates.subdivision_ids);
+                    const divNames = new Set();
+                    if (subRows) {
+                        subRows.forEach(s => (s.divisions || []).forEach(d => divNames.add(d)));
                     }
-                }
-                if (divNames.size > 0) {
                     updates.assigned_divisions = [...divNames];
+                } else {
+                    updates.assigned_divisions = [];
                 }
             }
 
