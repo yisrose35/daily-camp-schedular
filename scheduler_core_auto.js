@@ -433,8 +433,28 @@
         window._preGenClearActive = true;
         window._generationInProgress = true;
         window._divisionTimesLocked = false;
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
+
+        const _step0AllowedDivs = options.allowedDivisions || null;
+        const _allDivKeys = Object.keys(window.divisions || {});
+        const _isPartialGen = _step0AllowedDivs &&
+            _step0AllowedDivs.length > 0 &&
+            _step0AllowedDivs.length < _allDivKeys.length;
+
+        if (_isPartialGen) {
+            const divisions = window.divisions || {};
+            const myBunks = new Set();
+            _step0AllowedDivs.forEach(divName => {
+                (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+            });
+            log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + _step0AllowedDivs.join(', ') + ']');
+            myBunks.forEach(bunk => {
+                delete window.scheduleAssignments?.[bunk];
+                delete window.leagueAssignments?.[bunk];
+            });
+        } else {
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+        }
         window.fieldUsageBySlot = {};
         window.locationUsageBySlot = {};
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
