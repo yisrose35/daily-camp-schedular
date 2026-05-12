@@ -13091,14 +13091,26 @@
                                         // that crosses a period boundary at +30min becomes
                                         // 30min + 25min — the 25min piece is a trap if
                                         // sportFillMin > 25 and no matching short special exists.
-                                        var _dvSubGaps = splitGapAtPeriods(
-                                            { start: gapsAfter[ag].s, end: gapsAfter[ag].e }, grade);
-                                        if (_dvSubGaps.length > 1) {
-                                            for (var _dvi = 0; _dvi < _dvSubGaps.length; _dvi++) {
-                                                var _dvSeg = _dvSubGaps[_dvi].end - _dvSubGaps[_dvi].start;
-                                                if (_dvSeg > 0 && _dvSeg < sportFillMin && !_p25ShortSpecDurs[_dvSeg]) {
-                                                    score -= 1500;
-                                                    _trapGapCount++;
+                                        if (_sp25MergedPeriods.length > 0) {
+                                            var _dvGS = gapsAfter[ag].s, _dvGE = gapsAfter[ag].e;
+                                            var _dvSubs = [];
+                                            var _dvCur = _dvGS;
+                                            for (var _dvpi = 0; _dvpi < _sp25MergedPeriods.length; _dvpi++) {
+                                                var _dvP = _sp25MergedPeriods[_dvpi];
+                                                if (_dvP.e <= _dvCur) continue;
+                                                if (_dvP.s >= _dvGE) break;
+                                                var _dvSS = Math.max(_dvCur, _dvP.s);
+                                                var _dvSE = Math.min(_dvGE, _dvP.e);
+                                                if (_dvSE > _dvSS) _dvSubs.push(_dvSE - _dvSS);
+                                                _dvCur = _dvP.e;
+                                                if (_dvCur >= _dvGE) break;
+                                            }
+                                            if (_dvSubs.length > 1) {
+                                                for (var _dvi = 0; _dvi < _dvSubs.length; _dvi++) {
+                                                    if (_dvSubs[_dvi] > 0 && _dvSubs[_dvi] < sportFillMin && !_p25ShortSpecDurs[_dvSubs[_dvi]]) {
+                                                        score -= 1500;
+                                                        _trapGapCount++;
+                                                    }
                                                 }
                                             }
                                         }
