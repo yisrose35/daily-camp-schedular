@@ -804,8 +804,17 @@
             return;
         }
 
-        if (record.date_key !== _currentDateKey) {
-            log('Ignoring change for different date:', record.date_key);
+        // For DELETE events, payload.old may only have the primary key (id)
+        // if REPLICA IDENTITY is default. Treat unknown-date deletes as
+        // potentially affecting the current date.
+        var recordDateKey = record.date_key;
+        if (eventType === 'DELETE' && !recordDateKey) {
+            log('DELETE with unknown date_key — treating as current date');
+            recordDateKey = _currentDateKey;
+        }
+
+        if (recordDateKey !== _currentDateKey) {
+            log('Ignoring change for different date:', recordDateKey);
             return;
         }
 
@@ -817,7 +826,7 @@
             type: eventType,
             scheduler: record.scheduler_name || 'Unknown',
             schedulerId: record.scheduler_id,
-            dateKey: record.date_key,
+            dateKey: recordDateKey,
             data: payload.new?.schedule_data,
             divisions: payload.new?.divisions
         });
@@ -826,10 +835,6 @@
         showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
 
         // Always do a full cloud reload so the view reflects the latest state.
-        // refreshMultiSchedulerView loads all scheduler records, merges them,
-        // and hydrates window globals. The 60-second generation guard in
-        // forceHydrateFromLocalStorage protects against overwriting during
-        // an active local generation.
         setTimeout(function() {
             refreshMultiSchedulerView(_currentDateKey, true);
         }, 500);

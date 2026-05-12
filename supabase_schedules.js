@@ -424,8 +424,9 @@
             const records = await loadAllSchedulersForDate(dateKey);
             
             if (!records || records.length === 0) {
-                log('No cloud records, using local data');
-                return { success: true, data: getLocalSchedule(dateKey), source: 'local' };
+                log('No cloud records — clearing local cache for this date');
+                deleteLocalSchedule(dateKey);
+                return { success: true, data: { scheduleAssignments: {}, leagueAssignments: {}, unifiedTimes: [], divisionTimes: {} }, source: 'cloud', recordCount: 0 };
             }
             const merged = mergeSchedules(records);
             
