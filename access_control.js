@@ -883,14 +883,36 @@
             if (_directDivisionAssignments && _directDivisionAssignments.length > 0) {
                 _directDivisionAssignments.forEach(d => editableDivs.add(d));
             }
-            
-            // ★★★ FIX: If window.divisions is empty (e.g., on dashboard), 
-            // use the divisions from subdivisions directly without filtering ★★★
+
+            // Expand parent division names to child grades.
+            // Subdivisions store parent division names (e.g. "Neranina") but
+            // window.divisions is keyed by grade names (e.g. "Duetos", "Majors").
+            // Each grade entry has a parentDivision property linking back.
+            if (editableDivs.size > 0 && allDivisions.length > 0) {
+                const divisions = window.divisions || {};
+                const expanded = new Set();
+                editableDivs.forEach(name => {
+                    if (divisions[name]) {
+                        expanded.add(name);
+                    } else {
+                        let found = false;
+                        allDivisions.forEach(gradeKey => {
+                            if (divisions[gradeKey]?.parentDivision === name) {
+                                expanded.add(gradeKey);
+                                found = true;
+                            }
+                        });
+                        if (!found) expanded.add(name);
+                    }
+                });
+                editableDivs.clear();
+                expanded.forEach(d => editableDivs.add(d));
+            }
+
             if (allDivisions.length === 0 && editableDivs.size > 0) {
                 _editableDivisions = [...editableDivs];
                 console.log("🔐 Scheduler edit access (from subdivisions):", _editableDivisions.length, "divisions", _editableDivisions);
             } else {
-                // Filter against window.divisions if it's populated
                 _editableDivisions = allDivisions.filter(d => editableDivs.has(d));
                 console.log("🔐 Scheduler edit access:", _editableDivisions.length, "divisions", _editableDivisions);
             }
