@@ -8962,8 +8962,50 @@
                                     log('[Phase3] ENFORCE: merged sub-dMin ' + eType + ' into next for bunk ' + eBunk);
                                 }
                             }
+                            // Last resort: absorb sub-dMin gap into adjacent neighbor
+                            // even if it crosses a period boundary — a 55min sport
+                            // is better than a 25min Free trapped between walls.
                             if (!eMerged) {
-                                warn('[Phase3] ENFORCE: could not fix sub-dMin ' + eType + ' (' + eDur + '<' + eDMin + ') for bunk ' + eBunk + ' — trapped between walls');
+                                var _lrAbsorbed = false;
+                                // Try prev neighbor absorption
+                                if (ej > 0) {
+                                    var _lrPrev = eTmpl[ej - 1];
+                                    var _lrPrevType = (_lrPrev.type || '').toLowerCase();
+                                    if (['sport', 'slot', 'sports'].includes(_lrPrevType) &&
+                                        !_lrPrev._fixed && !_lrPrev._pinned && !_lrPrev._league) {
+                                        var _lrPrevDur = _lrPrev.endMin - _lrPrev.startMin;
+                                        var _lrPrevMax = _lrPrev.dMax || (TYPE_CEILINGS[_lrPrevType] || GAP_MAX_DUR);
+                                        if (_lrPrevDur + eDur <= _lrPrevMax) {
+                                            _lrPrev.endMin += eDur;
+                                            eTmpl.splice(ej, 1); ej--;
+                                            _lrAbsorbed = true;
+                                            enforceFixCount++;
+                                            log('[Phase3] ENFORCE: last-resort absorbed ' + eDur + 'min into prev "' +
+                                                (_lrPrev.event || _lrPrevType) + '" for bunk ' + eBunk);
+                                        }
+                                    }
+                                }
+                                // Try next neighbor absorption
+                                if (!_lrAbsorbed && ej < eTmpl.length - 1) {
+                                    var _lrNext = eTmpl[ej + 1];
+                                    var _lrNextType = (_lrNext.type || '').toLowerCase();
+                                    if (['sport', 'slot', 'sports'].includes(_lrNextType) &&
+                                        !_lrNext._fixed && !_lrNext._pinned && !_lrNext._league) {
+                                        var _lrNextDur = _lrNext.endMin - _lrNext.startMin;
+                                        var _lrNextMax = _lrNext.dMax || (TYPE_CEILINGS[_lrNextType] || GAP_MAX_DUR);
+                                        if (_lrNextDur + eDur <= _lrNextMax) {
+                                            _lrNext.startMin -= eDur;
+                                            eTmpl.splice(ej, 1); ej--;
+                                            _lrAbsorbed = true;
+                                            enforceFixCount++;
+                                            log('[Phase3] ENFORCE: last-resort absorbed ' + eDur + 'min into next "' +
+                                                (_lrNext.event || _lrNextType) + '" for bunk ' + eBunk);
+                                        }
+                                    }
+                                }
+                                if (!_lrAbsorbed) {
+                                    warn('[Phase3] ENFORCE: could not fix sub-dMin ' + eType + ' (' + eDur + '<' + eDMin + ') for bunk ' + eBunk + ' — trapped between walls');
+                                }
                             }
                         }
                     }
@@ -9307,6 +9349,49 @@
                 allTemplates[pg_bunk]  = pg_tmpl;
             }
             if (pgClosed > 0) log('[POST-GAP] ★ closed ' + pgClosed + ' post-enforcement gap(s)');
+
+            // ══════════════════════════════════════════════════════════════════════
+            // ★ MICRO-FILL PASS: Replace sub-dMin "Free" blocks with real activities.
+            // After all repairs, some blocks are stuck at Free with durations of
+            // 5-25min (below sportFillMin). Try to fill them with short specials
+            // (Slush 10min, Neranitas 20min) or rotation events that fit exactly.
+            // ══════════════════════════════════════════════════════════════════════
+            var _mfCount = 0;
+            for (var _mfi = 0; _mfi < allBunkIds.length; _mfi++) {
+                var _mfBunk = allBunkIds[_mfi];
+                var _mfMeta = bunkMeta[_mfBunk];
+                if (!_mfMeta) continue;
+                var _mfTmpl = bunkTimelines[_mfBunk] || allTemplates[_mfBunk] || [];
+                var _mfGrade = _mfMeta.grade;
+                var _mfFillMin = _mfMeta.fillMinDur || 25;
+                for (var _mfj = 0; _mfj < _mfTmpl.length; _mfj++) {
+                    var _mfBlk = _mfTmpl[_mfj];
+                    if (!_mfBlk) continue;
+                    var _mfEvt = (_mfBlk.event || '').toLowerCase();
+                    var _mfType = (_mfBlk.type || '').toLowerCase();
+                    if (_mfEvt !== 'free' && _mfType !== 'free') continue;
+                    var _mfDur = _mfBlk.endMin - _mfBlk.startMin;
+                    if (_mfDur <= 0 || _mfDur >= _mfFillMin) continue;
+                    // Try to find a short special that fits exactly
+                    var _mfActivity = pickFillActivity(_mfDur, _mfGrade, _mfBunk);
+                    if (_mfActivity) {
+                        var _mfActDur = getSpecialDuration(_mfActivity, activityProperties, globalSettings) || _mfDur;
+                        if (_mfActDur <= _mfDur) {
+                            _mfBlk.event = _mfActivity;
+                            _mfBlk.type = 'slot';
+                            _mfBlk._source = 'micro-fill';
+                            if (_mfActDur < _mfDur) {
+                                _mfBlk.endMin = _mfBlk.startMin + _mfActDur;
+                            }
+                            _mfCount++;
+                            log('[MICRO-FILL] bunk=' + _mfBunk + ' replaced Free with "' +
+                                _mfActivity + '" (' + _mfActDur + 'min) @' +
+                                _mfBlk.startMin + '-' + _mfBlk.endMin);
+                        }
+                    }
+                }
+            }
+            if (_mfCount > 0) log('[MICRO-FILL] ★ replaced ' + _mfCount + ' sub-dMin Free block(s) with real activities');
 
             // ══════════════════════════════════════════════════════════════════════
             // ★ COMPONENT 3 — COVERAGE VALIDATION (budget-first assertion)
@@ -10009,12 +10094,30 @@
                 this._fieldBias = fieldBiases[_fbIdx];
                 summary.push('fields=' + this._fieldBias);
 
+                // ── Lever 10: Intra-bunk specials ordering ──
+                // Within each bunk's drafted specials, the placement order matters:
+                // early specials constrain later ones. Vary across iterations.
+                var bunkSpecialsOrders = ['draft', 'longest-first', 'shortest-first', 'most-failed-first'];
+                var _bsoIdx;
+                if (iter <= 2) {
+                    _bsoIdx = 0;
+                } else if (this._iterPhase === 'explore') {
+                    _bsoIdx = Math.floor(iter / 2) % bunkSpecialsOrders.length;
+                } else if (this._bestStructure && this._bestStructure.bunkSpecialsOrder != null) {
+                    _bsoIdx = this._bestStructure.bunkSpecialsOrder;
+                } else {
+                    _bsoIdx = 0;
+                }
+                this._bunkSpecialsOrder = bunkSpecialsOrders[_bsoIdx];
+                summary.push('bunk-spec=' + this._bunkSpecialsOrder);
+
                 // ★ Publish full strategy to window for solver to read
                 window._brainStrategy = {
                     solverSort: this._solverSortStrategy,
                     durationPref: this._durationPref,
                     fieldBias: this._fieldBias,
                     specialsSort: this._specialsSortStrategy,
+                    bunkSpecialsOrder: this._bunkSpecialsOrder,
                     iterPhase: this._iterPhase,
                     iter: iter
                 };
@@ -10861,6 +10964,7 @@
         window._brainStrategy = {
             solverSort: 'time-sweep', durationPref: 'balanced',
             fieldBias: 'rotation', specialsSort: 'narrowness',
+            bunkSpecialsOrder: 'draft',
             iterPhase: 'explore', iter: 0
         };
 
@@ -12654,6 +12758,26 @@
                         //   entry becomes its own wall, recomputing existingWalls /
                         //   allGapsForBunk each iteration so subsequent placements see
                         //   prior ones.
+
+                        // ★ BRAIN Lever 10: Reorder specials within this bunk
+                        var _bsoStrat = adaptiveBrain._bunkSpecialsOrder || 'draft';
+                        if (_bsoStrat !== 'draft' && draft.specials.length > 1) {
+                            var _bsoFails = adaptiveBrain.specialPlacementFails || {};
+                            draft.specials.sort(function(a, b) {
+                                if (!a || !b) return 0;
+                                var aDur = getSpecialDuration(a.name || a.event || '', activityProperties, globalSettings) || a.duration || 30;
+                                var bDur = getSpecialDuration(b.name || b.event || '', activityProperties, globalSettings) || b.duration || 30;
+                                if (_bsoStrat === 'longest-first') return bDur - aDur;
+                                if (_bsoStrat === 'shortest-first') return aDur - bDur;
+                                if (_bsoStrat === 'most-failed-first') {
+                                    var aFail = _bsoFails[a.name || a.event || ''] || 0;
+                                    var bFail = _bsoFails[b.name || b.event || ''] || 0;
+                                    return bFail - aFail;
+                                }
+                                return 0;
+                            });
+                        }
+
                         for (var _sIdx = 0; _sIdx < draft.specials.length; _sIdx++) {
                         const special = draft.specials[_sIdx];
                         if (!special || !special.claimedTime) continue;
@@ -12953,21 +13077,32 @@
                                 var score = 0;
                                 var deadGapCount = 0;
                                 var gapSizes = [];
+                                var _trapGapCount = 0;
                                 for (var ag = 0; ag < gapsAfter.length; ag++) {
                                     var gSize = gapsAfter[ag].e - gapsAfter[ag].s;
                                     if (gSize <= 0) continue;
                                     gapSizes.push(gSize);
-                                    // Dead-gap penalty — three tiers:
-                                    //   < 5min    : truly unrecoverable (not even a micro-slot fits)
-                                    //              → deadGapCount++ (PLACEMENT-STUCK) + -2500
-                                    //   5-fillMin : micro-slot fillable but sport can't use it
-                                    //              → -2500 score penalty (same pressure) but
-                                    //                deadGapCount NOT incremented — post-gap closer
-                                    //                will create a General Activity Slot here
-                                    //   >= fillMin: sports can fill it → +50 bonus
                                     if (gSize < 5) { deadGapCount++; score -= 2500; }
                                     else if (gSize < sportFillMin) { score -= 2500; }
-                                    else { score += 50; } // fillable gap bonus
+                                    else {
+                                        score += 50;
+                                        // ★ Period-aware divisibility: split this gap by bell
+                                        // boundaries and check each sub-segment. A 55min gap
+                                        // that crosses a period boundary at +30min becomes
+                                        // 30min + 25min — the 25min piece is a trap if
+                                        // sportFillMin > 25 and no matching short special exists.
+                                        var _dvSubGaps = splitGapAtPeriods(
+                                            { start: gapsAfter[ag].s, end: gapsAfter[ag].e }, grade);
+                                        if (_dvSubGaps.length > 1) {
+                                            for (var _dvi = 0; _dvi < _dvSubGaps.length; _dvi++) {
+                                                var _dvSeg = _dvSubGaps[_dvi].end - _dvSubGaps[_dvi].start;
+                                                if (_dvSeg > 0 && _dvSeg < sportFillMin && !_p25ShortSpecDurs[_dvSeg]) {
+                                                    score -= 1500;
+                                                    _trapGapCount++;
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // Wall-aligned bonus (flush against existing blocks)
@@ -13415,6 +13550,7 @@
                 var _slStrats = ['time-sweep', 'reverse-time', 'grade-grouped', 'mrv-first', 'duration-first'];
                 var _dpStrats = ['balanced', 'prefer-short', 'prefer-long'];
                 var _fbStrats = ['rotation', 'spread', 'concentrate'];
+                var _bsoStrats = ['draft', 'longest-first', 'shortest-first', 'most-failed-first'];
                 adaptiveBrain._bestStructure = {
                     gradeOrder: adaptiveBrain.swimGradeOrder ? adaptiveBrain.swimGradeOrder.slice() : null,
                     poolHints: JSON.parse(JSON.stringify(adaptiveBrain.poolShiftHints)),
@@ -13423,7 +13559,8 @@
                     specialsSort: _ssStrats.indexOf(adaptiveBrain._specialsSortStrategy),
                     solverSort: _slStrats.indexOf(adaptiveBrain._solverSortStrategy),
                     durationPref: _dpStrats.indexOf(adaptiveBrain._durationPref),
-                    fieldBias: _fbStrats.indexOf(adaptiveBrain._fieldBias)
+                    fieldBias: _fbStrats.indexOf(adaptiveBrain._fieldBias),
+                    bunkSpecialsOrder: _bsoStrats.indexOf(adaptiveBrain._bunkSpecialsOrder)
                 };
                 log('[BRAIN] ★ New best! Saving structural decisions for exploitation phase');
             } else staleCount++;
@@ -13593,6 +13730,7 @@
                 if (_bs.solverSort != null) _bsParts.push('solver=' + ['time-sweep','reverse-time','grade-grouped','mrv-first','duration-first'][_bs.solverSort]);
                 if (_bs.durationPref != null) _bsParts.push('duration=' + ['balanced','prefer-short','prefer-long'][_bs.durationPref]);
                 if (_bs.fieldBias != null) _bsParts.push('fields=' + ['rotation','spread','concentrate'][_bs.fieldBias]);
+                if (_bs.bunkSpecialsOrder != null) _bsParts.push('bunk-spec=' + ['draft','longest-first','shortest-first','most-failed-first'][_bs.bunkSpecialsOrder]);
                 if (_bsParts.length > 0) _brainSummary.push('best-structure: ' + _bsParts.join(', '));
             }
             if (_brainSummary.length > 0) {
