@@ -1715,6 +1715,12 @@
                     mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
                 }
                 
+                // Camp-wide config is owned by the owner — always prefer
+                // cloud version so schedulers see the latest structure.
+                if (cloudState.campStructure && Object.keys(cloudState.campStructure).length > 0) {
+                    mergedState.campStructure = cloudState.campStructure;
+                }
+
                 setLocalSettings(mergedState);
 
                 // Do NOT assign window.divisions directly from the flat top-level key —
