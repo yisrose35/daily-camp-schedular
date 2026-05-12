@@ -704,6 +704,10 @@
             });
         }
 
+        // ★ Brain free-priority: bunks that consistently get Free blocks
+        // should be solved earlier so they claim scarce fields first.
+        const _brainFP = window._brainFreePriorityBunks || {};
+
         blocks.sort((a, b) => {
             const aHint = a._draftActivity ? -1 : 0;
             const bHint = b._draftActivity ? -1 : 0;
@@ -716,6 +720,11 @@
 
             // Primary: earlier start time first (time-sweep across all grades)
             if (aSM !== bSM) return (aSM || 0) - (bSM || 0);
+
+            // ★ Brain boost: free-priority bunks solved before peers at same time
+            const aFP = _brainFP[a.bunk] ? 1 : 0;
+            const bFP = _brainFP[b.bunk] ? 1 : 0;
+            if (aFP !== bFP) return bFP - aFP;
 
             // Secondary: within same start time, MRV — fewest field options first
             const aOptions = gradeFieldOptions.get(aGrade + '|' + aSM + '-' + aEM) || 999;

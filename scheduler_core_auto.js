@@ -9816,6 +9816,31 @@
                     });
                 });
 
+                // ── Lever 4: Free-hotspot bunk priority ──
+                // Bunks that consistently get Free blocks should be solved earlier
+                // so they claim scarce fields before other bunks.
+                var freePriorityBunks = {};
+                Object.keys(this.freeHotspots).forEach(function(g) {
+                    var spots = self.freeHotspots[g] || [];
+                    var bunkCounts = {};
+                    spots.forEach(function(s) {
+                        bunkCounts[s.bunk] = (bunkCounts[s.bunk] || 0) + 1;
+                    });
+                    Object.keys(bunkCounts).forEach(function(bk) {
+                        if (bunkCounts[bk] >= 2) {
+                            freePriorityBunks[bk] = bunkCounts[bk];
+                        }
+                    });
+                });
+                if (Object.keys(freePriorityBunks).length > 0) {
+                    window._brainFreePriorityBunks = freePriorityBunks;
+                    log('[BRAIN] Free-priority bunks: ' + Object.keys(freePriorityBunks).map(function(b) {
+                        return b + '(' + freePriorityBunks[b] + 'x)';
+                    }).join(', '));
+                } else {
+                    window._brainFreePriorityBunks = null;
+                }
+
                 // Log strategy summary
                 var summary = [];
                 if (this.swimGradeOrder) summary.push('swim-order');
@@ -9827,6 +9852,9 @@
                 Object.keys(this.poolShiftHints).forEach(function(g) {
                     summary.push('pool-' + g + ':' + self.poolShiftHints[g]);
                 });
+                if (Object.keys(freePriorityBunks).length > 0) {
+                    summary.push('free-priority:' + Object.keys(freePriorityBunks).length + ' bunks');
+                }
                 if (summary.length > 0) {
                     log('[BRAIN] ★ Strategy summary: ' + summary.join(' | '));
                 }
@@ -13119,6 +13147,12 @@
                     return e[0] + ' blocked by ' + Object.entries(e[1]).map(function(b) { return b[0] + '×' + b[1]; }).join(',');
                 }).join('; '));
             }
+            var _freeHotspotTotal = 0;
+            Object.values(adaptiveBrain.freeHotspots).forEach(function(spots) { _freeHotspotTotal += spots.length; });
+            if (_freeHotspotTotal > 0) _brainSummary.push('free-hotspots: ' + _freeHotspotTotal);
+            if (window._brainFreePriorityBunks && Object.keys(window._brainFreePriorityBunks).length > 0) {
+                _brainSummary.push('free-priority-bunks: ' + Object.keys(window._brainFreePriorityBunks).join(','));
+            }
             if (_brainSummary.length > 0) {
                 log('[BRAIN] ★ Final report: ' + _brainSummary.join(' | '));
             } else {
@@ -13172,6 +13206,85 @@
             console.warn('[scheduler_core_auto] Rotation event completion tracking failed:', e);
         }
 
+        // =====================================================================
+        // ★ BRAIN: FINAL GAP ABSORBER
+        // The POST-GAP micro-absorber runs during iterations and fixes 10-15min
+        // dead gaps by extending neighbors. But the final elite restore loads a
+        // schedule where those absorptions didn't happen. Run the same logic here
+        // on the final schedule so dead gaps between Shiur/Slush/Change are closed.
+        // Unlike the self-healing (which only extends sport/slot), this extends
+        // ANY block that isn't hard-fixed (swim/lunch/snack/dismissal/league/change).
+        // =====================================================================
+        (function _finalGapAbsorber() {
+            var HARD_FIXED_TYPES = { swim:1, lunch:1, snack:1, snacks:1, dismissal:1,
+                league:1, specialty_league:1, 'pre-change':1, 'post-change':1, change:1, trip:1 };
+            var fgaClosed = 0;
+
+            allGrades.forEach(function(grade) {
+                var div = divisions[grade] || divisions[String(grade)];
+                if (!div) return;
+                var fillMin = getMinFillable(grade) || 25;
+
+                getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                    var tl = bunkTimelines[bunk];
+                    if (!tl || tl.length < 2) return;
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+
+                    var changed = true, passes = 0;
+                    while (changed && passes < 10) {
+                        changed = false;
+                        passes++;
+                        for (var i = 0; i < tl.length - 1; i++) {
+                            var gapStart = tl[i].endMin;
+                            var gapEnd = tl[i + 1].startMin;
+                            var gapSize = gapEnd - gapStart;
+                            if (gapSize <= 0 || gapSize >= fillMin) continue;
+                            if (isInDeadZone(gapStart, gapEnd, grade)) continue;
+
+                            var prev = tl[i], next = tl[i + 1];
+                            var prevT = (prev.type || '').toLowerCase();
+                            var nextT = (next.type || '').toLowerCase();
+
+                            // Strategy A: extend prev rightward (if not hard-fixed and stays in period)
+                            if (!HARD_FIXED_TYPES[prevT] && staysInPeriod(prev.startMin, prev.endMin + gapSize, grade)) {
+                                prev.endMin += gapSize;
+                                fgaClosed++;
+                                changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': extended "' + (prev.event || prevT) + '" +' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
+                                break;
+                            }
+
+                            // Strategy B: extend next leftward
+                            if (!HARD_FIXED_TYPES[nextT] && staysInPeriod(next.startMin - gapSize, next.endMin, grade)) {
+                                next.startMin -= gapSize;
+                                fgaClosed++;
+                                changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': extended "' + (next.event || nextT) + '" -' + gapSize + 'min to close gap @' + gapStart + '-' + gapEnd);
+                                break;
+                            }
+
+                            // Strategy C: split between both
+                            if (!HARD_FIXED_TYPES[prevT] && !HARD_FIXED_TYPES[nextT]) {
+                                var givePrev = Math.floor(gapSize / 2 / 5) * 5;
+                                var giveNext = gapSize - givePrev;
+                                if (givePrev > 0 && giveNext > 0 &&
+                                    staysInPeriod(prev.startMin, prev.endMin + givePrev, grade) &&
+                                    staysInPeriod(next.startMin - giveNext, next.endMin, grade)) {
+                                    prev.endMin += givePrev;
+                                    next.startMin -= giveNext;
+                                    fgaClosed++;
+                                    changed = true;
+                                    log('[FINAL-GAP] ' + bunk + ': split gap ' + gapSize + 'min @' + gapStart + ' (' + givePrev + '/' + giveNext + ')');
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+
+            if (fgaClosed > 0) log('[FINAL-GAP] ★ Absorbed ' + fgaClosed + ' dead gap(s) in final schedule');
+        })();
 
         // =====================================================================
         // STEP 2.6 — VALIDATE
@@ -16467,7 +16580,11 @@
                         }
                     }
 
-                    // Fix dead gaps: extend adjacent sport blocks (skip inter-period gaps)
+                    // Fix dead gaps: extend adjacent blocks (skip inter-period gaps)
+                    // ★ v15.1: Extend ANY non-hard-fixed type (not just sport/slot)
+                    // so specials like Shiur can absorb 10min dead gaps.
+                    var _shHardFixed = { swim:1, lunch:1, snack:1, snacks:1, dismissal:1,
+                        league:1, specialty_league:1, 'pre-change':1, 'post-change':1, change:1, trip:1 };
                     var _gpHeal = (window.campPeriods && window.campPeriods[grade])
                         ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; }) : [];
                     var _isInterPeriodGapH = function(gs, ge) {
@@ -16476,17 +16593,17 @@
                         }
                         return false;
                     };
+                    var _shFillMin = getMinFillable(grade) || 25;
                     sorted.sort(function(a, b) { return a.startMin - b.startMin; });
                     for (var di = 0; di < sorted.length - 1; di++) {
                         var healGapStart = sorted[di].endMin, healGapEnd = sorted[di + 1].startMin;
                         var gapSize = healGapEnd - healGapStart;
-                        if (gapSize > 0 && gapSize < 25 && !_isInterPeriodGapH(healGapStart, healGapEnd)) {
-                            // Extend prev if it's a sport/slot
+                        if (gapSize > 0 && gapSize < _shFillMin && !_isInterPeriodGapH(healGapStart, healGapEnd)) {
                             var prevT = (sorted[di].type || '').toLowerCase();
                             var nextT = (sorted[di + 1].type || '').toLowerCase();
-                            if (['sport', 'slot'].includes(prevT) && !sorted[di]._fixed) {
+                            if (!_shHardFixed[prevT]) {
                                 sorted[di].endMin += gapSize; healed++;
-                            } else if (['sport', 'slot'].includes(nextT) && !sorted[di + 1]._fixed) {
+                            } else if (!_shHardFixed[nextT]) {
                                 sorted[di + 1].startMin -= gapSize; healed++;
                             }
                         }
