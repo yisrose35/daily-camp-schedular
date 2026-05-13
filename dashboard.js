@@ -1128,13 +1128,12 @@
         var html = '<strong style="color:var(--slate-700);">Week breakdown:</strong><br>';
         weeks.forEach(function(w) {
             var label = 'Week ' + w.week;
-            var inHalf1 = h1End && w.start <= h1End;
-            var inHalf2 = h2Start && w.end >= h2Start;
             var halfTag = '';
             if (h1End && h2Start) {
-                if (inHalf1 && !inHalf2) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
-                else if (inHalf2 && !inHalf1) halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
-                else if (inHalf1 && inHalf2) halfTag = ' <span style="color:#d97706; font-weight:600;">(transition)</span>';
+                var isTransition = w.start <= h2Start && w.end >= h2Start;
+                if (isTransition) halfTag = ' <span style="color:#d97706; font-weight:600;">(transition)</span>';
+                else if (w.end <= h1End) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
+                else halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
             }
             var fmt = function(d) {
                 var parts = d.split('-');
