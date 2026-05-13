@@ -366,21 +366,28 @@
             if (editProfileBtn) {
                 editProfileBtn.style.display = 'none';
             }
-            
+
             // Add "Your Permissions" section for team members
             addPermissionsSection();
-            
+
             // Hide team management section (only for owners)
             if (teamAccessSection) {
                 teamAccessSection.style.display = 'none';
             }
-            
+
+            // Schedulers and admins can see camp dates (read-only)
+            if (userRole === 'scheduler' || userRole === 'admin') {
+                var campDatesSection = document.getElementById('camp-dates-section');
+                if (campDatesSection) campDatesSection.style.display = 'block';
+                loadCampDates(true);
+            }
+
         } else if (userRole === 'owner') {
             // Owner sees everything
             checkAccessControl();
             var campDatesSection = document.getElementById('camp-dates-section');
             if (campDatesSection) campDatesSection.style.display = 'block';
-            loadCampDates();
+            loadCampDates(false);
         }
     }
     
@@ -1033,9 +1040,9 @@
     // CAMP DATES
     // ========================================
 
-    async function loadCampDates() {
+    async function loadCampDates(readOnly) {
         try {
-            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campId = localStorage.getItem('campistry_user_id') || (membership ? membership.camp_id : null) || currentUser.id;
             var campDates = null;
 
             var { data: kvRows, error: kvErr } = await window.supabase
@@ -1048,16 +1055,25 @@
                 campDates = kvRows[0].value;
             }
 
+            var startEl = document.getElementById('campStartDate');
+            var h1EndEl = document.getElementById('campHalf1End');
+            var h2StartEl = document.getElementById('campHalf2Start');
+            var endEl = document.getElementById('campEndDate');
+
             if (campDates) {
-                var startEl = document.getElementById('campStartDate');
-                var h1EndEl = document.getElementById('campHalf1End');
-                var h2StartEl = document.getElementById('campHalf2Start');
-                var endEl = document.getElementById('campEndDate');
                 if (startEl && campDates.startDate) startEl.value = campDates.startDate;
                 if (h1EndEl && campDates.half1End) h1EndEl.value = campDates.half1End;
                 if (h2StartEl && campDates.half2Start) h2StartEl.value = campDates.half2Start;
                 if (endEl && campDates.endDate) endEl.value = campDates.endDate;
                 updateWeekPreview();
+            }
+
+            if (readOnly) {
+                [startEl, h1EndEl, h2StartEl, endEl].forEach(function(el) {
+                    if (el) { el.disabled = true; el.style.backgroundColor = 'var(--slate-50)'; el.style.color = 'var(--slate-500)'; }
+                });
+                var actions = document.getElementById('campDatesActions');
+                if (actions) actions.style.display = 'none';
             }
         } catch (e) {
             console.warn('Could not load camp dates:', e);
