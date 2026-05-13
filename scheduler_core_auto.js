@@ -10213,6 +10213,25 @@
                 }
                 if (this._exploreBand) summary.push('band=' + this._exploreBand);
 
+                // ★ MULTI-STRATEGY EVALUATION: let the brain reason about
+                // which strategy combination best addresses recent failures.
+                // Only active during explore phase after enough data.
+                if (this._iterPhase === 'explore' && iter > 5) {
+                    var evalResult = this.evaluateStrategies(iter);
+                    if (evalResult) {
+                        this._solverSortStrategy = evalResult.solver;
+                        this._fieldBias = evalResult.fields;
+                        this._gapFillMode = evalResult.gapFill;
+                        // Update summary to reflect override
+                        for (var _si = 0; _si < summary.length; _si++) {
+                            if (summary[_si].indexOf('solver=') === 0) summary[_si] = 'solver=' + evalResult.solver;
+                            if (summary[_si].indexOf('fields=') === 0) summary[_si] = 'fields=' + evalResult.fields;
+                            if (summary[_si].indexOf('gap-fill=') === 0) summary[_si] = 'gap-fill=' + evalResult.gapFill;
+                        }
+                        summary.push('★EVAL');
+                    }
+                }
+
                 // ★ Build cross-iteration failure memory for solver
                 var _failMem = {};
                 if (iter > 3) {
@@ -10380,6 +10399,186 @@
                         }
                     });
                 }
+
+                // ★ Run causal diagnosis on this iteration
+                this.diagnoseIteration(timelines, freeLocations, this._lastIter || 0);
+            },
+
+            // ★ CAUSAL DIAGNOSIS ENGINE — analyze WHY an iteration failed
+            diagnoseIteration: function(timelines, freeLocations, iter) {
+                var diagnoses = [];
+                var _bunkGrade = {};
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(b) { _bunkGrade[String(b)] = g; });
+                });
+
+                // Diagnose Free blocks: field contention vs. special blocking vs. duration trap
+                (freeLocations || []).forEach(function(fl) {
+                    var cause = 'unknown';
+                    var grade = fl.grade || _bunkGrade[fl.bunk] || '';
+
+                    // Check: is this Free block adjacent to a pinned special?
+                    var tl = timelines[fl.bunk] || [];
+                    var neighbors = tl.filter(function(b) {
+                        return (b.endMin === fl.startMin || b.startMin === fl.endMin);
+                    });
+                    var pinnedNeighbor = neighbors.find(function(n) { return n._pinned || n._fixed; });
+                    if (pinnedNeighbor) {
+                        var gapDur = fl.endMin - fl.startMin;
+                        if (gapDur < 30) {
+                            cause = 'trapped-by-pinned';
+                        } else {
+                            cause = 'field-contention-near-pinned';
+                        }
+                    }
+
+                    // Check: how many other bunks occupy this time window?
+                    var concurrentBunks = 0;
+                    Object.keys(timelines).forEach(function(otherBunk) {
+                        if (otherBunk === fl.bunk) return;
+                        (timelines[otherBunk] || []).forEach(function(b) {
+                            if (b.startMin < fl.endMin && b.endMin > fl.startMin &&
+                                b.field && b.field !== 'Free') {
+                                concurrentBunks++;
+                            }
+                        });
+                    });
+                    if (cause === 'unknown' && concurrentBunks > 12) {
+                        cause = 'high-contention-window';
+                    }
+                    if (cause === 'unknown') cause = 'solver-exhaustion';
+
+                    diagnoses.push({
+                        bunk: fl.bunk, grade: grade,
+                        startMin: fl.startMin, endMin: fl.endMin,
+                        cause: cause, concurrent: concurrentBunks
+                    });
+                });
+
+                // Aggregate causes
+                var causeCounts = {};
+                diagnoses.forEach(function(d) {
+                    causeCounts[d.cause] = (causeCounts[d.cause] || 0) + 1;
+                });
+
+                if (!this._diagnosisHistory) this._diagnosisHistory = [];
+                this._diagnosisHistory.push({
+                    iter: iter, diagnoses: diagnoses, causes: causeCounts,
+                    strategy: {
+                        solverSort: this._solverSortStrategy,
+                        fieldBias: this._fieldBias,
+                        diversity: this._candidateDiversity,
+                        poolShift: JSON.parse(JSON.stringify(this.poolShiftHints)),
+                        eviction: this._evictionTarget,
+                        gapFill: this._gapFillMode
+                    }
+                });
+
+                if (diagnoses.length > 0) {
+                    var causeStr = Object.entries(causeCounts)
+                        .sort(function(a, b) { return b[1] - a[1]; })
+                        .map(function(e) { return e[0] + '×' + e[1]; }).join(', ');
+                    log('[BRAIN-DIAG] iter ' + iter + ': ' + diagnoses.length +
+                        ' issues — ' + causeStr);
+                }
+                return diagnoses;
+            },
+
+            // ★ LEVER INTERACTION LEARNING — track which lever combos work best
+            recordLeverCombo: function(iter, score) {
+                if (!this._leverCombos) this._leverCombos = [];
+                var combo = {
+                    key: (this._solverSortStrategy || 'x') + '|' +
+                         (this._fieldBias || 'x') + '|' +
+                         (this._candidateDiversity || 0) + '|' +
+                         (this._gapFillMode || 'x'),
+                    score: score,
+                    iter: iter,
+                    levers: {
+                        solver: this._solverSortStrategy,
+                        fields: this._fieldBias,
+                        diversity: this._candidateDiversity,
+                        gapFill: this._gapFillMode,
+                        specials: this._specialsSortStrategy,
+                        bunkSpec: this._bunkSpecialsOrder,
+                        duration: this._durationPref
+                    }
+                };
+                this._leverCombos.push(combo);
+            },
+
+            // ★ MULTI-STRATEGY EVALUATION — pick best strategy for next iteration
+            // Instead of cycling levers blindly, generate 2-3 candidate strategies
+            // based on diagnosis, score each by past performance, pick the best.
+            evaluateStrategies: function(iter) {
+                if (!this._diagnosisHistory || this._diagnosisHistory.length < 3) return null;
+                if (!this._leverCombos || this._leverCombos.length < 5) return null;
+
+                // Identify dominant failure cause across recent iterations
+                var recentDiags = this._diagnosisHistory.slice(-5);
+                var totalCauses = {};
+                recentDiags.forEach(function(dh) {
+                    Object.keys(dh.causes).forEach(function(c) {
+                        totalCauses[c] = (totalCauses[c] || 0) + dh.causes[c];
+                    });
+                });
+                var dominantCause = null, maxCount = 0;
+                Object.keys(totalCauses).forEach(function(c) {
+                    if (totalCauses[c] > maxCount) { maxCount = totalCauses[c]; dominantCause = c; }
+                });
+
+                // Generate candidate strategies targeting the dominant cause
+                var candidates = [];
+                if (dominantCause === 'trapped-by-pinned') {
+                    candidates.push({ solver: 'mrv-first', fields: 'spread', gapFill: 'aggressive', reason: 'trapped gaps need MRV + spread + aggressive fill' });
+                    candidates.push({ solver: 'duration-first', fields: 'spread', gapFill: 'moderate', reason: 'long blocks first to avoid leaving small remainders' });
+                } else if (dominantCause === 'high-contention-window') {
+                    candidates.push({ solver: 'grade-grouped', fields: 'concentrate', gapFill: 'moderate', reason: 'group grades to reduce cross-grade field contention' });
+                    candidates.push({ solver: 'mrv-first', fields: 'spread', gapFill: 'conservative', reason: 'MRV resolves contention by filling hardest blocks first' });
+                } else if (dominantCause === 'field-contention-near-pinned') {
+                    candidates.push({ solver: 'time-sweep', fields: 'spread', gapFill: 'aggressive', reason: 'spread fields near pinned specials' });
+                    candidates.push({ solver: 'reverse-time', fields: 'rotation', gapFill: 'aggressive', reason: 'reverse sweep avoids early-block field lock-in' });
+                } else {
+                    candidates.push({ solver: 'mrv-first', fields: 'spread', gapFill: 'moderate', reason: 'general: MRV + spread is safest default' });
+                    candidates.push({ solver: 'time-sweep', fields: 'rotation', gapFill: 'moderate', reason: 'general: time-sweep + rotation for variety' });
+                }
+
+                // Score each candidate by past performance of similar combos
+                var self = this;
+                candidates.forEach(function(cand) {
+                    var matchingCombos = self._leverCombos.filter(function(lc) {
+                        var matchCount = 0;
+                        if (lc.levers.solver === cand.solver) matchCount++;
+                        if (lc.levers.fields === cand.fields) matchCount++;
+                        if (lc.levers.gapFill === cand.gapFill) matchCount++;
+                        return matchCount >= 2;
+                    });
+                    if (matchingCombos.length > 0) {
+                        var avgScore = matchingCombos.reduce(function(s, c) { return s + c.score; }, 0) / matchingCombos.length;
+                        cand.predictedScore = avgScore;
+                        cand.evidence = matchingCombos.length;
+                    } else {
+                        cand.predictedScore = Infinity;
+                        cand.evidence = 0;
+                    }
+                });
+
+                // Pick the candidate with lowest predicted score (best performance)
+                // If no evidence, prefer the one with most matching combos
+                candidates.sort(function(a, b) {
+                    if (a.evidence > 0 && b.evidence > 0) return a.predictedScore - b.predictedScore;
+                    if (a.evidence > 0) return -1;
+                    if (b.evidence > 0) return 1;
+                    return 0;
+                });
+
+                var best = candidates[0];
+                log('[BRAIN-EVAL] Dominant cause: ' + dominantCause + '×' + maxCount +
+                    ' | Chose: solver=' + best.solver + ' fields=' + best.fields +
+                    ' gapFill=' + best.gapFill +
+                    ' (predicted=' + (best.predictedScore === Infinity ? '?' : Math.round(best.predictedScore)) +
+                    ', evidence=' + best.evidence + ') — ' + best.reason);
+                return best;
             },
 
             getSwimGradeOrder: function() {
@@ -13783,7 +13982,9 @@
             repairTargets.update(bunkTimelines);
 
             // ★ BRAIN: Analyze this iteration's results for cross-iteration learning
+            adaptiveBrain._lastIter = totalIters;
             adaptiveBrain.postIterAnalyze(bunkTimelines, iterFreeEstimate, iterFreeLocations, todaysSwimmers);
+            adaptiveBrain.recordLeverCombo(totalIters, iterScore);
 
             // ★ v12.0: Analyze gap-wall adjacency to nudge walls in next iteration
             wallGapFeedback.analyzeGaps(bunkTimelines);
@@ -13945,6 +14146,37 @@
                     _brainSummary.push('best-strat: ' + _corrPairs[0].key + '(avg ' + _corrPairs[0].avg + ' free)');
                     _brainSummary.push('worst-strat: ' + _corrPairs[_corrPairs.length - 1].key + '(avg ' + _corrPairs[_corrPairs.length - 1].avg + ' free)');
                 }
+            }
+
+            // Report lever combo analysis: best-performing combinations
+            if (adaptiveBrain._leverCombos && adaptiveBrain._leverCombos.length >= 5) {
+                var _comboMap = {};
+                adaptiveBrain._leverCombos.forEach(function(lc) {
+                    if (!_comboMap[lc.key]) _comboMap[lc.key] = { total: 0, count: 0 };
+                    _comboMap[lc.key].total += lc.score;
+                    _comboMap[lc.key].count++;
+                });
+                var _comboPairs = Object.entries(_comboMap)
+                    .filter(function(e) { return e[1].count >= 2; })
+                    .map(function(e) { return { combo: e[0], avg: Math.round(e[1].total / e[1].count), n: e[1].count }; })
+                    .sort(function(a, b) { return a.avg - b.avg; });
+                if (_comboPairs.length >= 1) {
+                    _brainSummary.push('best-combo: ' + _comboPairs[0].combo + '(avg ' + _comboPairs[0].avg + ', n=' + _comboPairs[0].n + ')');
+                }
+            }
+
+            // Report causal diagnosis summary
+            if (adaptiveBrain._diagnosisHistory && adaptiveBrain._diagnosisHistory.length > 0) {
+                var _allCauses = {};
+                adaptiveBrain._diagnosisHistory.forEach(function(dh) {
+                    Object.keys(dh.causes).forEach(function(c) {
+                        _allCauses[c] = (_allCauses[c] || 0) + dh.causes[c];
+                    });
+                });
+                var _causeStr = Object.entries(_allCauses)
+                    .sort(function(a, b) { return b[1] - a[1]; })
+                    .map(function(e) { return e[0] + '×' + e[1]; }).join(', ');
+                if (_causeStr) _brainSummary.push('failure-causes: ' + _causeStr);
             }
 
             if (_brainSummary.length > 0) {
