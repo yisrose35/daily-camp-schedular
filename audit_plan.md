@@ -2,6 +2,15 @@
 
 Hand this file to a new chat and say "run slice N from `audit_plan.md`". The plan is built around **slice-by-slice audits**: one bounded subsystem at a time, each one finds issues, fix what's real, then drive the affected user-facing flow in a browser before moving on.
 
+## Standing audit checklist (applies to EVERY slice)
+
+In addition to each slice's specific goals, every audit must also check for:
+
+1. **Dead / unnecessary code.** Unused functions, unreachable branches, redundant checks, variables written but never read, duplicated logic that could be a single call. If it's dead, remove it.
+2. **Niche edge cases.** Think about what happens with empty arrays, null/undefined inputs, zero-length camps, single-bunk divisions, renamed/deleted entities mid-season, timezone edge cases near midnight, concurrent calls to the same function. Flag anything that would silently fail or produce wrong results.
+3. **Unnecessary loops.** Nested loops that could be a lookup, repeated iterations over the same data, O(n²) patterns that should be O(n), rebuilding the same map/set multiple times in one call chain.
+4. **Stale patterns.** Code that was correct before a refactor but is now redundant because the callee already handles it (double-validation, re-normalization, re-filtering).
+
 ## Why slice-by-slice
 
 A whole-codebase audit goes shallow. A single-file audit goes blind to seams. Slices the size of "one pipeline" or "one subsystem" are the sweet spot — deep enough to find silent bypasses, narrow enough to keep findings actionable.

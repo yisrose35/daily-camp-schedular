@@ -928,97 +928,6 @@
     }
 
     // =========================================================================
-    // VERSIONING
-    // =========================================================================
-    /**
-     * Create a named version of the current schedule.
-     */
-    async function createVersion(dateKey, versionName) {
-        const client = getClient();
-        const campId = getCampId();
-        const userId = getUserId();
-        // Load current data
-        const current = await loadAllSchedulersForDate(dateKey);
-        if (!current || current.length === 0) {
-            return { success: false, error: 'No schedule data to version' };
-        }
-        const merged = mergeSchedules(current);
-        try {
-            const { data, error } = await client
-                .from('schedule_versions')
-                .insert({
-                    camp_id: campId,
-                    date_key: dateKey,
-                    name: versionName,
-                    schedule_data: {
-                        scheduleAssignments: merged.scheduleAssignments,
-                        leagueAssignments: merged.leagueAssignments,
-                        unifiedTimes: serializeUnifiedTimes(merged.unifiedTimes)
-                    },
-                    created_by: userId
-                })
-                .select()
-                .single();
-            if (error) {
-                logError('Create version failed:', error);
-                return { success: false, error: error.message };
-            }
-            log('Created version:', versionName);
-            return { success: true, version: data };
-        } catch (e) {
-            logError('Create version exception:', e);
-            return { success: false, error: e.message };
-        }
-    }
-    /**
-     * Load all versions for a date.
-     */
-    async function loadVersions(dateKey) {
-        const client = getClient();
-        const campId = getCampId();
-        try {
-            const { data, error } = await client
-                .from('schedule_versions')
-                .select('*')
-                .eq('camp_id', campId)
-                .eq('date_key', dateKey)
-                .order('created_at', { ascending: false });
-            if (error) {
-                logError('Load versions failed:', error);
-                return [];
-            }
-            return data || [];
-        } catch (e) {
-            logError('Load versions exception:', e);
-            return [];
-        }
-    }
-    /**
-     * Restore a version.
-     */
-    async function restoreVersion(versionId) {
-        const client = getClient();
-        try {
-            // Load the version
-            const { data: version, error: loadError } = await client
-                .from('schedule_versions')
-                .select('*')
-                .eq('id', versionId)
-                .single();
-            if (loadError || !version) {
-                return { success: false, error: 'Version not found' };
-            }
-            // Save as current schedule
-            const result = await saveSchedule(version.date_key, version.schedule_data, { skipFilter: true });
-            
-            return { success: result.success, dateKey: version.date_key };
-        } catch (e) {
-            logError('Restore version exception:', e);
-            return { success: false, error: e.message };
-        }
-    }
-
-    // =========================================================================
     // DIAGNOSTIC HELPER
     // =========================================================================
     
@@ -1119,11 +1028,6 @@
         
         // Merge
         mergeSchedules,
-        
-        // Versioning
-        createVersion,
-        loadVersions,
-        restoreVersion,
         
         // Local storage helpers
         getLocalSchedule,
