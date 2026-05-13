@@ -166,9 +166,17 @@
     function _canWriteCampState() {
         const role = window.AccessControl?.getCurrentRole?.() ||
                      window.CampistryDB?.getRole?.() ||
-                     localStorage.getItem('campistry_role') || 
+                     localStorage.getItem('campistry_role') ||
                      'viewer';
         return role === 'owner' || role === 'admin';
+    }
+
+    function _canReadCampState() {
+        const role = window.AccessControl?.getCurrentRole?.() ||
+                     window.CampistryDB?.getRole?.() ||
+                     localStorage.getItem('campistry_role') ||
+                     'viewer';
+        return role === 'owner' || role === 'admin' || role === 'scheduler';
     }
 
     // =========================================================================
@@ -665,8 +673,8 @@
         }
 
         // ★★★ FIX v6.8: EARLY EXIT for non-admin roles ★★★
-        // camp_state table has RLS that only allows owner/admin to read/write.
-        // Schedulers/viewers must NOT attempt ANY Supabase calls to camp_state
+        // camp_state_kv RLS allows owner/admin to write; schedulers can read
+        // but not write. Schedulers/viewers must NOT attempt UPSERT calls
         // or the 403 error propagates up through forceSyncToCloud →
         // saveDailySkeleton → runOptimizer and kills schedule generation.
         if (!_canWriteCampState()) {
@@ -1542,7 +1550,7 @@
 
             if (kvError) {
                 if (kvError.code === '42501') {
-                    log('RLS denied camp_state_kv read (expected for scheduler role) — using local settings');
+                    log('RLS denied camp_state_kv read (expected for viewer role) — using local settings');
                     _cloudHydrationDone = true;
                     window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                     return;
@@ -1773,9 +1781,9 @@
             log('camp_state realtime: no client/campId yet, deferring');
             return;
         }
-        // Role guard: RLS blocks scheduler/viewer from reading camp_state
-        // changes via realtime too — don't bother subscribing.
-        if (!_canWriteCampState()) {
+        // Role guard: viewers can't read camp_state_kv via RLS.
+        // Schedulers have SELECT access (migration 006) so they subscribe.
+        if (!_canReadCampState()) {
             log('camp_state realtime: role cannot read camp_state, skipping subscription');
             return;
         }
