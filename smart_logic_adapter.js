@@ -428,6 +428,16 @@
             log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage}${divisionName ? ' for ' + divisionName : ''})`);
             return false;
         }
+
+        // ★ Exact frequency: ceiling enforcement
+        let exactFreq = props2.exactFrequency || 0;
+        if (divisionName && props2.exactFrequencyPerGrade && props2.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props2.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0 && usedCount >= exactFreq) {
+            log(`      ${bunk}: at exact limit for ${special.name} (${usedCount}/${exactFreq}${divisionName ? ' for ' + divisionName : ''})`);
+            return false;
+        }
         
         // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
         if (window.isBunkEligibleForSpecial && !window.isBunkEligibleForSpecial(bunk, special.name)) {

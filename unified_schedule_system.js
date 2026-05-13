@@ -1540,6 +1540,13 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             if (hist >= maxUsage) return Infinity;
             if (hist >= maxUsage - 1) penalty += 2000;
         }
+        const exactFreq = props.exactFrequency || 0;
+        if (exactFreq > 0) {
+            const hist = getActivityCount(bunk, activityName);
+            if (hist >= exactFreq) return Infinity;
+            if (hist >= exactFreq - 1) penalty += 2000;
+            if (hist < exactFreq) penalty -= 100000 * (exactFreq - hist);
+        }
         return penalty;
     }
 

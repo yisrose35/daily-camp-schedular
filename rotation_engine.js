@@ -945,6 +945,18 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (currentCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
         }
 
+        // ★ Exact frequency: acts as both ceiling and floor
+        var exactFreq = parseInt(props.exactFrequency) || 0;
+        if (divisionName && props.exactFrequencyPerGrade && props.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            if (currentCount >= exactFreq) return Infinity;
+            if (currentCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            var exactShortage = exactFreq - currentCount;
+            if (exactShortage > 0) return -(exactShortage * 8000);
+        }
+
         // ★ Min frequency: strong pull when bunk is below the floor
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {

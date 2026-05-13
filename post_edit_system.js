@@ -1539,6 +1539,8 @@
             const specMax = specProps.maxUsage != null ? parseInt(specProps.maxUsage) : Infinity;
             const usageCount = window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0;
             if (usageCount >= specMax) return;
+            const specExact = specProps.exactFrequency != null ? parseInt(specProps.exactFrequency) : 0;
+            if (specExact > 0 && usageCount >= specExact) return;
             const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
             let score = 100 - usageCount;
             if (daysSince === null) score += 20;

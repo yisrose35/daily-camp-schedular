@@ -2921,6 +2921,21 @@
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
 
+                // Exact frequency: acts as both ceiling and floor.
+                // Per-grade override takes precedence over the global value.
+                {
+                    const _efExact = parseInt((props.exactFrequencyPerGrade || {})[grade]) || parseInt(props.exactFrequency) || parseInt(cfg?.exactFrequency) || 0;
+                    if (_efExact > 0) {
+                        const _efPeriod = props.exactFrequencyPeriod || cfg?.exactFrequencyPeriod || '1week';
+                        const _efCount = getPeriodCount(bunk, s.name, _efPeriod);
+                        if (_efCount >= _efExact) {
+                            log('[exact] skip ' + s.name + ' for ' + bunk + ' (count=' + _efCount + ' >= exact=' + _efExact + ')');
+                            return;
+                        }
+                        score -= 100000 * (_efExact - _efCount);
+                    }
+                }
+
                 // Min frequency floor: if this bunk is below the required minimum
                 // visits, heavily boost priority so the scheduler fills the gap first.
                 // Per-grade override takes precedence over the global minimum.
