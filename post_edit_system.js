@@ -1508,6 +1508,7 @@
 
             const fieldProps = allProps[f.name] || allProps[f.name.toLowerCase()] || {};
             const fieldMax = fieldProps.maxUsage != null ? parseInt(fieldProps.maxUsage) : Infinity;
+            const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
 
             (f.activities || f.sports || []).forEach(sport => {
                 const sn = typeof sport === 'string' ? sport : sport.name;
@@ -1516,7 +1517,8 @@
                 if (window.TimeBasedFieldUsage?.checkAvailability) {
                     if (!window.TimeBasedFieldUsage.checkAvailability(f.name, startMin, endMin, cap, bunk).available) return;
                 }
-                const usageCount = window.RotationEngine?.getActivityCount?.(bunk, sn) || 0;
+                const fieldMaxPeriod = fieldProps.maxUsagePeriod || 'half';
+                const usageCount = (_gpc && fieldMax < Infinity) ? _gpc(bunk, sn, fieldMaxPeriod) : (window.RotationEngine?.getActivityCount?.(bunk, sn) || 0);
                 if (usageCount >= fieldMax) return;
                 const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, sn, 0);
                 let score = 100 - usageCount;
@@ -1537,10 +1539,16 @@
             }
             const specProps = allProps[s.name] || allProps[s.name.toLowerCase()] || {};
             const specMax = specProps.maxUsage != null ? parseInt(specProps.maxUsage) : Infinity;
-            const usageCount = window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0;
+            const _gpc2 = window.SchedulerCoreUtils?.getPeriodActivityCount;
+            const specMaxPeriod = specProps.maxUsagePeriod || 'half';
+            const usageCount = (_gpc2 && specMax < Infinity) ? _gpc2(bunk, s.name, specMaxPeriod) : (window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0);
             if (usageCount >= specMax) return;
             const specExact = specProps.exactFrequency != null ? parseInt(specProps.exactFrequency) : 0;
-            if (specExact > 0 && usageCount >= specExact) return;
+            if (specExact > 0) {
+                const exactPeriod = specProps.exactFrequencyPeriod || '1week';
+                const exactCount = _gpc2 ? _gpc2(bunk, s.name, exactPeriod) : usageCount;
+                if (exactCount >= specExact) return;
+            }
             const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
             let score = 100 - usageCount;
             if (daysSince === null) score += 20;

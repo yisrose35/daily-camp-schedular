@@ -1534,15 +1534,18 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                 }
             }
         }
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
         const maxUsage = props.maxUsage || 0;
         if (maxUsage > 0) {
-            const hist = getActivityCount(bunk, activityName);
+            const maxPeriod = props.maxUsagePeriod || 'half';
+            const hist = _gpc ? _gpc(bunk, activityName, maxPeriod) : getActivityCount(bunk, activityName);
             if (hist >= maxUsage) return Infinity;
             if (hist >= maxUsage - 1) penalty += 2000;
         }
         const exactFreq = props.exactFrequency || 0;
         if (exactFreq > 0) {
-            const hist = getActivityCount(bunk, activityName);
+            const exactPeriod = props.exactFrequencyPeriod || '1week';
+            const hist = _gpc ? _gpc(bunk, activityName, exactPeriod) : getActivityCount(bunk, activityName);
             if (hist >= exactFreq) return Infinity;
             if (hist >= exactFreq - 1) penalty += 2000;
             if (hist < exactFreq) penalty -= 100000 * (exactFreq - hist);

@@ -1153,6 +1153,8 @@
                          { onConflict: 'camp_id,key' });
 
             if (error) throw error;
+            // Also update local settings cache so Flow/scheduler pick it up immediately
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
             if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
             updateWeekPreview();
         } catch (e) {
@@ -1174,6 +1176,7 @@
                 .from('camp_state_kv')
                 .upsert({ camp_id: campId, key: 'campDates', value: null, updated_at: new Date().toISOString() },
                          { onConflict: 'camp_id,key' });
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', null);
             var status = document.getElementById('campDatesStatus');
             if (status) { status.textContent = 'Cleared.'; status.style.color = 'var(--slate-400)'; setTimeout(function() { status.textContent = ''; }, 3000); }
         } catch (e) {

@@ -2148,6 +2148,95 @@
     };
 
     /**
+     * Get camp dates config (if set by owner on the dashboard).
+     * Returns { startDate, half1End, half2Start, endDate } or null.
+     */
+    Utils.getCampDates = function() {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        const cd = gs.campDates || (window.loadGlobalSettings ? window.loadGlobalSettings('campDates') : null);
+        if (cd && cd.startDate) return cd;
+        return null;
+    };
+
+    /**
+     * Compute the start date of the current N-week period, anchored to camp
+     * start date if configured, else rolling calendar windows.
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate] - reference date (ISO), defaults to today
+     * @returns {string|null} ISO date string
+     */
+    Utils.getPeriodStartDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half' || (!period)) {
+            if (cd) {
+                var curParts = today.split('-').map(Number);
+                var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
+                if (cd.startDate) return cd.startDate;
+            }
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var s = gs.app1 || gs;
+            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
+        }
+
+        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        if (nWeeks === 0) return null;
+
+        if (cd && cd.startDate) {
+            var campStart = new Date(cd.startDate + 'T00:00:00');
+            var todayParts = today.split('-').map(Number);
+            var cur = new Date(todayParts[0], todayParts[1] - 1, todayParts[2]);
+            var daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart >= 0) {
+                var weeksSinceStart = Math.floor(daysSinceStart / 7);
+                var periodIndex = Math.floor(weeksSinceStart / nWeeks);
+                var periodStartDay = periodIndex * nWeeks * 7;
+                var periodDate = new Date(campStart);
+                periodDate.setDate(periodDate.getDate() + periodStartDay);
+                return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            }
+        }
+
+        // Fallback: rolling calendar window from Monday
+        var parts = today.split('-').map(Number);
+        var d = new Date(parts[0], parts[1] - 1, parts[2]);
+        var dow = d.getDay();
+        var daysToMon = dow === 0 ? 6 : dow - 1;
+        d.setDate(d.getDate() - daysToMon - ((nWeeks - 1) * 7));
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Period-aware activity count: how many days within the given period has
+     * this bunk done this activity? Scans allDailyData.
+     * @param {string} bunk
+     * @param {string} activityName
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate]
+     * @returns {number}
+     */
+    Utils.getPeriodActivityCount = function(bunk, activityName, period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var count = 0;
+        Object.keys(allDaily).forEach(function(dateKey) {
+            if (dateKey >= today) return;
+            if (periodStart && dateKey < periodStart) return;
+            var slots = allDaily[dateKey]?.scheduleAssignments?.[bunk];
+            if (!Array.isArray(slots)) return;
+            if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
+        });
+        return count;
+    };
+
+    /**
      * ★★★ REBUILD HISTORICAL COUNTS FROM ALL SAVED SCHEDULES ★★★
      * This is the DEFINITIVE source of truth for activity counts.
      * Call this after generation or on app load to sync counts.
