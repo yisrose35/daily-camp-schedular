@@ -840,6 +840,20 @@ function _sortedDivisions(){
     }
     return keys.map(function(k){return [k,structure[k]]});
 }
+function _sortedGrades(divData){
+    var entries=Object.entries(divData.grades||{});
+    var ord=divData.gradeOrder;
+    if(Array.isArray(ord)&&ord.length>0){
+        var pos={};ord.forEach(function(k,i){pos[k]=i});
+        entries.sort(function(a,b){
+            var ai=pos[a[0]]==null?9999:pos[a[0]];
+            var bi=pos[b[0]]==null?9999:pos[b[0]];
+            if(ai!==bi)return ai-bi;
+            return a[0].localeCompare(b[0]);
+        });
+    }
+    return entries;
+}
 function moveDivision(name,dir){
     var keys=_sortedDivisions().map(function(e){return e[0]});
     var i=keys.indexOf(name);
@@ -859,13 +873,15 @@ function _commitStructureReorder(){
         if(!divName||!structure[divName])return;
         var divColor=structure[divName].color;
         var newGrades={};
+        var gradeOrder=[];
         card.querySelectorAll('.me-grade-block').forEach(function(gBlock){
             var gn=gBlock.getAttribute('data-grade');
             if(!gn||!structure[divName].grades||!structure[divName].grades[gn])return;
             var newBunks=Array.prototype.map.call(gBlock.querySelectorAll('.me-card-bunk'),function(c){return c.getAttribute('data-bunk')||c.textContent.trim()}).filter(Boolean);
             newGrades[gn]={bunks:newBunks};
+            gradeOrder.push(gn);
         });
-        structure[divName]={color:divColor,grades:newGrades};
+        structure[divName]={color:divColor,grades:newGrades,gradeOrder:gradeOrder};
     });
     save();
 }
@@ -877,8 +893,7 @@ function renderStructure(){
     else{
         h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
         divs.forEach(function([dn,dd],ix){
-            // Honor stored insertion order (drag-reorders preserve it).
-            var grades=Object.entries(dd.grades||{});
+            var grades=_sortedGrades(dd);
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
             var col=dd.color||'#94A3B8';
             var upDis=ix===0?' disabled':'';
@@ -1061,7 +1076,7 @@ function openDivForm(name){
     h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'"></div>';
     // Grades + Bunks
     h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
-    Object.entries(d.grades||{}).forEach(function([gn,gd]){
+    _sortedGrades(d).forEach(function([gn,gd]){
         h+=_renderGradeRowHTML(gn,gd.bunks||[]);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
@@ -1104,7 +1119,13 @@ function saveDiv(){
         Object.values(roster).forEach(function(c){if(c.division===editingDiv){c.division=name}});
         delete structure[editingDiv];
     }
-    structure[name]={color:color,grades:grades};
+    var gradeOrder=[];
+    rows.forEach(function(row){
+        var gn=row.querySelector('.dmGradeN');
+        var n=gn?gn.value.trim():'';
+        if(n)gradeOrder.push(n);
+    });
+    structure[name]={color:color,grades:grades,gradeOrder:gradeOrder};
     save();closeModal('divModal');render(curPage);toast(editingDiv?'Division updated':'Division created');
 }
 function deleteDiv(n){if(!confirm('Delete "'+n+'"?'))return;delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted')}
