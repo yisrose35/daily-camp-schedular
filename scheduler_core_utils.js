@@ -2319,15 +2319,16 @@
 
     /**
      * Compute the escalating bonus for min/exact frequency enforcement.
-     * Returns a score penalty that doubles each active camp day into the period.
-     * Early in the period the bonus is gentle; near the end it forces placement.
+     * Accounts for cooldown: if the activity can't be scheduled until a
+     * future date, the effective remaining window shrinks and urgency rises.
      *
      * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
      * @param {number} visitsNeeded - how many more visits are required
      * @param {string} [refDate] - reference date
+     * @param {number} [cooldownDaysLeft] - calendar days until cooldown expires
      * @returns {number} bonus score (always >= 0)
      */
-    Utils.getEscalationBonus = function(period, visitsNeeded, refDate) {
+    Utils.getEscalationBonus = function(period, visitsNeeded, refDate, cooldownDaysLeft) {
         if (visitsNeeded <= 0) return 0;
         var today = refDate || (window.currentScheduleDate
             ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
@@ -2339,11 +2340,21 @@
             return 100 * visitsNeeded;
         }
 
-        var daysElapsed = Utils.countCampDays(periodStart, today);
         var daysTotal = Utils.countCampDays(periodStart, periodEnd);
         if (daysTotal <= 0) return 100 * visitsNeeded;
 
-        var dayIndex = Math.max(0, daysElapsed - 1);
+        // Effective remaining camp days: subtract cooldown-blocked days
+        var daysRemaining = Utils.countCampDays(today, periodEnd);
+        if (cooldownDaysLeft > 0) {
+            var cooldownExpiry = new Date(today + 'T00:00:00');
+            cooldownExpiry.setDate(cooldownExpiry.getDate() + cooldownDaysLeft);
+            var expiryStr = cooldownExpiry.getFullYear() + '-' + String(cooldownExpiry.getMonth() + 1).padStart(2, '0') + '-' + String(cooldownExpiry.getDate()).padStart(2, '0');
+            var eligibleRemaining = Utils.countCampDays(expiryStr, periodEnd);
+            daysRemaining = Math.min(daysRemaining, eligibleRemaining);
+        }
+
+        var effectiveElapsed = Math.max(0, daysTotal - daysRemaining);
+        var dayIndex = Math.max(0, effectiveElapsed - 1);
         var base = 100 * Math.pow(2, dayIndex);
         return base * visitsNeeded;
     };

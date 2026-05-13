@@ -930,6 +930,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
@@ -961,13 +962,13 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             var exactShortage = exactFreq - exactCount;
             if (exactShortage > 0) {
-                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage);
+                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage, undefined, _cdForEsc);
                 return -(_efEsc || (exactShortage * 8000));
             }
         }
 
         // ★ Min frequency: strong pull when bunk is below the floor
-        // Escalates as the period progresses to force placement near deadline.
+        // Escalates based on effective remaining days incl. cooldown.
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {
             var minPeriod = props.minFrequencyPeriod || 'week';
@@ -975,7 +976,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             var minCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, minPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
             var shortage = minFreq - minCount;
             if (shortage > 0) {
-                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage);
+                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
                 return -(_mfEsc || (shortage * 8000));
             }
         }

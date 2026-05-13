@@ -2957,10 +2957,13 @@
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
 
+                // Cooldown days for this activity (used by escalation below)
+                const _cdForEsc = parseInt(props.frequencyDays || cfg?.frequencyDays) || 0;
+
                 // Exact frequency: acts as both ceiling and floor.
                 // Per-grade override takes precedence over the global value.
-                // Bonus escalates as the period progresses so the system forces
-                // placement near the deadline (100 → 200 → 400 → ... per camp day).
+                // Bonus escalates based on effective remaining camp days,
+                // accounting for cooldown that blocks days after each visit.
                 {
                     const _efExact = parseInt((props.exactFrequencyPerGrade || {})[grade]) || parseInt(props.exactFrequency) || parseInt(cfg?.exactFrequency) || 0;
                     if (_efExact > 0) {
@@ -2971,7 +2974,7 @@
                             return;
                         }
                         const _efNeeded = _efExact - _efCount;
-                        const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate);
+                        const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate, _cdForEsc);
                         score -= _efEsc || (100 * _efNeeded);
                     }
                 }
@@ -2979,7 +2982,7 @@
                 // Min frequency floor: if this bunk is below the required minimum
                 // visits, heavily boost priority so the scheduler fills the gap first.
                 // Per-grade override takes precedence over the global minimum.
-                // Bonus escalates as the period progresses.
+                // Bonus escalates based on effective remaining days incl. cooldown.
                 {
                     const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
                     if (_mfMin > 0) {
@@ -2988,7 +2991,7 @@
                         const _mfCount = getPeriodCount(bunk, s.name, _mfPeriodNorm);
                         if (_mfCount < _mfMin) {
                             const _mfNeeded = _mfMin - _mfCount;
-                            const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate);
+                            const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate, _cdForEsc);
                             score -= _mfEsc || (100 * _mfNeeded);
                         }
                     }
