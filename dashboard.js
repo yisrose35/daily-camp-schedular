@@ -1126,21 +1126,25 @@
             return;
         }
 
+        var fmt = function(d) {
+            var parts = d.split('-');
+            return parseInt(parts[1]) + '/' + parseInt(parts[2]);
+        };
         var html = '<strong style="color:var(--slate-700);">Week breakdown:</strong><br>';
+        var transitionShown = false;
         weeks.forEach(function(w) {
-            var label = 'Week ' + w.week;
             var halfTag = '';
             if (h1End && h2Start) {
-                var isTransition = w.start <= h2Start && w.end >= h2Start;
-                if (isTransition) halfTag = ' <span style="color:#d97706; font-weight:600;">(transition)</span>';
-                else if (w.end <= h1End) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
+                var isFirstHalf = w.end <= h1End;
+                var containsH2Start = w.start <= h2Start && w.end >= h2Start;
+                if (!transitionShown && containsH2Start) {
+                    html += '<span style="color:#d97706; font-weight:600;">Transition: ' + fmt(h1End) + ' – ' + fmt(h2Start) + '</span><br>';
+                    transitionShown = true;
+                }
+                if (isFirstHalf) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
                 else halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
             }
-            var fmt = function(d) {
-                var parts = d.split('-');
-                return parseInt(parts[1]) + '/' + parseInt(parts[2]);
-            };
-            html += label + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
+            html += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
         });
 
         preview.innerHTML = html;
