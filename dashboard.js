@@ -378,6 +378,9 @@
         } else if (userRole === 'owner') {
             // Owner sees everything
             checkAccessControl();
+            var campDatesSection = document.getElementById('camp-dates-section');
+            if (campDatesSection) campDatesSection.style.display = 'block';
+            loadCampDates();
         }
     }
     
@@ -1027,13 +1030,171 @@
     window.handleLogout = window.logout;
 
     // ========================================
+    // CAMP DATES
+    // ========================================
+
+    async function loadCampDates() {
+        try {
+            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campDates = null;
+
+            var { data: kvRows, error: kvErr } = await window.supabase
+                .from('camp_state_kv')
+                .select('key, value')
+                .eq('camp_id', campId)
+                .eq('key', 'campDates');
+
+            if (!kvErr && kvRows && kvRows.length > 0) {
+                campDates = kvRows[0].value;
+            }
+
+            if (campDates) {
+                var startEl = document.getElementById('campStartDate');
+                var h1EndEl = document.getElementById('campHalf1End');
+                var h2StartEl = document.getElementById('campHalf2Start');
+                var endEl = document.getElementById('campEndDate');
+                if (startEl && campDates.startDate) startEl.value = campDates.startDate;
+                if (h1EndEl && campDates.half1End) h1EndEl.value = campDates.half1End;
+                if (h2StartEl && campDates.half2Start) h2StartEl.value = campDates.half2Start;
+                if (endEl && campDates.endDate) endEl.value = campDates.endDate;
+                updateWeekPreview();
+            }
+        } catch (e) {
+            console.warn('Could not load camp dates:', e);
+        }
+    }
+
+    function buildWeekMap(startDate, endDate) {
+        if (!startDate) return null;
+        var start = new Date(startDate + 'T00:00:00');
+        var end = endDate ? new Date(endDate + 'T00:00:00') : null;
+        var weeks = [];
+        var weekStart = new Date(start);
+        var weekNum = 1;
+        while (!end || weekStart <= end) {
+            var nextSunday = new Date(weekStart);
+            var dow = nextSunday.getDay();
+            var daysUntilSun = dow === 0 ? 7 : 7 - dow;
+            nextSunday.setDate(nextSunday.getDate() + daysUntilSun);
+            var weekEnd = (end && nextSunday > end) ? new Date(end) : new Date(nextSunday);
+            weekEnd.setDate(weekEnd.getDate() - 1);
+            weeks.push({
+                week: weekNum,
+                start: weekStart.toISOString().slice(0, 10),
+                end: weekEnd.toISOString().slice(0, 10)
+            });
+            weekStart = new Date(nextSunday);
+            weekNum++;
+            if (weekNum > 52) break;
+        }
+        return weeks;
+    }
+
+    function updateWeekPreview() {
+        var startDate = document.getElementById('campStartDate')?.value;
+        var endDate = document.getElementById('campEndDate')?.value;
+        var h1End = document.getElementById('campHalf1End')?.value;
+        var h2Start = document.getElementById('campHalf2Start')?.value;
+        var preview = document.getElementById('campDatesWeekPreview');
+        if (!preview) return;
+
+        if (!startDate) {
+            preview.style.display = 'none';
+            return;
+        }
+
+        var weeks = buildWeekMap(startDate, endDate);
+        if (!weeks || weeks.length === 0) {
+            preview.style.display = 'none';
+            return;
+        }
+
+        var html = '<strong style="color:var(--slate-700);">Week breakdown:</strong><br>';
+        weeks.forEach(function(w) {
+            var label = 'Week ' + w.week;
+            var inHalf1 = h1End && w.start <= h1End;
+            var inHalf2 = h2Start && w.end >= h2Start;
+            var halfTag = '';
+            if (h1End && h2Start) {
+                if (inHalf1 && !inHalf2) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
+                else if (inHalf2 && !inHalf1) halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
+                else if (inHalf1 && inHalf2) halfTag = ' <span style="color:#d97706; font-weight:600;">(transition)</span>';
+            }
+            var fmt = function(d) {
+                var parts = d.split('-');
+                return parseInt(parts[1]) + '/' + parseInt(parts[2]);
+            };
+            html += label + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
+        });
+
+        preview.innerHTML = html;
+        preview.style.display = 'block';
+    }
+
+    window.saveCampDates = async function() {
+        var startDate = document.getElementById('campStartDate')?.value || null;
+        var h1End = document.getElementById('campHalf1End')?.value || null;
+        var h2Start = document.getElementById('campHalf2Start')?.value || null;
+        var endDate = document.getElementById('campEndDate')?.value || null;
+        var status = document.getElementById('campDatesStatus');
+
+        var campDates = {
+            startDate: startDate,
+            half1End: h1End,
+            half2Start: h2Start,
+            endDate: endDate
+        };
+
+        try {
+            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            var { error } = await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+
+            if (error) throw error;
+            if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+            updateWeekPreview();
+        } catch (e) {
+            console.error('Error saving camp dates:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.clearCampDates = async function() {
+        document.getElementById('campStartDate').value = '';
+        document.getElementById('campHalf1End').value = '';
+        document.getElementById('campHalf2Start').value = '';
+        document.getElementById('campEndDate').value = '';
+        document.getElementById('campDatesWeekPreview').style.display = 'none';
+
+        try {
+            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campDates', value: null, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+            var status = document.getElementById('campDatesStatus');
+            if (status) { status.textContent = 'Cleared.'; status.style.color = 'var(--slate-400)'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.warn('Error clearing camp dates:', e);
+        }
+    };
+
+    // Live preview on date change
+    ['campStartDate', 'campHalf1End', 'campHalf2Start', 'campEndDate'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', updateWeekPreview);
+    });
+
+    // ========================================
     // INITIALIZE
     // ========================================
-    
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', checkAuth);
     } else {
         checkAuth();
     }
-    
+
 })();

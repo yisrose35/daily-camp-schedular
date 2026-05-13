@@ -224,6 +224,51 @@
             </section>
         </div>
 
+        <!-- ===== CAMP DATES (Owners only) ===== -->
+        <section id="camp-dates-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                Camp Dates
+            </h2>
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header">
+                    <h2>Summer Schedule</h2>
+                </div>
+                <p class="card-desc" style="margin-bottom:16px; color:var(--slate-500); font-size:0.85rem; line-height:1.5;">
+                    Set your camp's start and end dates so the scheduler knows exactly what "per week" and "per 2 weeks" mean.
+                    If no dates are set, the system uses rolling calendar windows.
+                </p>
+                <div id="campDatesForm" style="display:flex; flex-direction:column; gap:14px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="campStartDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of Summer</label>
+                            <input type="date" id="campStartDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="campHalf1End" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of 1st Half</label>
+                            <input type="date" id="campHalf1End" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="campHalf2Start" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of 2nd Half</label>
+                            <input type="date" id="campHalf2Start" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="campEndDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of Summer</label>
+                            <input type="date" id="campEndDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div id="campDatesWeekPreview" style="display:none; background:var(--slate-50); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--slate-600); line-height:1.6;"></div>
+                    <div style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Dates</button>
+                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Clear</button>
+                        <span id="campDatesStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">

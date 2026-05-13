@@ -616,10 +616,46 @@
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
         function getHalfStartDate() {
+            const cd = _campDates;
+            if (cd) {
+                const curParts = currentDate.split('-').map(Number);
+                const curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start) {
+                    const h2 = new Date(cd.half2Start + 'T00:00:00');
+                    if (curD >= h2) return cd.half2Start;
+                }
+                if (cd.startDate) return cd.startDate;
+            }
             const s = globalSettings.app1 || globalSettings;
             return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
         }
+
+        const _campDates = (function() {
+            const cd = globalSettings.campDates || (window.loadGlobalSettings && window.loadGlobalSettings('campDates'));
+            if (cd && cd.startDate) return cd;
+            return null;
+        })();
+
+        function _getCampDatePeriodStart(period) {
+            if (!_campDates || !_campDates.startDate) return null;
+            const nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+            if (nWeeks === 0) return null;
+            const campStart = new Date(_campDates.startDate + 'T00:00:00');
+            const curParts = currentDate.split('-').map(Number);
+            const cur = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+            const daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart < 0) return null;
+            const weeksSinceStart = Math.floor(daysSinceStart / 7);
+            const periodIndex = Math.floor(weeksSinceStart / nWeeks);
+            const periodStartDay = periodIndex * nWeeks * 7;
+            const periodDate = new Date(campStart);
+            periodDate.setDate(periodDate.getDate() + periodStartDay);
+            return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+        }
+
         function getPeriodStartDate(period) {
+            const campDateStart = _getCampDatePeriodStart(period);
+            if (campDateStart) return campDateStart;
             switch (period) {
                 case '1week': return getMondayOfWeek(currentDate, 0);
                 case '2weeks': return getMondayOfWeek(currentDate, 1);
