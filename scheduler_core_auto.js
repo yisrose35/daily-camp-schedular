@@ -2959,6 +2959,8 @@
 
                 // Exact frequency: acts as both ceiling and floor.
                 // Per-grade override takes precedence over the global value.
+                // Bonus escalates as the period progresses so the system forces
+                // placement near the deadline (100 → 200 → 400 → ... per camp day).
                 {
                     const _efExact = parseInt((props.exactFrequencyPerGrade || {})[grade]) || parseInt(props.exactFrequency) || parseInt(cfg?.exactFrequency) || 0;
                     if (_efExact > 0) {
@@ -2968,19 +2970,27 @@
                             log('[exact] skip ' + s.name + ' for ' + bunk + ' (count=' + _efCount + ' >= exact=' + _efExact + ')');
                             return;
                         }
-                        score -= 100000 * (_efExact - _efCount);
+                        const _efNeeded = _efExact - _efCount;
+                        const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate);
+                        score -= _efEsc || (100 * _efNeeded);
                     }
                 }
 
                 // Min frequency floor: if this bunk is below the required minimum
                 // visits, heavily boost priority so the scheduler fills the gap first.
                 // Per-grade override takes precedence over the global minimum.
+                // Bonus escalates as the period progresses.
                 {
                     const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
                     if (_mfMin > 0) {
                         const _mfPeriod = props.minFrequencyPeriod || cfg?.minFrequencyPeriod || 'week';
-                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriod);
-                        if (_mfCount < _mfMin) score -= 100000 * (_mfMin - _mfCount);
+                        const _mfPeriodNorm = _mfPeriod === 'week' ? '1week' : _mfPeriod;
+                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriodNorm);
+                        if (_mfCount < _mfMin) {
+                            const _mfNeeded = _mfMin - _mfCount;
+                            const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate);
+                            score -= _mfEsc || (100 * _mfNeeded);
+                        }
                     }
                 }
 

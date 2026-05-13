@@ -1544,13 +1544,16 @@
             const usageCount = (_gpc2 && specMax < Infinity) ? _gpc2(bunk, s.name, specMaxPeriod) : (window.RotationEngine?.getActivityCount?.(bunk, s.name) || 0);
             if (usageCount >= specMax) return;
             const specExact = specProps.exactFrequency != null ? parseInt(specProps.exactFrequency) : 0;
+            var _exactEscBonus = 0;
             if (specExact > 0) {
                 const exactPeriod = specProps.exactFrequencyPeriod || '1week';
                 const exactCount = _gpc2 ? _gpc2(bunk, s.name, exactPeriod) : usageCount;
                 if (exactCount >= specExact) return;
+                const needed = specExact - exactCount;
+                _exactEscBonus = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, needed) || 0;
             }
             const daysSince = window.RotationEngine?.getDaysSinceActivity?.(bunk, s.name, 0);
-            let score = 100 - usageCount;
+            let score = 100 - usageCount + _exactEscBonus;
             if (daysSince === null) score += 20;
             else if (daysSince >= 7) score += 10;
             else if (daysSince >= 3) score += 5;

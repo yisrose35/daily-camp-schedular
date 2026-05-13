@@ -2237,6 +2237,118 @@
     };
 
     /**
+     * Determine the end date of the current period.
+     */
+    Utils.getPeriodEndDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half') {
+            if (cd) {
+                var curD = new Date(today + 'T00:00:00');
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) {
+                    return cd.endDate || null;
+                }
+                return cd.half1End || cd.endDate || null;
+            }
+            return null;
+        }
+
+        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        if (nWeeks === 0) return null;
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        if (!periodStart) return null;
+        var ps = new Date(periodStart + 'T00:00:00');
+        ps.setDate(ps.getDate() + (nWeeks * 7) - 1);
+        var endDate = cd && cd.endDate ? cd.endDate : null;
+        if (endDate && ps > new Date(endDate + 'T00:00:00')) {
+            return endDate;
+        }
+        return ps.getFullYear() + '-' + String(ps.getMonth() + 1).padStart(2, '0') + '-' + String(ps.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Check if a date is an active camp day. Excludes Saturday (Shabbat).
+     * Detects whether Sundays are active by checking allDailyData.
+     */
+    Utils._sundayActiveCache = null;
+    Utils._isSundayActive = function() {
+        if (Utils._sundayActiveCache !== null) return Utils._sundayActiveCache;
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var keys = Object.keys(allDaily);
+        for (var i = 0; i < keys.length; i++) {
+            var d = new Date(keys[i] + 'T00:00:00');
+            if (d.getDay() === 0) {
+                var dayData = allDaily[keys[i]];
+                if (dayData && dayData.scheduleAssignments && Object.keys(dayData.scheduleAssignments).length > 0) {
+                    Utils._sundayActiveCache = true;
+                    return true;
+                }
+            }
+        }
+        Utils._sundayActiveCache = false;
+        return false;
+    };
+
+    Utils.isCampDay = function(dateStr) {
+        var d = new Date(dateStr + 'T00:00:00');
+        var dow = d.getDay();
+        if (dow === 6) return false;
+        if (dow === 0 && !Utils._isSundayActive()) return false;
+        return true;
+    };
+
+    /**
+     * Count active camp days between two dates (inclusive).
+     */
+    Utils.countCampDays = function(startDate, endDate) {
+        if (!startDate || !endDate) return 0;
+        var cur = new Date(startDate + 'T00:00:00');
+        var end = new Date(endDate + 'T00:00:00');
+        var count = 0;
+        while (cur <= end) {
+            var iso = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0') + '-' + String(cur.getDate()).padStart(2, '0');
+            if (Utils.isCampDay(iso)) count++;
+            cur.setDate(cur.getDate() + 1);
+        }
+        return count;
+    };
+
+    /**
+     * Compute the escalating bonus for min/exact frequency enforcement.
+     * Returns a score penalty that doubles each active camp day into the period.
+     * Early in the period the bonus is gentle; near the end it forces placement.
+     *
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {number} visitsNeeded - how many more visits are required
+     * @param {string} [refDate] - reference date
+     * @returns {number} bonus score (always >= 0)
+     */
+    Utils.getEscalationBonus = function(period, visitsNeeded, refDate) {
+        if (visitsNeeded <= 0) return 0;
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var periodEnd = Utils.getPeriodEndDate(period, today);
+        if (!periodStart || !periodEnd) {
+            return 100 * visitsNeeded;
+        }
+
+        var daysElapsed = Utils.countCampDays(periodStart, today);
+        var daysTotal = Utils.countCampDays(periodStart, periodEnd);
+        if (daysTotal <= 0) return 100 * visitsNeeded;
+
+        var dayIndex = Math.max(0, daysElapsed - 1);
+        var base = 100 * Math.pow(2, dayIndex);
+        return base * visitsNeeded;
+    };
+
+    /**
      * ★★★ REBUILD HISTORICAL COUNTS FROM ALL SAVED SCHEDULES ★★★
      * This is the DEFINITIVE source of truth for activity counts.
      * Call this after generation or on app load to sync counts.

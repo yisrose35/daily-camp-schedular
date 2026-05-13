@@ -1960,14 +1960,15 @@ function summarySpecialUsage(s) {
     }
     var exactF = parseInt(s.exactFrequency) || 0;
     if (exactF > 0) {
-        var exactPlabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
+        var exactPlabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
         parts.push('Exactly ' + exactF + 'x ' + (exactPlabels[s.exactFrequencyPeriod] || 'per week'));
         var exactGradeCount = Object.keys(s.exactFrequencyPerGrade || {}).filter(function(k) { return (s.exactFrequencyPerGrade[k] || 0) > 0; }).length;
         if (exactGradeCount > 0) parts.push(exactGradeCount + ' exact-grade override' + (exactGradeCount > 1 ? 's' : ''));
     }
     var minF = parseInt(s.minFrequency) || 0;
     if (minF > 0) {
-        parts.push('Min ' + minF + 'x ' + (s.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minPlabels = { 'week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Min ' + minF + 'x ' + (minPlabels[s.minFrequencyPeriod] || 'per week'));
         var minGradeCount = Object.keys(s.minFrequencyPerGrade || {}).filter(function(k) { return (s.minFrequencyPerGrade[k] || 0) > 0; }).length;
         if (minGradeCount > 0) parts.push(minGradeCount + ' min-grade override' + (minGradeCount > 1 ? 's' : ''));
     }
@@ -2764,7 +2765,8 @@ function renderSpecialUsage(saData) {
             var exactPeriodSel = document.createElement('select');
             exactPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
             [{ value:'1week', label:'per week' }, { value:'2weeks', label:'per 2 weeks' },
-             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' }].forEach(function(p) {
+             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' },
+             { value:'half', label:'per half' }].forEach(function(p) {
                 var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((saData.exactFrequencyPeriod || '1week') === p.value) opt.selected = true;
                 exactPeriodSel.appendChild(opt);
@@ -2776,7 +2778,7 @@ function renderSpecialUsage(saData) {
 
             var exactNote = document.createElement('div');
             exactNote.style.cssText = 'font-size:0.78rem; color:#5b21b6; background:#ede9fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
-            var _exactPLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks' };
+            var _exactPLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             exactNote.innerHTML = 'The scheduler will ensure every bunk gets this activity exactly <strong>' +
                 (saData.exactFrequency || 1) + 'x</strong> ' +
                 (_exactPLabels[saData.exactFrequencyPeriod] || 'per week') +
@@ -2881,7 +2883,9 @@ function renderSpecialUsage(saData) {
             minSuffix.textContent = 'time(s) per';
             var minPeriodSel = document.createElement('select');
             minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' },
+             { value:'3weeks', label:'3 weeks' }, { value:'4weeks', label:'4 weeks' },
+             { value:'half', label:'half' }].forEach(function(p) {
                 var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((saData.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
                 minPeriodSel.appendChild(opt);
@@ -2891,11 +2895,12 @@ function renderSpecialUsage(saData) {
             minRow.appendChild(minAtLeast); minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
             minDetail.appendChild(minRow);
 
+            var _minPLabels = { 'week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             var minNote = document.createElement('div');
             minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
             minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
                 (saData.minFrequency || 1) + 'x</strong> ' +
-                (saData.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+                (_minPLabels[saData.minFrequencyPeriod] || 'per week') + '.';
             minDetail.appendChild(minNote);
 
             // per-grade min toggle

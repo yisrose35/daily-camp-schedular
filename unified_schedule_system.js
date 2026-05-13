@@ -1548,7 +1548,11 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
             const hist = _gpc ? _gpc(bunk, activityName, exactPeriod) : getActivityCount(bunk, activityName);
             if (hist >= exactFreq) return Infinity;
             if (hist >= exactFreq - 1) penalty += 2000;
-            if (hist < exactFreq) penalty -= 100000 * (exactFreq - hist);
+            const _efNeeded = exactFreq - hist;
+            if (_efNeeded > 0) {
+                const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, _efNeeded);
+                penalty -= _efEsc || (100 * _efNeeded);
+            }
         }
         return penalty;
     }

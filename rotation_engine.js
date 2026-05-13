@@ -960,17 +960,24 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (exactCount >= exactFreq) return Infinity;
             if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
             var exactShortage = exactFreq - exactCount;
-            if (exactShortage > 0) return -(exactShortage * 8000);
+            if (exactShortage > 0) {
+                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage);
+                return -(_efEsc || (exactShortage * 8000));
+            }
         }
 
         // ★ Min frequency: strong pull when bunk is below the floor
+        // Escalates as the period progresses to force placement near deadline.
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {
             var minPeriod = props.minFrequencyPeriod || 'week';
             if (minPeriod === 'week') minPeriod = '1week';
             var minCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, minPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
             var shortage = minFreq - minCount;
-            if (shortage > 0) return -(shortage * 8000);
+            if (shortage > 0) {
+                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage);
+                return -(_mfEsc || (shortage * 8000));
+            }
         }
 
         return 0;
