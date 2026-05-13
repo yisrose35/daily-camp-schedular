@@ -84,7 +84,9 @@ When the user says **"day X"** or **"let's do day X"**:
 - Tasks:
   - Audit `supabase_schedules.js` — verify every write to `daily_schedules` is atomic and correct, every read returns the right data. Fix any issues.
   - Audit `supabase_sync.js` — verify sync orchestration has no race conditions (two saves firing simultaneously, stale reads overwriting fresh writes). Fix any issues.
-- Done when: Both files audited and any bugs fixed
+  - **[NEW from main]** Realtime sync had 12 commits including revert cycles — verify current realtime handler in `integration_hooks.js` and `supabase_sync.js` is clean: DELETE event propagation works, no duplicate merge blocks, 60-second guard is fully removed, scoped delete/clear for schedulers vs owners
+  - **[NEW from main]** Multi-scheduler merge (`schedule_orchestrator.js`) — verify newest-wins sort by `updated_at` doesn't lose data
+- Done when: Both files audited, realtime sync verified clean, any bugs fixed
 
 **Day 5**
 - Goal: Audit rotation cloud and offline cache
@@ -107,12 +109,14 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: Division/grade/bunk CRUD works and cloud-persists correctly
 
 **Day 7**
-- Goal: Verify activity config and builder mode handoff
+- Goal: Verify activity config, camp dates, and builder mode handoff
 - Tasks:
   - Add a special activity, add a league/sport — verify both appear correctly when entering the Flow builder
   - Read `app1.js` lines 489–545 (`renderBuilderModeSlider`) — verify the Manual/Auto toggle is visually clear and the selection persists to `camp_state_kv`
   - Load Flow page and verify all configured divisions, bunks, activities and leagues are present
-- Done when: Builder mode persists, all camp data is available in the Flow page
+  - **[NEW from main]** Camp dates feature (`dashboard.js`, `dashboard.html`): set up camp dates (start/end, halves, transition weeks), verify they persist to cloud, survive reload, and show read-only for scheduler role
+  - **[NEW from main]** Verify camp ID resolution — a prior fix (`9d03c205`) fixed camp ID mismatch causing dates not to persist
+- Done when: Builder mode persists, camp dates persist, all camp data is available in the Flow page
 
 **Day 8**
 - Goal: Regression — structural changes don't corrupt existing schedules
@@ -166,23 +170,25 @@ When the user says **"day X"** or **"let's do day X"**:
 
 **Day 13**
 - Goal: Auto solver baseline — no crashes
-- Files: `scheduler_core_auto.js`
+- Files: `scheduler_core_auto.js`, `daily_adjustments.js`
 - Tasks:
   - Read the top-level structure of `scheduler_core_auto.js` — understand the entry point, main generation loop, and how it consumes layer config
   - Run generation for a standard camp config (2–3 divisions, 2–4 bunks each, standard activities)
   - Verify: no JS errors, no crashes, schedule is produced for all bunks
+  - **[NEW from main]** Generation scope picker (`daily_adjustments.js`): test partial regen — select only one division and generate. Verify the pre-generation wipe only clears selected divisions, not all. Verify Free-slot fallback (`scheduler_core_main.js`) also respects the scope.
   - Fix any crash-level bugs
-- Done when: Auto generation completes without errors for a standard config
+- Done when: Auto generation completes without errors for standard and scoped configs
 
 **Day 14**
-- Goal: Access restrictions and field conflicts
-- Files: `scheduler_core_auto.js`, `scheduler_core_utils.js`, `rules.js`
+- Goal: Access restrictions, field conflicts, and scheduler division scoping
+- Files: `scheduler_core_auto.js`, `scheduler_core_utils.js`, `rules.js`, `access_control.js`
 - Tasks:
   - Verify access restrictions are honored: a bunk that cannot access a certain activity should never receive it in the generated schedule
   - Verify field conflicts: no two bunks are assigned to the same field at the same time
   - Set up a test case with known restrictions and verify the output manually
+  - **[NEW from main]** Scheduler division scoping (`access_control.js`): verify `allowedDivisions` resolution is not stale (prior fixes: `36dfa2ed`, `09b95280`, `304f6f24`, `542a1476`, `af5d4009`). Test with a scheduler role account — they should only see/generate for their assigned divisions. Verify subdivision UUID resolution and parent→child grade expansion work correctly.
   - Fix any violations found
-- Done when: Access restrictions and field conflicts are clean
+- Done when: Access restrictions, field conflicts, and division scoping are clean
 
 **Day 15**
 - Goal: Time rules and field sharing
@@ -204,14 +210,17 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: Auto-generated schedule saves and reloads correctly from Supabase
 
 **Day 17**
-- Goal: Rotation fairness
-- Files: `rotation_engine.js`, `rotation_cloud.js`
+- Goal: Rotation fairness, exact frequency, and escalation bonuses
+- Files: `rotation_engine.js`, `rotation_cloud.js`, `scheduler_core_auto.js`, `scheduler_core_utils.js`
 - Tasks:
   - Read `rotation_engine.js` — understand the least-recent selection logic and how it scores activities for each bunk
   - Generate schedules for 3 consecutive days — verify that activity distribution is visibly fair (no bunk gets the same activity every day, no bunk is always last to get desirable activities)
   - Verify rotation counts are written to `rotation_counts` in Supabase after each generation
+  - **[NEW from main]** Exact frequency constraint: configure a special with an exact frequency (e.g. "exactly 2x per week") in facilities UI. Generate — verify the constraint is enforced, not exceeded. Verify the manual edit gate also rejects violations.
+  - **[NEW from main]** Escalating frequency bonuses (`rotation_engine.js`, `scheduler_core_auto.js`): verify the bonus doesn't unfairly favor one bunk, and that cooldown is factored into the escalation correctly
+  - **[NEW from main]** Per Half period option: if camp dates define halves, verify rotation can be set to "Per Half" and counts reset at the half boundary
   - Fix any fairness bugs
-- Done when: Rotation is visibly fair across days and counts persist to cloud
+- Done when: Rotation is visibly fair, exact frequency enforced, escalation balanced
 
 **Day 18**
 - Goal: Rotation count correctness on re-generation
@@ -224,14 +233,16 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: Re-generation produces correct cumulative rotation counts
 
 **Day 19**
-- Goal: Special activities integration
-- Files: `special_activities.js`, `scheduler_core_auto.js`
+- Goal: Special activities integration + multi-period spanning
+- Files: `special_activities.js`, `scheduler_core_auto.js`, `division_times_system.js`, `post_edit_system.js`
 - Tasks:
   - Configure 2–3 special activities in the Me page
   - Run auto generation — verify specials are placed correctly, no bunk is double-booked for a special
   - Verify special activity assignments are saved to cloud and reload correctly
+  - **[NEW from main]** Multi-period special spanning: configure a special that spans 2+ consecutive periods (e.g. 90-min swim across two 45-min slots). Verify: continuation slots have correct `_startMin/_endMin`, field capacity is counted correctly across spanned periods, pinned preservation handles multi-period pins, manual edit of a spanned special updates all continuation slots
+  - **[NEW from main]** Period-boundary alignment: verify multi-period specials align to period boundaries and don't create unfillable gaps
   - Fix any placement or persistence bugs
-- Done when: Special activities place and persist correctly
+- Done when: Special activities place correctly including multi-period spanning
 
 **Day 20**
 - Goal: League games in auto builder
@@ -253,13 +264,14 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: League game assignments survive page refresh from cloud
 
 **Day 22**
-- Goal: Large camp stress test
+- Goal: Large camp stress test + multi-scheduler
 - Tasks:
   - Configure a large camp: 4+ divisions, 4+ bunks each, multiple leagues, special activities
   - Run auto generation — verify it completes without timeout, crash, or JS errors
   - Verify all bunks receive a complete schedule with no gaps or invalid placements
+  - **[NEW from main]** Multi-scheduler test: assign different divisions to different scheduler accounts. Have each scheduler generate only their divisions. Verify: no scheduler can wipe another's divisions, the merged schedule shows all divisions correctly, cross-user schedule visibility works during auto mode
   - Fix any performance or correctness issues found
-- Done when: Solver handles a large camp correctly
+- Done when: Solver handles a large camp correctly, multi-scheduler scoping is clean
 
 **Day 23**
 - Goal: Multi-day stress test and cross-division
@@ -408,14 +420,15 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: Print center produces correct output for both builder modes
 
 **Day 38**
-- Goal: Calendar, daily adjustments, analytics
-- Files: `schedule_calendar_views.js`, `daily_adjustments.js`, `analytics.js`
+- Goal: Calendar, daily adjustments, analytics, camp dates integration
+- Files: `schedule_calendar_views.js`, `daily_adjustments.js`, `analytics.js`, `dashboard.js`
 - Tasks:
   - Navigate the calendar across multiple dates — verify each date loads the correct schedule from cloud (not a cached wrong day)
   - Make daily adjustments on two different dates — verify each saves independently in cloud
   - Open the analytics/rotation report — verify rotation counts match what is stored in `rotation_counts` table
+  - **[NEW from main]** Camp dates + calendar integration: verify camp dates (halves, transitions) display correctly in calendar views, transition week markers render as non-numbered markers, half boundaries are respected by period counting in auto/manual/rotation systems
   - Fix any date isolation or analytics accuracy bugs
-- Done when: Calendar date isolation is correct, analytics match cloud data
+- Done when: Calendar date isolation is correct, camp dates render properly, analytics match cloud data
 
 ---
 
@@ -434,8 +447,10 @@ When the user says **"day X"** or **"let's do day X"**:
 - Goal: Cloud hardening and final polish
 - Tasks:
   - **Multi-user test:** have two users (or two browser sessions with different accounts) edit simultaneously — verify no data corruption in `daily_schedules` or `camp_state_kv`
+  - **[NEW from main]** Multi-user with scheduler roles: owner deletes a day while scheduler has it open — verify DELETE propagates via realtime. Scheduler clears their divisions — verify it doesn't clear owner's divisions. Test the scoped delete/clear operations end-to-end.
+  - **[NEW from main]** Realtime sync stress: rapid edits from two sessions — verify the smart merge logic (no 60-second guard, cloud-empty clear, dedup) handles all cases without data loss or stale state
   - **Offline→online:** disconnect network, make schedule edits, reconnect — verify all changes reach Supabase
-  - **Session persistence:** log out and log back in — verify entire state survives (camp structure, layers/skeleton, schedules, rotation counts)
+  - **Session persistence:** log out and log back in — verify entire state survives (camp structure, layers/skeleton, schedules, rotation counts, camp dates)
   - **Performance check:** measure schedule generation time, cloud save latency, page load time — flag anything over 5 seconds
   - Fix any issues found
 - Done when: Cloud is bulletproof. App is ready for summer.
