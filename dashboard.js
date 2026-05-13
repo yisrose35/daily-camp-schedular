@@ -259,8 +259,9 @@
                 campName = ownedCamp.name || null;
                 userName = ownedCamp.owner_name || null;
                 
-                // Store camp ID
-                localStorage.setItem('campistry_user_id', currentUser.id);
+                // Store camp ID (use camp's row ID, not auth user ID)
+                localStorage.setItem('campistry_user_id', ownedCamp.id);
+                localStorage.setItem('campistry_camp_id', ownedCamp.id);
                 return;
             }
         } catch (e) {
@@ -292,7 +293,7 @@
             const rbacCache = {
                 userId: currentUser?.id,
                 role: userRole,
-                campId: membership?.camp_id || currentUser?.id,
+                campId: membership?.camp_id || campData?.id || currentUser?.id,
                 campName: campName,
                 userName: userName,
                 isTeamMember: isTeamMember,
@@ -769,7 +770,7 @@
     
     async function loadStats() {
         try {
-            const campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
 
             // Read per-key rows from camp_state_kv, fall back to legacy blob
             let state = null;
@@ -1042,7 +1043,7 @@
 
     async function loadCampDates(readOnly) {
         try {
-            var campId = localStorage.getItem('campistry_user_id') || (membership ? membership.camp_id : null) || currentUser.id;
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (membership ? membership.camp_id : null) || currentUser.id;
             var campDates = null;
 
             var { data: kvRows, error: kvErr } = await window.supabase
@@ -1161,7 +1162,7 @@
         };
 
         try {
-            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
             var { error } = await window.supabase
                 .from('camp_state_kv')
                 .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
@@ -1186,7 +1187,7 @@
         document.getElementById('campDatesWeekPreview').style.display = 'none';
 
         try {
-            var campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
             await window.supabase
                 .from('camp_state_kv')
                 .upsert({ camp_id: campId, key: 'campDates', value: null, updated_at: new Date().toISOString() },
