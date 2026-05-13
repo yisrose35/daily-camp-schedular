@@ -14435,6 +14435,49 @@
                 });
             });
 
+            // Pass 2: relax staysInPeriod for small gaps (≤ 15min) that
+            // survived Pass 1. These typically sit on period boundaries
+            // where extending within-period is impossible. Allow cross-
+            // period extension up to TYPE_CEILINGS so tiny dead gaps don't
+            // survive to the final schedule.
+            allGrades.forEach(function(grade) {
+                var div = divisions[grade] || divisions[String(grade)];
+                if (!div) return;
+                var fillMin = getMinFillable(grade) || 25;
+                getBunksForGrade(grade, divisions).forEach(function(bunk) {
+                    var tl = bunkTimelines[bunk];
+                    if (!tl || tl.length < 2) return;
+                    tl.sort(function(a, b) { return a.startMin - b.startMin; });
+                    var changed = true, passes = 0;
+                    while (changed && passes < 5) {
+                        changed = false; passes++;
+                        for (var i = 0; i < tl.length - 1; i++) {
+                            var gs2 = tl[i].endMin, ge2 = tl[i + 1].startMin;
+                            var sz2 = ge2 - gs2;
+                            if (sz2 <= 0 || sz2 >= fillMin || sz2 > 15) continue;
+                            if (isInDeadZone(gs2, ge2, grade)) continue;
+                            var pv = tl[i], nx = tl[i + 1];
+                            var pvT = (pv.type || '').toLowerCase();
+                            var nxT = (nx.type || '').toLowerCase();
+                            var pvMax = TYPE_CEILINGS[pvT] || GAP_MAX_DUR;
+                            var nxMax = TYPE_CEILINGS[nxT] || GAP_MAX_DUR;
+                            if (!HARD_FIXED_TYPES[pvT] && (pv.endMin - pv.startMin + sz2) <= pvMax) {
+                                pv.endMin += sz2;
+                                fgaClosed++; changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': cross-period extended "' + (pv.event || pvT) + '" +' + sz2 + 'min @' + gs2 + '-' + ge2);
+                                break;
+                            }
+                            if (!HARD_FIXED_TYPES[nxT] && (nx.endMin - nx.startMin + sz2) <= nxMax) {
+                                nx.startMin -= sz2;
+                                fgaClosed++; changed = true;
+                                log('[FINAL-GAP] ' + bunk + ': cross-period extended "' + (nx.event || nxT) + '" -' + sz2 + 'min @' + gs2 + '-' + ge2);
+                                break;
+                            }
+                        }
+                    }
+                });
+            });
+
             if (fgaClosed > 0) log('[FINAL-GAP] ★ Absorbed ' + fgaClosed + ' dead gap(s) in final schedule');
         })();
 
@@ -15073,12 +15116,23 @@
         // BEFORE swim's period" (e.g. 12:00-12:10 from P2). This pass
         // drops every pre/post and rebuilds them from the swim block's
         // layer config + computeSwimChangeAnchors.
-        log('\n[STEP 2.78] Re-anchoring swim change blocks...');
-        let _reanchorPlaced = 0, _reanchorDropped = 0;
+        log('[STEP 2.78] Re-anchoring swim change blocks...');
+        let _reanchorPlaced = 0, _reanchorDropped = 0, _reanchorKept = 0;
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk];
                 if (!Array.isArray(tl) || tl.length === 0) return;
+                // Save original change blocks keyed by swimGroupId so we can
+                // restore them if recomputation fails for a given swim block.
+                const _origChangeByGroup = {};
+                tl.forEach(b => {
+                    if (!b) return;
+                    const bt = String(b.type || '').toLowerCase();
+                    if (bt !== 'pre-change' && bt !== 'post-change') return;
+                    const gid = b._swimGroupId || '__ungrouped';
+                    if (!_origChangeByGroup[gid]) _origChangeByGroup[gid] = [];
+                    _origChangeByGroup[gid].push({ ...b });
+                });
                 // Drop ALL pre-change / post-change blocks first.
                 const beforeCount = tl.length;
                 bunkTimelines[bunk] = tl.filter(b => {
@@ -15292,7 +15346,18 @@
                         }
                     }
 
-                    if (!anchors.pre && !anchors.post) return;
+                    if (!anchors.pre && !anchors.post) {
+                        // Recomputation failed — restore original change blocks
+                        // so the user still gets pre/post-change around this swim.
+                        const gid = sw._swimGroupId || '__ungrouped';
+                        const orig = _origChangeByGroup[gid];
+                        if (orig && orig.length > 0) {
+                            orig.forEach(ob => tl278.push(ob));
+                            _reanchorKept += orig.length;
+                            log('[2.78] Kept ' + orig.length + ' original change block(s) for ' + bunk + ' (recompute failed)');
+                        }
+                        return;
+                    }
                     const groupId = sw._swimGroupId || nextSwimGroupId();
                     sw._swimGroupId = groupId;
                     if (anchors.pre) {
@@ -15359,13 +15424,31 @@
                         });
                         _reanchorPlaced++;
                     }
+                    // Partial restore: if only one anchor was recomputed,
+                    // restore the missing one from the original set.
+                    const _needPre  = !anchors.pre  && preChangeDur > 0;
+                    const _needPost = !anchors.post && postChangeDur > 0;
+                    if (_needPre || _needPost) {
+                        const orig = _origChangeByGroup[groupId] || _origChangeByGroup[sw._swimGroupId] || [];
+                        orig.forEach(ob => {
+                            const obt = String(ob.type || '').toLowerCase();
+                            if (_needPre && obt === 'pre-change') {
+                                const noOverlap = !tl278.some(b => b && b.startMin < ob.endMin && b.endMin > ob.startMin);
+                                if (noOverlap) { tl278.push(ob); _reanchorKept++; }
+                            }
+                            if (_needPost && obt === 'post-change') {
+                                const noOverlap = !tl278.some(b => b && b.startMin < ob.endMin && b.endMin > ob.startMin);
+                                if (noOverlap) { tl278.push(ob); _reanchorKept++; }
+                            }
+                        });
+                    }
                 });
                 bunkTimelines[bunk] = bunkTimelines[bunk]
                     .filter(b => b && b.endMin > b.startMin)
                     .sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
             });
         });
-        log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old change blocks, placed ' + _reanchorPlaced + ' period-anchored ones');
+        log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old, placed ' + _reanchorPlaced + ' new, kept ' + _reanchorKept + ' originals (recompute-failed)');
         // Mirror to divisionTimes._perBunkSlots so the renderer sees them too.
         allGrades.forEach(grade => {
             const dt = window.divisionTimes?.[grade];
@@ -15875,7 +15958,7 @@
         });
 
         // Write pinned + custom blocks
-        let pinnedWriteCount = 0, customWriteCount = 0;
+        let pinnedWriteCount = 0, customWriteCount = 0, changeBlockWriteCount = 0;
         allGrades.forEach(grade => {
             const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
             if (!pbs) return;
@@ -16012,7 +16095,10 @@
                                     window.GlobalFieldLocks.lockField(block._customField, [idx], { lockedBy: 'auto_custom', division: grade, activity: block._customActivity || 'Custom', startMin: block.startMin, endMin: block.endMin });
                                 }
                             }
-                        } else pinnedWriteCount++;
+                        } else {
+                            pinnedWriteCount++;
+                            if (blockType === 'pre-change' || blockType === 'post-change') changeBlockWriteCount++;
+                        }
                     }
                 });
             });
@@ -16109,7 +16195,7 @@
         window._autoDivisionTimesBuilt = true;
         window._preGenClearActive = false;
 
-        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
+        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned (' + changeBlockWriteCount + ' change), ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
         if (_stepRulesRescued.length > 0) {
             log('[2.7] ↪ Relocated ' + _stepRulesRescued.length + ' rule-violating write(s) to valid alternative field(s):');
             _stepRulesRescued.forEach(r => {
