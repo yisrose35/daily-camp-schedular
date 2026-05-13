@@ -45,7 +45,7 @@
     const CONFIG = {
         TABLE_NAME: 'daily_schedules',
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
-        DEBUG: true,  // Enable debug logging
+        DEBUG: false,
         VERIFY_MAX_ATTEMPTS: 3,
         VERIFY_BASE_DELAY_MS: 500
     };

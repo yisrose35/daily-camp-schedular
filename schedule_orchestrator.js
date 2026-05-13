@@ -57,7 +57,7 @@
 
     const CONFIG = {
         VERSION: '1.6.0',
-        DEBUG: true,
+        DEBUG: false,
         LOCAL_STORAGE_KEY: 'campDailyData_v1',
         
         // Timing

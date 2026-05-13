@@ -53,7 +53,7 @@
         },
 
         // Debug mode - set to true to see detailed logs
-        DEBUG: true
+        DEBUG: false
     };
 
     // =========================================================================
