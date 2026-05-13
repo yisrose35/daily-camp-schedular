@@ -92,9 +92,6 @@
     // slow networks because supabase-js doesn't set keepalive: true.
     let _cachedAccessToken = null;
 
-    // Store the TRUE original saveGlobalSettings before ANY patches
-    const _trueOriginalSaveGlobalSettings = window.saveGlobalSettings;
-
     // =========================================================================
     // LOGGING
     // =========================================================================
@@ -2233,24 +2230,7 @@
                         
                         const totalBunks = Object.keys(merged).length;
                         console.log(`🔗 ✅ Merged remote update: ${totalBunks} total bunks (${myBunks.size} mine preserved)`);
-                        const myAssignments = {};
-                        
-                        // Keep my current assignments
-                        Object.entries(window.scheduleAssignments || {}).forEach(([bunk, data]) => {
-                            if (myBunks.has(String(bunk))) {
-                                myAssignments[bunk] = data;
-                            }
-                        });
-                        
-                        const remoteAssignments = result.data.scheduleAssignments || {};
 
-                        window.scheduleAssignments = {
-                            ...remoteAssignments,
-                            ...myAssignments
-                        };
-
-                        window.leagueAssignments = result.data.leagueAssignments || window.leagueAssignments;
-                        
                         // ★★★ FIX: Also update unifiedTimes from remote ★★★
                         if (result.data.unifiedTimes?.length > (window.unifiedTimes?.length || 0)) {
                             window.unifiedTimes = result.data.unifiedTimes;

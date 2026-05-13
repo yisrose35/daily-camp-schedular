@@ -818,19 +818,19 @@
     // ★★★ FIXED: OFFLINE QUEUE PROCESSING WITH PERSISTENCE ★★★
     // =========================================================================
 
-    function handleOnline() {
+    async function handleOnline() {
         log('Back online');
         _isOnline = true;
         updateStatus('idle');
-        
-        // Re-subscribe to realtime
+
+        // Re-subscribe to realtime before processing queue
         const dateKey = _currentDateKey || getCurrentDateKey();
         if (dateKey) {
-            subscribe(dateKey);
+            await subscribe(dateKey);
         }
-        
+
         // Process any queued saves
-        processOfflineQueue();
+        await processOfflineQueue();
     }
 
     function handleOffline() {
