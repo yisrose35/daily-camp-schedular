@@ -1931,6 +1931,24 @@
         return !(end1 <= start2 || start1 >= end2);
     };
 
+    // Slice 3 audit fix (N16): dual-key divisions lookup. The auto pipeline
+    // has ~40 sites that read `divisions[grade]?.startTime` directly. If
+    // `grade` ever arrives as a number when `divisions` is keyed by
+    // string (or vice versa), the optional chain returns undefined, the
+    // parse returns null, and the `|| 540 / || 960` literal default
+    // silently kicks in — schedule uses the wrong day-window hours.
+    // Use this helper at any time-lookup site to be type-tolerant.
+    Utils.getDivisionRecord = function(grade) {
+        const divs = window.divisions || {};
+        if (grade == null) return null;
+        return divs[grade] || divs[String(grade)] || null;
+    };
+    Utils.getDivisionTimes = function(grade) {
+        const dt = window.divisionTimes || {};
+        if (grade == null) return null;
+        return dt[grade] || dt[String(grade)] || null;
+    };
+
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================
@@ -1996,7 +2014,10 @@
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
-                activities.add(entry._activity.toLowerCase().trim());
+                const _al = entry._activity.toLowerCase().trim();
+                if (_al !== 'free' && _al !== 'free play' && !_al.includes('transition')) {
+                    activities.add(_al);
+                }
             }
         }
 
@@ -2127,6 +2148,218 @@
     };
 
     /**
+     * Get camp dates config (if set by owner on the dashboard).
+     * Returns { startDate, half1End, half2Start, endDate } or null.
+     */
+    Utils.getCampDates = function() {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        const cd = gs.campDates || (window.loadGlobalSettings ? window.loadGlobalSettings('campDates') : null);
+        if (cd && cd.startDate) return cd;
+        return null;
+    };
+
+    /**
+     * Compute the start date of the current N-week period, anchored to camp
+     * start date if configured, else rolling calendar windows.
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate] - reference date (ISO), defaults to today
+     * @returns {string|null} ISO date string
+     */
+    Utils.getPeriodStartDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half' || (!period)) {
+            if (cd) {
+                var curParts = today.split('-').map(Number);
+                var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
+                if (cd.startDate) return cd.startDate;
+            }
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var s = gs.app1 || gs;
+            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
+        }
+
+        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        if (nWeeks === 0) return null;
+
+        if (cd && cd.startDate) {
+            var campStart = new Date(cd.startDate + 'T00:00:00');
+            var todayParts = today.split('-').map(Number);
+            var cur = new Date(todayParts[0], todayParts[1] - 1, todayParts[2]);
+            var daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart >= 0) {
+                var weeksSinceStart = Math.floor(daysSinceStart / 7);
+                var periodIndex = Math.floor(weeksSinceStart / nWeeks);
+                var periodStartDay = periodIndex * nWeeks * 7;
+                var periodDate = new Date(campStart);
+                periodDate.setDate(periodDate.getDate() + periodStartDay);
+                return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            }
+        }
+
+        // Fallback: rolling calendar window from Monday
+        var parts = today.split('-').map(Number);
+        var d = new Date(parts[0], parts[1] - 1, parts[2]);
+        var dow = d.getDay();
+        var daysToMon = dow === 0 ? 6 : dow - 1;
+        d.setDate(d.getDate() - daysToMon - ((nWeeks - 1) * 7));
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Period-aware activity count: how many days within the given period has
+     * this bunk done this activity? Scans allDailyData.
+     * @param {string} bunk
+     * @param {string} activityName
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate]
+     * @returns {number}
+     */
+    Utils.getPeriodActivityCount = function(bunk, activityName, period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var count = 0;
+        Object.keys(allDaily).forEach(function(dateKey) {
+            if (dateKey >= today) return;
+            if (periodStart && dateKey < periodStart) return;
+            var slots = allDaily[dateKey]?.scheduleAssignments?.[bunk];
+            if (!Array.isArray(slots)) return;
+            if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
+        });
+        return count;
+    };
+
+    /**
+     * Determine the end date of the current period.
+     */
+    Utils.getPeriodEndDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half') {
+            if (cd) {
+                var curD = new Date(today + 'T00:00:00');
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) {
+                    return cd.endDate || null;
+                }
+                return cd.half1End || cd.endDate || null;
+            }
+            return null;
+        }
+
+        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        if (nWeeks === 0) return null;
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        if (!periodStart) return null;
+        var ps = new Date(periodStart + 'T00:00:00');
+        ps.setDate(ps.getDate() + (nWeeks * 7) - 1);
+        var endDate = cd && cd.endDate ? cd.endDate : null;
+        if (endDate && ps > new Date(endDate + 'T00:00:00')) {
+            return endDate;
+        }
+        return ps.getFullYear() + '-' + String(ps.getMonth() + 1).padStart(2, '0') + '-' + String(ps.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Check if a date is an active camp day. Excludes Saturday (Shabbat).
+     * Detects whether Sundays are active by checking allDailyData.
+     */
+    Utils._sundayActiveCache = null;
+    Utils._isSundayActive = function() {
+        if (Utils._sundayActiveCache !== null) return Utils._sundayActiveCache;
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var keys = Object.keys(allDaily);
+        for (var i = 0; i < keys.length; i++) {
+            var d = new Date(keys[i] + 'T00:00:00');
+            if (d.getDay() === 0) {
+                var dayData = allDaily[keys[i]];
+                if (dayData && dayData.scheduleAssignments && Object.keys(dayData.scheduleAssignments).length > 0) {
+                    Utils._sundayActiveCache = true;
+                    return true;
+                }
+            }
+        }
+        Utils._sundayActiveCache = false;
+        return false;
+    };
+
+    Utils.isCampDay = function(dateStr) {
+        var d = new Date(dateStr + 'T00:00:00');
+        var dow = d.getDay();
+        if (dow === 6) return false;
+        if (dow === 0 && !Utils._isSundayActive()) return false;
+        return true;
+    };
+
+    /**
+     * Count active camp days between two dates (inclusive).
+     */
+    Utils.countCampDays = function(startDate, endDate) {
+        if (!startDate || !endDate) return 0;
+        var cur = new Date(startDate + 'T00:00:00');
+        var end = new Date(endDate + 'T00:00:00');
+        var count = 0;
+        while (cur <= end) {
+            var iso = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0') + '-' + String(cur.getDate()).padStart(2, '0');
+            if (Utils.isCampDay(iso)) count++;
+            cur.setDate(cur.getDate() + 1);
+        }
+        return count;
+    };
+
+    /**
+     * Compute the escalating bonus for min/exact frequency enforcement.
+     * Accounts for cooldown: if the activity can't be scheduled until a
+     * future date, the effective remaining window shrinks and urgency rises.
+     *
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {number} visitsNeeded - how many more visits are required
+     * @param {string} [refDate] - reference date
+     * @param {number} [cooldownDaysLeft] - calendar days until cooldown expires
+     * @returns {number} bonus score (always >= 0)
+     */
+    Utils.getEscalationBonus = function(period, visitsNeeded, refDate, cooldownDaysLeft) {
+        if (visitsNeeded <= 0) return 0;
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var periodEnd = Utils.getPeriodEndDate(period, today);
+        if (!periodStart || !periodEnd) {
+            return 100 * visitsNeeded;
+        }
+
+        var daysTotal = Utils.countCampDays(periodStart, periodEnd);
+        if (daysTotal <= 0) return 100 * visitsNeeded;
+
+        // Effective remaining camp days: subtract cooldown-blocked days
+        var daysRemaining = Utils.countCampDays(today, periodEnd);
+        if (cooldownDaysLeft > 0) {
+            var cooldownExpiry = new Date(today + 'T00:00:00');
+            cooldownExpiry.setDate(cooldownExpiry.getDate() + cooldownDaysLeft);
+            var expiryStr = cooldownExpiry.getFullYear() + '-' + String(cooldownExpiry.getMonth() + 1).padStart(2, '0') + '-' + String(cooldownExpiry.getDate()).padStart(2, '0');
+            var eligibleRemaining = Utils.countCampDays(expiryStr, periodEnd);
+            daysRemaining = Math.min(daysRemaining, eligibleRemaining);
+        }
+
+        var effectiveElapsed = Math.max(0, daysTotal - daysRemaining);
+        var dayIndex = Math.max(0, effectiveElapsed - 1);
+        var base = 100 * Math.pow(2, dayIndex);
+        return base * visitsNeeded;
+    };
+
+    /**
      * ★★★ REBUILD HISTORICAL COUNTS FROM ALL SAVED SCHEDULES ★★★
      * This is the DEFINITIVE source of truth for activity counts.
      * Call this after generation or on app load to sync counts.
@@ -2155,7 +2388,7 @@
 
                         // Skip "Free" and transition types
                         const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower.includes('transition')) {
+                        if (actLower === 'free' || actLower === 'free play' || actLower.includes('transition')) {
                             return;
                         }
 
@@ -2173,6 +2406,11 @@
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
             window.saveGlobalSettings('historicalCounts', counts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
+            const _countedDates = {};
+            Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
             // Trigger cloud sync if available
@@ -2507,13 +2745,18 @@ const validActivities = Utils.getValidActivityNames();
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
             _rotHist.bunks = _rotHist.bunks || {};
             const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
-            const _now = Date.now();
-            _rotHist.bunks[bunk] = {};
+            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate + 'T12:00:00').getTime() : Date.now();
+            const _now = _schedDate || Date.now();
+            // Merge today's activities into existing timestamps instead of
+            // wiping the bunk — preserves previous-day recency data.
+            if (!_rotHist.bunks[bunk]) _rotHist.bunks[bunk] = {};
+            const _todayActs = new Set();
             _bunkSlots.forEach(entry => {
                 if (entry?._activity && !entry.continuation && !entry._isTransition) {
                     const _aLower = entry._activity.toLowerCase();
                     if (_aLower !== 'free' && !_aLower.includes('transition')) {
                         _rotHist.bunks[bunk][entry._activity] = _now;
+                        _todayActs.add(entry._activity);
                     }
                 }
             });

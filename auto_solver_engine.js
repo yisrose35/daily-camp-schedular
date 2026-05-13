@@ -41,7 +41,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '12.0.0'; // ★ v12.0: forward-checking, dynamic re-sort, capacity-relax repair, enhanced colocate
+    const VERSION = '11.0.0'; // ★ v11.0: regret-ordering, BFS augmenting, SA-guided elite pool, depth-5 ejection
     const TAG = '[AutoSolver]';
 
     function log(msg, ...args) { console.log(TAG + ' ' + msg, ...args); }
@@ -98,7 +98,14 @@
                     unavailable: isUnavail,
                     startMin: sMin,
                     endMin: eMin,
-                    divisions: Array.isArray(r.divisions) ? r.divisions.map(String) : []
+                    // Slice 3 audit fix (N11): tolerate divisions stored as a
+                    // single string/number (e.g. "5" or 5). Earlier non-array
+                    // values fell through to [] which silently re-scoped the
+                    // rule to "all grades" — a per-grade Unavailable rule
+                    // becoming a global one would block other grades.
+                    divisions: Array.isArray(r.divisions)
+                        ? r.divisions.map(String)
+                        : (r.divisions != null && r.divisions !== '' ? [String(r.divisions)] : [])
                 };
             }).filter(r => r.startMin != null && r.endMin != null && (r.available || r.unavailable));
         }
@@ -726,135 +733,10 @@
             return aDur - bDur;
         });
 
-        // ── Backtracking infrastructure ─────────────────────────────
-        const MAX_BACKTRACKS = 30;
-        const BACKTRACK_TIME_BUDGET = 10000;
-        let backtrackCount = 0;
-        const assignmentStack = [];
-
-        function snapshotState() {
-            const saClone = {};
-            const sa = window.scheduleAssignments || {};
-            for (const bk of Object.keys(sa)) {
-                if (!Array.isArray(sa[bk])) { saClone[bk] = sa[bk]; continue; }
-                saClone[bk] = sa[bk].map(e => e ? Object.assign({}, e) : e);
-            }
-            const fiClone = new Map();
-            for (const [k, arr] of fieldIndex) {
-                fiClone.set(k, arr.map(e => Object.assign({}, e)));
-            }
-            const baClone = new Map();
-            for (const [k, s] of bunkActivities) {
-                baClone.set(k, new Set(s));
-            }
-            const fubsClone = {};
-            const fubs = window.fieldUsageBySlot || {};
-            for (const si of Object.keys(fubs)) {
-                fubsClone[si] = {};
-                for (const fn of Object.keys(fubs[si])) {
-                    const o = fubs[si][fn];
-                    fubsClone[si][fn] = {
-                        count: o.count,
-                        bunks: Object.assign({}, o.bunks),
-                        divisions: o.divisions ? o.divisions.slice() : []
-                    };
-                }
-            }
-            return {
-                scheduleAssignments: saClone,
-                fieldIndex: fiClone,
-                bunkActivities: baClone,
-                fieldUsageBySlot: fubsClone,
-                rotationCache: new Map(rotationCache),
-                gradeFieldOptions: new Map(gradeFieldOptions)
-            };
-        }
-
-        function restoreState(snapshot) {
-            window.scheduleAssignments = {};
-            for (const bk of Object.keys(snapshot.scheduleAssignments)) {
-                const arr = snapshot.scheduleAssignments[bk];
-                if (!Array.isArray(arr)) { window.scheduleAssignments[bk] = arr; continue; }
-                window.scheduleAssignments[bk] = arr.map(e => e ? Object.assign({}, e) : e);
-            }
-            fieldIndex.clear();
-            for (const [k, arr] of snapshot.fieldIndex) {
-                fieldIndex.set(k, arr.map(e => Object.assign({}, e)));
-            }
-            bunkActivities.clear();
-            for (const [k, s] of snapshot.bunkActivities) {
-                bunkActivities.set(k, new Set(s));
-            }
-            window.fieldUsageBySlot = {};
-            for (const si of Object.keys(snapshot.fieldUsageBySlot)) {
-                window.fieldUsageBySlot[si] = {};
-                for (const fn of Object.keys(snapshot.fieldUsageBySlot[si])) {
-                    const o = snapshot.fieldUsageBySlot[si][fn];
-                    window.fieldUsageBySlot[si][fn] = {
-                        count: o.count,
-                        bunks: Object.assign({}, o.bunks),
-                        divisions: o.divisions ? o.divisions.slice() : []
-                    };
-                }
-            }
-            rotationCache.clear();
-            for (const [k, v] of snapshot.rotationCache) rotationCache.set(k, v);
-            gradeFieldOptions.clear();
-            for (const [k, v] of snapshot.gradeFieldOptions) gradeFieldOptions.set(k, v);
-        }
-
-        function rebuildAutoFieldLocks() {
-            if (!window.AutoFieldLocks) return;
-            if (window.AutoFieldLocks.clearAll) window.AutoFieldLocks.clearAll();
-            if (!window.AutoFieldLocks.claimField) return;
-            const sa = window.scheduleAssignments || {};
-            const dt = window.divisionTimes || {};
-            for (const [bk, slots] of Object.entries(sa)) {
-                if (!Array.isArray(slots)) continue;
-                let gr = '';
-                for (const [g, d] of Object.entries(divisions)) {
-                    if ((d.bunks || []).map(String).includes(String(bk))) { gr = g; break; }
-                }
-                const pbs = window._perBunkSlots?.[gr]?.[bk]
-                    || dt[gr]?._perBunkSlots?.[bk]
-                    || (Array.isArray(dt[gr]) ? dt[gr] : []);
-                slots.forEach((e, idx) => {
-                    if (!e || e.field === 'Free' || e.continuation) return;
-                    const sM = pbs[idx]?.startMin ?? e._startMin;
-                    const eM = pbs[idx]?.endMin ?? e._endMin;
-                    if (sM == null || eM == null) return;
-                    window.AutoFieldLocks.claimField(e.field, sM, eM, bk, gr, e.sport || e._activity);
-                });
-            }
-        }
-
-        function findBlameTarget(block, allCandidates, startMin, endMin, bunk, grade) {
-            if (assignmentStack.length === 0) return -1;
-            const blockingFields = new Set();
-            for (const cand of allCandidates) {
-                if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) {
-                    blockingFields.add(normName(cand.field));
-                }
-            }
-            if (blockingFields.size === 0) return -1;
-            for (let si = assignmentStack.length - 1; si >= 0; si--) {
-                const entry = assignmentStack[si];
-                if (entry.pick._fixed || entry.pick._pinned || entry.pick._league) continue;
-                const pickFieldNorm = normName(entry.pick.field);
-                if (blockingFields.has(pickFieldNorm)) {
-                    if (entry.candidateIdx + 1 < entry.scored.length) return si;
-                }
-            }
-            return -1;
-        }
-
         // ── Solve each block ─────────────────────────────────────────
         let filled = 0, free = 0;
-        let blockIdx = 0;
-        let forceStartCandidate = -1;
 
-        while (blockIdx < blocks.length) {
-            const block = blocks[blockIdx];
+        for (const block of blocks) {
             const bunk = block.bunk;
             const grade = block.divName || '';
             const slotIdx = block.slots?.[0];
@@ -864,15 +746,18 @@
             if (startMin == null || endMin == null || !bunk) {
                 writeFree(block);
                 free++;
-                blockIdx++;
                 continue;
             }
 
+            // Already filled? Skip
             const existing = window.scheduleAssignments?.[bunk]?.[slotIdx];
-            if (existing && (existing._fixed || existing._locked)) { blockIdx++; continue; }
+            if (existing && existing._fixed) continue;
 
+            // Get this bunk's activities so far
             const doneToday = bunkActivities.get(bunk) || new Set();
 
+            // ★ Adjacent-slot back-to-back prevention — find the nearest filled sport
+            //   in each direction for this bunk so we can skip same-sport candidates.
             let prevAdjacentSport = null, nextAdjacentSport = null;
             {
                 const bunkSlotsAdj = window.scheduleAssignments?.[bunk];
@@ -894,32 +779,42 @@
                 }
             }
 
+            // Score all candidates for this block
             const scored = [];
             for (const cand of candidates) {
+                // Same-day repeat check (HARD rule)
                 if (doneToday.has(cand.sportNorm)) continue;
 
+                // ★ Back-to-back consecutive sport skip — prevents placing the same sport
+                //   as the immediately adjacent filled slot in this bunk.
                 if ((prevAdjacentSport && prevAdjacentSport === cand.sportNorm) ||
                     (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) continue;
 
+                // Field availability (time-based)
                 if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
 
+                // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;
 
+                // Score: rotation + draft hint
                 let score = getCachedRotation(bunk, cand.sport, grade);
                 score += getDraftBonus(block, cand);
 
+                // Prefer filling fields to capacity (same activity co-location)
                 const fn = cand.fieldNorm;
                 const existing = (fieldIndex.get(fn) || []).filter(e =>
                     e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk
                 );
                 if (existing.length > 0) {
                     const sameAct = existing.filter(e => e.activity === cand.sportNorm);
-                    if (sameAct.length > 0) score -= 1500;
-                    else score += 300;
+                    if (sameAct.length > 0) score -= 1500; // Co-locate same activity
+                    else score += 300; // Mixed activities on same field = mild penalty
                 }
 
+               // Scarcity penalty: avoid using fields that other grades desperately need
                 score += getScarcityPenalty(cand.fieldNorm, startMin, endMin, grade);
 
+                // Adjacent bunk bonus (sports that need pairing)
                 const bunkNum = parseInt(String(bunk).replace(/\D/g, '')) || 0;
                 const adjacentOnField = existing.some(e => {
                     const eNum = parseInt(String(e.bunk).replace(/\D/g, '')) || 0;
@@ -927,11 +822,15 @@
                 });
                 if (adjacentOnField) score -= 500;
 
+                // ★ v11.0: Grade diversity score.
+                // Penalize assigning a sport that many other bunks in this grade
+                // have already been assigned today. Promotes variety across the grade.
                 {
                     let gradeSportCount = 0;
                     for (const [ob, oslots] of Object.entries(window.scheduleAssignments || {})) {
                         if (String(ob) === String(bunk)) continue;
                         if (!Array.isArray(oslots)) continue;
+                        // Is this bunk in the same grade?
                         let obGrade = '';
                         for (const [g, d] of Object.entries(divisions)) {
                             if ((d.bunks || []).map(String).includes(String(ob))) { obGrade = g; break; }
@@ -945,20 +844,25 @@
                             }
                         }
                     }
+                    // Light penalty: enough to prefer variety but not override hard constraints
                     score += gradeSportCount * 200;
                 }
 
+                // ★ v11.0: Opportunity cost penalty.
+                // Count how many FUTURE blocks in this same time window are also competing
+                // for this specific field. Using it now has high opportunity cost if others need it.
                 {
                     const wk = startMin + '-' + endMin;
                     const fieldWindows = scarcityMap.get(fn);
                     if (fieldWindows && fieldWindows.has(wk)) {
                         const fw = fieldWindows.get(wk);
-                        const competingGrades = fw.grades.size - 1;
+                        const competingGrades = fw.grades.size - 1; // exclude self
                         if (competingGrades > 0) {
                             const cap = cand.capacity || 2;
-                            const occ = existing.length;
-                            const remaining = cap - occ - 1;
+                            const occ = existing.length; // already occupying
+                            const remaining = cap - occ - 1; // remaining after our placement
                             if (remaining <= 0) {
+                                // Taking this field saturates it — big cost if others need it
                                 score += competingGrades * 300;
                             }
                         }
@@ -968,167 +872,57 @@
                 scored.push({ cand, score });
             }
 
-            scored.sort((a, b) => a.score - b.score);
-
-            // Determine starting candidate index (for backtracking retries)
-            let startCandIdx = 0;
-            if (forceStartCandidate >= 0) {
-                startCandIdx = forceStartCandidate;
-                forceStartCandidate = -1;
-            }
-
-            if (scored.length === 0 || startCandIdx >= scored.length) {
-                // ── Backtracking: try to undo a blamed prior assignment ──
-                const canBacktrack = backtrackCount < MAX_BACKTRACKS
-                    && (performance.now() - startTime) < BACKTRACK_TIME_BUDGET
-                    && assignmentStack.length > 0;
-
-                if (canBacktrack) {
-                    const blameIdx = findBlameTarget(block, candidates, startMin, endMin, bunk, grade);
-                    if (blameIdx >= 0) {
-                        const blamed = assignmentStack[blameIdx];
-                        log('BACKTRACK #' + (backtrackCount + 1) + ': block ' + blockIdx + ' (' + bunk + ') blames stack[' + blameIdx + '] (' + blamed.bunk + ' → ' + blamed.pick.sport + '), trying candidate ' + (blamed.candidateIdx + 1));
-                        restoreState(blamed.snapshot);
-                        const affectedBunks = new Set();
-                        for (let si = blameIdx; si < assignmentStack.length; si++) {
-                            affectedBunks.add(assignmentStack[si].bunk);
-                        }
-                        for (const ab of affectedBunks) {
-                            if (window.RotationEngine?.invalidateBunkTodayCache) {
-                                window.RotationEngine.invalidateBunkTodayCache(ab);
-                            }
-                            invalidateRotationCacheForBunk(ab);
-                        }
-                        rebuildAutoFieldLocks();
-
-                        const newStartCand = blamed.candidateIdx + 1;
-                        assignmentStack.length = blameIdx;
-                        blockIdx = blamed.blockIdx;
-                        forceStartCandidate = newStartCand;
-                        backtrackCount++;
-                        filled = blamed.filledBefore;
-                        free = blamed.freeBefore;
-                        continue;
-                    }
-                }
-
+            if (scored.length === 0) {
+                // No valid candidate — Free
                 writeFree(block);
                 free++;
-                blockIdx++;
                 continue;
             }
 
-            const pick = scored[startCandIdx].cand;
+            // Pick best.
+            // Slice 3 audit fix (Deferred-5): tie-break by field qualityRank
+            // (lower = higher quality). rules.js's Field Quality Group ranks
+            // were defined but never consumed — when two candidates tied on
+            // rotation score, we picked by Object insertion order, which
+            // could deprioritize a higher-quality field.
+            scored.sort((a, b) => {
+                if (a.score !== b.score) return a.score - b.score;
+                const aq = (a.cand?.qualityRank ?? a.cand?.field?.qualityRank ?? 999);
+                const bq = (b.cand?.qualityRank ?? b.cand?.field?.qualityRank ?? 999);
+                return aq - bq;
+            });
+            const pick = scored[0].cand;
 
-            // Snapshot state BEFORE committing this assignment
-            const snapshot = snapshotState();
-
+            // Write assignment
             writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx);
 
+            // Update tracking
             doneToday.add(pick.sportNorm);
             bunkActivities.set(bunk, doneToday);
+            // Invalidate this bunk's cached rotation scores so next block scores fresh
             invalidateRotationCacheForBunk(bunk);
 
+            // Update field index so subsequent blocks see this assignment
             const fn = pick.fieldNorm;
             if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
             fieldIndex.get(fn).push({ startMin, endMin, bunk, grade, slotIdx, activity: pick.sportNorm });
 
+            // Forward checking: refresh gradeFieldOptions for this time window so
+            // scarcity penalties for remaining blocks reflect the new assignment.
             updateDomainSizes(fieldIndex, startMin, endMin, candidates, gradeFieldOptions, windowBlocks);
 
+            // Register in AutoFieldLocks if available
             if (window.AutoFieldLocks?.claimField) {
                 window.AutoFieldLocks.claimField(pick.field, startMin, endMin, bunk, grade, pick.sport);
             }
 
+            // Invalidate rotation cache for this bunk
             if (window.RotationEngine?.invalidateBunkTodayCache) {
                 window.RotationEngine.invalidateBunkTodayCache(bunk);
             }
 
-            assignmentStack.push({
-                blockIdx, block, bunk, slotIdx, grade, startMin, endMin,
-                pick, score: scored[startCandIdx].score,
-                snapshot, candidateIdx: startCandIdx, scored,
-                filledBefore: filled, freeBefore: free
-            });
-
             filled++;
-
-            // ★ v12.0: Forward checking — detect domain wipeouts immediately.
-            var fcWipeout = false;
-            if (backtrackCount < MAX_BACKTRACKS && (performance.now() - startTime) < BACKTRACK_TIME_BUDGET) {
-                for (var fi = blockIdx + 1; fi < blocks.length; fi++) {
-                    var fb = blocks[fi];
-                    if (fb._locked) continue;
-                    var fbSM = parseTime(fb.startTime), fbEM = parseTime(fb.endTime);
-                    if (fbSM !== startMin || fbEM !== endMin) continue;
-                    var fbBunk = fb.bunk;
-                    var fbGrade = fb.divName || '';
-                    var fbSlotIdx = fb.slots?.[0];
-                    var fbEx = window.scheduleAssignments?.[fbBunk]?.[fbSlotIdx];
-                    if (fbEx && (fbEx._fixed || fbEx._locked)) continue;
-                    var fbDone = bunkActivities.get(fbBunk) || new Set();
-                    var fcCount = 0;
-                    for (var ci = 0; ci < candidates.length && fcCount === 0; ci++) {
-                        var fc = candidates[ci];
-                        if (fbDone.has(fc.sportNorm)) continue;
-                        if (!isFieldAvailableByTime(fc.field, fbSM, fbEM, fbBunk, fbGrade, fieldIndex, fc)) continue;
-                        if (isRainy && !fc.isIndoor) continue;
-                        fcCount++;
-                    }
-                    if (fcCount === 0) { fcWipeout = true; break; }
-                }
-            }
-            if (fcWipeout && assignmentStack.length > 0) {
-                var lastEntry = assignmentStack[assignmentStack.length - 1];
-                if (lastEntry.candidateIdx + 1 < lastEntry.scored.length) {
-                    log('FORWARD-CHECK: wipeout after ' + bunk + ' → ' + pick.sport + ', backtracking');
-                    restoreState(lastEntry.snapshot);
-                    for (var abi = assignmentStack.length - 1; abi >= 0; abi--) {
-                        var ab2 = assignmentStack[abi].bunk;
-                        if (window.RotationEngine?.invalidateBunkTodayCache) window.RotationEngine.invalidateBunkTodayCache(ab2);
-                        invalidateRotationCacheForBunk(ab2);
-                    }
-                    rebuildAutoFieldLocks();
-                    forceStartCandidate = lastEntry.candidateIdx + 1;
-                    blockIdx = lastEntry.blockIdx;
-                    filled = lastEntry.filledBefore;
-                    free = lastEntry.freeBefore;
-                    assignmentStack.length = assignmentStack.length - 1;
-                    backtrackCount++;
-                    continue;
-                }
-            }
-
-            // ★ v12.0: Dynamic re-sort every 8 assignments
-            if (filled > 0 && filled % 8 === 0 && blockIdx + 1 < blocks.length) {
-                var remaining = blocks.slice(blockIdx + 1);
-                remaining.sort(function(a, b) {
-                    var aHint = a._draftActivity ? -1 : 0;
-                    var bHint = b._draftActivity ? -1 : 0;
-                    if (aHint !== bHint) return aHint - bHint;
-                    var aSM = parseTime(a.startTime), aEM = parseTime(a.endTime);
-                    var bSM = parseTime(b.startTime), bEM = parseTime(b.endTime);
-                    if (aSM !== bSM) return (aSM || 0) - (bSM || 0);
-                    var aG = a.divName || '', bG = b.divName || '';
-                    var aOpts = gradeFieldOptions.get(aG + '|' + aSM + '-' + aEM) || 999;
-                    var bOpts = gradeFieldOptions.get(bG + '|' + bSM + '-' + bEM) || 999;
-                    if (aOpts !== bOpts) return aOpts - bOpts;
-                    var aRegret = regretMap.get(aG + '|' + (aSM||0) + '-' + (aEM||0)) || 0;
-                    var bRegret = regretMap.get(bG + '|' + (bSM||0) + '-' + (bEM||0)) || 0;
-                    if (Math.abs(aRegret - bRegret) > 0.001) return bRegret - aRegret;
-                    return 0;
-                });
-                for (var ri = 0; ri < remaining.length; ri++) blocks[blockIdx + 1 + ri] = remaining[ri];
-            }
-
-            blockIdx++;
         }
-
-        if (backtrackCount > 0) {
-            log('★ Backtracking: ' + backtrackCount + ' backtracks performed');
-        }
-
-        // ── Post-solve swap optimization ─────────────────────────────
-        const swapCount = pairwiseSwapOptimization(candidates, fieldIndex, bunkActivities, divisions);
 
         // ── Same-day duplicate sweep (safety net) ────────────────────
         const dupFixes = sameDayDuplicateSweep();
@@ -1150,10 +944,6 @@
         const colocFixed = colocateFreeBlocks(colocCands);
         free = Math.max(0, free - colocFixed);
 
-        // ★ v12.0: Capacity relaxation — last resort, allow cap+1 for remaining Free ──
-        const capRelaxFixed = capacityRelaxRepair(config);
-        free = Math.max(0, free - capRelaxFixed);
-
         const elapsed = ((performance.now() - startTime) / 1000).toFixed(2);
         log('╔═══════════════════════════════════════════════════════════╗');
         log('║  SOLVE COMPLETE in ' + elapsed + 's');
@@ -1163,17 +953,68 @@
         if (ejectionFixed > 0) log('║  ' + ejectionFixed + ' Free blocks recovered by ejection chains');
         if (bfsFixed > 0)      log('║  ' + bfsFixed + ' Free blocks recovered by BFS augmenting');
         if (colocFixed > 0)    log('║  ' + colocFixed + ' Free blocks recovered by colocate (sharing)');
-        if (capRelaxFixed > 0) log('║  ' + capRelaxFixed + ' Free blocks recovered by capacity relaxation');
-        if (swapCount > 0)     log('║  ' + swapCount + ' rotation-improving swaps');
         log('╚═══════════════════════════════════════════════════════════╝');
 
-        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed, swapCount, capRelaxFixed };
+        return { filled, free, elapsed, dupFixes, lnsFixed, ejectionFixed, bfsFixed };
     }
 
 
     // =========================================================================
     // WRITE HELPERS
     // =========================================================================
+
+    // ── Cross-grade pressure helper (Slice 3 audit, N18) ──────────────
+    // Repair phases used to pick the first matching candidate. That
+    // could land a free block on a field other grades urgently need
+    // (no spare capacity), while a less-contested alternative sat
+    // unused. We can't access the main solver's full scarcityMap from
+    // here (it's a closure local), but the fieldIndex passed into each
+    // repair helper has everything we need to compute a simple cross-
+    // grade pressure score: count distinct other grades already using
+    // the candidate field in the FB's time window. Higher = more
+    // contested = should be deprioritized.
+    function _crossGradePressure(cand, fb, fieldIndex) {
+        try {
+            const fn = cand?.fieldNorm || (cand?.field ? normName(cand.field) : null);
+            if (!fn || !fieldIndex?.get) return 0;
+            const entries = fieldIndex.get(fn) || [];
+            const otherGrades = new Set();
+            for (const e of entries) {
+                if (!e || e.bunk === fb.bunk) continue;
+                if (e.endMin <= fb.startMin || e.startMin >= fb.endMin) continue;
+                if (e.grade != null && e.grade !== fb.grade) otherGrades.add(e.grade);
+            }
+            return otherGrades.size;
+        } catch (_) { return 0; }
+    }
+    function _sortCandidatesByPressure(candidates, fb, fieldIndex) {
+        // Stable: lower pressure first; preserves caller's prior ordering.
+        const indexed = candidates.map((c, i) => ({ c, i, p: _crossGradePressure(c, fb, fieldIndex) }));
+        indexed.sort((a, b) => a.p !== b.p ? a.p - b.p : a.i - b.i);
+        return indexed.map(x => x.c);
+    }
+
+    // ── Bunk-done-today helper (shared) ────────────────────────────────
+    // Slice 3 audit fix (Deferred-2): centralized so the three repair
+    // phases (tryDirectFill, colocateFreeBlocks, ejection chain) all
+    // share the same definition. Previously each rebuilt its own from
+    // scratch; if a future caller forgets the optional `extraSports`
+    // arg (used by chain construction to inject in-flight commits not
+    // yet in scheduleAssignments), the helpers disagree about what
+    // the bunk has placed.
+    function getBunkDoneToday(bunk, excludeSlotIdx, extraSports) {
+        const done = new Set();
+        const slots = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+        for (let i = 0; i < slots.length; i++) {
+            if (i === excludeSlotIdx) continue;
+            const e = slots[i];
+            if (!e || e.continuation) continue;
+            const act = normName(e._activity || e.sport || e.field);
+            if (act && act !== 'free' && act !== 'free play') done.add(act);
+        }
+        if (extraSports) extraSports.forEach(s => done.add(s));
+        return done;
+    }
 
     // ── HARD WRITE GUARD ────────────────────────────────────────────────
     // Reads field rules from live globalSettings on every call — no
@@ -1310,272 +1151,22 @@
 
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
         window.scheduleAssignments[bunk][slotIdx] = entry;
-        return true;
-    }
-
-    // =========================================================================
-    // SWAP LEGALITY CHECK (read-only mirror of commitWriteIfLegal validation)
-    // =========================================================================
-    function isSwapLegal(bunk, slotIdx, fieldName, sport, grade, startMin, endMin, fieldIndex, candidate) {
-        if (!fieldName || fieldName === 'Free') return true;
-
-        const gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
-        const fields = gs.app1?.fields || [];
-        const fld = fields.find(f => f && f.name === fieldName);
-        if (fld) {
-            if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
-                const divs = fld.accessRestrictions.divisions || {};
-                const gradeKey = String(grade);
-                if (!(gradeKey in divs) && !(grade in divs)) return false;
-                const bunkList = divs[gradeKey] || divs[grade];
-                if (Array.isArray(bunkList) && bunkList.length > 0
-                    && !bunkList.map(String).includes(String(bunk))) return false;
-            }
-            if (Array.isArray(fld.timeRules) && fld.timeRules.length > 0
-                && startMin != null && endMin != null) {
-                const myG = grade != null ? String(grade) : null;
-                const _parseTM = window.SchedulerCoreUtils?.parseTimeToMinutes;
-                let hasGradeAvail = false, insideAvail = false;
-                for (const r of fld.timeRules) {
-                    const t = String(r.type || '').toLowerCase();
-                    const isUn = t === 'unavailable' || r.available === false;
-                    const isAv = t === 'available' || r.available === true;
-                    const rs = r.startMin != null ? r.startMin
-                              : (_parseTM ? _parseTM(r.start || r.startTime) : null);
-                    const re = r.endMin != null ? r.endMin
-                              : (_parseTM ? _parseTM(r.end || r.endTime) : null);
-                    if (rs == null || re == null || (!isUn && !isAv)) continue;
-                    const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
-                    if (rDivs.length > 0 && myG && rDivs.indexOf(myG) === -1) continue;
-                    if (isUn && rs < endMin && re > startMin) return false;
-                    if (isAv) {
-                        hasGradeAvail = true;
-                        if (startMin >= rs && endMin <= re) insideAvail = true;
-                    }
-                }
-                if (hasGradeAvail && !insideAvail) return false;
-            }
-        }
-
-        if (sport) {
-            const specials = gs.app1?.specialActivities || [];
-            const sp = specials.find(s => s && s.name === sport);
-            if (sp?.accessRestrictions?.enabled) {
-                const sDivs = sp.accessRestrictions.divisions || {};
-                const gKey = String(grade);
-                if (!(gKey in sDivs) && !(grade in sDivs)) return false;
-                const sBunkAllow = sDivs[gKey] || sDivs[grade];
-                if (Array.isArray(sBunkAllow) && sBunkAllow.length > 0
-                    && !sBunkAllow.map(String).includes(String(bunk))) return false;
-            }
-        }
-
+        // Invalidate rotation caches for this bunk so any later score
+        // (in repair phases or other modules) reflects the just-placed
+        // activity. Earlier this was only done from the main solver
+        // loop; repair-phase commits left stale scores around.
         try {
-            if (window.SchedulingRules?.isCandidateAllowed && startMin != null && endMin != null) {
-                const cand = {
-                    startMin, endMin,
-                    type: 'sport',
-                    event: sport || '',
-                    field: fieldName
-                };
-                const existing = window.scheduleAssignments?.[bunk] || [];
-                const template = [];
-                for (let ti = 0; ti < existing.length; ti++) {
-                    if (ti === slotIdx) continue;
-                    const w = existing[ti];
-                    if (!w || w.continuation) continue;
-                    const ws = w._startMin, we = w._endMin;
-                    if (ws == null || we == null) continue;
-                    template.push({
-                        startMin: ws, endMin: we,
-                        type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
-                        event: w.event || w._activity || w.sport || '',
-                        field: w.field, _assignedSpecial: w._assignedSpecial,
-                        _specialLocation: w._specialLocation
-                    });
-                }
-                const _cdOpts = { mode: 'auto' };
-                if (window._previousDayEndBlocks && window._previousDayEndBlocks[bunk]) {
-                    _cdOpts.previousDayBlocks = window._previousDayEndBlocks[bunk];
-                }
-                if (!window.SchedulingRules.isCandidateAllowed(cand, template, _cdOpts)) return false;
+            if (window.RotationEngine?.invalidateBunkTodayCache) {
+                window.RotationEngine.invalidateBunkTodayCache(bunk);
             }
-        } catch (e) { /* safe fallback */ }
-
-        if (!isFieldAvailableByTime(fieldName, startMin, endMin, bunk, grade, fieldIndex, candidate)) return false;
-
+        } catch (e) {
+            // Log so the regression that N12 fixed (rotation cache staleness
+            // after commits) isn't silently re-introduced by a signature
+            // change in RotationEngine.
+            console.warn('[commitWriteIfLegal] invalidate rotation cache failed:', e?.message || e);
+        }
         return true;
     }
-
-
-    // =========================================================================
-    // POST-SOLVE PAIRWISE SWAP OPTIMIZATION
-    // =========================================================================
-    function pairwiseSwapOptimization(candidates, fieldIndex, bunkActivities, divisions) {
-        const MAX_PASSES = 3;
-        const MAX_TIME_MS = 2000;
-        const swapStart = performance.now();
-        const sa = window.scheduleAssignments || {};
-        let totalSwaps = 0;
-
-        const candidateByFieldSport = new Map();
-        candidates.forEach(c => {
-            candidateByFieldSport.set(normName(c.field) + '|' + c.sportNorm, c);
-        });
-        function findCandidate(fieldName, sport) {
-            return candidateByFieldSport.get(normName(fieldName) + '|' + normName(sport)) || null;
-        }
-
-        function getBunkGrade(bunk) {
-            for (const [g, d] of Object.entries(divisions)) {
-                if ((d.bunks || []).map(String).includes(String(bunk))) return g;
-            }
-            return '';
-        }
-
-        function bunkHasSportElsewhere(bunk, sportNorm, excludeSlotIdx) {
-            const slots = sa[bunk];
-            if (!Array.isArray(slots)) return false;
-            for (let i = 0; i < slots.length; i++) {
-                if (i === excludeSlotIdx) continue;
-                const e = slots[i];
-                if (!e || e.continuation || e.field === 'Free') continue;
-                if (normName(e._activity || e.sport || '') === sportNorm) return true;
-            }
-            return false;
-        }
-
-        function getAdjacentSport(bunk, slotIdx, direction) {
-            const slots = sa[bunk];
-            if (!Array.isArray(slots)) return null;
-            if (direction < 0) {
-                for (let i = slotIdx - 1; i >= 0; i--) {
-                    const s = slots[i];
-                    if (!s || s.continuation) continue;
-                    if (s.field === 'Free') return null;
-                    return normName(s._activity || s.sport || '');
-                }
-            } else {
-                for (let i = slotIdx + 1; i < slots.length; i++) {
-                    const s = slots[i];
-                    if (!s || s.continuation) continue;
-                    if (s.field === 'Free') return null;
-                    return normName(s._activity || s.sport || '');
-                }
-            }
-            return null;
-        }
-
-        for (let pass = 0; pass < MAX_PASSES; pass++) {
-            if (performance.now() - swapStart > MAX_TIME_MS) break;
-            let passSwaps = 0;
-
-            const freshIndex = buildFieldTimeIndex();
-
-            const windowGroups = new Map();
-            Object.entries(sa).forEach(([bunk, slots]) => {
-                if (!Array.isArray(slots)) return;
-                const grade = getBunkGrade(bunk);
-                slots.forEach((entry, idx) => {
-                    if (!entry || entry.continuation || entry.field === 'Free') return;
-                    if (entry._fixed || entry._pinned || entry._league) return;
-                    const sMin = entry._startMin, eMin = entry._endMin;
-                    if (sMin == null || eMin == null) return;
-                    const wk = sMin + '-' + eMin;
-                    if (!windowGroups.has(wk)) windowGroups.set(wk, []);
-                    windowGroups.get(wk).push({ bunk, grade, slotIdx: idx, entry, startMin: sMin, endMin: eMin });
-                });
-            });
-
-            for (const [wk, group] of windowGroups) {
-                if (performance.now() - swapStart > MAX_TIME_MS) break;
-                if (group.length < 2) continue;
-
-                for (let i = 0; i < group.length; i++) {
-                    for (let j = i + 1; j < group.length; j++) {
-                        if (performance.now() - swapStart > MAX_TIME_MS) break;
-                        const a = group[i], b = group[j];
-
-                        const aSport = normName(a.entry._activity || a.entry.sport || '');
-                        const bSport = normName(b.entry._activity || b.entry.sport || '');
-                        if (aSport === bSport) continue;
-
-                        if (bunkHasSportElsewhere(a.bunk, bSport, a.slotIdx)) continue;
-                        if (bunkHasSportElsewhere(b.bunk, aSport, b.slotIdx)) continue;
-
-                        const aPrev = getAdjacentSport(a.bunk, a.slotIdx, -1);
-                        const aNext = getAdjacentSport(a.bunk, a.slotIdx, 1);
-                        const bPrev = getAdjacentSport(b.bunk, b.slotIdx, -1);
-                        const bNext = getAdjacentSport(b.bunk, b.slotIdx, 1);
-                        if ((aPrev && aPrev === bSport) || (aNext && aNext === bSport)) continue;
-                        if ((bPrev && bPrev === aSport) || (bNext && bNext === aSport)) continue;
-
-                        const aRotCurr = getRotationScore(a.bunk, a.entry.sport || aSport, a.grade);
-                        const bRotCurr = getRotationScore(b.bunk, b.entry.sport || bSport, b.grade);
-                        const currScore = aRotCurr + bRotCurr;
-
-                        const aRotSwap = getRotationScore(a.bunk, b.entry.sport || bSport, a.grade);
-                        const bRotSwap = getRotationScore(b.bunk, a.entry.sport || aSport, b.grade);
-                        const swapScore = aRotSwap + bRotSwap;
-
-                        if (swapScore >= currScore) continue;
-
-                        const tmpIndex = buildFieldTimeIndex();
-                        const aFiEntries = tmpIndex.get(normName(a.entry.field)) || [];
-                        const bFiEntries = tmpIndex.get(normName(b.entry.field)) || [];
-                        const aFiIdx = aFiEntries.findIndex(e => e.bunk === a.bunk && e.slotIdx === a.slotIdx);
-                        const bFiIdx = bFiEntries.findIndex(e => e.bunk === b.bunk && e.slotIdx === b.slotIdx);
-                        if (aFiIdx >= 0) aFiEntries.splice(aFiIdx, 1);
-                        if (bFiIdx >= 0) bFiEntries.splice(bFiIdx, 1);
-
-                        const candA = findCandidate(b.entry.field, b.entry.sport || bSport);
-                        const candB = findCandidate(a.entry.field, a.entry.sport || aSport);
-
-                        const origA = sa[a.bunk][a.slotIdx];
-                        const origB = sa[b.bunk][b.slotIdx];
-                        sa[a.bunk][a.slotIdx] = null;
-                        sa[b.bunk][b.slotIdx] = null;
-
-                        const aLegal = isSwapLegal(a.bunk, a.slotIdx, b.entry.field, b.entry.sport || bSport, a.grade, a.startMin, a.endMin, tmpIndex, candA);
-                        const bLegal = isSwapLegal(b.bunk, b.slotIdx, a.entry.field, a.entry.sport || aSport, b.grade, b.startMin, b.endMin, tmpIndex, candB);
-
-                        if (aLegal && bLegal) {
-                            sa[a.bunk][a.slotIdx] = {
-                                field: b.entry.field, sport: b.entry.sport, _activity: b.entry._activity,
-                                _autoMode: true, _autoSolved: true,
-                                _startMin: a.startMin, _endMin: a.endMin, _blockStart: a.startMin,
-                                _division: a.grade, continuation: false, _swapped: true
-                            };
-                            sa[b.bunk][b.slotIdx] = {
-                                field: a.entry.field, sport: a.entry.sport, _activity: a.entry._activity,
-                                _autoMode: true, _autoSolved: true,
-                                _startMin: b.startMin, _endMin: b.endMin, _blockStart: b.startMin,
-                                _division: b.grade, continuation: false, _swapped: true
-                            };
-
-                            group[i] = { ...a, entry: sa[a.bunk][a.slotIdx] };
-                            group[j] = { ...b, entry: sa[b.bunk][b.slotIdx] };
-
-                            passSwaps++;
-                            log('SWAP: ' + a.bunk + '(' + aSport + ') ↔ ' + b.bunk + '(' + bSport + ') @ ' + wk + ' Δrot=' + (currScore - swapScore));
-                        } else {
-                            sa[a.bunk][a.slotIdx] = origA;
-                            sa[b.bunk][b.slotIdx] = origB;
-                        }
-                    }
-                }
-            }
-
-            totalSwaps += passSwaps;
-            if (passSwaps === 0) break;
-        }
-
-        if (totalSwaps > 0) {
-            log('★ Swap optimization: ' + totalSwaps + ' improving swaps in ' + ((performance.now() - swapStart) / 1000).toFixed(2) + 's');
-        }
-        return totalSwaps;
-    }
-
 
     function writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx) {
         if (!window.scheduleAssignments?.[bunk]) return;
@@ -1608,9 +1199,29 @@
         const bunk = block.bunk;
         const slotIdx = block.slots?.[0];
         if (!window.scheduleAssignments?.[bunk]) return;
+        // Slice 3 audit fix (N14): stamp time bounds even on Free entries
+        // so downstream consumers (rule-template builders, descriptor
+        // matchers, capacity readers) can reason about Free as a
+        // first-class block. Earlier these were missing and any code
+        // that built a rule template from `scheduleAssignments` skipped
+        // Free slots entirely.
+        //
+        // The solver's primary input blocks (built by scheduler_core_auto)
+        // carry `startTime` / `endTime` as strings, not `startMin` /
+        // `endMin`. Fall through to `parseTimeMin` so the primary solve
+        // pass also benefits — earlier this fix only landed for the
+        // repair-phase `collectFreeBlocks` callers and silently emitted
+        // null on the main path.
+        let _sMin = block.startMin;
+        let _eMin = block.endMin;
+        const _ptm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        if (_sMin == null && block.startTime && _ptm) _sMin = _ptm(block.startTime);
+        if (_eMin == null && block.endTime && _ptm) _eMin = _ptm(block.endTime);
         window.scheduleAssignments[bunk][slotIdx] = {
             field: 'Free', sport: null, _activity: 'Free',
-            _autoMode: true, _autoSolved: true, continuation: false
+            _autoMode: true, _autoSolved: true, continuation: false,
+            _startMin: _sMin ?? null,
+            _endMin: _eMin ?? null
         };
     }
 
@@ -1843,15 +1454,15 @@
         // freed up between the main solve and now.
         const sa = window.scheduleAssignments || {};
 
-        // Build what this bunk has today (excluding its own Free slot)
-        const doneToday = new Set();
-        (sa[fb.bunk] || []).forEach((e, i) => {
-            if (i === fb.slotIdx || !e || e.continuation) return;
-            const act = normName(e._activity || e.sport || e.field);
-            if (act && act !== 'free' && act !== 'free play') doneToday.add(act);
-        });
+        // Centralized helper — same source-of-truth the ejection chain uses.
+        const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
 
-        for (const cand of candidates) {
+        // Scarcity-aware ordering: prefer candidates with fewer other-grade
+        // overlaps in this window. Earlier the first matching candidate
+        // won, which could land FB on a field other grades urgently need.
+        const sortedCandidates = _sortCandidatesByPressure(candidates, fb, fieldIndex);
+
+        for (const cand of sortedCandidates) {
             if (window.isRainyDay && !cand.isIndoor) continue;
             if (doneToday.has(cand.sportNorm)) continue;
             if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
@@ -1880,15 +1491,12 @@
         // assignment to a different field, then place FB in the vacated spot.
         const sa = window.scheduleAssignments || {};
 
-        // What does FB's bunk have today?
-        const fbDoneToday = new Set();
-        (sa[fb.bunk] || []).forEach((e, i) => {
-            if (i === fb.slotIdx || !e || e.continuation) return;
-            const act = normName(e._activity || e.sport || e.field);
-            if (act && act !== 'free' && act !== 'free play') fbDoneToday.add(act);
-        });
+        // What does FB's bunk have today? Centralized helper.
+        const fbDoneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
 
-        for (const cand of candidates) {
+        // Scarcity-aware ordering (N18): least-contested fields first.
+        const sortedCandidates = _sortCandidatesByPressure(candidates, fb, fieldIndex);
+        for (const cand of sortedCandidates) {
             if (window.isRainyDay && !cand.isIndoor) continue;
             if (fbDoneToday.has(cand.sportNorm)) continue;
 
@@ -1908,13 +1516,9 @@
                 if (!victimEntry || victimEntry._fixed || victimEntry._pinned || victimEntry._league) continue;
                 if (!victimEntry._autoSolved && !victimEntry._autoMode) continue;
 
-                // Build victim's doneToday (excluding its own current slot)
-                const victimDoneToday = new Set();
-                (sa[victim.bunk] || []).forEach((e, i) => {
-                    if (i === victim.slotIdx || !e || e.continuation) return;
-                    const act = normName(e._activity || e.sport || e.field);
-                    if (act && act !== 'free' && act !== 'free play') victimDoneToday.add(act);
-                });
+                // Build victim's doneToday (excluding its own current slot).
+                // Centralized helper — single source of truth.
+                const victimDoneToday = getBunkDoneToday(victim.bunk, victim.slotIdx);
 
                 // Temporarily remove the victim from the field index so we can
                 // search for its alternative without false capacity blocks.
@@ -1947,6 +1551,13 @@
                     }
 
                     // ── Commit the swap ──────────────────────────────────────
+                    // Snapshot the victim's pre-swap cell so we can fully roll
+                    // back if the FB write rejects. Earlier the rollback only
+                    // restored fieldIndex but left scheduleAssignments[victim]
+                    // mutated — a hard divergence between the index's view and
+                    // actual placements.
+                    const _victimSaPrev = window.scheduleAssignments?.[victim.bunk]?.[victim.slotIdx];
+
                     // 1. Move victim to its new field/sport
                     const _vEntry = {
                         field: victimNewCand.field, sport: victimNewCand.sport,
@@ -1973,7 +1584,17 @@
                         _startMin: fb.startMin, _endMin: fb.endMin
                     };
                     if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry)) {
-                        // Roll back victim move (unlikely path — both sides validated upstream)
+                        // Full rollback: restore victim's prior assignment AND
+                        // pop its newly-pushed fieldIndex entry, then restore
+                        // the source field's pre-swap entries.
+                        if (window.scheduleAssignments?.[victim.bunk]) {
+                            window.scheduleAssignments[victim.bunk][victim.slotIdx] = _victimSaPrev;
+                        }
+                        const vcEntries = fieldIndex.get(vcFn);
+                        if (Array.isArray(vcEntries) && vcEntries.length > 0) {
+                            // Drop the most recently pushed entry (the one we just added).
+                            vcEntries.pop();
+                        }
                         fieldIndex.set(fn, origEntries);
                         continue;
                     }
@@ -2025,18 +1646,17 @@
 
         const fieldIndex = buildFieldTimeIndex();
 
-        // Build ALL candidates per field so we can try different sports
-        var candsByField = {};
-        candidates.forEach(function(c) {
-            var fn = normName(c.field);
-            if (!candsByField[fn]) candsByField[fn] = [];
-            candsByField[fn].push(c);
+        // Build a quick lookup: field → candidate config (for shareType/capacity)
+        const candByField = {};
+        candidates.forEach(c => {
+            if (!candByField[normName(c.field)]) candByField[normName(c.field)] = c;
         });
 
         let fixed = 0;
         for (const fb of freeBlocks) {
             let placed = false;
-            const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
+            // Walk every field that has at least one occupant with EXACTLY the same time window
+            // (user requirement: shared bunks must have identical start AND end — no partial overlap)
             for (const [fn, entries] of fieldIndex) {
                 if (placed) break;
                 const overlapping = entries.filter(e =>
@@ -2044,83 +1664,24 @@
                 );
                 if (overlapping.length === 0) continue;
 
-                var fieldCands = candsByField[fn];
-                if (!fieldCands || fieldCands.length === 0) continue;
+                const cand = candByField[fn];
+                if (!cand) continue; // field not in candidate list for any known sport
 
-                for (var ci = 0; ci < fieldCands.length; ci++) {
-                    var cand = fieldCands[ci];
-                    if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
-                    if (doneToday.has(cand.sportNorm)) continue;
+                // Check sharing rules and capacity
+                if (!isFieldAvailableByTime(cand.field, fb.startMin, fb.endMin, fb.bunk, fb.grade, fieldIndex, cand)) continue;
 
-                    const _coEntry = {
-                        field: cand.field, sport: cand.sport, _activity: cand.sport,
-                        _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
-                        _startMin: fb.startMin, _endMin: fb.endMin
-                    };
-                    if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _coEntry)) continue;
-                    if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
-                    fieldIndex.get(fn).push({
-                        startMin: fb.startMin, endMin: fb.endMin,
-                        bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
-                        activity: cand.sportNorm
-                    });
-                    fixed++;
-                    placed = true;
-                    break;
-                }
-            }
-        }
-        if (fixed > 0) log('Colocate pass: ' + fixed + ' Free block(s) filled via aggressive sharing');
-        return fixed;
-    }
-
-    // =========================================================================
-    // ★ v12.0: CAPACITY RELAXATION REPAIR
-    // =========================================================================
-    // Last-resort: for remaining Free blocks, allow cap+1 sharing on same-division.
-    function capacityRelaxRepair(config) {
-        config = config || {};
-        var { candidates } = buildCandidates(config);
-        if (candidates.length === 0) return 0;
-
-        var freeBlocks = collectFreeBlocks();
-        if (freeBlocks.length === 0) return 0;
-
-        var fieldIndex = buildFieldTimeIndex();
-        var fixed = 0;
-
-        for (var i = 0; i < freeBlocks.length; i++) {
-            var fb = freeBlocks[i];
-            var doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
-            var placed = false;
-
-            var sortedCands = _sortCandidatesByPressure(candidates, fb, fieldIndex);
-            for (var ci = 0; ci < sortedCands.length; ci++) {
-                if (placed) break;
-                var cand = sortedCands[ci];
-                if (window.isRainyDay && !cand.isIndoor) continue;
+                // Don't repeat same activity this bunk already has today.
+                // Centralized helper — same source-of-truth the chain uses.
+                const doneToday = getBunkDoneToday(fb.bunk, fb.slotIdx);
                 if (doneToday.has(cand.sportNorm)) continue;
 
-                var fn = cand.fieldNorm;
-                var cap = cand.capacity || 2;
-                var overlap = (fieldIndex.get(fn) || []).filter(function(e) {
-                    return e.startMin < fb.endMin && e.endMin > fb.startMin && e.bunk !== fb.bunk;
-                });
-
-                var st = cand.shareType || 'same_division';
-                if (st === 'not_sharable') continue;
-                if (overlap.length !== cap) continue; // only relax by exactly +1
-
-                if (st === 'same_division') {
-                    if (overlap.some(function(e) { return e.grade !== fb.grade; })) continue;
-                }
-
-                var _crEntry = {
+                // Place it — co-locate with the existing occupant(s)
+                const _coEntry = {
                     field: cand.field, sport: cand.sport, _activity: cand.sport,
-                    _autoMode: true, _autoSolved: true, _capacityRelaxed: true, continuation: false,
+                    _autoMode: true, _autoSolved: true, _colocated: true, continuation: false,
                     _startMin: fb.startMin, _endMin: fb.endMin
                 };
-                if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _crEntry)) continue;
+                if (!commitWriteIfLegal(fb.bunk, fb.slotIdx, cand.field, cand.sport, fb.grade, fb.startMin, fb.endMin, _coEntry)) continue;
                 if (!fieldIndex.has(fn)) fieldIndex.set(fn, []);
                 fieldIndex.get(fn).push({
                     startMin: fb.startMin, endMin: fb.endMin,
@@ -2131,7 +1692,7 @@
                 placed = true;
             }
         }
-        if (fixed > 0) log('Capacity-relax repair: ' + fixed + ' Free block(s) filled by allowing cap+1');
+        if (fixed > 0) log('Colocate pass: ' + fixed + ' Free block(s) filled via aggressive sharing');
         return fixed;
     }
 
@@ -2230,16 +1791,9 @@
         // chain: [{victim, newCand, sourceFn}] built up during DFS
         const chain = [];
 
-        function getBunkDoneToday(bunk, excludeSlotIdx, extraSports) {
-            const done = new Set();
-            (sa[bunk] || []).forEach((e, i) => {
-                if (i === excludeSlotIdx || !e || e.continuation) return;
-                const act = normName(e._activity || e.sport || e.field);
-                if (act && act !== 'free' && act !== 'free play') done.add(act);
-            });
-            if (extraSports) extraSports.forEach(s => done.add(s));
-            return done;
-        }
+        // getBunkDoneToday is module-scoped (defined near the top of this
+        // file) so tryDirectFill / colocateFreeBlocks / chain construction
+        // share one definition.
 
         function dfs(targetFn, overlapOnTarget, depth) {
             if (depth > maxDepth) return false;
@@ -2327,32 +1881,59 @@
 
     // ── Atomic chain commit ───────────────────────────────────────────────
     // Executes a chain deepest-first so each move sees the field freed by
-    // the one before it.
+    // the one before it. Earlier this discarded the boolean returned by
+    // commitWriteIfLegal — when a step was rejected (cooldown, etc.) the
+    // schedule wasn't updated but the fieldIndex was, leaving the index's
+    // view of "what's placed" out of sync with reality. We now snapshot
+    // pre-write cells, run the chain, and roll back atomically if any
+    // step rejects.
     function executeChain(chain, fb, fbCand, fieldIndex) {
         const sa = window.scheduleAssignments || {};
+        // Stack of per-step undos in reverse application order.
+        const undoStack = [];
+
+        function rollback() {
+            for (let u = undoStack.length - 1; u >= 0; u--) {
+                const op = undoStack[u];
+                if (op.kind === 'sa') {
+                    if (sa[op.bunk]) sa[op.bunk][op.slotIdx] = op.prev;
+                } else if (op.kind === 'idxRestore') {
+                    fieldIndex.set(op.fn, op.prev);
+                }
+            }
+        }
 
         for (let i = chain.length - 1; i >= 0; i--) {
             const { victim, newCand, sourceFn } = chain[i];
 
             if (sa[victim.bunk]) {
+                const prevCell = sa[victim.bunk][victim.slotIdx];
                 const _vEntry = {
                     field: newCand.field, sport: newCand.sport, _activity: newCand.sport,
                     _autoMode: true, _autoSolved: true, _ejected: true, continuation: false,
                     _startMin: victim.startMin, _endMin: victim.endMin
                 };
-                commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry);
+                const ok = commitWriteIfLegal(victim.bunk, victim.slotIdx, newCand.field, newCand.sport, victim.grade, victim.startMin, victim.endMin, _vEntry);
+                if (!ok) {
+                    log('executeChain: step rejected by rule guard — rolling back chain');
+                    rollback();
+                    return false;
+                }
+                undoStack.push({ kind: 'sa', bunk: victim.bunk, slotIdx: victim.slotIdx, prev: prevCell });
             }
 
-            // Remove victim from source field in index
+            // Remove victim from source field in index (snapshot first).
             if (fieldIndex.has(sourceFn)) {
+                undoStack.push({ kind: 'idxRestore', fn: sourceFn, prev: fieldIndex.get(sourceFn) });
                 fieldIndex.set(sourceFn, fieldIndex.get(sourceFn).filter(e =>
                     !(e.bunk === victim.bunk && e.slotIdx === victim.slotIdx)
                 ));
             }
 
-            // Add victim to destination field in index
+            // Add victim to destination field in index (snapshot first).
             const dstFn = normName(newCand.field);
             if (!fieldIndex.has(dstFn)) fieldIndex.set(dstFn, []);
+            undoStack.push({ kind: 'idxRestore', fn: dstFn, prev: [...fieldIndex.get(dstFn)] });
             fieldIndex.get(dstFn).push({
                 startMin: victim.startMin, endMin: victim.endMin,
                 bunk: victim.bunk, grade: victim.grade, slotIdx: victim.slotIdx,
@@ -2360,14 +1941,21 @@
             });
         }
 
-        // Place FB in the now-vacated field
+        // Place FB in the now-vacated field.
         if (sa[fb.bunk]) {
+            const prevFbCell = sa[fb.bunk][fb.slotIdx];
             const _fbEntry = {
                 field: fbCand.field, sport: fbCand.sport, _activity: fbCand.sport,
                 _autoMode: true, _autoSolved: true, _ejectionChainFilled: true, continuation: false,
                 _startMin: fb.startMin, _endMin: fb.endMin
             };
-            commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry);
+            const ok = commitWriteIfLegal(fb.bunk, fb.slotIdx, fbCand.field, fbCand.sport, fb.grade, fb.startMin, fb.endMin, _fbEntry);
+            if (!ok) {
+                log('executeChain: FB write rejected — rolling back chain');
+                rollback();
+                return false;
+            }
+            undoStack.push({ kind: 'sa', bunk: fb.bunk, slotIdx: fb.slotIdx, prev: prevFbCell });
         }
         const fbFn = fbCand.fieldNorm;
         if (!fieldIndex.has(fbFn)) fieldIndex.set(fbFn, []);
@@ -2376,6 +1964,7 @@
             bunk: fb.bunk, grade: fb.grade, slotIdx: fb.slotIdx,
             activity: fbCand.sportNorm
         });
+        return true;
     }
 
     // ── Post-chain validity check ─────────────────────────────────────────
@@ -2454,9 +2043,14 @@
                     const chain = findEjectionChain(fb, fbCand, candidates, fieldIndex, tabuSet, CHAIN_DEPTH);
                     if (!chain || chain.length === 0) continue;
 
-                    // Snapshot state before commit so we can roll back if validation fails
-                    const saSnapshot = {};
+                    // Snapshot PRE-commit state so we can roll back if
+                    // isChainValid finds a capacity / cross-grade violation
+                    // that slipped past commitWriteIfLegal. executeChain's
+                    // OWN rollback handles the rule-guard-rejection path:
+                    // when it returns false, state is already unchanged
+                    // and we just skip without restoring.
                     const allBunksInChain = [fb, ...chain.map(m => m.victim)];
+                    const saSnapshot = {};
                     allBunksInChain.forEach(({bunk, slotIdx}) => {
                         saSnapshot[bunk + '|' + slotIdx] = (window.scheduleAssignments[bunk] || [])[slotIdx];
                     });
@@ -2464,17 +2058,18 @@
                     const fiSnapshot = {};
                     fieldsTouched.forEach(fn => { fiSnapshot[fn] = (fieldIndex.get(fn) || []).slice(); });
 
-                    executeChain(chain, fb, fbCand, fieldIndex);
+                    const chainOk = executeChain(chain, fb, fbCand, fieldIndex);
+                    if (!chainOk) continue; // already rolled back by executeChain itself
 
-                    // Validate — roll back if any capacity or cross-grade violation
                     if (!isChainValid(chain, fb, fbCand, fieldIndex, candidates)) {
+                        // Post-commit validation failed — restore pre-commit snapshot.
                         allBunksInChain.forEach(({bunk, slotIdx}) => {
                             if (window.scheduleAssignments[bunk]) {
                                 window.scheduleAssignments[bunk][slotIdx] = saSnapshot[bunk + '|' + slotIdx];
                             }
                         });
                         fieldsTouched.forEach(fn => { fieldIndex.set(fn, fiSnapshot[fn]); });
-                        continue; // try next candidate for this FB
+                        continue;
                     }
 
                     // Register evicted victims in tabu — don't immediately move them back
@@ -2557,6 +2152,41 @@
         // Daily disabled sport for this field
         if (cand?.disabledSports && cand.sportNorm
             && cand.disabledSports.has(cand.sportNorm)) return false;
+
+        // Cooldown / FieldCombos / generic SchedulingRules. Earlier this
+        // helper checked only access + timeRules + disabledSports, so a
+        // BFS chain endpoint that satisfied all three but violated a
+        // cooldown was deemed legal. commitWriteIfLegal would then reject
+        // it during executeChain, leaving the rest of the chain partially
+        // committed. Pre-screen here so rejected endpoints are filtered
+        // out before any state mutates.
+        try {
+            if (window.SchedulingRules?.isCandidateAllowed && startMin != null && endMin != null) {
+                const candCheck = {
+                    startMin, endMin,
+                    type: 'sport',
+                    event: cand?.sport || cand?.sportNorm || '',
+                    field: cand?.field || cand?.name || ''
+                };
+                const existing = (window.scheduleAssignments && window.scheduleAssignments[bunk]) || [];
+                const template = [];
+                for (let ti = 0; ti < existing.length; ti++) {
+                    const w = existing[ti];
+                    if (!w || w.continuation) continue;
+                    if (w._startMin === startMin && w._endMin === endMin) continue;
+                    if (w._startMin == null || w._endMin == null) continue;
+                    template.push({
+                        startMin: w._startMin, endMin: w._endMin,
+                        type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                        event: w.event || w._activity || w.sport || '',
+                        field: w.field, _assignedSpecial: w._assignedSpecial,
+                        _specialLocation: w._specialLocation
+                    });
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(candCheck, template, { mode: 'auto' })) return false;
+            }
+        } catch (_) { /* never let rule-engine bug hide legal moves */ }
+
         return true;
     }
 
@@ -2918,8 +2548,15 @@
         ejectionChainRepair,     // Timetabling: multi-hop ejection chains + tabu (DFS)
         bfsAugmentingRepair,     // ★ v11.0: Hopcroft-Karp BFS shortest augmenting paths
         colocateFreeBlocks,      // ★ v12.1: Aggressive sharing — piggyback on placed fields
-        capacityRelaxRepair,     // ★ v12.0: Last resort — allow cap+1 for remaining Free blocks
         report,
+        // Expose the hard-write guard so scheduler_core_auto.js Step 2.7
+        // direct-write paths (special / sport-override / capacity-checked
+        // / anchor) can route through the same access + timeRules +
+        // sharing + cooldown / FieldCombos rule check the main solver
+        // uses. Earlier those sites called only _validateWritePlacement
+        // (which doesn't consult SchedulingRules) and silently violated
+        // cooldowns + FieldCombos.
+        commitWriteIfLegal,
         // Expose for scheduler_core_auto.js to call
         solveSchedule: function(activityBlocks, config) {
             return solve(activityBlocks, config);

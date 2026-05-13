@@ -84,7 +84,7 @@
         FIVE_DAYS_AGO_PENALTY: 2500,             // 5 days ago - slight concern
         SIX_SEVEN_DAYS_PENALTY: 1200,            // 6-7 days ago - mild
         FOUR_TO_SEVEN_DAYS_PENALTY: 1200,        // Alias for compatibility
-        WEEK_PLUS_PENALTY: 0,                  // 8+ days ago - minimal
+        WEEK_PLUS_PENALTY: 600,                  // 8+ days ago - decaying baseline
 
         // =====================================================================
         // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
@@ -196,15 +196,17 @@ var _todayCacheGeneration = 0;
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
+            const _dateRe = /^\d{4}-\d{2}-\d{2}$/;
             const sortedDates = Object.keys(allDaily)
-                .filter(function(d) { return d < today; })
+                .filter(function(d) { return _dateRe.test(d) && d < today; })
                 .sort(function(a, b) { return b.localeCompare(a); });
             
             // Process last 14 days
             const datesToProcess = sortedDates.slice(0, 14);
             
-            datesToProcess.forEach(function(dateKey, daysAgo) {
-                const actualDaysAgo = daysAgo + 1;  // +1 because we excluded today
+            const _todayMs = new Date(today + 'T12:00:00').getTime();
+            datesToProcess.forEach(function(dateKey) {
+                const actualDaysAgo = Math.max(1, Math.round((_todayMs - new Date(dateKey + 'T12:00:00').getTime()) / 86400000));
                 const dayData = allDaily[dateKey];
                 
                 // ★★★ FIX: Defensive checks for day data ★★★
@@ -669,11 +671,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // This prevents "done once yesterday" from getting a bonus instead of a penalty
         if (daysSince >= 4) {
             if (actHistory.count === 1) {
-                // Done only once AND last time was 4+ days ago — safe to give novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_ONCE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_ONCE_BONUS;
             } else if (actHistory.count === 2) {
-                // Done only twice AND last time was 4+ days ago — moderate novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_TWICE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_TWICE_BONUS;
             }
         }
         
@@ -929,6 +929,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
+        var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
@@ -936,20 +938,47 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             maxUsage = props.maxUsagePerGrade[divisionName];
         }
 
-        var currentCount = RotationEngine.getActivityCount(bunkName, activityName);
+        var maxPeriod = props.maxUsagePeriod || 'half';
+        var maxCount = (_getPeriodCount && maxUsage > 0)
+            ? _getPeriodCount(bunkName, activityName, maxPeriod)
+            : RotationEngine.getActivityCount(bunkName, activityName);
 
         // Hard ceiling
         if (maxUsage > 0) {
-            if (currentCount >= maxUsage) return Infinity;
-            if (currentCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
-            if (currentCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+            if (maxCount >= maxUsage) return Infinity;
+            if (maxCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            if (maxCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+        }
+
+        // ★ Exact frequency: acts as both ceiling and floor
+        var exactFreq = parseInt(props.exactFrequency) || 0;
+        if (divisionName && props.exactFrequencyPerGrade && props.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            var exactPeriod = props.exactFrequencyPeriod || '1week';
+            var exactCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, exactPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            if (exactCount >= exactFreq) return Infinity;
+            if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            var exactShortage = exactFreq - exactCount;
+            if (exactShortage > 0) {
+                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage, undefined, _cdForEsc);
+                return -(_efEsc || (exactShortage * 8000));
+            }
         }
 
         // ★ Min frequency: strong pull when bunk is below the floor
+        // Escalates based on effective remaining days incl. cooldown.
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {
-            var shortage = minFreq - currentCount;
-            if (shortage > 0) return -(shortage * 8000);
+            var minPeriod = props.minFrequencyPeriod || 'week';
+            if (minPeriod === 'week') minPeriod = '1week';
+            var minCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, minPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            var shortage = minFreq - minCount;
+            if (shortage > 0) {
+                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
+                return -(_mfEsc || (shortage * 8000));
+            }
         }
 
         return 0;
@@ -1015,7 +1044,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var coverageScore = RotationEngine.calculateCoverageScore(bunkName, activityName);
 
         // LIMIT
-        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties);
+        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties, divisionName);
 
         if (limitScore === Infinity) {
             return Infinity;
@@ -1088,21 +1117,36 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Sort by score (lowest first)
         scored.sort(function(a, b) { return a.score - b.score; });
 
-        // ★★★ TIE-BREAKING: Add controlled randomness when scores are close ★★★
+        // ★★★ TIE-BREAKING: deterministic, not Math.random(). ★★★
+        // Earlier this used Math.random() which made every regenerate
+        // produce a different schedule even with identical inputs —
+        // impossible to reproduce a bad run for debugging, and the
+        // user-visible "regenerate" reshuffled work the user had
+        // implicitly accepted. Now we hash (bunk + activity + day) so
+        // ties resolve identically across runs while still varying
+        // across (bunk, activity) pairs to avoid alphabetic bias.
         if (scored.length >= 2) {
             var bestScore = scored[0].score;
             var tieGroup = scored.filter(function(p) {
                 return p.score <= bestScore + CONFIG.TIE_BREAKER_RANGE && p.allowed;
             });
-            
+
             if (tieGroup.length > 1) {
+                var dayKey = (typeof window !== 'undefined' && window.currentScheduleDate) || '';
+                function _detTieHash(s) {
+                    var h = 5381;
+                    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+                    // Map to [0, TIE_BREAKER_RANDOMNESS).
+                    var u = (h >>> 0) / 4294967296;
+                    return u * CONFIG.TIE_BREAKER_RANDOMNESS;
+                }
                 tieGroup.forEach(function(p) {
-                    p._tieBreaker = Math.random() * CONFIG.TIE_BREAKER_RANDOMNESS;
+                    p._tieBreaker = _detTieHash(bunkName + '|' + p.activityName + '|' + dayKey);
                     p._finalScore = p.score + p._tieBreaker;
                 });
-                
+
                 tieGroup.sort(function(a, b) { return a._finalScore - b._finalScore; });
-                
+
                 scored.splice(0, tieGroup.length);
                 for (var i = 0; i < tieGroup.length; i++) {
                     scored.unshift(tieGroup[tieGroup.length - 1 - i]);

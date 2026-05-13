@@ -76,6 +76,8 @@
                 activities: f.activities || [],
                 sharableWith: f.sharableWith || f.sharing || { type: 'not_sharable', capacity: 1 },
                 maxUsage: f.maxUsage || 0,
+                exactFrequency: f.exactFrequency || 0,
+                exactFrequencyPeriod: f.exactFrequencyPeriod || '1week',
             };
         });
         (gs.app1?.specialActivities || []).forEach(s => {
@@ -86,6 +88,8 @@
                 activities: [s.name],
                 sharableWith: { type: 'not_sharable', capacity: 1 },
                 maxUsage: s.maxUsage || 0,
+                exactFrequency: s.exactFrequency || 0,
+                exactFrequencyPeriod: s.exactFrequencyPeriod || '1week',
             };
         });
         return map;
@@ -236,7 +240,7 @@
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             (f.activities || []).forEach(actName => {
-                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0 });
+                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
             });
         });
 
@@ -252,7 +256,7 @@
                 if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
                 if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
             }
-            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0 });
+            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
         });
 
         return candidates;
@@ -314,6 +318,7 @@
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
             if (c.maxUsage > 0 && (countsByAct[act] || 0) >= c.maxUsage) return null; // at limit
+            if (c.exactFrequency > 0 && (countsByAct[act] || 0) >= c.exactFrequency) return null; // at exact limit
 
             // ── SCORING ─────────────────────────────────────────────────────
             let score = 0;
@@ -330,6 +335,15 @@
                 else if (diff === 2) score += 5000;
                 else if (diff === 3) score += 2500;
                 else if (diff >= 7) score -= 2000;    // long time ago — bonus
+            }
+
+            // Escalating bonus for exact frequency: pull harder as period deadline nears
+            if (c.exactFrequency > 0) {
+                const needed = c.exactFrequency - count;
+                if (needed > 0) {
+                    const esc = window.SchedulerCoreUtils?.getEscalationBonus?.(c.exactFrequencyPeriod || '1week', needed);
+                    score -= esc || (needed * 100);
+                }
             }
 
             // Small random tie-breaker so repeated calls vary

@@ -598,9 +598,9 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         
         const role = window.AccessControl?.getCurrentRole?.() || 'viewer';
         
-        // Owners/Admins don't need to see "other" schedulers - they see everything
-        if (role === 'owner' || role === 'admin') {
-            console.log('[GLOBAL_LOCKS] Owner/Admin mode - no field restrictions from other schedulers');
+        // Owners/Admins/Schedulers don't need to see "other" schedulers - they have full access
+        if (role === 'owner' || role === 'admin' || role === 'scheduler') {
+            console.log('[GLOBAL_LOCKS] Owner/Admin/Scheduler mode - no field restrictions from other schedulers');
             this._otherSchedulerLoaded = true;
             return { success: true, fieldCount: 0 };
         }

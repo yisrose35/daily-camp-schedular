@@ -388,7 +388,10 @@ function createDefaultSpecialActivity(name) {
         isIndoor: true,
         rainyDayAvailable: true,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3 },
-        location: ''
+        location: '',
+        exactFrequency: null,
+        exactFrequencyPeriod: '1week',
+        exactFrequencyPerGrade: {}
     };
 }
 
@@ -744,6 +747,16 @@ function renderUsedForSelector(fac) {
         chip.onclick = () => {
             if (isActive) {
                 fac.usedFor = fac.usedFor.filter(u => u !== t.key);
+                // Purge references for the removed type
+                if (t.key === 'special' && Array.isArray(fac.specialActivityNames)) {
+                    fac.specialActivityNames.forEach(n => { if (n) cleanupDeletedSpecial(n); });
+                    fac.specialActivityNames = [];
+                } else if (t.key === 'sports') {
+                    cleanupDeletedField(fac.name);
+                } else if (t.key === 'general' && Array.isArray(fac.generalActivityNames)) {
+                    fac.generalActivityNames.forEach(n => { if (n) cleanupDeletedGeneral(n); });
+                    fac.generalActivityNames = [];
+                }
             } else {
                 fac.usedFor.push(t.key);
             }
@@ -1945,9 +1958,17 @@ function summarySpecialUsage(s) {
         var maxGradeCount = Object.keys(s.maxUsagePerGrade || {}).filter(function(k) { return (s.maxUsagePerGrade[k] || 0) > 0; }).length;
         if (maxGradeCount > 0) parts.push(maxGradeCount + ' max-grade override' + (maxGradeCount > 1 ? 's' : ''));
     }
+    var exactF = parseInt(s.exactFrequency) || 0;
+    if (exactF > 0) {
+        var exactPlabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Exactly ' + exactF + 'x ' + (exactPlabels[s.exactFrequencyPeriod] || 'per week'));
+        var exactGradeCount = Object.keys(s.exactFrequencyPerGrade || {}).filter(function(k) { return (s.exactFrequencyPerGrade[k] || 0) > 0; }).length;
+        if (exactGradeCount > 0) parts.push(exactGradeCount + ' exact-grade override' + (exactGradeCount > 1 ? 's' : ''));
+    }
     var minF = parseInt(s.minFrequency) || 0;
     if (minF > 0) {
-        parts.push('Min ' + minF + 'x ' + (s.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minPlabels = { 'week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Min ' + minF + 'x ' + (minPlabels[s.minFrequencyPeriod] || 'per week'));
         var minGradeCount = Object.keys(s.minFrequencyPerGrade || {}).filter(function(k) { return (s.minFrequencyPerGrade[k] || 0) > 0; }).length;
         if (minGradeCount > 0) parts.push(minGradeCount + ' min-grade override' + (minGradeCount > 1 ? 's' : ''));
     }
@@ -2589,6 +2610,7 @@ function renderSpecialUsage(saData) {
     }
     if (!saData.maxUsagePerGrade || typeof saData.maxUsagePerGrade !== 'object') saData.maxUsagePerGrade = {};
     if (!saData.minFrequencyPerGrade || typeof saData.minFrequencyPerGrade !== 'object') saData.minFrequencyPerGrade = {};
+    if (!saData.exactFrequencyPerGrade || typeof saData.exactFrequencyPerGrade !== 'object') saData.exactFrequencyPerGrade = {};
 
     var updateSummary = function() {
         var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
@@ -2701,6 +2723,125 @@ function renderSpecialUsage(saData) {
             container.appendChild(ceilDetail);
         }
 
+        // ── A2: EXACT FREQUENCY ────────────────────────────────────────────
+        var exactDivider = document.createElement('div');
+        exactDivider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(exactDivider);
+
+        var exactLabel = document.createElement('div');
+        exactLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        exactLabel.textContent = 'Exact frequency';
+        container.appendChild(exactLabel);
+
+        var exactFVal = parseInt(saData.exactFrequency) || 0;
+        var exactEnabled = exactFVal > 0;
+
+        var exactTogRow = document.createElement('div');
+        exactTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (exactEnabled ? '12px' : '4px') + ';';
+        var exactTog = document.createElement('label'); exactTog.className = 'switch';
+        var exactCb = document.createElement('input'); exactCb.type = 'checkbox'; exactCb.checked = exactEnabled;
+        var exactSl = document.createElement('span'); exactSl.className = 'slider';
+        exactTog.appendChild(exactCb); exactTog.appendChild(exactSl);
+        var exactLbl = document.createElement('span');
+        exactLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        exactLbl.textContent = 'Require exactly this many times per period';
+        exactTogRow.appendChild(exactTog); exactTogRow.appendChild(exactLbl);
+        container.appendChild(exactTogRow);
+        exactCb.onchange = function() { saData.exactFrequency = exactCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (exactEnabled) {
+            var exactDetail = document.createElement('div');
+            exactDetail.style.cssText = 'padding-left:12px; border-left:2px solid #8b5cf6; margin-bottom:14px;';
+
+            var exactRow = document.createElement('div');
+            exactRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;';
+            var exactCountLbl = document.createElement('span'); exactCountLbl.style.cssText = 'font-size:0.85rem; color:#374151;'; exactCountLbl.textContent = 'Exactly:';
+            var exactIn = document.createElement('input');
+            exactIn.type = 'number'; exactIn.min = '1'; exactIn.max = '99'; exactIn.value = exactFVal || 1;
+            exactIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            var exactSuffix = document.createElement('span');
+            exactSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            exactSuffix.textContent = 'time(s)';
+            var exactPeriodSel = document.createElement('select');
+            exactPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'1week', label:'per week' }, { value:'2weeks', label:'per 2 weeks' },
+             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' },
+             { value:'half', label:'per half' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.exactFrequencyPeriod || '1week') === p.value) opt.selected = true;
+                exactPeriodSel.appendChild(opt);
+            });
+            exactIn.onchange = function() { saData.exactFrequency = Math.max(1, parseInt(exactIn.value) || 1); saveSpecialData(saData); updateSummary(); };
+            exactPeriodSel.onchange = function() { saData.exactFrequencyPeriod = exactPeriodSel.value; saveSpecialData(saData); updateSummary(); };
+            exactRow.appendChild(exactCountLbl); exactRow.appendChild(exactIn); exactRow.appendChild(exactSuffix); exactRow.appendChild(exactPeriodSel);
+            exactDetail.appendChild(exactRow);
+
+            var exactNote = document.createElement('div');
+            exactNote.style.cssText = 'font-size:0.78rem; color:#5b21b6; background:#ede9fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            var _exactPLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
+            exactNote.innerHTML = 'The scheduler will ensure every bunk gets this activity exactly <strong>' +
+                (saData.exactFrequency || 1) + 'x</strong> ' +
+                (_exactPLabels[saData.exactFrequencyPeriod] || 'per week') +
+                ' — no more, no less.';
+            exactDetail.appendChild(exactNote);
+
+            // per-grade exact toggle
+            var exactPgTogRow = document.createElement('div');
+            exactPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            var exactPgTog = document.createElement('label'); exactPgTog.className = 'switch';
+            var exactPgCb = document.createElement('input'); exactPgCb.type = 'checkbox';
+            var hasExactGradeOverrides = Object.keys(saData.exactFrequencyPerGrade || {}).length > 0;
+            exactPgCb.checked = hasExactGradeOverrides;
+            var exactPgSl = document.createElement('span'); exactPgSl.className = 'slider';
+            exactPgTog.appendChild(exactPgCb); exactPgTog.appendChild(exactPgSl);
+            var exactPgLbl = document.createElement('span');
+            exactPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            exactPgLbl.textContent = 'Different exact count per grade';
+            exactPgTogRow.appendChild(exactPgTog); exactPgTogRow.appendChild(exactPgLbl);
+            exactDetail.appendChild(exactPgTogRow);
+
+            var exactGradeGrid = document.createElement('div');
+            exactGradeGrid.style.display = hasExactGradeOverrides ? 'flex' : 'none';
+            exactGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var exactAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            exactAllDivs.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.exactFrequency) || 1);
+                var gv = saData.exactFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.exactFrequencyPerGrade[d] = v;
+                    else delete saData.exactFrequencyPerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.exactFrequencyPerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                exactGradeGrid.appendChild(row);
+            });
+            exactPgCb.onchange = function() {
+                if (!exactPgCb.checked) { saData.exactFrequencyPerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                exactGradeGrid.style.display = exactPgCb.checked ? 'flex' : 'none';
+                exactGradeGrid.style.flexDirection = 'column';
+                exactGradeGrid.style.gap = '5px';
+                exactGradeGrid.style.marginTop = '6px';
+            };
+            exactDetail.appendChild(exactGradeGrid);
+            container.appendChild(exactDetail);
+        }
+
         // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
         var divider = document.createElement('div');
         divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
@@ -2742,7 +2883,9 @@ function renderSpecialUsage(saData) {
             minSuffix.textContent = 'time(s) per';
             var minPeriodSel = document.createElement('select');
             minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' },
+             { value:'3weeks', label:'3 weeks' }, { value:'4weeks', label:'4 weeks' },
+             { value:'half', label:'half' }].forEach(function(p) {
                 var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((saData.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
                 minPeriodSel.appendChild(opt);
@@ -2752,11 +2895,12 @@ function renderSpecialUsage(saData) {
             minRow.appendChild(minAtLeast); minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
             minDetail.appendChild(minRow);
 
+            var _minPLabels = { 'week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             var minNote = document.createElement('div');
             minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
             minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
                 (saData.minFrequency || 1) + 'x</strong> ' +
-                (saData.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+                (_minPLabels[saData.minFrequencyPeriod] || 'per week') + '.';
             minDetail.appendChild(minNote);
 
             // per-grade min toggle
@@ -3494,6 +3638,26 @@ function cleanupDeletedField(fieldName) {
             }
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+        // ★ Pinned-tile defaults
+        const pinned = window.getPinnedTileDefaults?.() || {};
+        let pinnedChanged = false;
+        Object.keys(pinned).forEach(k => { if (matches(k)) { delete pinned[k]; pinnedChanged = true; } });
+        if (pinnedChanged) window.savePinnedTileDefaults?.(pinned);
+
+        // ★ Location zones — field can appear in zone.fields
+        const zones = window.getLocationZones?.() || settings.locationZones || {};
+        let zonesChanged = false;
+        Object.values(zones).forEach(zone => {
+            if (Array.isArray(zone?.fields)) {
+                const before = zone.fields.length;
+                zone.fields = zone.fields.filter(n => !matches(n));
+                if (zone.fields.length !== before) zonesChanged = true;
+            }
+        });
+        if (zonesChanged) window.saveLocationZones?.(zones);
+
+        // ★ Rotation tracking (historicalCounts, manualUsageOffsets, rotationHistory, cloud)
+        cleanupRotationTracking(fieldName);
     } catch (e) {
         console.error('[FACILITIES] Cleanup error:', e);
     }
@@ -3725,6 +3889,95 @@ function cleanupRotationTracking(activityName) {
     }
 }
 
+// ★ Comprehensive purge for a deleted sport. Removes from field activity
+//   lists, scheduleAssignments, sportMetaData, daily disabled-sports,
+//   and rotation tracking so the sport is fully forgotten.
+function cleanupDeletedSport(sportName) {
+    if (!sportName) return;
+    console.log(`[FACILITIES] Cleaning up deleted sport: "${sportName}"`);
+    const norm = String(sportName).toLowerCase().trim();
+    const matches = (s) => s && String(s).toLowerCase().trim() === norm;
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // Field activity lists — remove sport from every field's .activities
+        const fields = settings.app1?.fields || settings.fields || [];
+        let fieldsChanged = false;
+        fields.forEach(f => {
+            if (Array.isArray(f.activities)) {
+                const before = f.activities.length;
+                f.activities = f.activities.filter(a => !matches(a));
+                if (f.activities.length !== before) fieldsChanged = true;
+            }
+        });
+        if (fieldsChanged) {
+            const app1 = settings.app1 || {};
+            app1.fields = fields;
+            window.saveGlobalSettings?.('app1', app1);
+            window.saveGlobalSettings?.('fields', fields);
+            if (Array.isArray(window.fields)) {
+                window.fields.forEach(f => {
+                    if (Array.isArray(f.activities)) f.activities = f.activities.filter(a => !matches(a));
+                });
+            }
+        }
+
+        // sportMetaData
+        try {
+            if (typeof sportMetaData === 'object' && sportMetaData) {
+                Object.keys(sportMetaData).forEach(k => { if (matches(k)) delete sportMetaData[k]; });
+            }
+        } catch (e) { /* sportMetaData not always defined */ }
+
+        // Daily disabled-sports per-date
+        const dailySchedules = settings.daily_schedules || {};
+        let dailyChanged = false;
+        Object.values(dailySchedules).forEach(dayData => {
+            if (!dayData) return;
+            // overrides.disabledSports
+            if (Array.isArray(dayData.overrides?.disabledSports)) {
+                const before = dayData.overrides.disabledSports.length;
+                dayData.overrides.disabledSports = dayData.overrides.disabledSports.filter(n => !matches(n));
+                if (dayData.overrides.disabledSports.length !== before) dailyChanged = true;
+            }
+            // disabledSportsByField: { fieldName: [sportName, ...] }
+            if (dayData.overrides?.disabledSportsByField && typeof dayData.overrides.disabledSportsByField === 'object') {
+                Object.keys(dayData.overrides.disabledSportsByField).forEach(fld => {
+                    const arr = dayData.overrides.disabledSportsByField[fld];
+                    if (Array.isArray(arr)) {
+                        const before = arr.length;
+                        dayData.overrides.disabledSportsByField[fld] = arr.filter(n => !matches(n));
+                        if (dayData.overrides.disabledSportsByField[fld].length !== before) dailyChanged = true;
+                    }
+                });
+            }
+            // scheduleAssignments — null out slots where sport matches
+            if (dayData.scheduleAssignments) {
+                Object.keys(dayData.scheduleAssignments).forEach(bunk => {
+                    const slots = dayData.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots)) return;
+                    slots.forEach((slot, idx) => {
+                        if (!slot) return;
+                        if (matches(slot.sport) || matches(slot._activity)) {
+                            dayData.scheduleAssignments[bunk][idx] = null;
+                            dailyChanged = true;
+                        }
+                    });
+                });
+            }
+        });
+        if (dailyChanged) window.saveGlobalSettings?.('daily_schedules', dailySchedules);
+
+        // Rotation tracking
+        cleanupRotationTracking(sportName);
+
+        console.log(`[FACILITIES]   Sport "${sportName}" fully cleaned`);
+    } catch (e) {
+        console.error('[FACILITIES] Cleanup error (sport):', e);
+    }
+}
+window.cleanupDeletedSport = cleanupDeletedSport;
+
 // ★ NEW: Sweep for orphaned references — anything in scheduleAssignments
 //   pointing to a field/special that no longer exists in the master lists.
 //   Returns { fields, specials } summary. Pass {dryRun: false} to actually
@@ -3784,27 +4037,44 @@ window.cleanupDeletedGeneral = cleanupDeletedGeneral;
 window.cleanupRotationTracking = cleanupRotationTracking;
 window.sweepOrphanedReferences = sweepOrphanedReferences;
 
+// Slice 4 audit fix — full propagation, transactional best-effort.
+// Earlier this only updated `daily_schedules` (localStorage), `app1.disabledFields`,
+// and `locationZones`. Missed:
+//   - window.scheduleAssignments (live data — today's schedule kept old name)
+//   - window.activityProperties (keyed by name)
+//   - window.pinnedTileDefaults
+//   - window.historicalCounts[bunk][name] / window.manualUsageOffsets
+//   - rotationHistory.bunks[bunk][name]
+//   - cloud rotation_counts table
+//   - cloud daily_schedules table (per-date rows; the saveGlobalSettings call
+//     above only fans out via the integration_hooks queue)
+// Now: collect every state surface, snapshot pre-rename, attempt all renames
+// in sequence, save all keys. If any save throws, fall back to the snapshot
+// to keep the app in a consistent state. (Best-effort transaction; true
+// atomicity would require a server-side RPC.)
 function propagateFieldRename(oldName, newName) {
     if (!oldName || !newName || oldName === newName) return;
+    const snapshot = {};
     try {
         const settings = window.loadGlobalSettings?.() || {};
+        // 1) saved daily_schedules
         const dailySchedules = settings.daily_schedules || {};
-
+        snapshot.daily_schedules = JSON.parse(JSON.stringify(dailySchedules));
         Object.keys(dailySchedules).forEach(dateKey => {
             const dayData = dailySchedules[dateKey];
             if (!dayData) return;
-            // Rename in schedule slot references
             if (dayData.scheduleAssignments) {
                 Object.keys(dayData.scheduleAssignments).forEach(bunkKey => {
                     const slots = dayData.scheduleAssignments[bunkKey];
                     if (!Array.isArray(slots)) return;
                     slots.forEach((slot) => {
-                        if (slot?.location === oldName) slot.location = newName;
-                        if (slot?.field === oldName) slot.field = newName;
+                        if (!slot) return;
+                        if (slot.location === oldName) slot.location = newName;
+                        if (slot.field === oldName) slot.field = newName;
+                        if (slot._location === oldName) slot._location = newName;
                     });
                 });
             }
-            // Rename in per-date disabled field overrides
             if (Array.isArray(dayData.overrides?.disabledFields)) {
                 dayData.overrides.disabledFields = dayData.overrides.disabledFields.map(
                     n => n === oldName ? newName : n
@@ -3813,14 +4083,16 @@ function propagateFieldRename(oldName, newName) {
         });
         window.saveGlobalSettings?.('daily_schedules', dailySchedules);
 
-        // Rename in app1.disabledFields global list
+        // 2) app1.disabledFields, app1.fields (already updated upstream)
         const app1 = settings.app1 || {};
+        snapshot.app1 = JSON.parse(JSON.stringify(app1));
         if (Array.isArray(app1.disabledFields)) {
             app1.disabledFields = app1.disabledFields.map(n => n === oldName ? newName : n);
-            window.saveGlobalSettings?.('app1', app1);
         }
 
+        // 3) locationZones
         const locationZones = settings.locationZones || {};
+        snapshot.locationZones = JSON.parse(JSON.stringify(locationZones));
         Object.values(locationZones).forEach(zone => {
             if (zone.fields) {
                 const idx = zone.fields.indexOf(oldName);
@@ -3832,8 +4104,128 @@ function propagateFieldRename(oldName, newName) {
             }
         });
         window.saveGlobalSettings?.('locationZones', locationZones);
+
+        // 4) Live scheduleAssignments — today's grid in memory.
+        if (window.scheduleAssignments) {
+            snapshot.scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            Object.keys(window.scheduleAssignments).forEach(bunkKey => {
+                const slots = window.scheduleAssignments[bunkKey];
+                if (!Array.isArray(slots)) return;
+                slots.forEach(slot => {
+                    if (!slot) return;
+                    if (slot.location === oldName) slot.location = newName;
+                    if (slot.field === oldName) slot.field = newName;
+                    if (slot._location === oldName) slot._location = newName;
+                });
+            });
+        }
+
+        // 5) activityProperties keyed by field name.
+        if (window.activityProperties && window.activityProperties[oldName]) {
+            snapshot.activityProperties = JSON.parse(JSON.stringify(window.activityProperties));
+            window.activityProperties[newName] = window.activityProperties[oldName];
+            delete window.activityProperties[oldName];
+            window.saveGlobalSettings?.('activityProperties', window.activityProperties);
+        }
+
+        // 6) pinnedTileDefaults — entries may reference field name.
+        const ptd = settings.pinnedTileDefaults || window.pinnedTileDefaults;
+        if (ptd && typeof ptd === 'object') {
+            snapshot.pinnedTileDefaults = JSON.parse(JSON.stringify(ptd));
+            let ptdChanged = false;
+            Object.keys(ptd).forEach(k => {
+                const v = ptd[k];
+                if (!v) return;
+                if (v.field === oldName) { v.field = newName; ptdChanged = true; }
+                if (v.location === oldName) { v.location = newName; ptdChanged = true; }
+            });
+            if (ptdChanged) window.saveGlobalSettings?.('pinnedTileDefaults', ptd);
+        }
+
+        // 7) historicalCounts[bunk][name]
+        if (window.historicalCounts) {
+            snapshot.historicalCounts = JSON.parse(JSON.stringify(window.historicalCounts));
+            Object.keys(window.historicalCounts).forEach(bunk => {
+                const m = window.historicalCounts[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+            });
+            window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+        }
+
+        // 8) manualUsageOffsets[bunk][name]
+        if (window.manualUsageOffsets) {
+            snapshot.manualUsageOffsets = JSON.parse(JSON.stringify(window.manualUsageOffsets));
+            Object.keys(window.manualUsageOffsets).forEach(bunk => {
+                const m = window.manualUsageOffsets[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = (m[newName] || 0) + m[oldName];
+                delete m[oldName];
+            });
+            window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+        }
+
+        // 9) rotationHistory.bunks[bunk][name]
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {}, leagues: {} };
+            snapshot.rotationHistory = JSON.parse(JSON.stringify(rh));
+            let rhChanged = false;
+            Object.keys(rh.bunks || {}).forEach(bunk => {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldName in m)) return;
+                m[newName] = m[oldName];
+                delete m[oldName];
+                rhChanged = true;
+            });
+            if (rhChanged && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 10) Cloud rotation_counts via RotationCloud.renameActivity if it
+        //     exists, otherwise delete-then-rebuild on next save.
+        if (window.RotationCloud) {
+            if (typeof window.RotationCloud.renameActivity === 'function') {
+                try { window.RotationCloud.renameActivity(oldName, newName); } catch (_) {}
+            } else if (typeof window.RotationCloud.deleteActivity === 'function') {
+                // Best-effort: delete the old name; the next save will write
+                // the renamed entries with fresh counts.
+                try { window.RotationCloud.deleteActivity(oldName); } catch (_) {}
+            }
+        }
+
+        // 11) Save the app1 mutation last (smallest blast radius if it throws).
+        window.saveGlobalSettings?.('app1', app1);
+
+        console.log('[FACILITIES] Field rename propagated: "' + oldName + '" → "' + newName + '" across all surfaces');
     } catch (e) {
-        console.error('[FACILITIES] Rename propagation error:', e);
+        console.error('[FACILITIES] Rename propagation error — attempting rollback:', e);
+        // Best-effort restore from snapshots.
+        try {
+            if (snapshot.daily_schedules) window.saveGlobalSettings?.('daily_schedules', snapshot.daily_schedules);
+            if (snapshot.app1) window.saveGlobalSettings?.('app1', snapshot.app1);
+            if (snapshot.locationZones) window.saveGlobalSettings?.('locationZones', snapshot.locationZones);
+            if (snapshot.activityProperties) {
+                window.activityProperties = snapshot.activityProperties;
+                window.saveGlobalSettings?.('activityProperties', snapshot.activityProperties);
+            }
+            if (snapshot.scheduleAssignments) window.scheduleAssignments = snapshot.scheduleAssignments;
+            if (snapshot.historicalCounts) {
+                window.historicalCounts = snapshot.historicalCounts;
+                window.saveGlobalSettings?.('historicalCounts', snapshot.historicalCounts);
+            }
+            if (snapshot.manualUsageOffsets) {
+                window.manualUsageOffsets = snapshot.manualUsageOffsets;
+                window.saveGlobalSettings?.('manualUsageOffsets', snapshot.manualUsageOffsets);
+            }
+            if (snapshot.rotationHistory && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(snapshot.rotationHistory);
+            }
+            console.warn('[FACILITIES] Rename rolled back to pre-rename snapshot');
+        } catch (restoreErr) {
+            console.error('[FACILITIES] Rollback also failed — manual recovery may be required:', restoreErr);
+        }
     }
 }
 

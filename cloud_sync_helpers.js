@@ -210,14 +210,17 @@
     window.removeGlobalSport = function(sportName) {
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
-        
+
         let sports = settings.allSports || settings.app1?.allSports || [];
         sports = sports.filter(s => s !== sportName);
-        
+
         settings.app1.allSports = sports;
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("allSports", sports);
         console.log("☁️ Removed sport:", sportName);
+        if (typeof window.cleanupDeletedSport === 'function') {
+            window.cleanupDeletedSport(sportName);
+        }
     };
 
     // =========================================================================

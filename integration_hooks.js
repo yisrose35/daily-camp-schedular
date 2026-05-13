@@ -163,9 +163,17 @@
     function _canWriteCampState() {
         const role = window.AccessControl?.getCurrentRole?.() ||
                      window.CampistryDB?.getRole?.() ||
-                     localStorage.getItem('campistry_role') || 
+                     localStorage.getItem('campistry_role') ||
                      'viewer';
         return role === 'owner' || role === 'admin';
+    }
+
+    function _canReadCampState() {
+        const role = window.AccessControl?.getCurrentRole?.() ||
+                     window.CampistryDB?.getRole?.() ||
+                     localStorage.getItem('campistry_role') ||
+                     'viewer';
+        return role === 'owner' || role === 'admin' || role === 'scheduler';
     }
 
     // =========================================================================
@@ -662,8 +670,8 @@
         }
 
         // ★★★ FIX v6.8: EARLY EXIT for non-admin roles ★★★
-        // camp_state table has RLS that only allows owner/admin to read/write.
-        // Schedulers/viewers must NOT attempt ANY Supabase calls to camp_state
+        // camp_state_kv RLS allows owner/admin to write; schedulers can read
+        // but not write. Schedulers/viewers must NOT attempt UPSERT calls
         // or the 403 error propagates up through forceSyncToCloud →
         // saveDailySkeleton → runOptimizer and kills schedule generation.
         if (!_canWriteCampState()) {
@@ -1539,7 +1547,7 @@
 
             if (kvError) {
                 if (kvError.code === '42501') {
-                    log('RLS denied camp_state_kv read (expected for scheduler role) — using local settings');
+                    log('RLS denied camp_state_kv read (expected for viewer role) — using local settings');
                     _cloudHydrationDone = true;
                     window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
                     return;
@@ -1770,9 +1778,9 @@
             log('camp_state realtime: no client/campId yet, deferring');
             return;
         }
-        // Role guard: RLS blocks scheduler/viewer from reading camp_state
-        // changes via realtime too — don't bother subscribing.
-        if (!_canWriteCampState()) {
+        // Role guard: viewers can't read camp_state_kv via RLS.
+        // Schedulers have SELECT access (migration 006) so they subscribe.
+        if (!_canReadCampState()) {
             log('camp_state realtime: role cannot read camp_state, skipping subscription');
             return;
         }
@@ -2161,6 +2169,25 @@
                         return;
                     }
                     
+                    if (result?.success && result.recordCount === 0) {
+                        // ★ Cloud empty = owner deleted everything → full clear
+                        console.log('🔗 Cloud is empty — clearing all local data');
+                        window.scheduleAssignments = {};
+                        window.leagueAssignments = {};
+                        window.divisionTimes = {};
+                        window.unifiedTimes = [];
+                        window._localGenerationTimestamp = 0;
+                        try {
+                            var DAILY_KEY = 'campDailyData_v1';
+                            var allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                            delete allData[change.dateKey];
+                            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        } catch (e) { /* ignore */ }
+                        if (window.updateTable) window.updateTable();
+                        console.log('🔗 ✅ Cleared — cloud had 0 records');
+                        return;
+                    }
+
                     if (result?.success && result.data) {
                         // ★★★ v6.9 CRITICAL FIX: Properly merge — keep MY data, add THEIR data ★★★
                         const myBunks = new Set(
@@ -2205,13 +2232,7 @@
                             window.unifiedTimes = result.data.unifiedTimes;
                         }
                         if (result.data.divisionTimes) {
-                            // ★ v7.0: Don't overwrite divisionTimes if local generation is fresh
-                            var localGenTime = window._localGenerationTimestamp || 0;
-                            if (Date.now() - localGenTime > 60000) {
-                                window.divisionTimes = result.data.divisionTimes;
-                            } else {
-                                console.log('🔗 Skipped divisionTimes overwrite — local generation is fresh');
-                            }
+                            window.divisionTimes = result.data.divisionTimes;
                         }
                         
                         // Update localStorage with merged data

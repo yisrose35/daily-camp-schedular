@@ -433,8 +433,28 @@
         window._preGenClearActive = true;
         window._generationInProgress = true;
         window._divisionTimesLocked = false;
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
+
+        const _step0AllowedDivs = options.allowedDivisions || null;
+        const _allDivKeys = Object.keys(window.divisions || {});
+        const _isPartialGen = _step0AllowedDivs &&
+            _step0AllowedDivs.length > 0 &&
+            _step0AllowedDivs.length < _allDivKeys.length;
+
+        if (_isPartialGen) {
+            const divisions = window.divisions || {};
+            const myBunks = new Set();
+            _step0AllowedDivs.forEach(divName => {
+                (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+            });
+            log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + _step0AllowedDivs.join(', ') + ']');
+            myBunks.forEach(bunk => {
+                delete window.scheduleAssignments?.[bunk];
+                delete window.leagueAssignments?.[bunk];
+            });
+        } else {
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+        }
         window.fieldUsageBySlot = {};
         window.locationUsageBySlot = {};
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
@@ -596,10 +616,46 @@
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
         function getHalfStartDate() {
+            const cd = _campDates;
+            if (cd) {
+                const curParts = currentDate.split('-').map(Number);
+                const curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start) {
+                    const h2 = new Date(cd.half2Start + 'T00:00:00');
+                    if (curD >= h2) return cd.half2Start;
+                }
+                if (cd.startDate) return cd.startDate;
+            }
             const s = globalSettings.app1 || globalSettings;
             return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
         }
+
+        const _campDates = (function() {
+            const cd = globalSettings.campDates || (window.loadGlobalSettings && window.loadGlobalSettings('campDates'));
+            if (cd && cd.startDate) return cd;
+            return null;
+        })();
+
+        function _getCampDatePeriodStart(period) {
+            if (!_campDates || !_campDates.startDate) return null;
+            const nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+            if (nWeeks === 0) return null;
+            const campStart = new Date(_campDates.startDate + 'T00:00:00');
+            const curParts = currentDate.split('-').map(Number);
+            const cur = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+            const daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart < 0) return null;
+            const weeksSinceStart = Math.floor(daysSinceStart / 7);
+            const periodIndex = Math.floor(weeksSinceStart / nWeeks);
+            const periodStartDay = periodIndex * nWeeks * 7;
+            const periodDate = new Date(campStart);
+            periodDate.setDate(periodDate.getDate() + periodStartDay);
+            return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+        }
+
         function getPeriodStartDate(period) {
+            const campDateStart = _getCampDatePeriodStart(period);
+            if (campDateStart) return campDateStart;
             switch (period) {
                 case '1week': return getMondayOfWeek(currentDate, 0);
                 case '2weeks': return getMondayOfWeek(currentDate, 1);
@@ -652,6 +708,29 @@
             if (dailyDisabledSpecials.includes(s.name)) return false;
             return true;
         });
+        // Slice 3 audit fix (Deferred-3): sort specials by access narrowness
+        // ascending — most-constrained first. The previous order was the
+        // raw registry order. A special with only 2 eligible bunks should
+        // get first crack at slots before a universal one occupies them.
+        try {
+            const _allFieldsForWidth = globalSettings.app1?.fields || [];
+            todaysSpecials.sort(function(a, b) {
+                function _restrictionWidth(s) {
+                    let numGrades = 0;
+                    if (s?.accessRestrictions?.enabled) {
+                        const divs = s.accessRestrictions.divisions || {};
+                        numGrades = Object.keys(divs).length;
+                    } else {
+                        numGrades = Object.keys(globalSettings.divisions || {}).length || 99;
+                    }
+                    let numLocations = 1;
+                    if (Array.isArray(s?.locations)) numLocations = Math.max(1, s.locations.length);
+                    else if (Array.isArray(s?.availableFields)) numLocations = Math.max(1, s.availableFields.length);
+                    return Math.max(1, numGrades) * numLocations;
+                }
+                return _restrictionWidth(a) - _restrictionWidth(b);
+            });
+        } catch (_) {}
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
@@ -1071,8 +1150,8 @@
                 // ★ fullGrade swim is already placed grade-wide in Phase 0 — skip MRC staggering
                 if (swimLayer.fullGrade === true) return;
                 if (computeRatio(swimLayer) >= 1) return;
-                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 const c = resolveConstraints(swimLayer, 'swim');
                 swimGrades.push({
                     grade, swimLayer, dMin: c.dMin, dMax: c.dMax,
@@ -1119,7 +1198,7 @@
                 bunks.forEach(bunk => {
                     const tl = timelines[bunk] || [];
                     const sorted = [...tl].sort((a, b) => a.startMin - b.startMin);
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
                     if (sorted.length > 0 && sorted[0].startMin > gs) gradeScore += (sorted[0].startMin - gs) * 15;
                     for (let i = 0; i < sorted.length - 1; i++) {
                         const gap = sorted[i + 1].startMin - sorted[i].endMin;
@@ -1511,8 +1590,8 @@
                 const sliceEnd = Math.min(t + CONTENTION_SLICE, endMin);
                 let demand = 0;
                 for (const grade of allGrades) {
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 660;
-                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 990;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 660;
+                    const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 990;
                     if (t >= ge || sliceEnd <= gs) continue;
                     for (const bk of getBunksForGrade(grade, divisions)) {
                         if (bk === excludeBunk) continue;
@@ -2326,7 +2405,7 @@
                         if (b.startMin > start && b.startMin < nextWall) nextWall = b.startMin;
                     });
                 });
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 if (ge < nextWall) nextWall = ge;
                 let d = Math.max(dMin, Math.min(dMax, nextWall - start));
                 d = snapTo5(d) < dMin ? dMin : snapTo5(d);
@@ -2394,11 +2473,11 @@
                 const _minFill = getMinFillable(grade);
                 bunks.forEach(bk => {
                     const tl = bunkTimelines[bk] || [];
-                    let prevEnd = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
+                    let prevEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
                     tl.forEach(b => { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
                     const gapBefore = ts - prevEnd;
                     if (gapBefore > 0 && gapBefore < _minFill) score += 5000;
-                    let nextStart = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    let nextStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     tl.forEach(b => { if (b.startMin >= leagueEnd && b.startMin < nextStart) nextStart = b.startMin; });
                     const gapAfter = nextStart - leagueEnd;
                     if (gapAfter > 0 && gapAfter < _minFill) score += 5000;
@@ -2420,8 +2499,8 @@
                     });
 
                     // Check EACH bunk — after league, does it still have a gap >= maxSpecialDur?
-                    var gs2Start = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    var gs2End = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    var gs2Start = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    var gs2End = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     var bunksWithNoRoom = 0;
                     bunks.forEach(function(bk) {
                         var bkWalls = (bunkTimelines[bk] || []).map(function(b) { return { s: b.startMin, e: b.endMin }; });
@@ -2483,8 +2562,8 @@
                 if (_lp_fixedNeedDurs.length > 0) {
                     bunks.forEach(function(bk) {
                         var tl = bunkTimelines[bk] || [];
-                        var gs3 = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
-                        var ge3 = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime) || 960;
+                        var gs3 = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
+                        var ge3 = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime) || 960;
                         // Gap before the proposed league
                         var prevEnd = gs3;
                         tl.forEach(function(b) { if (b.endMin <= ts && b.endMin > prevEnd) prevEnd = b.endMin; });
@@ -2545,8 +2624,8 @@
         // =====================================================================
 
         function buildBunkShoppingList(bunk, grade) {
-            const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+            const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
             const bunkSize = (window.getBunkMetaData?.() || window.bunkMetaData || {})[bunk]?.size || 20;
 
             const timeline = (bunkTimelines[bunk] || []).sort((a, b) => a.startMin - b.startMin);
@@ -2710,6 +2789,31 @@
                 if (a.rotationScore !== b.rotationScore) return a.rotationScore - b.rotationScore;
                 return (a.fields?.length || 0) - (b.fields?.length || 0);
             });
+            // Slice 3 audit fix (Deferred-1): expose a re-rank closure on the
+            // list itself so iterating consumers can refresh rotation scores
+            // before each slot pick. Earlier the list was built with
+            // beforeSlotIndex: 0 and never re-scored — by slot 5 the scores
+            // were stale because slots 1-4 had placed activities the picker
+            // ought to see. Now `list._rerank()` re-sorts using the live
+            // scheduleAssignments state (commitWriteIfLegal also invalidates
+            // the rotation cache so calculateRotationScore returns fresh
+            // values).
+            sportPriorityList._rerank = function() {
+                if (!window.RotationEngine?.calculateRotationScore) return;
+                for (let _i = 0; _i < sportPriorityList.length; _i++) {
+                    const _it = sportPriorityList[_i];
+                    let _s = window.RotationEngine.calculateRotationScore({
+                        bunkName: bunk, activityName: _it.name, divisionName: grade,
+                        beforeSlotIndex: 0, allActivities: null, activityProperties
+                    });
+                    if (_s === Infinity) _s = 99999;
+                    _it.rotationScore = _s;
+                }
+                sportPriorityList.sort((a, b) => {
+                    if (a.rotationScore !== b.rotationScore) return a.rotationScore - b.rotationScore;
+                    return (a.fields?.length || 0) - (b.fields?.length || 0);
+                });
+            };
             // Iteration variation: partially shuffle sport order
             // ★ v11.0: When bias = sportVariety, skip shuffle to preserve rotation-optimal order
             if (_iterSeed > 0 && iterationBias.category !== 'sportVariety') {
@@ -2853,15 +2957,43 @@
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
 
+                // Cooldown days for this activity (used by escalation below)
+                const _cdForEsc = parseInt(props.frequencyDays || cfg?.frequencyDays) || 0;
+
+                // Exact frequency: acts as both ceiling and floor.
+                // Per-grade override takes precedence over the global value.
+                // Bonus escalates based on effective remaining camp days,
+                // accounting for cooldown that blocks days after each visit.
+                {
+                    const _efExact = parseInt((props.exactFrequencyPerGrade || {})[grade]) || parseInt(props.exactFrequency) || parseInt(cfg?.exactFrequency) || 0;
+                    if (_efExact > 0) {
+                        const _efPeriod = props.exactFrequencyPeriod || cfg?.exactFrequencyPeriod || '1week';
+                        const _efCount = getPeriodCount(bunk, s.name, _efPeriod);
+                        if (_efCount >= _efExact) {
+                            log('[exact] skip ' + s.name + ' for ' + bunk + ' (count=' + _efCount + ' >= exact=' + _efExact + ')');
+                            return;
+                        }
+                        const _efNeeded = _efExact - _efCount;
+                        const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate, _cdForEsc);
+                        score -= _efEsc || (100 * _efNeeded);
+                    }
+                }
+
                 // Min frequency floor: if this bunk is below the required minimum
                 // visits, heavily boost priority so the scheduler fills the gap first.
                 // Per-grade override takes precedence over the global minimum.
+                // Bonus escalates based on effective remaining days incl. cooldown.
                 {
                     const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
                     if (_mfMin > 0) {
                         const _mfPeriod = props.minFrequencyPeriod || cfg?.minFrequencyPeriod || 'week';
-                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriod);
-                        if (_mfCount < _mfMin) score -= 100000 * (_mfMin - _mfCount);
+                        const _mfPeriodNorm = _mfPeriod === 'week' ? '1week' : _mfPeriod;
+                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriodNorm);
+                        if (_mfCount < _mfMin) {
+                            const _mfNeeded = _mfMin - _mfCount;
+                            const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate, _cdForEsc);
+                            score -= _mfEsc || (100 * _mfNeeded);
+                        }
                     }
                 }
 
@@ -2886,6 +3018,22 @@
                 });
             });
            specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
+            specialPriorityList._rerank = function() {
+                if (!window.RotationEngine?.calculateRotationScore) return;
+                for (let _i = 0; _i < specialPriorityList.length; _i++) {
+                    const _it = specialPriorityList[_i];
+                    let _s = window.RotationEngine.calculateRotationScore({
+                        bunkName: bunk, activityName: _it.name, divisionName: grade,
+                        beforeSlotIndex: 0, allActivities: null, activityProperties
+                    });
+                    if (_s === Infinity) _s = 99999;
+                    _it.rotationScore = _s;
+                }
+                specialPriorityList.sort((a, b) => {
+                    if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1;
+                    return a.rotationScore - b.rotationScore;
+                });
+            };
             // Iteration variation: shuffle non-scarce specials
             if (_iterSeed > 0) {
                 const scarceEnd = specialPriorityList.findIndex(s => !s.isScarce);
@@ -3288,6 +3436,10 @@
                 if (result.specials.length >= cap) return;
 
                 var priorityList = sl.specials && sl.specials.priorityList ? sl.specials.priorityList : [];
+                // Slice 3 audit fix (Deferred-1): re-rank using current
+                // placement state before iterating. Without this the
+                // picker uses scores frozen at "before slot 0".
+                if (typeof priorityList._rerank === 'function') priorityList._rerank();
                 for (var i = 0; i < priorityList.length; i++) {
                     if (result.specials.length >= cap) break;
                     var special = priorityList[i];
@@ -3385,6 +3537,7 @@
                     if (result.sports.length >= (sl.sports?.cap ?? sl.sports?.required ?? 0)) continue;
 
                     var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
+                    if (typeof sportList._rerank === 'function') sportList._rerank();
                     for (var spi = 0; spi < sportList.length; spi++) {
                         var sport = sportList[spi];
                         if (result.usedActivities.has(sport.name)) continue;
@@ -3560,6 +3713,7 @@
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (list.specials.required <= 0) continue;
+                if (typeof list.specials.priorityList?._rerank === 'function') list.specials.priorityList._rerank();
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
                     if (!special.isScarce || result.usedActivities.has(special.name)) continue;
@@ -3580,6 +3734,7 @@
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (result.specials.length >= list.specials.required) continue;
+                if (typeof list.specials.priorityList?._rerank === 'function') list.specials.priorityList._rerank();
                 for (const special of list.specials.priorityList) {
                     if (result.specials.length >= list.specials.required) break;
                     if (result.usedActivities.has(special.name) || special.isScarce) continue;
@@ -3599,6 +3754,7 @@
             for (const list of allBunkList) {
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (list.sports.required <= 0) continue;
+                if (typeof list.sports.priorityList?._rerank === 'function') list.sports.priorityList._rerank();
                 for (const sport of list.sports.priorityList) {
                     if (result.sports.length >= list.sports.required) break;
                     if (result.usedActivities.has(sport.name)) continue;
@@ -3752,8 +3908,8 @@
                         const queue = gradeQueues[grade];
                         if (!queue || queue.length === 0) return;
 
-                        const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                        const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                        const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                        const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                         // Find next bunk that still needs a special
                         while (queue.length > 0) {
@@ -3804,6 +3960,22 @@
                                         if (rightRem > 0 && rightRem >= _gpSportMin) score += 50;
                                         if (leftRem > 0 && leftRem < _gpSportMin) score -= 1000;  // dead remainder
                                         if (rightRem > 0 && rightRem < _gpSportMin) score -= 1000;
+                                        // Period-boundary alignment for multi-period specials
+                                        var _gpPeriods = window.campPeriods && window.campPeriods[grade];
+                                        if (_gpPeriods && _gpPeriods.length > 1) {
+                                            var _gpMaxPDur = 0;
+                                            for (var _gpi = 0; _gpi < _gpPeriods.length; _gpi++) {
+                                                var _gpPDur = _gpPeriods[_gpi].endMin - _gpPeriods[_gpi].startMin;
+                                                if (_gpPDur > _gpMaxPDur) _gpMaxPDur = _gpPDur;
+                                            }
+                                            if (dur > _gpMaxPDur) {
+                                                for (var _gpbi = 0; _gpbi < _gpPeriods.length; _gpbi++) {
+                                                    if (t === _gpPeriods[_gpbi].startMin || t + dur === _gpPeriods[_gpbi].endMin) {
+                                                        score += 150; break;
+                                                    }
+                                                }
+                                            }
+                                        }
                                         // Earliness preference: small bonus for earlier t — breaks
                                         // ties when nothing else differs (e.g. two equivalent clean gaps).
                                         score -= (t - gradeStart) * 0.01;
@@ -3956,8 +4128,8 @@
                     return;
                 }
 
-                const gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                 // ── Step A: Build per-bunk gap map ───────────────────
                 const bunkGaps = {};
@@ -5015,8 +5187,8 @@
                         var _tmp = bunks[si]; bunks[si] = bunks[sj]; bunks[sj] = _tmp;
                     }
                 }
-                var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                var gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                var gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                 for (var bi = 0; bi < bunks.length; bi++) {
                     var bunk = bunks[bi];
@@ -5059,6 +5231,8 @@
                             }
                         }
                         // ── Period containment: snap pre-placed blocks to a single period ──
+                        // Multi-period specials whose duration exceeds every single period
+                        // are exempt — they span consecutive periods by design.
                         var _p0Start = b.startMin, _p0End = b.endMin;
                         var _p0Periods = window.campPeriods && window.campPeriods[grade];
                         if (_p0Periods && _p0Periods.length > 0) {
@@ -5071,11 +5245,48 @@
                             }
                             // Check if block overflows the period boundary
                             if (_p0PS && _p0End > _p0PS.endMin) {
-                                // Try to fit duration in current period (startMin period)
-                                if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
+                                // Multi-period exemption: if this is a special and no single
+                                // period can hold its duration, check if it spans consecutive
+                                // periods cleanly — if so, don't snap it.
+                                var _p0IsSpecial = (bType === 'special');
+                                var _p0FitsAnySingle = false;
+                                if (_p0IsSpecial) {
+                                    for (var _pi0s = 0; _pi0s < _p0Periods.length; _pi0s++) {
+                                        if (_p0Periods[_pi0s].endMin - _p0Periods[_pi0s].startMin >= _p0Duration) {
+                                            _p0FitsAnySingle = true; break;
+                                        }
+                                    }
+                                }
+                                var _p0SpansConsecutive = false;
+                                if (_p0IsSpecial && !_p0FitsAnySingle) {
+                                    // Check if [_p0Start, _p0End) fits inside contiguous consecutive periods
+                                    var _p0Sorted = _p0Periods.slice().sort(function(a, b2) { return a.startMin - b2.startMin; });
+                                    var _p0SI = -1;
+                                    for (var _pi0c = 0; _pi0c < _p0Sorted.length; _pi0c++) {
+                                        if (_p0Sorted[_pi0c].startMin <= _p0Start && _p0Sorted[_pi0c].endMin > _p0Start) {
+                                            _p0SI = _pi0c; break;
+                                        }
+                                    }
+                                    if (_p0SI !== -1) {
+                                        var _p0Cov = _p0Sorted[_p0SI].endMin;
+                                        for (var _pi0d = _p0SI + 1; _pi0d < _p0Sorted.length && _p0Cov < _p0End; _pi0d++) {
+                                            if (_p0Sorted[_pi0d].startMin !== _p0Cov) break;
+                                            _p0Cov = _p0Sorted[_pi0d].endMin;
+                                        }
+                                        _p0SpansConsecutive = (_p0Cov >= _p0End);
+                                    }
+                                }
+
+                                if (_p0SpansConsecutive) {
+                                    log('[Phase0] Multi-period special "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' at ' + _p0Start + '-' + _p0End + ' spans consecutive periods — not snapping');
+                                } else if (_p0Duration <= (_p0PS.endMin - _p0PS.startMin)) {
                                     // Block fits if we push startMin back to period start
                                     _p0Start = _p0PS.startMin;
                                     _p0End = _p0PS.startMin + _p0Duration;
+                                    log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' from ' + b.startMin + '-' + b.endMin +
+                                        ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                                 } else {
                                     // Try the next period whose size can accommodate the duration
                                     var _p0Fixed = false;
@@ -5100,10 +5311,10 @@
                                             _p0Start = Math.max(_p0PS.startMin, _p0Ideal);
                                         }
                                     }
+                                    log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
+                                        ' from ' + b.startMin + '-' + b.endMin +
+                                        ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                                 }
-                                log('[Phase0] Snapped "' + (b.event || b.type) + '" bunk=' + bunk +
-                                    ' from ' + b.startMin + '-' + b.endMin +
-                                    ' to ' + _p0Start + '-' + _p0End + ' (period boundary)');
                             }
                         }
                         template.push(makeBlock({
@@ -10217,8 +10428,8 @@
             const gradeInfo = {};
             let maxOffField = 0;
             shuffled.forEach(grade => {
-                const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                 const layers = layersByGrade[grade] || [];
                 const offField = [];
                 if (layers.some(l => (l.type || '').toLowerCase() === 'swim')) offField.push('swim');
@@ -10678,8 +10889,8 @@
 
                     var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
                     var _p23SwimDur = _p23SC.dMin || 40;
-                    var _p23GradeStart = parseTimeToMinutes(divisions[grade] && divisions[grade].startTime) || 540;
-                    var _p23GradeEnd   = parseTimeToMinutes(divisions[grade] && divisions[grade].endTime)   || 960;
+                    var _p23GradeStart = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
+                    var _p23GradeEnd   = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime)   || 960;
                     var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
                     var _p23WinEnd   = Math.min(_p23SwimLayer.endMin   || 1440, _p23GradeEnd);
 
@@ -11717,8 +11928,8 @@
                 gradesByConstraint.forEach(grade => {
                     preplacedByGrade[grade] = 0;
                     var gradeLayers = layersByGrade[grade] || [];
-                    var gradeStart = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    var gradeEnd = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    var gradeStart = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    var gradeEnd = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
 
                     // Sort bunks: most constrained first, with seeded shuffle
                     // inside equal-slack bands (±15) so different iterations try
@@ -12127,6 +12338,16 @@
                                 // the dead gap lands at the period edge, not between activities.
                                 if (_p25PreChgStarts[pos + specialDur]) score += 350;
                                 if (_p25PostChgEnds[pos])               score += 350;
+
+                                // Period-boundary alignment: for multi-period specials,
+                                // prefer positions where start or end lands on a period
+                                // boundary so any remainder gap is at a natural break.
+                                if (_sp25MergedPeriods.length > 0 && specialDur > (_p25Periods.length > 0 ? Math.max.apply(null, _p25Periods.map(function(p){return p.endMin-p.startMin;})) : 0)) {
+                                    for (var _pbai = 0; _pbai < _p25Periods.length; _pbai++) {
+                                        if (pos === _p25Periods[_pbai].startMin) { score += 150; break; }
+                                        if (pos + specialDur === _p25Periods[_pbai].endMin) { score += 150; break; }
+                                    }
+                                }
 
                                 candidatePositions.push({ pos: pos, score: score, deadGapCount: deadGapCount });
                             }
@@ -12744,8 +12965,8 @@
 
         let validationPassed = true;
         allGrades.forEach(grade => {
-            const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-            const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+            const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+            const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const tl = bunkTimelines[bunk] || [];
                 for (let i = 0; i < tl.length - 1; i++) {
@@ -13777,6 +13998,74 @@
         const _stepRulesBlocked = []; // diagnostic accumulator
         const _stepRulesRescued = []; // diagnostic for write-site rescues
 
+        // Slice 3 audit fix (N4): Step 2.7 direct writes used to call only
+        // _validateWritePlacement, which covers access + timeRules + special-
+        // access but NOT cooldowns / FieldCombos / any rules.js-only gate.
+        // This helper builds the candidate + template the same way
+        // commitWriteIfLegal does and routes through SchedulingRules so
+        // every direct-write site enforces the full rule set.
+        // Anchor event types — these are not sports and must not be passed
+        // to SchedulingRules with type='sport', or a generic "no Sport
+        // within 30 min of Lunch" cooldown rule would spuriously block
+        // the camp's own Lunch / Swim / Snack anchor writes at Step 2.7.
+        const _ANCHOR_TYPE_BY_EVENT = {
+            lunch: 'lunch', swim: 'swim', pool: 'swim',
+            snack: 'snack', snacks: 'snack',
+            dismissal: 'dismissal', arrival: 'arrival',
+            lineup: 'lineup', regroup: 'regroup', bus: 'bus',
+            'transition/buffer': 'transition', transition: 'transition', buffer: 'transition'
+        };
+        function _runRulesCheck(fieldName, activityName, isSpecial, grade, bunk, startMin, endMin, blockType) {
+            try {
+                if (!window.SchedulingRules?.isCandidateAllowed) return null;
+                if (startMin == null || endMin == null) return null;
+                // Resolve the candidate type. Priority: explicit blockType
+                // from the caller (authoritative — the block already knows
+                // it's 'swim' / 'lunch' / 'snack' regardless of display
+                // name) > special flag > anchor-event-name lookup > sport.
+                // Earlier the lookup-by-event-name was the only path, so
+                // a camp renaming its Swim layer to "Pool Time" silently
+                // fell back to type='sport' and a "no Sport within 30 min
+                // of Lunch" cooldown blocked the swim anchor write.
+                let candType = 'sport';
+                if (blockType && typeof blockType === 'string' && blockType !== 'sport' && blockType !== 'slot') {
+                    candType = blockType.toLowerCase();
+                } else if (isSpecial) {
+                    candType = 'special';
+                } else if (activityName) {
+                    const lc = String(activityName).toLowerCase().trim();
+                    if (_ANCHOR_TYPE_BY_EVENT[lc]) candType = _ANCHOR_TYPE_BY_EVENT[lc];
+                }
+                const cand = {
+                    startMin, endMin,
+                    type: candType,
+                    event: activityName || '',
+                    field: fieldName,
+                    _assignedSpecial: isSpecial ? activityName : undefined,
+                    _specialLocation: isSpecial ? fieldName : undefined
+                };
+                const existing = (window.scheduleAssignments && window.scheduleAssignments[String(bunk)]) || [];
+                const template = [];
+                for (let ti = 0; ti < existing.length; ti++) {
+                    const w = existing[ti];
+                    if (!w || w.continuation) continue;
+                    if (w._startMin === startMin && w._endMin === endMin) continue;
+                    if (w._startMin == null || w._endMin == null) continue;
+                    template.push({
+                        startMin: w._startMin, endMin: w._endMin,
+                        type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                        event: w.event || w._activity || w.sport || '',
+                        field: w.field, _assignedSpecial: w._assignedSpecial,
+                        _specialLocation: w._specialLocation
+                    });
+                }
+                if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'auto' })) {
+                    return 'cooldown/rules: blocked';
+                }
+            } catch (_) { /* never let rule-engine bug block legal writes */ }
+            return null;
+        }
+
         // Find another field that can host `activityName` for this bunk's grade
         // at this time, passing every gate (access, timeRules, sharing,
         // capacity). Returns the field name or null. Used both at write sites
@@ -13791,41 +14080,99 @@
             // Live read — same rationale as _validateWritePlacement
             const _altGs = getGlobalSettings();
             const _altFields = _altGs.app1?.fields || [];
+
+            // Slice 3 audit fix (N10): also filter by today's disabledFields
+            // and per-field dailyDisabledSports so the safety-net rescue
+            // can't land us on a field/sport the user explicitly disabled
+            // for the day. Earlier these were checked only at the main
+            // solver write path; the rescue path skipped them entirely.
+            const _disabledFields = new Set(
+                (window.dailyDisabledFields || []).concat(
+                    (window.currentDayOverrides?.disabledFields) || []
+                ).map(String)
+            );
+            const _disabledSportsByField = window.dailyDisabledSportsByField || {};
+
             for (const f of _altFields) {
                 if (!f || !f.name) continue;
                 if (excludeField && f.name === excludeField) continue;
+                if (_disabledFields.has(String(f.name))) continue;
+                // Sport disabled on this field today (via direct entry or
+                // FieldCombos exclusivity — so disabling a sport on "Full
+                // Gym" also blocks its sub-fields).
+                let _sportDisabled = false;
+                const _disabledSet = _disabledSportsByField[f.name];
+                if (_disabledSet && (_disabledSet.has?.(activityName) || (Array.isArray(_disabledSet) && _disabledSet.includes(activityName)))) {
+                    _sportDisabled = true;
+                }
+                if (!_sportDisabled && window.FieldCombos?.getExclusiveFields) {
+                    try {
+                        const _excl = window.FieldCombos.getExclusiveFields(f.name) || [];
+                        for (const ef of _excl) {
+                            const ds = _disabledSportsByField[ef];
+                            if (ds && (ds.has?.(activityName) || (Array.isArray(ds) && ds.includes(activityName)))) {
+                                _sportDisabled = true;
+                                break;
+                            }
+                        }
+                    } catch (_) {}
+                }
+                if (_sportDisabled) continue;
+
                 if (!Array.isArray(f.activities)) continue;
                 if (!f.activities.some(a => String(a).toLowerCase() === wantLower)) continue;
                 if (_validateWritePlacement(f.name, activityName, grade, bunk, startMin, endMin)) continue;
 
                 // Capacity check against current scheduleAssignments —
                 // collect overlap details for share-rule evaluation below.
+                //
+                // Slice 3 audit fix (Deferred-4): O(B × S) outer was a real
+                // O(F × B × S) per rescue call. Build a per-field overlap
+                // index once per rescue and reuse it. The index is keyed
+                // by field name and contains all entries that overlap
+                // (startMin, endMin); we look up only this field.
                 let overlapCount = 0;
                 let crossGradeOverlap = false;
                 let misalignedShare = false;
                 const overlapGrades = [];
-                for (const [otherBunk, otherSlots] of Object.entries(sa)) {
-                    if (String(otherBunk) === String(bunk)) continue;
-                    if (!Array.isArray(otherSlots)) continue;
-                    const otherGrade = Object.entries(divisions).find(([g, d]) =>
-                        (d.bunks || []).map(String).includes(String(otherBunk))
-                    )?.[0];
-                    const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
-                    for (let oi = 0; oi < otherSlots.length; oi++) {
-                        const oe = otherSlots[oi];
-                        if (!oe || oe.continuation) continue;
-                        const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
-                        if (oField !== f.name) continue;
-                        const oslot = otherPbs[oi];
-                        const oStart = oe._startMin ?? oslot?.startMin;
-                        const oEnd   = oe._endMin   ?? oslot?.endMin;
-                        if (oStart == null || oEnd == null) continue;
-                        if (oEnd <= startMin || oStart >= endMin) continue;
-                        overlapCount++;
-                        overlapGrades.push(otherGrade);
-                        if (otherGrade !== grade) crossGradeOverlap = true;
-                        if (oStart !== startMin || oEnd !== endMin) misalignedShare = true;
+                const _idx = (function _buildFieldOverlapIndexOnce() {
+                    if (_findValidAlternativeField._idxCache &&
+                        _findValidAlternativeField._idxCache._t === sa &&
+                        _findValidAlternativeField._idxCache._sMin === startMin &&
+                        _findValidAlternativeField._idxCache._eMin === endMin) {
+                        return _findValidAlternativeField._idxCache._idx;
                     }
+                    const idx = new Map(); // fieldName → [{grade, oStart, oEnd, otherBunk}]
+                    for (const [otherBunk, otherSlots] of Object.entries(sa)) {
+                        if (String(otherBunk) === String(bunk)) continue;
+                        if (!Array.isArray(otherSlots)) continue;
+                        const otherGrade = Object.entries(divisions).find(([g, d]) =>
+                            (d.bunks || []).map(String).includes(String(otherBunk))
+                        )?.[0];
+                        const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                        for (let oi = 0; oi < otherSlots.length; oi++) {
+                            const oe = otherSlots[oi];
+                            if (!oe || oe.continuation) continue;
+                            const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
+                            if (!oField || oField === 'Free') continue;
+                            const oslot = otherPbs[oi];
+                            const oStart = oe._startMin ?? oslot?.startMin;
+                            const oEnd   = oe._endMin   ?? oslot?.endMin;
+                            if (oStart == null || oEnd == null) continue;
+                            if (oEnd <= startMin || oStart >= endMin) continue;
+                            if (!idx.has(oField)) idx.set(oField, []);
+                            idx.get(oField).push({ grade: otherGrade, oStart, oEnd });
+                        }
+                    }
+                    _findValidAlternativeField._idxCache = { _t: sa, _sMin: startMin, _eMin: endMin, _idx: idx };
+                    return idx;
+                })();
+                const _fieldOverlaps = _idx.get(f.name) || [];
+                for (const oo of _fieldOverlaps) {
+                    overlapCount++;
+                    overlapGrades.push(oo.grade);
+                    if (oo.grade !== grade) crossGradeOverlap = true;
+                    if (oo.oStart !== startMin || oo.oEnd !== endMin) misalignedShare = true;
                 }
 
                 let sharing = f.sharableWith?.type || 'not_sharable';
@@ -13893,6 +14240,11 @@
                     const _why = _validateWritePlacement(fn, block._assignedSpecial, grade, bunk, block.startMin, block.endMin);
                     if (_why) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _why });
+                        return;
+                    }
+                    const _rulesWhy = _runRulesCheck(fn, block._assignedSpecial, true, grade, bunk, block.startMin, block.endMin, block.type);
+                    if (_rulesWhy) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _rulesWhy });
                         return;
                     }
                     window.scheduleAssignments[String(bunk)][idx] = {
@@ -14093,23 +14445,31 @@
                                 return false;
                             };
 
+                            // Slice 3 audit fix (N15): collapsed the old Pass 1
+                            // / Pass 2 / Pass 3 cascade. Pass 2 was unreachable
+                            // — it filtered identically to Pass 1 minus the
+                            // courtIsBusy check, but Pass 1 already iterated
+                            // every rule-passing court and skipped only the
+                            // busy ones, so a court reaching Pass 2 had the
+                            // same busy state as it did in Pass 1. We now do
+                            // a single sweep: first the clean rule-passing
+                            // court, falling back to a busy rule-passing
+                            // court, falling back to the first court at all.
                             let pickedCourt = null;
-                            // Pass 1: rule-passing AND not double-booked
+                            let fallbackBusyRulePassing = null;
                             for (const court of courts) {
-                                if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
-                                if (courtIsBusy(court)) continue;
+                                const rulesFail = _validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin);
+                                if (rulesFail) continue;
+                                if (courtIsBusy(court)) {
+                                    if (!fallbackBusyRulePassing) fallbackBusyRulePassing = court;
+                                    continue;
+                                }
                                 pickedCourt = court; break;
                             }
-                            // Pass 2: rule-passing even if busy — better than rule-violating
-                            if (!pickedCourt) {
-                                for (const court of courts) {
-                                    if (_validateWritePlacement(court, sportName, grade, bunk, block.startMin, block.endMin)) continue;
-                                    pickedCourt = court;
-                                    console.warn(`[Override] All clean courts busy; forcing rule-passing ${pickedCourt} for ${bunk}`);
-                                    break;
-                                }
+                            if (!pickedCourt && fallbackBusyRulePassing) {
+                                pickedCourt = fallbackBusyRulePassing;
+                                console.warn(`[Override] All clean courts busy; forcing rule-passing ${pickedCourt} for ${bunk}`);
                             }
-                            // Pass 3 (last resort): any court — original behavior
                             if (!pickedCourt && courts.length > 0) {
                                 pickedCourt = courts[0];
                                 console.warn(`[Override] No rule-passing court for ${sportName}, forcing ${pickedCourt} for ${bunk}`);
@@ -14128,6 +14488,11 @@
                         const _pcWhy = _validateWritePlacement(resolvedField, _pcAct, grade, bunk, block.startMin, block.endMin);
                         if (_pcWhy) {
                             _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcWhy });
+                            return;
+                        }
+                        const _pcRulesWhy = _runRulesCheck(resolvedField, _pcAct, false, grade, bunk, block.startMin, block.endMin, block.type);
+                        if (_pcRulesWhy) {
+                            _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcRulesWhy });
                             return;
                         }
                         window.scheduleAssignments[String(bunk)][idx] = {
@@ -14194,6 +14559,11 @@
                             return;
                         }
                     }
+                    const _ccRulesWhy = _runRulesCheck(_useField, block._assignedSport, false, grade, bunk, block.startMin, block.endMin, block.type);
+                    if (_ccRulesWhy) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: _useField, activity: block._assignedSport, reason: 'capacity-checked-write: ' + _ccRulesWhy });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: _useField, sport: block._assignedSport,
                         _activity: block._assignedSport, _fixed: true, _bunkOverride: true,
@@ -14226,8 +14596,19 @@
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aWhy });
                         return;
                     }
+                    const _aRulesWhy = _runRulesCheck(block.event, block.event, false, grade, bunk, block.startMin, block.endMin, block.type);
+                    if (_aRulesWhy) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: block.event, activity: block.event, reason: 'anchor-write: ' + _aRulesWhy });
+                        return;
+                    }
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: block.event, sport: null, _activity: block.event,
+                        // Stamp type + event so the rule-template builder
+                        // in _runRulesCheck and elsewhere picks them up
+                        // authoritatively, instead of falling back to
+                        // type='sport' for already-placed anchors.
+                        type: block.type || undefined,
+                        event: block.event || undefined,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
                         _autoMode: true, continuation: false,
                         _startMin: block.startMin, _endMin: block.endMin
@@ -15291,7 +15672,24 @@
         // pre-allocators, cached pinned blocks, third-party patchers) so the
         // schedule the user sees never contains a known violation.
         (function rulesSafetyNet() {
+            // Slice 3 audit fix (N5): the safety net used to scan once,
+            // patch violations in place, and exit. If a rescue introduced
+            // a new violation (the alt-field finder doesn't check
+            // disabledFields/disabledSports/cooldowns), it survived into
+            // save. Wrap detect+repair in a fixed-point loop, capped at 3
+            // iterations to avoid pathological non-termination.
+            const MAX_SAFETY_NET_ITERATIONS = 3;
+            let _safetyNetIter = 0;
+          for (_safetyNetIter = 0; _safetyNetIter < MAX_SAFETY_NET_ITERATIONS; _safetyNetIter++) {
             try {
+                // Reset _findValidAlternativeField._idxCache so iter N
+                // sees the mutations iter N-1 made. Without this the
+                // cache (keyed on the sa reference + time window) would
+                // hit a stale snapshot from the previous iter and pick
+                // fields a same-iter rescue already filled.
+                if (typeof _findValidAlternativeField !== 'undefined') {
+                    _findValidAlternativeField._idxCache = null;
+                }
                 const _gs = getGlobalSettings();
                 const _allFields = _gs.app1?.fields || [];
                 const _allSpecials = _gs.app1?.specialActivities || [];
@@ -15425,17 +15823,42 @@
                         }
 
                         if (resolved) {
-                            slotsArr[v.idx] = {
+                            // Slice 3 audit fix (N3): route the rescue write
+                            // through commitWriteIfLegal so cooldown / FieldCombos
+                            // / disabledSports rules apply too. Earlier this
+                            // assigned directly and could re-introduce a
+                            // violation the safety net itself wouldn't catch.
+                            const _rescueEntry = {
                                 ...original,
                                 field: resolved,
                                 _ruleViolationReassigned: true,
                                 _violationReason: v.reason,
                                 _originalField: v.fieldName
                             };
-                            rescuedCount++;
-                            warn('  ↪ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
-                                + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved
-                                + ' [src: ' + v._srcFlags + ']');
+                            const _committed = window.AutoSolverEngine?.commitWriteIfLegal
+                                ? window.AutoSolverEngine.commitWriteIfLegal(
+                                      String(v.bunk), v.idx, resolved,
+                                      original.sport || original._activity, v.grade,
+                                      sMin, eMin, _rescueEntry)
+                                : false;
+                            if (_committed) {
+                                rescuedCount++;
+                                warn('  ↪ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                    + v.activity + ' relocated ' + v.fieldName + ' → ' + resolved
+                                    + ' [src: ' + v._srcFlags + ']');
+                            } else {
+                                // Rescue rejected by full rule check → fall through to clear.
+                                slotsArr[v.idx] = {
+                                    field: 'Free', sport: null, _activity: 'Free',
+                                    _autoMode: true, _fixed: true, _ruleViolationCleared: true,
+                                    _violationReason: v.reason + ' (rescue rejected)',
+                                    continuation: false
+                                };
+                                clearedCount++;
+                                warn('  ✗ ' + v.bunk + ' (' + v.grade + ') slot ' + v.idx + ': '
+                                    + v.activity + ' rescue → ' + resolved + ' rejected by rule guard'
+                                    + ' [src: ' + v._srcFlags + ']');
+                            }
                         } else {
                             // Replace with Free. _fixed:true keeps the cleaning
                             // durable: saveCurrentDailyData strips non-_fixed
@@ -15454,16 +15877,41 @@
                                 + ' (no valid alternative — cleared) [src: ' + v._srcFlags + ']');
                         }
                     });
-                    log('[STEP 4.95] Rescued ' + rescuedCount + ', cleared ' + clearedCount);
-                    warnings.push({ type: 'rule_violations', count: violations.length, rescued: rescuedCount, cleared: clearedCount, items: violations });
+                    log('[STEP 4.95] Iter ' + (_safetyNetIter + 1) + ': rescued ' + rescuedCount + ', cleared ' + clearedCount);
+                    // Cumulative reporting across all iters: iter-1 / iter-2
+                    // violations come from rescues introduced by iter-0. The
+                    // user-visible warnings collection must show the union,
+                    // not just iter 0, otherwise the count under-reports
+                    // what the engine actually saw.
+                    warnings.push({
+                        type: 'rule_violations',
+                        iter: _safetyNetIter,
+                        count: violations.length,
+                        rescued: rescuedCount,
+                        cleared: clearedCount,
+                        items: violations
+                    });
                     // Force a render so the user sees the cleaned grid right away
                     try { if (typeof window.updateTable === 'function') window.updateTable(); } catch (_e) {}
+                    // If we cleared (or rescued) anything, loop again so any
+                    // newly-introduced violation from a rescue is caught too.
+                    if (rescuedCount === 0 && clearedCount === 0) break;
                 } else {
-                    log('[STEP 4.95] ✅ All placements pass field/special access + time rules');
+                    if (_safetyNetIter === 0) {
+                        log('[STEP 4.95] ✅ All placements pass field/special access + time rules');
+                    } else {
+                        log('[STEP 4.95] ✅ Converged after ' + _safetyNetIter + ' iteration(s)');
+                    }
+                    break;
                 }
             } catch (sErr) {
                 warn('[STEP 4.95] safety net error: ' + sErr.message);
+                break;
             }
+          }
+          if (_safetyNetIter >= MAX_SAFETY_NET_ITERATIONS) {
+              warn('[STEP 4.95] Safety net hit max iterations (' + MAX_SAFETY_NET_ITERATIONS + ') — residual violations may remain');
+          }
         })();
 
         // STEP 5 — SAVE
@@ -16001,8 +16449,8 @@
             for (let t = campStart; t < campEnd; t += 30) {
                 let onFields = 0;
                 const doing = allGrades.map(grade => {
-                    const gs = parseTimeToMinutes(divisions[grade]?.startTime) || 540;
-                    const ge = parseTimeToMinutes(divisions[grade]?.endTime) || 960;
+                    const gs = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.startTime) || 540;
+                    const ge = parseTimeToMinutes((divisions[grade]||divisions[String(grade)])?.endTime) || 960;
                     if (t < gs || t >= ge) return null;
                     const p = staggerPlan[grade] || {};
                     const tb = p.typeBands || {};

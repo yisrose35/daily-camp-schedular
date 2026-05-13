@@ -104,6 +104,9 @@
                     console.error('[RotationCloud] Upsert error:', result.error.message);
                     return false;
                 }
+                // Orphan cleanup is handled by deleteDate() before regen,
+                // not here — async cleanup after upsert races with
+                // concurrent saves and can delete valid rows.
                 console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey);
                 _cache = null;
                 _loadGen++;
@@ -127,7 +130,7 @@
         var client = getClient();
         var campId = getCampId();
         if (!client || !campId) {
-            return Promise.resolve({ counts: {}, lastDone: {} });
+            return Promise.resolve({ counts: {}, lastDone: {}, countsByDate: {} });
         }
 
         // Capture the generation at call start. If any cache-invalidating op
@@ -142,7 +145,7 @@
             .then(function(result) {
                 if (result.error) {
                     console.error('[RotationCloud] Load error:', result.error.message);
-                    return { counts: {}, lastDone: {} };
+                    return { counts: {}, lastDone: {}, countsByDate: {} };
                 }
 
                 var counts = {};
@@ -179,7 +182,7 @@
             })
             .catch(function(e) {
                 console.error('[RotationCloud] Load failed:', e);
-                return { counts: {}, lastDone: {} };
+                return { counts: {}, lastDone: {}, countsByDate: {} };
             });
     }
 
@@ -269,6 +272,32 @@
             });
     }
 
+    function clearForBunks(bunkNames) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !bunkNames || bunkNames.length === 0) return Promise.resolve(false);
+
+        return client
+            .from(TABLE)
+            .delete()
+            .eq('camp_id', campId)
+            .in('bunk', bunkNames)
+            .then(function(result) {
+                if (result.error) {
+                    console.error('[RotationCloud] ClearForBunks error:', result.error.message);
+                    return false;
+                }
+                _cache = null;
+                _loadGen++;
+                console.log('[RotationCloud] Cleared rotation data for', bunkNames.length, 'bunks');
+                return true;
+            })
+            .catch(function(e) {
+                console.error('[RotationCloud] ClearForBunks failed:', e);
+                return false;
+            });
+    }
+
     function invalidateCache() {
         _cache = null;
         _loadGen++;
@@ -283,6 +312,7 @@
         deleteDate: deleteRotationCounts,
         deleteActivity: deleteActivityCounts,
         clearAll: clearAllRotationCounts,
+        clearForBunks: clearForBunks,
         invalidateCache: invalidateCache
     };
 

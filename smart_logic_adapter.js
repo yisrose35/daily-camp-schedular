@@ -421,12 +421,27 @@
             maxUsage = props2.maxUsagePerGrade[divisionName];
         }
 
-        const bunkHistory = historicalCounts[bunk] || {};
-        const usedCount = bunkHistory[special.name] || 0;
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        const maxPeriod = props2.maxUsagePeriod || 'half';
+        const usedCount = (_gpc && maxUsage > 0) ? _gpc(bunk, special.name, maxPeriod) : ((historicalCounts[bunk] || {})[special.name] || 0);
 
         if (maxUsage > 0 && usedCount >= maxUsage) {
             log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage}${divisionName ? ' for ' + divisionName : ''})`);
             return false;
+        }
+
+        // ★ Exact frequency: ceiling enforcement
+        let exactFreq = props2.exactFrequency || 0;
+        if (divisionName && props2.exactFrequencyPerGrade && props2.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props2.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            const exactPeriod = props2.exactFrequencyPeriod || '1week';
+            const exactCount = _gpc ? _gpc(bunk, special.name, exactPeriod) : usedCount;
+            if (exactCount >= exactFreq) {
+                log(`      ${bunk}: at exact limit for ${special.name} (${exactCount}/${exactFreq}${divisionName ? ' for ' + divisionName : ''})`);
+                return false;
+            }
         }
         
         // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
@@ -465,8 +480,16 @@
             const propsB = activityProps?.[b.name] || b;
             const minFA = parseInt(propsA.minFrequency) || 0;
             const minFB = parseInt(propsB.minFrequency) || 0;
-            const scoreA = countA - Math.max(0, minFA - countA) * 0.5;
-            const scoreB = countB - Math.max(0, minFB - countB) * 0.5;
+            const exactFA = parseInt(propsA.exactFrequency) || 0;
+            const exactFB = parseInt(propsB.exactFrequency) || 0;
+            const shortageA = Math.max(minFA - countA, exactFA - countA, 0);
+            const shortageB = Math.max(minFB - countB, exactFB - countB, 0);
+            const periodA = propsA.exactFrequencyPeriod || propsA.minFrequencyPeriod || '1week';
+            const periodB = propsB.exactFrequencyPeriod || propsB.minFrequencyPeriod || '1week';
+            const escA = shortageA > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodA, shortageA) || shortageA * 100) : 0;
+            const escB = shortageB > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodB, shortageB) || shortageB * 100) : 0;
+            const scoreA = countA - escA;
+            const scoreB = countB - escB;
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
         });   

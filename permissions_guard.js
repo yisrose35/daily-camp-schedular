@@ -139,17 +139,17 @@
      * Check if user has FULL access (Owner or Admin)
      */
     function hasFullAccess() {
-        // ★★★ v1.1 FIX: Check multiple sources — don't rely on single init ★★★
-        if (_userRole === 'owner' || _userRole === 'admin') return true;
-        
+        // ★★★ v3.13: Scheduler has same permissions as admin ★★★
+        if (_userRole === 'owner' || _userRole === 'admin' || _userRole === 'scheduler') return true;
+
         // Fallback: check AccessControl directly (may be initialized before PermissionsGuard)
         const acRole = window.AccessControl?.getCurrentRole?.();
-        if (acRole === 'owner' || acRole === 'admin') return true;
-        
+        if (acRole === 'owner' || acRole === 'admin' || acRole === 'scheduler') return true;
+
         // Last resort: localStorage
         const lsRole = localStorage.getItem('campistry_role');
-        if (lsRole === 'owner' || lsRole === 'admin') return true;
-        
+        if (lsRole === 'owner' || lsRole === 'admin' || lsRole === 'scheduler') return true;
+
         return false;
     }
 

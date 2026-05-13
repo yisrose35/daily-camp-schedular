@@ -720,8 +720,15 @@
             unifiedTimes: [],
             divisionTimes: {},
             isRainyDay: false,
-            rainyDayStartTime: null  // ★ FIX v1.5: Include for mid-day mode persistence
+            rainyDayStartTime: null
         };
+
+        // Sort by updated_at ascending so the most recently saved record wins
+        records.sort((a, b) => {
+            const ta = a.updated_at || a.created_at || '';
+            const tb = b.updated_at || b.created_at || '';
+            return ta < tb ? -1 : ta > tb ? 1 : 0;
+        });
 
         for (const record of records) {
             const data = record.schedule_data || {};

@@ -206,6 +206,11 @@ function validateSpecialActivity(activity, activityName) {
             ? activity.maxUsagePerGrade : {},
         minFrequencyPerGrade: (activity.minFrequencyPerGrade && typeof activity.minFrequencyPerGrade === 'object')
             ? activity.minFrequencyPerGrade : {},
+        exactFrequency: (activity.exactFrequency != null && parseInt(activity.exactFrequency, 10) > 0)
+            ? parseInt(activity.exactFrequency, 10) : null,
+        exactFrequencyPeriod: activity.exactFrequencyPeriod || '1week',
+        exactFrequencyPerGrade: (activity.exactFrequencyPerGrade && typeof activity.exactFrequencyPerGrade === 'object')
+            ? activity.exactFrequencyPerGrade : {},
         availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
             ? activity.availableDays : [],
         // Canonical duration storage: `durations` is an array of allowed durations
@@ -237,7 +242,8 @@ function createDefaultActivity(name) {
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
-        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {}, availableDays: [] };
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {},
+        exactFrequency: null, exactFrequencyPeriod: '1week', exactFrequencyPerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -744,9 +750,15 @@ function summaryMaxUsage(item) {
         var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
         parts.push('Max ' + m + ' ' + (periodLabels[period] || 'per half'));
     }
+    var exactF = parseInt(item.exactFrequency) || 0;
+    if (exactF > 0) {
+        var exactPeriodLabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Exactly ' + exactF + 'x ' + (exactPeriodLabels[item.exactFrequencyPeriod] || 'per week'));
+    }
     var minF = parseInt(item.minFrequency) || 0;
     if (minF > 0) {
-        parts.push('Min ' + minF + 'x ' + (item.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minPLabels = { 'week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Min ' + minF + 'x ' + (minPLabels[item.minFrequencyPeriod] || 'per week'));
     }
     var gradeCount = Object.keys(item.maxUsagePerGrade || {}).filter(function(k) { return (item.maxUsagePerGrade[k] || 0) > 0; }).length;
     if (gradeCount > 0) parts.push(gradeCount + ' grade override' + (gradeCount > 1 ? 's' : ''));
@@ -1334,6 +1346,129 @@ function renderMaxUsageSettings(item) {
             container.appendChild(ceilDetail);
         }
 
+        // ── A2: EXACT FREQUENCY ────────────────────────────────────────────
+        const exactDivider = document.createElement('div');
+        exactDivider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(exactDivider);
+
+        const exactLabel = document.createElement('div');
+        exactLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        exactLabel.textContent = 'Exact frequency';
+        container.appendChild(exactLabel);
+
+        const exactF = parseInt(item.exactFrequency) || 0;
+        const exactEnabled = exactF > 0;
+
+        const exactTogRow = document.createElement('div');
+        exactTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (exactEnabled ? '12px' : '4px') + ';';
+        const exactTog = document.createElement('label'); exactTog.className = 'switch';
+        const exactCb = document.createElement('input'); exactCb.type = 'checkbox'; exactCb.checked = exactEnabled;
+        const exactSl = document.createElement('span'); exactSl.className = 'slider';
+        exactTog.appendChild(exactCb); exactTog.appendChild(exactSl);
+        const exactLbl = document.createElement('span');
+        exactLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        exactLbl.textContent = 'Require exactly this many times per period';
+        exactTogRow.appendChild(exactTog); exactTogRow.appendChild(exactLbl);
+        container.appendChild(exactTogRow);
+        exactCb.onchange = () => { item.exactFrequency = exactCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
+
+        if (exactEnabled) {
+            const exactDetail = document.createElement('div');
+            exactDetail.style.cssText = 'padding-left:12px; border-left:2px solid #8b5cf6; margin-bottom:14px;';
+
+            const exactRow = document.createElement('div');
+            exactRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;';
+            exactRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">Exactly:</span>';
+            const exactIn = document.createElement('input');
+            exactIn.type = 'number'; exactIn.min = '1'; exactIn.max = '99'; exactIn.value = exactF || 1;
+            exactIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            const exactSuffix = document.createElement('span');
+            exactSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            exactSuffix.textContent = 'time(s)';
+            const exactPeriodSel = document.createElement('select');
+            exactPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'1week', label:'per week' }, { value:'2weeks', label:'per 2 weeks' },
+             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' },
+             { value:'half', label:'per half' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.exactFrequencyPeriod || '1week') === p.value) opt.selected = true;
+                exactPeriodSel.appendChild(opt);
+            });
+            exactIn.onchange = () => { item.exactFrequency = Math.max(1, parseInt(exactIn.value) || 1); saveData(); updateSummary(); };
+            exactPeriodSel.onchange = () => { item.exactFrequencyPeriod = exactPeriodSel.value; saveData(); updateSummary(); };
+            exactRow.appendChild(exactIn); exactRow.appendChild(exactSuffix); exactRow.appendChild(exactPeriodSel);
+            exactDetail.appendChild(exactRow);
+
+            const exactNote = document.createElement('div');
+            exactNote.style.cssText = 'font-size:0.78rem; color:#5b21b6; background:#ede9fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            var _exactPeriodLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
+            exactNote.innerHTML = 'The scheduler will ensure every bunk gets this activity exactly <strong>' +
+                (item.exactFrequency || 1) + 'x</strong> ' +
+                (_exactPeriodLabels[item.exactFrequencyPeriod] || 'per week') +
+                ' — no more, no less.';
+            exactDetail.appendChild(exactNote);
+
+            // per-grade exact toggle
+            const exactPerGradeTogRow = document.createElement('div');
+            exactPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            const exactPgTog = document.createElement('label'); exactPgTog.className = 'switch';
+            const exactPgCb = document.createElement('input'); exactPgCb.type = 'checkbox';
+            const hasExactGradeOverrides = Object.keys(item.exactFrequencyPerGrade || {}).length > 0;
+            exactPgCb.checked = hasExactGradeOverrides;
+            const exactPgSl = document.createElement('span'); exactPgSl.className = 'slider';
+            exactPgTog.appendChild(exactPgCb); exactPgTog.appendChild(exactPgSl);
+            const exactPgLbl = document.createElement('span');
+            exactPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            exactPgLbl.textContent = 'Different exact count per grade';
+            exactPerGradeTogRow.appendChild(exactPgTog); exactPerGradeTogRow.appendChild(exactPgLbl);
+            exactDetail.appendChild(exactPerGradeTogRow);
+
+            const exactGradeGrid = document.createElement('div');
+            exactGradeGrid.style.display = hasExactGradeOverrides ? 'flex' : 'none';
+            exactGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const exactAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            if (!item.exactFrequencyPerGrade) item.exactFrequencyPerGrade = {};
+            exactAllDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.exactFrequency) || '—');
+                const gv = item.exactFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.exactFrequencyPerGrade[div] = v;
+                    else delete item.exactFrequencyPerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.exactFrequencyPerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                exactGradeGrid.appendChild(row);
+            });
+            exactPgCb.onchange = () => {
+                if (!exactPgCb.checked) {
+                    item.exactFrequencyPerGrade = {};
+                    saveData(); updateSummary();
+                }
+                exactGradeGrid.style.display = exactPgCb.checked ? 'flex' : 'none';
+                exactGradeGrid.style.flexDirection = 'column';
+                exactGradeGrid.style.gap = '5px';
+                exactGradeGrid.style.marginTop = '6px';
+            };
+            exactDetail.appendChild(exactGradeGrid);
+            container.appendChild(exactDetail);
+        }
+
         // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
         const divider = document.createElement('div');
         divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
@@ -1375,7 +1510,9 @@ function renderMaxUsageSettings(item) {
             minSuffix.textContent = 'time(s) per';
             const minPeriodSel = document.createElement('select');
             minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' },
+             { value:'3weeks', label:'3 weeks' }, { value:'4weeks', label:'4 weeks' },
+             { value:'half', label:'half' }].forEach(function(p) {
                 const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
                 minPeriodSel.appendChild(opt);
@@ -1385,11 +1522,12 @@ function renderMaxUsageSettings(item) {
             minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
             minDetail.appendChild(minRow);
 
+            var _minPeriodLabels = { 'week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             const minNote = document.createElement('div');
             minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
             minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
                 (item.minFrequency || 1) + 'x</strong> ' +
-                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+                (_minPeriodLabels[item.minFrequencyPeriod] || 'per week') + '.';
             minDetail.appendChild(minNote);
 
             // per-grade min toggle
@@ -2288,7 +2426,156 @@ function cleanupDeletedSpecialActivity(name) {
         } catch (_) {}
     } catch (e) { console.error('[SPECIAL_ACTIVITIES] Cleanup error:', e); }
 }
-function propagateSpecialActivityRename(oldN,newN) { if(!oldN||!newN||oldN===newN)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===oldN){dd.scheduleAssignments[bk][i]._activity=newN;c++;} if(s?.activity===oldN){dd.scheduleAssignments[bk][i].activity=newN;c++;} if(s?.event===oldN){dd.scheduleAssignments[bk][i].event=newN;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.activityProperties?.[oldN]){window.activityProperties[newN]={...window.activityProperties[oldN]};delete window.activityProperties[oldN];} } catch(e){console.error('[SPECIAL_ACTIVITIES] Rename error:',e);} }
+// Slice 4 audit fix — full propagation, transactional best-effort.
+// Earlier this only updated saved daily_schedules and activityProperties.
+// Missed:
+//   - window.scheduleAssignments (live data)
+//   - window.historicalCounts[bunk][name] / window.manualUsageOffsets
+//   - rotationHistory.bunks[bunk][name]
+//   - pinnedTileDefaults
+//   - cloud rotation_counts
+// Same shape as facilities.js propagateFieldRename — see its comment for
+// the rationale.
+function propagateSpecialActivityRename(oldN, newN) {
+    if (!oldN || !newN || oldN === newN) return;
+    const snapshot = {};
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // 1) saved daily_schedules
+        const ds = settings.daily_schedules || {};
+        snapshot.daily_schedules = JSON.parse(JSON.stringify(ds));
+        let c = 0;
+        Object.keys(ds).forEach(function (dk) {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(function (bk) {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (s, i) {
+                    if (!s) return;
+                    if (s._activity === oldN) { sl[i]._activity = newN; c++; }
+                    if (s.activity === oldN) { sl[i].activity = newN; c++; }
+                    if (s.event === oldN) { sl[i].event = newN; c++; }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+
+        // 2) live scheduleAssignments
+        if (window.scheduleAssignments) {
+            snapshot.scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            Object.keys(window.scheduleAssignments).forEach(function (bk) {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (slot) {
+                    if (!slot) return;
+                    if (slot._activity === oldN) slot._activity = newN;
+                    if (slot.activity === oldN) slot.activity = newN;
+                    if (slot.event === oldN) slot.event = newN;
+                });
+            });
+        }
+
+        // 3) activityProperties keyed by name
+        if (window.activityProperties && window.activityProperties[oldN]) {
+            snapshot.activityProperties = JSON.parse(JSON.stringify(window.activityProperties));
+            window.activityProperties[newN] = window.activityProperties[oldN];
+            delete window.activityProperties[oldN];
+            window.saveGlobalSettings?.('activityProperties', window.activityProperties);
+        }
+
+        // 4) pinnedTileDefaults
+        const ptd = settings.pinnedTileDefaults || window.pinnedTileDefaults;
+        if (ptd && typeof ptd === 'object') {
+            snapshot.pinnedTileDefaults = JSON.parse(JSON.stringify(ptd));
+            let changed = false;
+            Object.keys(ptd).forEach(function (k) {
+                const v = ptd[k];
+                if (!v) return;
+                if (v.activity === oldN) { v.activity = newN; changed = true; }
+                if (v._activity === oldN) { v._activity = newN; changed = true; }
+            });
+            if (changed) window.saveGlobalSettings?.('pinnedTileDefaults', ptd);
+        }
+
+        // 5) historicalCounts[bunk][name]
+        if (window.historicalCounts) {
+            snapshot.historicalCounts = JSON.parse(JSON.stringify(window.historicalCounts));
+            Object.keys(window.historicalCounts).forEach(function (bunk) {
+                const m = window.historicalCounts[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+        }
+
+        // 6) manualUsageOffsets[bunk][name]
+        if (window.manualUsageOffsets) {
+            snapshot.manualUsageOffsets = JSON.parse(JSON.stringify(window.manualUsageOffsets));
+            Object.keys(window.manualUsageOffsets).forEach(function (bunk) {
+                const m = window.manualUsageOffsets[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+        }
+
+        // 7) rotationHistory.bunks
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {}, leagues: {} };
+            snapshot.rotationHistory = JSON.parse(JSON.stringify(rh));
+            let rhChanged = false;
+            Object.keys(rh.bunks || {}).forEach(function (bunk) {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = m[oldN];
+                delete m[oldN];
+                rhChanged = true;
+            });
+            if (rhChanged && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 8) Cloud rotation_counts
+        if (window.RotationCloud) {
+            if (typeof window.RotationCloud.renameActivity === 'function') {
+                try { window.RotationCloud.renameActivity(oldN, newN); } catch (_) {}
+            } else if (typeof window.RotationCloud.deleteActivity === 'function') {
+                try { window.RotationCloud.deleteActivity(oldN); } catch (_) {}
+            }
+        }
+
+        console.log('[SPECIAL_ACTIVITIES] Rename propagated: "' + oldN + '" → "' + newN + '"');
+    } catch (e) {
+        console.error('[SPECIAL_ACTIVITIES] Rename propagation error — attempting rollback:', e);
+        try {
+            if (snapshot.daily_schedules) window.saveGlobalSettings?.('daily_schedules', snapshot.daily_schedules);
+            if (snapshot.activityProperties) {
+                window.activityProperties = snapshot.activityProperties;
+                window.saveGlobalSettings?.('activityProperties', snapshot.activityProperties);
+            }
+            if (snapshot.scheduleAssignments) window.scheduleAssignments = snapshot.scheduleAssignments;
+            if (snapshot.historicalCounts) {
+                window.historicalCounts = snapshot.historicalCounts;
+                window.saveGlobalSettings?.('historicalCounts', snapshot.historicalCounts);
+            }
+            if (snapshot.manualUsageOffsets) {
+                window.manualUsageOffsets = snapshot.manualUsageOffsets;
+                window.saveGlobalSettings?.('manualUsageOffsets', snapshot.manualUsageOffsets);
+            }
+            if (snapshot.rotationHistory && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(snapshot.rotationHistory);
+            }
+            console.warn('[SPECIAL_ACTIVITIES] Rename rolled back to pre-rename snapshot');
+        } catch (restoreErr) {
+            console.error('[SPECIAL_ACTIVITIES] Rollback also failed:', restoreErr);
+        }
+    }
+}
 
 function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
 function makeEditable(el,save) { if(!el)return; el.ondblclick=()=>{ const inp=document.createElement("input"); inp.value=el.textContent; inp.style.cssText="font-size:inherit;font-weight:inherit;border:1px solid #147D91;outline:none;border-radius:4px;padding:2px 6px;width:"+Math.max(100,el.offsetWidth+20)+"px;"; el.replaceWith(inp); inp.focus(); inp.select(); const finish=()=>{const v=inp.value.trim();if(v&&v!==el.textContent)save(v);else if(inp.parentNode)inp.replaceWith(el);}; inp.onblur=finish; inp.onkeyup=e=>{if(e.key==="Enter")finish();if(e.key==="Escape")inp.replaceWith(el);}; }; }

@@ -1150,7 +1150,7 @@
             eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
             
             newBtn.addEventListener("click", async () => {
-                if (!window.AccessControl?.canEraseData?.()) {
+                if (!window.AccessControl?.canEraseAllCampData?.()) {
                     window.AccessControl?.showPermissionDenied?.('erase all camp data');
                     return;
                 }
@@ -1261,13 +1261,16 @@
 
     window.removeGlobalSport = (sportName) => {
         if (!sportName) return;
-        const idx = state.allSports.findIndex(sp => 
+        const idx = state.allSports.findIndex(sp =>
             sp.toLowerCase() === sportName.toLowerCase()
         );
         if (idx !== -1) {
             state.allSports.splice(idx, 1);
             saveData();
             window.forceSyncToCloud?.();
+            if (typeof window.cleanupDeletedSport === 'function') {
+                window.cleanupDeletedSport(sportName);
+            }
         }
     };
     
