@@ -47,6 +47,10 @@ let selectedTileId = null;
 // ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
 let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
 
+// ★★★ v3.13: Generation Scope — which divisions to generate ★★★
+// null = all divisions, otherwise Set of division names
+let _generationScope = null;
+
 function _daIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
   const parseT = window.SchedulerCoreUtils?.parseTimeToMinutes;
@@ -3889,6 +3893,156 @@ function uid() {
 // =================================================================
 // TOOLBAR
 // =================================================================
+// =========================================================================
+// ★★★ v3.13: GENERATION SCOPE PICKER ★★★
+// =========================================================================
+
+function _getGenScopeBtnLabel() {
+  if (!_generationScope) return '⚙ All Divisions';
+  const count = _generationScope.size;
+  const total = Object.keys(window.divisions || {}).length;
+  if (count === 0) return '⚙ None Selected';
+  if (count === total) return '⚙ All Divisions';
+  return '⚙ ' + count + '/' + total + ' Divisions';
+}
+
+function _showGenScopePopover(anchorBtn) {
+  const existing = document.getElementById('da-gen-scope-popover');
+  if (existing) { existing.remove(); return; }
+
+  const divisions = window.divisions || {};
+  const divNames = Object.keys(divisions);
+  if (divNames.length === 0) return;
+
+  const popover = document.createElement('div');
+  popover.id = 'da-gen-scope-popover';
+  popover.style.cssText = 'position:absolute;z-index:10000;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.15);width:320px;max-height:70vh;display:flex;flex-direction:column;';
+
+  // Header
+  let html = '<div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">';
+  html += '<span style="font-weight:600;font-size:14px;color:#1e293b;">Generation Scope</span>';
+  html += '<button id="da-gen-scope-close" style="background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer;padding:0;line-height:1;">&times;</button>';
+  html += '</div>';
+
+  // Quick actions
+  html += '<div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid #f1f5f9;">';
+  html += '<button id="da-gen-scope-all" class="da-btn da-btn-sm da-btn-ghost">Select All</button>';
+  html += '<button id="da-gen-scope-none" class="da-btn da-btn-sm da-btn-ghost">Clear All</button>';
+  html += '</div>';
+
+  // Division list with bunks
+  html += '<div style="padding:8px 16px;overflow-y:auto;flex:1;">';
+  divNames.forEach(divName => {
+    const div = divisions[divName];
+    const bunks = div.bunks || [];
+    const isChecked = !_generationScope || _generationScope.has(divName);
+    const divColor = div.color || '#6366f1';
+
+    html += '<div class="da-gen-scope-div" data-division="' + divName + '" style="margin-bottom:10px;">';
+    html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 0;">';
+    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" ' + (isChecked ? 'checked' : '') + ' style="width:16px;height:16px;accent-color:' + divColor + ';">';
+    html += '<span style="font-weight:600;font-size:13px;color:#1e293b;">' + divName + '</span>';
+    html += '<span style="font-size:11px;color:#94a3b8;">(' + bunks.length + ' bunks)</span>';
+    html += '</label>';
+
+    // Individual bunk checkboxes
+    if (bunks.length > 0) {
+      html += '<div class="da-gen-scope-bunks" style="margin-left:28px;display:flex;flex-wrap:wrap;gap:4px;">';
+      bunks.forEach(bunk => {
+        const bunkChecked = isChecked;
+        html += '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:2px 6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;color:#475569;">';
+        html += '<input type="checkbox" class="da-gen-scope-bunk-cb" data-div="' + divName + '" data-bunk="' + bunk + '" ' + (bunkChecked ? 'checked' : '') + ' style="width:12px;height:12px;accent-color:' + divColor + ';">';
+        html += bunk;
+        html += '</label>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Footer
+  html += '<div style="padding:10px 16px;border-top:1px solid #e2e8f0;background:#f8fafc;border-radius:0 0 10px 10px;display:flex;justify-content:flex-end;gap:8px;">';
+  html += '<button id="da-gen-scope-apply" class="da-btn da-btn-primary da-btn-sm">Apply</button>';
+  html += '</div>';
+
+  popover.innerHTML = html;
+
+  // Position below the button
+  const rect = anchorBtn.getBoundingClientRect();
+  const toolbar = anchorBtn.closest('.da-toolbar') || anchorBtn.parentElement;
+  const toolbarRect = toolbar.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
+  popover.style.position = 'fixed';
+
+  document.body.appendChild(popover);
+
+  // Close button
+  document.getElementById('da-gen-scope-close').onclick = () => popover.remove();
+
+  // Select All
+  document.getElementById('da-gen-scope-all').onclick = () => {
+    popover.querySelectorAll('.da-gen-scope-div-cb, .da-gen-scope-bunk-cb').forEach(cb => cb.checked = true);
+  };
+
+  // Clear All
+  document.getElementById('da-gen-scope-none').onclick = () => {
+    popover.querySelectorAll('.da-gen-scope-div-cb, .da-gen-scope-bunk-cb').forEach(cb => cb.checked = false);
+  };
+
+  // Division checkbox toggles all its bunks
+  popover.querySelectorAll('.da-gen-scope-div-cb').forEach(divCb => {
+    divCb.onchange = () => {
+      const divName = divCb.dataset.div;
+      const checked = divCb.checked;
+      popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]').forEach(b => b.checked = checked);
+    };
+  });
+
+  // Bunk checkbox updates division checkbox state
+  popover.querySelectorAll('.da-gen-scope-bunk-cb').forEach(bunkCb => {
+    bunkCb.onchange = () => {
+      const divName = bunkCb.dataset.div;
+      const allBunks = popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]');
+      const allChecked = [...allBunks].every(b => b.checked);
+      const someChecked = [...allBunks].some(b => b.checked);
+      const divCb = popover.querySelector('.da-gen-scope-div-cb[data-div="' + divName + '"]');
+      if (divCb) {
+        divCb.checked = allChecked;
+        divCb.indeterminate = someChecked && !allChecked;
+      }
+    };
+  });
+
+  // Apply
+  document.getElementById('da-gen-scope-apply').onclick = () => {
+    const checkedDivs = new Set();
+    popover.querySelectorAll('.da-gen-scope-div-cb:checked').forEach(cb => checkedDivs.add(cb.dataset.div));
+    // Also include divisions where at least one bunk is checked
+    popover.querySelectorAll('.da-gen-scope-bunk-cb:checked').forEach(cb => checkedDivs.add(cb.dataset.div));
+
+    const allDivs = Object.keys(window.divisions || {});
+    if (checkedDivs.size === 0 || checkedDivs.size === allDivs.length) {
+      _generationScope = null;
+    } else {
+      _generationScope = checkedDivs;
+    }
+
+    popover.remove();
+    renderToolbar();
+  };
+
+  // Click outside to close
+  const closeOnOutside = (e) => {
+    if (!popover.contains(e.target) && e.target !== anchorBtn) {
+      popover.remove();
+      document.removeEventListener('mousedown', closeOnOutside);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
+}
+
 function renderToolbar() {
   const toolbar = document.getElementById('da-skeleton-toolbar');
   if (!toolbar) return;
@@ -3928,6 +4082,7 @@ function renderToolbar() {
         return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
       })() : ''}
       <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
+      <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
@@ -3998,6 +4153,11 @@ function renderToolbar() {
   
   document.getElementById('da-generate-btn').onclick = runOptimizer;
 
+  document.getElementById('da-gen-scope-btn').onclick = (e) => {
+    e.stopPropagation();
+    _showGenScopePopover(e.currentTarget);
+  };
+
   const daPeriodsBtn = document.getElementById('da-periods-btn');
   if (daPeriodsBtn) {
     daPeriodsBtn.onclick = () => {
@@ -4065,6 +4225,14 @@ async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
 
+    // ★★★ v3.13: Apply generation scope from settings picker ★★★
+    if (_generationScope && _generationScope.size > 0) {
+        window.selectedDivisionsForGeneration = [..._generationScope];
+        console.log('[Optimizer] Generation scope applied:', [..._generationScope]);
+    } else {
+        delete window.selectedDivisionsForGeneration;
+    }
+
    // ★★★ AUTO MODE: Full pipeline via scheduler_core_auto.js ★★★
     const isAutoMode = window._daBuilderMode === 'auto';
     if (isAutoMode) {
@@ -4125,7 +4293,9 @@ async function runOptimizer() {
 
         try {
             window.invalidateSmartLogicSpecialsCache?.();
-            const success = await window.runAutoScheduler(allLayers, { allowedDivisions: null });
+            const scopeDivisions = _generationScope ? [..._generationScope] : null;
+            const success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions });
+            delete window.selectedDivisionsForGeneration;
             if (success) {
                 // Match the manual builder's completion flow: confirm popup,
                 // then jump to the schedule view with a clean re-render.
@@ -4164,9 +4334,15 @@ async function runOptimizer() {
    
     
 
-    // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
+    // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
+  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  const allDivKeys = Object.keys(window.divisions || {});
+  const isPartialWipe = scopeDivsForWipe &&
+      scopeDivsForWipe.length > 0 &&
+      scopeDivsForWipe.length < allDivKeys.length;
+
+  console.log('[Optimizer] ★ PRE-GENERATION WIPE for', dateKey, '(partial:', isPartialWipe, ')');
 
   // Preserve user-defined inputs across the wipe — these are not generated data
   const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
@@ -4181,39 +4357,62 @@ async function runOptimizer() {
     disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
   };
 
-  // 1. Clear window globals
-  window.scheduleAssignments = {};
-  window.leagueAssignments = {};
+  if (isPartialWipe) {
+    // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+    const divisions = window.divisions || {};
+    const myBunks = new Set();
+    scopeDivsForWipe.forEach(divName => {
+      (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+    });
+    console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + scopeDivsForWipe.join(', ') + ']');
+    myBunks.forEach(bunk => {
+      delete window.scheduleAssignments?.[bunk];
+      delete window.leagueAssignments?.[bunk];
+    });
 
-  // 2. NUKE today's entry from ALL localStorage keys that store schedule data
-  try {
-      // Primary daily data store
+    // Partial localStorage clear — only remove selected bunks, not the whole date
+    try {
+      const DAILY_KEY = 'campDailyData_v1';
+      const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+      if (allData[dateKey]) {
+        myBunks.forEach(bunk => {
+          delete allData[dateKey]?.scheduleAssignments?.[bunk];
+          delete allData[dateKey]?.leagueAssignments?.[bunk];
+        });
+        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+      }
+      console.log('[Optimizer] Partial localStorage clear for', myBunks.size, 'bunks');
+    } catch (e) {
+      console.warn('[Optimizer] localStorage partial clear failed:', e);
+    }
+  } else {
+    // ═══ FULL: Wipe everything ═══
+    window.scheduleAssignments = {};
+    window.leagueAssignments = {};
+
+    try {
       const DAILY_KEY = 'campDailyData_v1';
       const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
       if (allData[dateKey]) {
           delete allData[dateKey];
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
       }
-      
-      // Also check the orchestrator's key
       const ORCH_KEY = 'campistry_schedule_data';
       const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
       if (orchData[dateKey]) {
           delete orchData[dateKey];
           localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
       }
-      
       console.log('[Optimizer] Nuked localStorage entries for', dateKey);
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] localStorage nuke failed:', e);
-  }
+    }
 
-  // 3. Delete from cloud so no system can rehydrate stale data
-  try {
+    // Delete from cloud (full wipe only)
+    try {
       const client = window.CampistryDB?.getClient?.() || window.supabase;
       const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
       if (client && campId) {
-          // Await this one — we need cloud clean BEFORE generation starts
           const { error } = await client
               .from('daily_schedules')
               .delete()
@@ -4222,20 +4421,21 @@ async function runOptimizer() {
           if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
           else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
       }
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] Cloud delete failed:', e);
+    }
   }
 
-  // 4. Clear GlobalFieldLocks
+  // Clear GlobalFieldLocks
   if (window.GlobalFieldLocks?.clearAllLocks) {
       window.GlobalFieldLocks.clearAllLocks();
   }
 
-  // 5. Block rehydration during generation
+  // Block rehydration during generation
   window._preGenClearActive = true;
   window._generationInProgress = true;
 
-  console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  console.log('[Optimizer] ★ WIPE COMPLETE. Running optimizer...');
 
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
@@ -4254,11 +4454,13 @@ async function runOptimizer() {
   window.invalidateSmartLogicSpecialsCache?.();
   let success = false;
   try {
-    success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
+    const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides, scopeDivsManual);
   } finally {
     // ★★★ POST-GENERATION CLEANUP — always clear even if generation throws ★★★
     window._preGenClearActive = false;
     window._generationInProgress = false;
+    delete window.selectedDivisionsForGeneration;
   }
 
 if (success) {

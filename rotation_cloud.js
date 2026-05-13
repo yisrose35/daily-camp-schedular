@@ -272,6 +272,32 @@
             });
     }
 
+    function clearForBunks(bunkNames) {
+        var client = getClient();
+        var campId = getCampId();
+        if (!client || !campId || !bunkNames || bunkNames.length === 0) return Promise.resolve(false);
+
+        return client
+            .from(TABLE)
+            .delete()
+            .eq('camp_id', campId)
+            .in('bunk', bunkNames)
+            .then(function(result) {
+                if (result.error) {
+                    console.error('[RotationCloud] ClearForBunks error:', result.error.message);
+                    return false;
+                }
+                _cache = null;
+                _loadGen++;
+                console.log('[RotationCloud] Cleared rotation data for', bunkNames.length, 'bunks');
+                return true;
+            })
+            .catch(function(e) {
+                console.error('[RotationCloud] ClearForBunks failed:', e);
+                return false;
+            });
+    }
+
     function invalidateCache() {
         _cache = null;
         _loadGen++;
@@ -286,6 +312,7 @@
         deleteDate: deleteRotationCounts,
         deleteActivity: deleteActivityCounts,
         clearAll: clearAllRotationCounts,
+        clearForBunks: clearForBunks,
         invalidateCache: invalidateCache
     };
 

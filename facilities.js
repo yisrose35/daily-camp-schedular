@@ -388,7 +388,10 @@ function createDefaultSpecialActivity(name) {
         isIndoor: true,
         rainyDayAvailable: true,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3 },
-        location: ''
+        location: '',
+        exactFrequency: null,
+        exactFrequencyPeriod: '1week',
+        exactFrequencyPerGrade: {}
     };
 }
 
@@ -1955,9 +1958,17 @@ function summarySpecialUsage(s) {
         var maxGradeCount = Object.keys(s.maxUsagePerGrade || {}).filter(function(k) { return (s.maxUsagePerGrade[k] || 0) > 0; }).length;
         if (maxGradeCount > 0) parts.push(maxGradeCount + ' max-grade override' + (maxGradeCount > 1 ? 's' : ''));
     }
+    var exactF = parseInt(s.exactFrequency) || 0;
+    if (exactF > 0) {
+        var exactPlabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Exactly ' + exactF + 'x ' + (exactPlabels[s.exactFrequencyPeriod] || 'per week'));
+        var exactGradeCount = Object.keys(s.exactFrequencyPerGrade || {}).filter(function(k) { return (s.exactFrequencyPerGrade[k] || 0) > 0; }).length;
+        if (exactGradeCount > 0) parts.push(exactGradeCount + ' exact-grade override' + (exactGradeCount > 1 ? 's' : ''));
+    }
     var minF = parseInt(s.minFrequency) || 0;
     if (minF > 0) {
-        parts.push('Min ' + minF + 'x ' + (s.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minPlabels = { 'week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Min ' + minF + 'x ' + (minPlabels[s.minFrequencyPeriod] || 'per week'));
         var minGradeCount = Object.keys(s.minFrequencyPerGrade || {}).filter(function(k) { return (s.minFrequencyPerGrade[k] || 0) > 0; }).length;
         if (minGradeCount > 0) parts.push(minGradeCount + ' min-grade override' + (minGradeCount > 1 ? 's' : ''));
     }
@@ -2599,6 +2610,7 @@ function renderSpecialUsage(saData) {
     }
     if (!saData.maxUsagePerGrade || typeof saData.maxUsagePerGrade !== 'object') saData.maxUsagePerGrade = {};
     if (!saData.minFrequencyPerGrade || typeof saData.minFrequencyPerGrade !== 'object') saData.minFrequencyPerGrade = {};
+    if (!saData.exactFrequencyPerGrade || typeof saData.exactFrequencyPerGrade !== 'object') saData.exactFrequencyPerGrade = {};
 
     var updateSummary = function() {
         var el = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
@@ -2711,6 +2723,125 @@ function renderSpecialUsage(saData) {
             container.appendChild(ceilDetail);
         }
 
+        // ── A2: EXACT FREQUENCY ────────────────────────────────────────────
+        var exactDivider = document.createElement('div');
+        exactDivider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(exactDivider);
+
+        var exactLabel = document.createElement('div');
+        exactLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        exactLabel.textContent = 'Exact frequency';
+        container.appendChild(exactLabel);
+
+        var exactFVal = parseInt(saData.exactFrequency) || 0;
+        var exactEnabled = exactFVal > 0;
+
+        var exactTogRow = document.createElement('div');
+        exactTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (exactEnabled ? '12px' : '4px') + ';';
+        var exactTog = document.createElement('label'); exactTog.className = 'switch';
+        var exactCb = document.createElement('input'); exactCb.type = 'checkbox'; exactCb.checked = exactEnabled;
+        var exactSl = document.createElement('span'); exactSl.className = 'slider';
+        exactTog.appendChild(exactCb); exactTog.appendChild(exactSl);
+        var exactLbl = document.createElement('span');
+        exactLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        exactLbl.textContent = 'Require exactly this many times per period';
+        exactTogRow.appendChild(exactTog); exactTogRow.appendChild(exactLbl);
+        container.appendChild(exactTogRow);
+        exactCb.onchange = function() { saData.exactFrequency = exactCb.checked ? 1 : null; saveSpecialData(saData); renderContent(); updateSummary(); };
+
+        if (exactEnabled) {
+            var exactDetail = document.createElement('div');
+            exactDetail.style.cssText = 'padding-left:12px; border-left:2px solid #8b5cf6; margin-bottom:14px;';
+
+            var exactRow = document.createElement('div');
+            exactRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;';
+            var exactCountLbl = document.createElement('span'); exactCountLbl.style.cssText = 'font-size:0.85rem; color:#374151;'; exactCountLbl.textContent = 'Exactly:';
+            var exactIn = document.createElement('input');
+            exactIn.type = 'number'; exactIn.min = '1'; exactIn.max = '99'; exactIn.value = exactFVal || 1;
+            exactIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            var exactSuffix = document.createElement('span');
+            exactSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            exactSuffix.textContent = 'time(s)';
+            var exactPeriodSel = document.createElement('select');
+            exactPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'1week', label:'per week' }, { value:'2weeks', label:'per 2 weeks' },
+             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' },
+             { value:'half', label:'per half' }].forEach(function(p) {
+                var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((saData.exactFrequencyPeriod || '1week') === p.value) opt.selected = true;
+                exactPeriodSel.appendChild(opt);
+            });
+            exactIn.onchange = function() { saData.exactFrequency = Math.max(1, parseInt(exactIn.value) || 1); saveSpecialData(saData); updateSummary(); };
+            exactPeriodSel.onchange = function() { saData.exactFrequencyPeriod = exactPeriodSel.value; saveSpecialData(saData); updateSummary(); };
+            exactRow.appendChild(exactCountLbl); exactRow.appendChild(exactIn); exactRow.appendChild(exactSuffix); exactRow.appendChild(exactPeriodSel);
+            exactDetail.appendChild(exactRow);
+
+            var exactNote = document.createElement('div');
+            exactNote.style.cssText = 'font-size:0.78rem; color:#5b21b6; background:#ede9fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            var _exactPLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
+            exactNote.innerHTML = 'The scheduler will ensure every bunk gets this activity exactly <strong>' +
+                (saData.exactFrequency || 1) + 'x</strong> ' +
+                (_exactPLabels[saData.exactFrequencyPeriod] || 'per week') +
+                ' — no more, no less.';
+            exactDetail.appendChild(exactNote);
+
+            // per-grade exact toggle
+            var exactPgTogRow = document.createElement('div');
+            exactPgTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            var exactPgTog = document.createElement('label'); exactPgTog.className = 'switch';
+            var exactPgCb = document.createElement('input'); exactPgCb.type = 'checkbox';
+            var hasExactGradeOverrides = Object.keys(saData.exactFrequencyPerGrade || {}).length > 0;
+            exactPgCb.checked = hasExactGradeOverrides;
+            var exactPgSl = document.createElement('span'); exactPgSl.className = 'slider';
+            exactPgTog.appendChild(exactPgCb); exactPgTog.appendChild(exactPgSl);
+            var exactPgLbl = document.createElement('span');
+            exactPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            exactPgLbl.textContent = 'Different exact count per grade';
+            exactPgTogRow.appendChild(exactPgTog); exactPgTogRow.appendChild(exactPgLbl);
+            exactDetail.appendChild(exactPgTogRow);
+
+            var exactGradeGrid = document.createElement('div');
+            exactGradeGrid.style.display = hasExactGradeOverrides ? 'flex' : 'none';
+            exactGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            var exactAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            exactAllDivs.forEach(function(div) {
+                var row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                var lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                var inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(saData.exactFrequency) || 1);
+                var gv = saData.exactFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = (function(d) { return function() {
+                    var v = parseInt(inp.value);
+                    if (v > 0) saData.exactFrequencyPerGrade[d] = v;
+                    else delete saData.exactFrequencyPerGrade[d];
+                    saveSpecialData(saData); updateSummary();
+                }; })(div);
+                var clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = function() { clrBtn.style.color = '#9CA3AF'; };
+                clrBtn.onmouseout = function() { clrBtn.style.color = '#D1D5DB'; };
+                clrBtn.onclick = (function(d, i) { return function() { i.value = ''; delete saData.exactFrequencyPerGrade[d]; saveSpecialData(saData); updateSummary(); }; })(div, inp);
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                exactGradeGrid.appendChild(row);
+            });
+            exactPgCb.onchange = function() {
+                if (!exactPgCb.checked) { saData.exactFrequencyPerGrade = {}; saveSpecialData(saData); updateSummary(); }
+                exactGradeGrid.style.display = exactPgCb.checked ? 'flex' : 'none';
+                exactGradeGrid.style.flexDirection = 'column';
+                exactGradeGrid.style.gap = '5px';
+                exactGradeGrid.style.marginTop = '6px';
+            };
+            exactDetail.appendChild(exactGradeGrid);
+            container.appendChild(exactDetail);
+        }
+
         // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
         var divider = document.createElement('div');
         divider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
@@ -2752,7 +2883,9 @@ function renderSpecialUsage(saData) {
             minSuffix.textContent = 'time(s) per';
             var minPeriodSel = document.createElement('select');
             minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' },
+             { value:'3weeks', label:'3 weeks' }, { value:'4weeks', label:'4 weeks' },
+             { value:'half', label:'half' }].forEach(function(p) {
                 var opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((saData.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
                 minPeriodSel.appendChild(opt);
@@ -2762,11 +2895,12 @@ function renderSpecialUsage(saData) {
             minRow.appendChild(minAtLeast); minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
             minDetail.appendChild(minRow);
 
+            var _minPLabels = { 'week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             var minNote = document.createElement('div');
             minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
             minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
                 (saData.minFrequency || 1) + 'x</strong> ' +
-                (saData.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+                (_minPLabels[saData.minFrequencyPeriod] || 'per week') + '.';
             minDetail.appendChild(minNote);
 
             // per-grade min toggle

@@ -496,9 +496,7 @@ function disableBypassRBACView() {
 }
 
     function shouldShowDivision(divName) {
-    const role = window.AccessControl?.getCurrentRole?.();
-    if (role === 'owner' || role === 'admin') return true;
-    return window.AccessControl?.canAccessDivision?.(divName) ?? true;
+    return true;
 }
 
 function shouldHighlightBunk(bunkName) {
@@ -1536,11 +1534,25 @@ const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(edi
                 }
             }
         }
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
         const maxUsage = props.maxUsage || 0;
         if (maxUsage > 0) {
-            const hist = getActivityCount(bunk, activityName);
+            const maxPeriod = props.maxUsagePeriod || 'half';
+            const hist = _gpc ? _gpc(bunk, activityName, maxPeriod) : getActivityCount(bunk, activityName);
             if (hist >= maxUsage) return Infinity;
             if (hist >= maxUsage - 1) penalty += 2000;
+        }
+        const exactFreq = props.exactFrequency || 0;
+        if (exactFreq > 0) {
+            const exactPeriod = props.exactFrequencyPeriod || '1week';
+            const hist = _gpc ? _gpc(bunk, activityName, exactPeriod) : getActivityCount(bunk, activityName);
+            if (hist >= exactFreq) return Infinity;
+            if (hist >= exactFreq - 1) penalty += 2000;
+            const _efNeeded = exactFreq - hist;
+            if (_efNeeded > 0) {
+                const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, _efNeeded);
+                penalty -= _efEsc || (100 * _efNeeded);
+            }
         }
         return penalty;
     }

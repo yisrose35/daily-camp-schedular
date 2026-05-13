@@ -440,8 +440,28 @@
         window._preGenClearActive = true;
         window._generationInProgress = true;
         window._divisionTimesLocked = false;
-        window.scheduleAssignments = {};
-        window.leagueAssignments = {};
+
+        const _step0AllowedDivs = options.allowedDivisions || null;
+        const _allDivKeys = Object.keys(window.divisions || {});
+        const _isPartialGen = _step0AllowedDivs &&
+            _step0AllowedDivs.length > 0 &&
+            _step0AllowedDivs.length < _allDivKeys.length;
+
+        if (_isPartialGen) {
+            const divisions = window.divisions || {};
+            const myBunks = new Set();
+            _step0AllowedDivs.forEach(divName => {
+                (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+            });
+            log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + _step0AllowedDivs.join(', ') + ']');
+            myBunks.forEach(bunk => {
+                delete window.scheduleAssignments?.[bunk];
+                delete window.leagueAssignments?.[bunk];
+            });
+        } else {
+            window.scheduleAssignments = {};
+            window.leagueAssignments = {};
+        }
         window.fieldUsageBySlot = {};
         window.locationUsageBySlot = {};
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
@@ -644,10 +664,46 @@
             return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         }
         function getHalfStartDate() {
+            const cd = _campDates;
+            if (cd) {
+                const curParts = currentDate.split('-').map(Number);
+                const curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start) {
+                    const h2 = new Date(cd.half2Start + 'T00:00:00');
+                    if (curD >= h2) return cd.half2Start;
+                }
+                if (cd.startDate) return cd.startDate;
+            }
             const s = globalSettings.app1 || globalSettings;
             return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || (Object.keys(allDailyData).sort()[0] || null);
         }
+
+        const _campDates = (function() {
+            const cd = globalSettings.campDates || (window.loadGlobalSettings && window.loadGlobalSettings('campDates'));
+            if (cd && cd.startDate) return cd;
+            return null;
+        })();
+
+        function _getCampDatePeriodStart(period) {
+            if (!_campDates || !_campDates.startDate) return null;
+            const nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+            if (nWeeks === 0) return null;
+            const campStart = new Date(_campDates.startDate + 'T00:00:00');
+            const curParts = currentDate.split('-').map(Number);
+            const cur = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+            const daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart < 0) return null;
+            const weeksSinceStart = Math.floor(daysSinceStart / 7);
+            const periodIndex = Math.floor(weeksSinceStart / nWeeks);
+            const periodStartDay = periodIndex * nWeeks * 7;
+            const periodDate = new Date(campStart);
+            periodDate.setDate(periodDate.getDate() + periodStartDay);
+            return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+        }
+
         function getPeriodStartDate(period) {
+            const campDateStart = _getCampDatePeriodStart(period);
+            if (campDateStart) return campDateStart;
             switch (period) {
                 case '1week': return getMondayOfWeek(currentDate, 0);
                 case '2weeks': return getMondayOfWeek(currentDate, 1);
@@ -2962,15 +3018,43 @@
                 const prepAttached = !prepCfgEntry || prepCfgEntry.timing !== 'flexible';
                 const effectivePrepDur = prepAttached ? prepDuration : 0;
 
+                // Cooldown days for this activity (used by escalation below)
+                const _cdForEsc = parseInt(props.frequencyDays || cfg?.frequencyDays) || 0;
+
+                // Exact frequency: acts as both ceiling and floor.
+                // Per-grade override takes precedence over the global value.
+                // Bonus escalates based on effective remaining camp days,
+                // accounting for cooldown that blocks days after each visit.
+                {
+                    const _efExact = parseInt((props.exactFrequencyPerGrade || {})[grade]) || parseInt(props.exactFrequency) || parseInt(cfg?.exactFrequency) || 0;
+                    if (_efExact > 0) {
+                        const _efPeriod = props.exactFrequencyPeriod || cfg?.exactFrequencyPeriod || '1week';
+                        const _efCount = getPeriodCount(bunk, s.name, _efPeriod);
+                        if (_efCount >= _efExact) {
+                            log('[exact] skip ' + s.name + ' for ' + bunk + ' (count=' + _efCount + ' >= exact=' + _efExact + ')');
+                            return;
+                        }
+                        const _efNeeded = _efExact - _efCount;
+                        const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate, _cdForEsc);
+                        score -= _efEsc || (100 * _efNeeded);
+                    }
+                }
+
                 // Min frequency floor: if this bunk is below the required minimum
                 // visits, heavily boost priority so the scheduler fills the gap first.
                 // Per-grade override takes precedence over the global minimum.
+                // Bonus escalates based on effective remaining days incl. cooldown.
                 {
                     const _mfMin = parseInt((props.minFrequencyPerGrade || {})[grade]) || parseInt(props.minFrequency) || parseInt(cfg?.minFrequency) || 0;
                     if (_mfMin > 0) {
                         const _mfPeriod = props.minFrequencyPeriod || cfg?.minFrequencyPeriod || 'week';
-                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriod);
-                        if (_mfCount < _mfMin) score -= 100000 * (_mfMin - _mfCount);
+                        const _mfPeriodNorm = _mfPeriod === 'week' ? '1week' : _mfPeriod;
+                        const _mfCount = getPeriodCount(bunk, s.name, _mfPeriodNorm);
+                        if (_mfCount < _mfMin) {
+                            const _mfNeeded = _mfMin - _mfCount;
+                            const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate, _cdForEsc);
+                            score -= _mfEsc || (100 * _mfNeeded);
+                        }
                     }
                 }
 

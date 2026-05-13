@@ -929,6 +929,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
+        var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
@@ -936,20 +938,47 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             maxUsage = props.maxUsagePerGrade[divisionName];
         }
 
-        var currentCount = RotationEngine.getActivityCount(bunkName, activityName);
+        var maxPeriod = props.maxUsagePeriod || 'half';
+        var maxCount = (_getPeriodCount && maxUsage > 0)
+            ? _getPeriodCount(bunkName, activityName, maxPeriod)
+            : RotationEngine.getActivityCount(bunkName, activityName);
 
         // Hard ceiling
         if (maxUsage > 0) {
-            if (currentCount >= maxUsage) return Infinity;
-            if (currentCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
-            if (currentCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+            if (maxCount >= maxUsage) return Infinity;
+            if (maxCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            if (maxCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+        }
+
+        // ★ Exact frequency: acts as both ceiling and floor
+        var exactFreq = parseInt(props.exactFrequency) || 0;
+        if (divisionName && props.exactFrequencyPerGrade && props.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            var exactPeriod = props.exactFrequencyPeriod || '1week';
+            var exactCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, exactPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            if (exactCount >= exactFreq) return Infinity;
+            if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            var exactShortage = exactFreq - exactCount;
+            if (exactShortage > 0) {
+                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage, undefined, _cdForEsc);
+                return -(_efEsc || (exactShortage * 8000));
+            }
         }
 
         // ★ Min frequency: strong pull when bunk is below the floor
+        // Escalates based on effective remaining days incl. cooldown.
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {
-            var shortage = minFreq - currentCount;
-            if (shortage > 0) return -(shortage * 8000);
+            var minPeriod = props.minFrequencyPeriod || 'week';
+            if (minPeriod === 'week') minPeriod = '1week';
+            var minCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, minPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            var shortage = minFreq - minCount;
+            if (shortage > 0) {
+                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
+                return -(_mfEsc || (shortage * 8000));
+            }
         }
 
         return 0;

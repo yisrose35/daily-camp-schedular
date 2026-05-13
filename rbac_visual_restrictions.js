@@ -5,8 +5,8 @@
 // 
 // ROLE BEHAVIOR:
 // - OWNER: Full access, no restrictions
-// - ADMIN: Full access, no restrictions  
-// - SCHEDULER: Editable divisions normal, others greyed out (view-only)
+// - ADMIN: Full access, no restrictions
+// - SCHEDULER: Full access, no restrictions (v3.13 — same as admin)
 // - VIEWER: Everything greyed out except Print Center & Camper Locator
 //
 // EXCEPTIONS (always accessible):
@@ -40,11 +40,12 @@
     // =========================================================================
 
     function _isOwnerOrAdmin() {
-        if (_currentRole === 'owner' || _currentRole === 'admin') return true;
+        // ★★★ v3.13: Scheduler has same permissions as admin — no visual restrictions ★★★
+        if (_currentRole === 'owner' || _currentRole === 'admin' || _currentRole === 'scheduler') return true;
         const acRole = window.AccessControl?.getCurrentRole?.();
-        if (acRole === 'owner' || acRole === 'admin') return true;
+        if (acRole === 'owner' || acRole === 'admin' || acRole === 'scheduler') return true;
         const lsRole = localStorage.getItem('campistry_role');
-        if (lsRole === 'owner' || lsRole === 'admin') return true;
+        if (lsRole === 'owner' || lsRole === 'admin' || lsRole === 'scheduler') return true;
         return false;
     }
 
@@ -148,9 +149,9 @@
         return _currentRole === 'scheduler' && _editableDivisions.length > 0;
     }
 
-    // ★ v2.1: Check if user can edit print templates
+    // ★ v2.1/v3.13: Scheduler can edit print templates too
     function canEditPrintTemplates() {
-        return _currentRole === 'owner' || _currentRole === 'admin';
+        return _currentRole === 'owner' || _currentRole === 'admin' || _currentRole === 'scheduler';
     }
 
     // =========================================================================
