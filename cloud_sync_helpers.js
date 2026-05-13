@@ -372,20 +372,6 @@
     // AUTO-HOOK: WATCH FOR DATA CHANGES
     // =========================================================================
 
-    // Debounced auto-sync when many changes happen quickly
-    let _autoSyncTimeout = null;
-    
-    function scheduleAutoSync() {
-        if (_autoSyncTimeout) {
-            clearTimeout(_autoSyncTimeout);
-        }
-        _autoSyncTimeout = setTimeout(() => {
-            if (typeof window.forceSyncToCloud === 'function') {
-                window.forceSyncToCloud();
-            }
-        }, 1000);
-    }
-
     // Hook into common save patterns
     const originalSaveGlobalSettings = window.saveGlobalSettings;
     if (originalSaveGlobalSettings && !originalSaveGlobalSettings._cloudHelpersHooked) {

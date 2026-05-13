@@ -57,7 +57,7 @@
     const CONFIG = {
         SYNC_DEBOUNCE_MS: 500,
         LOCAL_STORAGE_KEY: 'campGlobalSettings_v1',
-        DEBUG: true,
+        DEBUG: false,
         SAVE_MAX_RETRIES: 3,
         SAVE_RETRY_DELAY_MS: 2000,
         SHOW_NOTIFICATIONS: true
