@@ -50,21 +50,22 @@ After the agent reports, fix the HIGHs (and MEDs that are cheap), commit each ba
 
 Run **every** slice. The order below is highest-leverage-first; do not skip any. Slices 3 and 6 had prior partial passes — re-audit them in full to catch regressions and finish the items the prior runs deferred.
 
-1. Cloud sync + persistence
-2. Auth + Supabase RLS + secret exposure
+1. Cloud sync + persistence (**RE-AUDIT needed**: 12 realtime sync commits from main, revert cycles — see Group D)
+2. Auth + Supabase RLS + secret exposure (**RE-AUDIT needed**: 12 scheduler division scoping commits — see Group C)
 3. Auto generation pipeline (re-audit; finish deferred items — see slice 3)
 4. Manual builder + edit / undo / displacement
-5. Rotation tracking + analytics
+5. Rotation tracking + analytics (**UPDATE needed**: exact frequency + escalation bonuses — see Group F)
 6. Deletion / cleanup paths (re-audit; cover surfaces beyond the patched three)
-7. Calendar / day management
+7. Calendar / day management (**UPDATE needed**: scheduler division scoping touches calendar — see Group C)
 8. Leagues + playoffs
-9. Daily adjustments + overrides + pinned activities
-10. Facilities / fields / specials / general activities
+9. Daily adjustments + overrides + pinned activities (**UPDATE needed**: multi-period special spanning — see Group B)
+10. Facilities / fields / specials / general activities (**UPDATE needed**: exact frequency UI — see Group F)
 11. Rendering + print path
 12. XSS / input validation / user-supplied content
-13. Cross-device + race conditions
+13. Cross-device + race conditions (**RE-AUDIT needed**: realtime sync churn — see Group D)
 14. Performance + bundle size
 15. UI flows audit (manual, in-browser — not delegable)
+16. Camp dates setup + period integration (**NEW** — see Group E)
 
 ---
 
@@ -375,12 +376,109 @@ For each scenario, write down: expected behavior, observed behavior, delta. The 
 
 ---
 
+## Post-merge coverage: 56 commits from main (merged 2026-05-13)
+
+These commits landed on main after the Daily-Audit-Walkthrough branch was created. They've been merged in and need audit coverage. Grouped by feature area with the slice they map to.
+
+### Group A — Audit pipeline hardening (Slices 3–6) — ALREADY AUDITED
+
+These commits ARE the audit fixes themselves. They don't need re-auditing unless a regression is suspected.
+
+| Commits | Description |
+|---|---|
+| `92c58300` `c1401a82` `48e27d63` `3a07dcf1` | Slice 3: auto-pipeline 3-pass audit |
+| `08856456` `c7ab3f82` `6571d3e9` | Slice 4: manual builder 3-pass audit |
+| `f732dae0` `72daa794` `144a7765` | Slice 5: rotation tracking 3-pass audit |
+| `c460231a` `efd293b2` `aeb922a6` | Audit diagnostic script |
+| `211ebed3` | Slice 6: deletion/cleanup audit |
+
+### Group B — Multi-period special spanning → Cover in Slice 9
+
+6 commits: `08069442` `49917627` `9b1d7f60` `db4aa811` `6fd77ba1` `49ba5c26`
+
+New feature: special activities can span multiple consecutive periods. Touches `scheduler_core_auto.js`, `division_times_system.js`, `post_edit_system.js`. Audit should verify:
+- Spanning respects access restrictions per period
+- Continuation slots have correct `_startMin/_endMin`
+- Field capacity counted correctly across spanned periods
+- Pinned preservation handles multi-period pins
+- Manual edit of a spanned special updates all continuation slots
+
+### Group C — Scheduler division scoping → Cover in Slice 2 (re-audit) + Slice 7
+
+12 commits: `526a1359` `f59d4608` `cca2363b` `eccb56af` `36dfa2ed` `09b95280` `304f6f24` `e3174272` `542a1476` `af5d4009` `601dbbae` `4e265c0e`
+
+Major changes: schedulers now have elevated permissions scoped to assigned divisions. Touches `access_control.js`, `scheduler_core_main.js`, `daily_adjustments.js`, `schedule_orchestrator.js`, many RBAC files. Audit should verify:
+- `allowedDivisions` resolution is consistent (not stale cache)
+- Generation scope picker works for partial regen
+- Pre-generation wipe respects scope (doesn't erase other schedulers' divisions)
+- Free-slot fallback respects scope
+- Multi-scheduler merge (newest-wins) doesn't lose data
+- Cross-user schedule visibility during auto mode
+
+### Group D — Realtime sync fixes → Cover in Slice 1 (re-audit) + Slice 13
+
+12 commits: `7c96f929` `9dd66131` `af89f3c2` `213e44f7` `7f3f04df` `9d64f808` `ceca8158` `eb3eae05` `4ce52679` `60b5ee1e` `2485540c` `e74c67dd` + reverts `ee40886b` `e6d66668` `f8217ca7` `5fdd0a09` `32988af0`
+
+Extensive churn in `supabase_sync.js` and `integration_hooks.js` around:
+- DELETE events reaching realtime handler
+- Owner delete/reset propagation
+- Smart merge vs full cloud refresh
+- 60-second guard removal
+- Cloud-empty clear logic
+- Several revert-then-redo cycles (indicates fragile area)
+
+**HIGH PRIORITY for re-audit.** The revert cycles suggest this area is not fully settled. Audit should verify:
+- Current realtime handler logic is clean (no leftover revert artifacts)
+- DELETE propagation works end-to-end
+- Scoped delete/clear for schedulers vs owners
+- No duplicate merge blocks
+- `_postEditInProgress` guard still works correctly after changes
+
+### Group E — Camp dates feature → NEW Slice 16
+
+7 commits: `71548218` `34e5d26a` `ba2bb137` `52f26018` `47e9fbd1` `9d03c205` `ceaa7a38`
+
+Brand new feature: camp dates setup on dashboard, integrated with period counting. Touches `dashboard.js`, `dashboard.html`, `scheduler_core_auto.js`, `post_edit_system.js`, `rotation_engine.js`, `scheduler_core_utils.js`, `smart_logic_adapter.js`, `unified_schedule_system.js`, `integration_hooks.js`. Audit should verify:
+- Camp dates persist to cloud correctly (campId mismatch was already fixed)
+- Period counting uses camp dates consistently across auto/manual/rotation
+- Schedulers see read-only camp dates
+- Transition week markers render correctly
+- Half/period boundaries don't break auto generation
+
+### Group F — Exact frequency + escalation bonuses → Cover in Slice 5 + Slice 10
+
+4 commits: `b3e68a0a` `8fb806e3` `d9be72e9` `b55f4c67`
+
+New rotation constraint: exact frequency for specials, escalating frequency bonuses, Per Half period option. Touches `rotation_engine.js`, `scheduler_core_auto.js`, `scheduler_core_utils.js`, `facilities.js`, `special_activities.js`, `auto_fill_slot.js`, `smart_logic_adapter.js`, `unified_schedule_system.js`, `post_edit_system.js`. Audit should verify:
+- Exact frequency constraint enforced in auto pipeline and respected in manual edit validation
+- Escalation bonus doesn't create infinite loops or favor one bunk unfairly
+- Cooldown factored into escalation correctly
+- Per Half option interacts correctly with camp dates half boundaries
+- UI in facilities.js saves and loads the constraint correctly
+
+---
+
 ## What this plan deliberately doesn't cover
 
 - **A11y / WCAG audit.** This is an admin tool, not a public site. Worth a separate pass eventually but not in the top 15.
 - **Internationalization.** No evidence the app supports multiple languages currently.
 - **Test coverage / unit testing.** A `tests/` folder exists but the audit is about correctness, not coverage. Adding tests is a follow-up.
 - **Code style / linting.** Out of scope; these are correctness audits.
+
+---
+
+## Slice 16 — Camp dates setup + period integration (NEW — from main merge)
+
+**Files in scope:** `dashboard.js`, `dashboard.html`, `scheduler_core_auto.js` (period counting sections), `rotation_engine.js` (Per Half logic), `scheduler_core_utils.js`, `smart_logic_adapter.js`, `unified_schedule_system.js`, `post_edit_system.js`, `integration_hooks.js` (campDates hydration)
+
+**Audit goals:**
+
+1. **Camp dates CRUD.** Create dates, edit, save. Verify persistence to cloud via `saveGlobalSettings`. The camp ID mismatch bug (`9d03c205`) was already fixed — verify no regression.
+2. **Period counting integration.** Auto pipeline reads camp dates for period boundaries. Verify consistent reading across `scheduler_core_auto.js`, `rotation_engine.js`, `smart_logic_adapter.js`.
+3. **Half/transition boundaries.** Transition week markers. Do they affect generation? Are they purely cosmetic or do they gate rotation resets?
+4. **Scheduler read-only view.** Schedulers should see camp dates but not edit them. Verify the UI enforces this and no write path is exposed.
+5. **Cloud hydration.** `integration_hooks.js` hydrates campDates from cloud. Verify the hydration path works for schedulers (fix `52f26018`).
+6. **Per Half frequency option.** New rotation option tied to camp date halves. Verify it resets counts correctly at half boundary.
 
 ---
 
