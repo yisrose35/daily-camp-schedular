@@ -920,21 +920,24 @@
         var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
         showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
 
-        // ★ Throttle + debounce: avoid rapid-fire refreshes that cause visual
-        //   flashing. At most one refresh per 15 seconds, debounced by 2s so
-        //   burst events (e.g. multi-record upsert) collapse into one refresh.
+        // ★ Debounce + throttle: avoid rapid-fire refreshes that cause visual
+        //   flashing, while guaranteeing multi-user changes are never lost.
+        //   - Debounce 2s: burst events collapse into one refresh.
+        //   - Throttle 15s: if too soon, DEFER (not drop) to the end of the
+        //     throttle window so remote changes always arrive.
         var MIN_REFRESH_GAP = 15000; // 15 seconds
         var DEBOUNCE_MS = 2000;
         if (_realtimeRefreshTimer) clearTimeout(_realtimeRefreshTimer);
+        var now = Date.now();
+        var elapsed = now - _lastRealtimeRefresh;
+        // If enough time has passed, debounce briefly then refresh.
+        // If too soon, defer to the end of the throttle window.
+        var delay = elapsed >= MIN_REFRESH_GAP ? DEBOUNCE_MS
+                  : (MIN_REFRESH_GAP - elapsed) + 500; // defer to end of window + small buffer
         _realtimeRefreshTimer = setTimeout(function() {
-            var now = Date.now();
-            if (now - _lastRealtimeRefresh < MIN_REFRESH_GAP) {
-                log('Throttled realtime refresh (last was', Math.round((now - _lastRealtimeRefresh)/1000), 's ago)');
-                return;
-            }
-            _lastRealtimeRefresh = now;
+            _lastRealtimeRefresh = Date.now();
             refreshMultiSchedulerView(_currentDateKey, true);
-        }, DEBOUNCE_MS);
+        }, delay);
     }
 
     // =========================================================================
