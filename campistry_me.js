@@ -3800,24 +3800,27 @@ function importRows(rows){
     save();
 
     // ★ Restore preserved grade times into app1.divisions
-    //   After save(), app1.loadData() will rebuild divisions from the new
-    //   campStructure. We merge the preserved times so they survive the import.
+    //   save() writes campStructure but deliberately skips app1.divisions
+    //   (owned by app1/Flow). We write the preserved times as stub entries
+    //   so that when app1.loadData() next rebuilds divisions from the new
+    //   campStructure, it finds times in existingTimes and carries them over.
     if(Object.keys(_preservedGradeTimes).length>0){
         try{
             var curSettings=window.loadGlobalSettings?.() || {};
             var curApp1=curSettings.app1||{};
-            var curDivs=curApp1.divisions||{};
+            var restoredDivs=curApp1.divisions||{};
             var timesRestored=0;
             Object.entries(_preservedGradeTimes).forEach(function(pair){
                 var gradeName=pair[0],times=pair[1];
-                if(curDivs[gradeName]){
-                    curDivs[gradeName].startTime=times.startTime;
-                    curDivs[gradeName].endTime=times.endTime;
-                    timesRestored++;
-                }
+                // Create or update the entry — app1.loadData() reads startTime/endTime
+                // from these entries via its existingTimes snapshot (app1.js ~line 874-884)
+                if(!restoredDivs[gradeName])restoredDivs[gradeName]={};
+                restoredDivs[gradeName].startTime=times.startTime;
+                restoredDivs[gradeName].endTime=times.endTime;
+                timesRestored++;
             });
             if(timesRestored>0){
-                curApp1.divisions=curDivs;
+                curApp1.divisions=restoredDivs;
                 window.saveGlobalSettings?.('app1',curApp1);
                 console.log('[Me] Restored grade times for',timesRestored,'grades after import');
             }
