@@ -650,6 +650,7 @@ function viewCamper(n){
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">Add Note</button>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">Upload Doc</button>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
+    b+='<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete Camper</button>';
     b+='</div>';
 
     document.getElementById('cvBody').innerHTML=b;
@@ -674,6 +675,7 @@ function editCamper(n){
     h+=ff('Teacher','ceTeacher',d.teacher||'');
 
     h+='<div class="fsec">Camp Assignment</div>';
+    if(!Object.keys(structure).length){h+='<div style="background:var(--warn-bg,#fff8e1);border:1px solid var(--warn-border,#ffe082);border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.8rem;color:var(--s600,#555)"><strong>No camp structure yet.</strong> Go to <a href="#" onclick="event.preventDefault();CampistryMe.closeModal(\'camperEditModal\');CampistryMe.nav(\'structure\')" style="color:var(--me);font-weight:600">Camp Structure</a> to create divisions, grades, and bunks first — or <a href="#" onclick="event.preventDefault();CampistryMe.closeModal(\'camperEditModal\');CampistryMe.openCsv()" style="color:var(--me);font-weight:600">import a CSV</a> which will create them automatically.</div>'}
     h+='<div class="fr">'+ff('Division','ceDiv',d.division||'','select',[''].concat(Object.keys(structure).sort()))+ff('Grade','ceCGrade',d.grade||'','select',grOpts(d.division))+'</div>';
     h+=ff('Bunk','ceBunk',d.bunk||'','select',bkOpts(d.division,d.grade));
 
@@ -724,11 +726,11 @@ function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
     if(!first){toast('First name required','error');return}
     var full=first+(last?' '+last:'');
+    var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
     if(editingCamper&&editingCamper!==full)delete roster[editingCamper];
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
-    var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
     if(!existingId){existingId=nextCamperId;nextCamperId++}
     roster[full]={
         camperId:existingId,
@@ -752,6 +754,12 @@ function saveCamper(){
     // Sync address to Campistry Go format
     syncAddressToGo(full,roster[full]);
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
+}
+function deleteCamper(n){
+    if(!n||!roster[n])return;
+    if(!confirm('Delete camper "'+n+'"? This cannot be undone.'))return;
+    delete roster[n];
+    save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
 }
 function grOpts(div){var o=[''];if(div&&structure[div])Object.keys(structure[div].grades||{}).sort().forEach(function(g){o.push(g)});return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
@@ -3845,7 +3853,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
