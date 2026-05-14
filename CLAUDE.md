@@ -29,7 +29,7 @@ When the user says **"day X"** or **"let's do day X"**:
 
 | System | Files |
 |--------|-------|
-| Auto Builder — Layer Editor | `auto_schedule_planner.js` |
+| Auto Builder — Layer Editor | `master_schedule_builder.js` (renderDAWGrid) |
 | Auto Builder — Grid Preview | `auto_schedule_grid.js` |
 | Auto Builder — Solver | `scheduler_core_auto.js`, `auto_solver_engine.js`, `total_solver_engine.js` |
 | Manual Builder — Skeleton Editor | `master_schedule_builder.js` |
