@@ -114,14 +114,18 @@
     // Save bunks (guard against null during early init)
     if (_bunkCache !== null) window.saveGlobalSettings?.("bunks", _bunkCache);
 
-    // Update window references
-    window.divisions = _divisionCache;
-    window.globalBunks = _bunkCache;
-    window.availableDivisions = Object.keys(_divisionCache);
+    // Update window references (guard against null during early init)
+    if (_divisionCache !== null) {
+      window.divisions = _divisionCache;
+      window.availableDivisions = Object.keys(_divisionCache);
+    }
+    if (_bunkCache !== null) {
+      window.globalBunks = _bunkCache;
+    }
 
     console.log("🧠 Registry saved:", {
-      divisions: Object.keys(_divisionCache).length,
-      bunks: _bunkCache.length,
+      divisions: _divisionCache ? Object.keys(_divisionCache).length : 0,
+      bunks: _bunkCache ? _bunkCache.length : 0,
       syncMode: immediate ? 'immediate' : 'batched'
     });
 
