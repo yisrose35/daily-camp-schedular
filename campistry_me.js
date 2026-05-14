@@ -3654,8 +3654,21 @@ function importRows(rows){
     // Clear Go addresses too
     try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
     // Also wipe the cloud settings so stale data doesn't survive
+    // ★ Preserve existing grade times (startTime/endTime) from app1.divisions
+    //   so they survive re-imports. Times are configured in Flow and are
+    //   independent of camper/roster data.
+    var _preservedGradeTimes={};
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Snapshot grade times before wiping
+        if(g.app1&&g.app1.divisions){
+            Object.entries(g.app1.divisions).forEach(function(pair){
+                var k=pair[0],v=pair[1];
+                if(v&&(v.startTime||v.endTime)){
+                    _preservedGradeTimes[k]={startTime:v.startTime||'',endTime:v.endTime||''};
+                }
+            });
+        }
         g.campStructure={};
         if(!g.app1)g.app1={};
         g.app1.camperRoster={};
@@ -3784,7 +3797,34 @@ function importRows(rows){
     });
 
     // ═══ SAVE & REPORT ═══
-    save();closeModal('csvModal');render(curPage);
+    save();
+
+    // ★ Restore preserved grade times into app1.divisions
+    //   After save(), app1.loadData() will rebuild divisions from the new
+    //   campStructure. We merge the preserved times so they survive the import.
+    if(Object.keys(_preservedGradeTimes).length>0){
+        try{
+            var curSettings=window.loadGlobalSettings?.() || {};
+            var curApp1=curSettings.app1||{};
+            var curDivs=curApp1.divisions||{};
+            var timesRestored=0;
+            Object.entries(_preservedGradeTimes).forEach(function(pair){
+                var gradeName=pair[0],times=pair[1];
+                if(curDivs[gradeName]){
+                    curDivs[gradeName].startTime=times.startTime;
+                    curDivs[gradeName].endTime=times.endTime;
+                    timesRestored++;
+                }
+            });
+            if(timesRestored>0){
+                curApp1.divisions=curDivs;
+                window.saveGlobalSettings?.('app1',curApp1);
+                console.log('[Me] Restored grade times for',timesRestored,'grades after import');
+            }
+        }catch(e){console.warn('[Me] Failed to restore grade times:',e)}
+    }
+
+    closeModal('csvModal');render(curPage);
 
     // Build summary
     var summary=added+' campers imported';
