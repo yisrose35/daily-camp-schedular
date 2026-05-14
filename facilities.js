@@ -32,6 +32,19 @@ let _facilitySearchQuery = '';
 let sportMetaData = {};
 // Combined fields state
 let fieldCombos = {};
+
+function _getOrderedGrades() {
+    const divs = window.divisions || window.getGlobalDivisions?.() || {};
+    const keys = Object.keys(divs);
+    const groups = window.getDivisionGroups?.() || {};
+    const ordered = [];
+    for (const g of Object.keys(groups)) {
+        const arr = groups[g]?.grades;
+        if (Array.isArray(arr)) arr.forEach(k => { if (keys.includes(k) && !ordered.includes(k)) ordered.push(k); });
+    }
+    keys.forEach(k => { if (!ordered.includes(k)) ordered.push(k); });
+    return ordered;
+}
 let _comboLookup = { combinedToSubs: {}, subToCombined: {}, allComboFields: new Set() };
 
 // =========================================================================
@@ -1423,7 +1436,7 @@ function renderSharing(item) {
         }
 
         // -- Per-Grade Overrides --
-        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+        const allDivs = _getOrderedGrades();
         if (allDivs.length > 0) {
             const divider = document.createElement("div");
             divider.style.cssText = "border-top:1px dashed #E5E7EB; margin-bottom:12px;";
@@ -1553,7 +1566,7 @@ function renderAccess(item) {
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes);
         container.appendChild(modeWrap);
 
-        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+        const allDivs = _getOrderedGrades();
 
         if (rules.enabled) {
             const body = document.createElement("div");
@@ -1663,7 +1676,7 @@ function renderAccess(item) {
 // -- Time Rules --
 function renderTimeRules(item) {
     const container = document.createElement("div");
-    const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+    const allDivs = _getOrderedGrades();
 
     if (item.timeRules?.length > 0) {
         item.timeRules.forEach((r, i) => {
@@ -2094,7 +2107,7 @@ function renderSpecialAccess(saData) {
         }
 
         const divisions = window.divisions || window.getGlobalDivisions?.() || {};
-        const allDivs = Object.keys(divisions);
+        const allDivs = _getOrderedGrades();
 
         const help = document.createElement("div");
         help.style.cssText = "font-size:0.78rem; color:#64748B; margin-bottom:10px; line-height:1.4;";
@@ -2533,7 +2546,7 @@ function renderSpecialSchedulingMode(saData) {
         container.appendChild(capWrap);
 
         // ── Step 4: Grade pairing ─────────────────────────────────
-        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+        const allDivs = _getOrderedGrades();
 
         if (allDivs.length < 2) {
             const noGr = document.createElement('div');
@@ -2684,7 +2697,7 @@ function renderSpecialUsage(saData) {
             var ceilGradeGrid = document.createElement('div');
             ceilGradeGrid.style.display = hasMaxGradeOverrides ? 'flex' : 'none';
             ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            var allDivs = _getOrderedGrades();
             allDivs.forEach(function(div) {
                 var row = document.createElement('div');
                 row.style.cssText = 'display:flex; align-items:center; gap:8px;';
@@ -2921,7 +2934,7 @@ function renderSpecialUsage(saData) {
             var minGradeGrid = document.createElement('div');
             minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
             minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            var allDivs2 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            var allDivs2 = _getOrderedGrades();
             if (!saData.minFrequencyPerGrade) saData.minFrequencyPerGrade = {};
             allDivs2.forEach(function(div) {
                 var row = document.createElement('div');
@@ -3025,7 +3038,7 @@ function renderSpecialUsage(saData) {
         cohortDiv.appendChild(modeWrap);
 
         if (rc.enabled) {
-            var allDivs3 = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            var allDivs3 = _getOrderedGrades();
             if (!Array.isArray(rc.grades)) rc.grades = [];
 
             var chipLabel = document.createElement('div');
