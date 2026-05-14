@@ -599,8 +599,8 @@
         updateLocalSetting(key, value);
         _pendingChanges[key] = value;
         
-        log(`Queued change: ${key}`, typeof value === 'object' ? 
-            (Array.isArray(value) ? `[${value.length} items]` : `{${Object.keys(value).length} keys}`) : 
+        log(`Queued change: ${key}`, typeof value === 'object' && value !== null ?
+            (Array.isArray(value) ? `[${value.length} items]` : `{${Object.keys(value).length} keys}`) :
             value);
         
         scheduleBatchSync();

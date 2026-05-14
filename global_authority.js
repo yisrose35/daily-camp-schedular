@@ -108,11 +108,11 @@
   // SAVE (Synchronous with background cloud sync)
   // --------------------------------------------------------------
   function saveRegistry(immediate = false) {
-    // Save divisions
-    window.saveGlobalSettings?.("divisions", _divisionCache);
-    
-    // Save bunks
-    window.saveGlobalSettings?.("bunks", _bunkCache);
+    // Save divisions (guard against null during early init)
+    if (_divisionCache !== null) window.saveGlobalSettings?.("divisions", _divisionCache);
+
+    // Save bunks (guard against null during early init)
+    if (_bunkCache !== null) window.saveGlobalSettings?.("bunks", _bunkCache);
 
     // Update window references
     window.divisions = _divisionCache;
