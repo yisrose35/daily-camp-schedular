@@ -650,11 +650,11 @@ function viewCamper(n){
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addCamperNote(\''+je(n)+'\')">Add Note</button>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.uploadDocument(\''+je(n)+'\')">Upload Doc</button>';
     b+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.addScholarship(\''+je(n)+'\')">Award Aid</button>';
-    b+='<button class="me-btn me-btn--sm" style="background:var(--err);color:#fff;border:none" onclick="CampistryMe.deleteCamper(\''+je(n)+'\')">Delete Camper</button>';
     b+='</div>';
 
     document.getElementById('cvBody').innerHTML=b;
     document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
+    document.getElementById('cvDeleteBtn').onclick=function(){deleteCamper(n)};
     openModal('camperViewModal');
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
