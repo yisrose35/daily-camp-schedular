@@ -131,8 +131,27 @@
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
         var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
         var structureOrder = Object.keys(gs.campStructure || {});
+        var cs = gs.campStructure || {};
         var divs = window.divisions || {};
+
+        // Build a flat grade order from campStructure gradeOrder arrays
+        // This preserves the user's drag-reorder on the Me page
+        var _csGradeOrder = [];
+        structureOrder.forEach(function (divName) {
+            var go = cs[divName] && Array.isArray(cs[divName].gradeOrder) ? cs[divName].gradeOrder : Object.keys((cs[divName] && cs[divName].grades) || {});
+            go.forEach(function (g) { _csGradeOrder.push(g); });
+        });
+
         return keys.slice().sort(function (a, b) {
+            // Primary: campStructure gradeOrder (user's Me page drag order)
+            if (_csGradeOrder.length > 0) {
+                var agi = _csGradeOrder.indexOf(a);
+                var bgi = _csGradeOrder.indexOf(b);
+                if (agi >= 0 && bgi >= 0) return agi - bgi;
+                if (agi >= 0) return -1;
+                if (bgi >= 0) return 1;
+            }
+            // Fallback: manualColumnOrder (Flow page column reorder)
             if (manualOrder) {
                 var ai = manualOrder.indexOf(a);
                 var bi = manualOrder.indexOf(b);
