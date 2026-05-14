@@ -80,11 +80,39 @@ function makeSupabaseMock() {
                 _filters: {},
                 _action: null,
                 _updatePayload: null,
-                select() { chain._action = 'select'; return chain; },
+                _selectArg: null,
+                select(arg) { chain._action = 'select'; chain._selectArg = arg; return chain; },
                 delete() { chain._action = 'delete'; return chain; },
                 update(payload) { chain._action = 'update'; chain._updatePayload = payload; return chain; },
                 eq(col, val) {
                     chain._filters[col] = val;
+                    // select('*').eq('camp_id', ...) — return a chain-like thenable that
+                    // also supports a second .eq('date_key', ...) filter
+                    if (chain._action === 'select' && chain._selectArg === '*' && col === 'camp_id') {
+                        const result = {
+                            eq(col2, val2) {
+                                chain._filters[col2] = val2;
+                                supabaseLog.push({ action: 'select_all', table, filters: { ...chain._filters } });
+                                if (col2 === 'date_key') {
+                                    return Promise.resolve({ data: supabaseMockData[val2] || [], error: null });
+                                }
+                                const allRecords = [];
+                                Object.entries(supabaseMockData).forEach(([dk, recs]) => {
+                                    (Array.isArray(recs) ? recs : [recs]).forEach(r => allRecords.push(r));
+                                });
+                                return Promise.resolve({ data: allRecords, error: null });
+                            },
+                            then(resolve, reject) {
+                                supabaseLog.push({ action: 'select_all', table, filters: { ...chain._filters } });
+                                const allRecords = [];
+                                Object.entries(supabaseMockData).forEach(([dk, recs]) => {
+                                    (Array.isArray(recs) ? recs : [recs]).forEach(r => allRecords.push(r));
+                                });
+                                return Promise.resolve({ data: allRecords, error: null }).then(resolve, reject);
+                            }
+                        };
+                        return result;
+                    }
                     if (chain._action === 'select' && col === 'date_key') {
                         supabaseLog.push({ action: 'select', table, filters: { ...chain._filters } });
                         const key = chain._filters.date_key || '';
@@ -173,6 +201,7 @@ function setupMocks(role) {
         getCurrentRole() { return role; },
         showPermissionDenied(action) { alertMessages.push('Permission denied: ' + action); },
         getEditableDivisions() { return ['Junior Boys']; },
+        getGeneratableDivisions() { return ['Junior Boys']; },
         canEraseData() { return role === 'owner' || role === 'admin' || role === 'scheduler'; },
         canEraseAllCampData() { return role === 'owner'; },
         canSave() { return role !== 'viewer'; }
@@ -279,7 +308,7 @@ describe('eraseCurrentDailyData', () => {
     });
 
     // v3.13: Scheduler now has admin permissions — full delete like owner/admin
-    it('scheduler: deletes today fully (same as admin)', async () => {
+    it('scheduler: scoped delete — only assigned divisions bunks removed', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': {
@@ -299,27 +328,30 @@ describe('eraseCurrentDailyData', () => {
         });
 
         supabaseLog = [];
-        global.supabase = makeSupabaseMock();
-        global.ScheduleDB = {
-            deleteSchedule: async function(dateKey) {
-                supabaseLog.push({ action: 'ScheduleDB.deleteSchedule', dateKey });
-                return { success: true };
-            }
+        supabaseMockData = {
+            '2026-07-15': [{ id: 'rec1', schedule_data: {
+                scheduleAssignments: { 'Bunk 1': ['Basketball'], 'Bunk 2': ['Art'], 'Bunk 3': ['Swimming'], 'Bunk 4': ['Drama'] },
+                leagueAssignments: { 'Bunk 1': ['League A'], 'Bunk 3': ['League B'] }
+            }}]
         };
+        global.supabase = makeSupabaseMock();
 
         setupMocks('scheduler');
         global.currentScheduleDate = '2026-07-15';
 
         await global.eraseCurrentDailyData();
 
-        // Cloud call — full delete via ScheduleDB
-        const dbCall = supabaseLog.find(l => l.action === 'ScheduleDB.deleteSchedule');
-        assert.ok(dbCall, 'ScheduleDB.deleteSchedule should be called');
-        assert.equal(dbCall.dateKey, '2026-07-15');
+        // Cloud: should update (not full delete) since Senior Boys bunks remain
+        const updateCall = supabaseLog.find(l => l.action === 'update');
+        assert.ok(updateCall, 'Cloud record updated (not deleted) since other bunks remain');
 
-        // localStorage — today removed, other dates preserved
+        // localStorage — Junior Boys bunks removed, Senior Boys preserved
         const remaining = JSON.parse(fakeStorage['campDailyData_v1'] || '{}');
-        assert.equal(remaining['2026-07-15'], undefined, 'Today removed from localStorage');
+        assert.ok(remaining['2026-07-15'], 'Date still exists (other bunks remain)');
+        assert.equal(remaining['2026-07-15'].scheduleAssignments['Bunk 1'], undefined, 'Bunk 1 removed');
+        assert.equal(remaining['2026-07-15'].scheduleAssignments['Bunk 2'], undefined, 'Bunk 2 removed');
+        assert.deepEqual(remaining['2026-07-15'].scheduleAssignments['Bunk 3'], ['Swimming'], 'Bunk 3 preserved');
+        assert.deepEqual(remaining['2026-07-15'].scheduleAssignments['Bunk 4'], ['Drama'], 'Bunk 4 preserved');
         assert.ok(remaining['2026-07-16'], 'Other dates preserved');
     });
 });
@@ -354,21 +386,43 @@ describe('eraseAllDailyData', () => {
         assert.ok(reloadCalled, 'Page reload triggered');
     });
 
-    // v3.13: Scheduler now has admin permissions — can erase all data
-    it('scheduler: deletes all dates (same as admin)', async () => {
+    it('scheduler: scoped erase — only assigned divisions removed across all dates', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
-                '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] }, leagueAssignments: {} }
+                '2026-07-15': {
+                    scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
+                    leagueAssignments: {}
+                },
+                '2026-07-16': {
+                    scheduleAssignments: { 'Bunk 2': ['Swim'], 'Bunk 4': ['Drama'] },
+                    leagueAssignments: {}
+                }
             })
         });
         supabaseLog = [];
+        supabaseMockData = {
+            '2026-07-15': [{ id: 'rec1', schedule_data: {
+                scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
+                leagueAssignments: {}
+            }}],
+            '2026-07-16': [{ id: 'rec2', schedule_data: {
+                scheduleAssignments: { 'Bunk 2': ['Swim'], 'Bunk 4': ['Drama'] },
+                leagueAssignments: {}
+            }}]
+        };
         global.supabase = makeSupabaseMock();
         setupMocks('scheduler');
         reloadCalled = false;
 
         await global.eraseAllDailyData();
 
-        assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false, 'All daily data removed');
+        // localStorage should still exist but Junior Boys bunks removed
+        const remaining = JSON.parse(fakeStorage['campDailyData_v1'] || '{}');
+        assert.equal(remaining['2026-07-15']?.scheduleAssignments?.['Bunk 1'], undefined, 'Bunk 1 removed from 07-15');
+        assert.deepEqual(remaining['2026-07-15']?.scheduleAssignments?.['Bunk 3'], ['Music'], 'Bunk 3 preserved on 07-15');
+        assert.equal(remaining['2026-07-16']?.scheduleAssignments?.['Bunk 2'], undefined, 'Bunk 2 removed from 07-16');
+        assert.deepEqual(remaining['2026-07-16']?.scheduleAssignments?.['Bunk 4'], ['Drama'], 'Bunk 4 preserved on 07-16');
+        assert.ok(reloadCalled, 'Page reload triggered');
     });
 
     it('owner: clears gamesPerDate for regular + specialty leagues, resets leagueRoundState, dispatches event', async () => {
@@ -554,21 +608,52 @@ describe('startNewHalf', () => {
         assert.equal(reloadCalled, false);
     });
 
-    // v3.13: Scheduler now has admin permissions — can start new half
-    it('scheduler: clears ALL counters + schedules (same as admin)', async () => {
+    it('scheduler: scoped new half — only assigned divisions cleared', async () => {
         resetStorage({
-            'campRotationHistory_v1': JSON.stringify({ data: true }),
-            'campDailyData_v1': JSON.stringify({ '2026-07-15': {} })
+            'campRotationHistory_v1': JSON.stringify({ bunks: { 'Bunk 1': { Art: 3 }, 'Bunk 3': { Music: 2 } }, leagues: {} }),
+            'campDailyData_v1': JSON.stringify({
+                '2026-07-15': {
+                    scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
+                    leagueAssignments: {}
+                }
+            }),
+            'smartTileHistory_v1': JSON.stringify({ 'Bunk 1': { Art: 1 }, 'Bunk 3': { Music: 1 } })
         });
         clearCloudKeysCalls = [];
+        supabaseMockData = {
+            '2026-07-15': [{ id: 'rec1', schedule_data: {
+                scheduleAssignments: { 'Bunk 1': ['Art'], 'Bunk 3': ['Music'] },
+                leagueAssignments: {}
+            }}]
+        };
         global.supabase = makeSupabaseMock();
         setupMocks('scheduler');
+        global.RotationCloud = { clearForBunks: async function() {} };
+        global.loadRotationHistory = function() {
+            return JSON.parse(fakeStorage['campRotationHistory_v1'] || '{"bunks":{},"leagues":{}}');
+        };
+        global.saveRotationHistory = function(data) {
+            fakeStorage['campRotationHistory_v1'] = JSON.stringify(data);
+        };
+        global.loadGlobalSettings = function(key) {
+            if (key === 'historicalCounts') return {};
+            return {};
+        };
         reloadCalled = false;
 
         await global.startNewHalf();
 
-        assert.equal(fakeStorage.hasOwnProperty('campRotationHistory_v1'), false, 'Rotation history cleared');
-        assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false, 'Daily data cleared');
+        // Rotation history: Bunk 1 removed, Bunk 3 preserved
+        const rotHist = JSON.parse(fakeStorage['campRotationHistory_v1'] || '{}');
+        assert.equal(rotHist.bunks?.['Bunk 1'], undefined, 'Bunk 1 rotation cleared');
+        assert.ok(rotHist.bunks?.['Bunk 3'], 'Bunk 3 rotation preserved');
+
+        // Daily data: Bunk 1 removed from schedule, Bunk 3 preserved
+        const daily = JSON.parse(fakeStorage['campDailyData_v1'] || '{}');
+        assert.equal(daily['2026-07-15']?.scheduleAssignments?.['Bunk 1'], undefined, 'Bunk 1 schedule cleared');
+        assert.deepEqual(daily['2026-07-15']?.scheduleAssignments?.['Bunk 3'], ['Music'], 'Bunk 3 schedule preserved');
+
+        assert.ok(reloadCalled, 'Page reload triggered');
     });
 });
 
@@ -650,8 +735,7 @@ describe('gamesPerDate cleanup on day delete', () => {
         assert.equal(specialtyCleanup, '2026-07-15', 'specialty cleanupDateFromHistory called');
     });
 
-    // v3.13: Scheduler now uses admin erase path (full delete)
-    it('scheduler: cleanupDateFromHistory called for both leagues after full delete', async () => {
+    it('scheduler: cleanupDateFromHistory called after scoped delete', async () => {
         resetStorage({
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': {
@@ -662,13 +746,13 @@ describe('gamesPerDate cleanup on day delete', () => {
         });
 
         supabaseLog = [];
-        global.supabase = makeSupabaseMock();
-        global.ScheduleDB = {
-            deleteSchedule: async function(dateKey) {
-                supabaseLog.push({ action: 'ScheduleDB.deleteSchedule', dateKey });
-                return { success: true };
-            }
+        supabaseMockData = {
+            '2026-07-15': [{ id: 'rec1', schedule_data: {
+                scheduleAssignments: { 'Bunk 1': ['Hoops'], 'Bunk 3': ['Soccer'] },
+                leagueAssignments: {}
+            }}]
         };
+        global.supabase = makeSupabaseMock();
 
         let regularCleanup = null;
         let specialtyCleanup = null;
