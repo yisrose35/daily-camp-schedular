@@ -1673,7 +1673,10 @@ let _toastTimer = null;
             const divChips = divNames.map(dName => {
                 const isActive = (sh.divisions || []).includes(dName);
                 const color = struct[dName]?.color || '#888';
-                const gradeNames = Object.keys(struct[dName]?.grades || {}).sort();
+                const gOrd = struct[dName]?.gradeOrder;
+                const gradeNames = Array.isArray(gOrd) && gOrd.length
+                    ? gOrd.filter(g => g in (struct[dName]?.grades || {}))
+                    : Object.keys(struct[dName]?.grades || {}).sort();
                 const gradeMode = sh.grades[dName];
                 let gradeHtml = '';
                 if (isActive && gradeNames.length > 1) {

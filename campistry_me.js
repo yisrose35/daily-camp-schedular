@@ -755,7 +755,7 @@ function deleteCamper(n){
     delete roster[n];
     save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
 }
-function grOpts(div){var o=[''];if(div&&structure[div])Object.keys(structure[div].grades||{}).sort().forEach(function(g){o.push(g)});return o}
+function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
 
 // Sync camper address to Campistry Go's address store
