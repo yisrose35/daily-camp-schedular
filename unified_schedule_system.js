@@ -2631,11 +2631,13 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (currentBuilderMode === 'auto' && window.AutoScheduleGrid && window.AutoScheduleGrid.render) {
             var divisionsAuto = Object.keys(divisions);
             if (divisionsAuto.length === 0 && window.availableDivisions) divisionsAuto = window.availableDivisions;
-            divisionsAuto.sort(function (a, b) {
-                var na = parseInt(a), nb = parseInt(b);
-                if (!isNaN(na) && !isNaN(nb)) return na - nb;
-                return String(a).localeCompare(String(b));
-            });
+            divisionsAuto = (typeof window.getUserDivisionOrder === 'function')
+                ? window.getUserDivisionOrder(divisionsAuto)
+                : divisionsAuto.sort(function (a, b) {
+                    var na = parseInt(a), nb = parseInt(b);
+                    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+                    return String(a).localeCompare(String(b));
+                });
             var autoEditable = (window.AccessControl && window.AccessControl.getEditableDivisions && window.AccessControl.getEditableDivisions()) || divisionsAuto;
             var autoWrapper = document.createElement('div');
             autoWrapper.style.cssText = 'display:flex;flex-direction:column;gap:24px;';
@@ -2661,21 +2663,13 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         // Resolve & sort divisions
         var divisionsToShow = Object.keys(divisions);
         if (divisionsToShow.length === 0 && window.availableDivisions) divisionsToShow = window.availableDivisions;
-        var customOrder = (window.loadGlobalSettings ? window.loadGlobalSettings() : {});
-        customOrder = customOrder && customOrder.app1 && customOrder.app1.manualColumnOrder;
-        if (Array.isArray(customOrder) && customOrder.length > 0) {
-            divisionsToShow.sort(function (a, b) {
-                var ai = customOrder.indexOf(a); if (ai < 0) ai = 9999;
-                var bi = customOrder.indexOf(b); if (bi < 0) bi = 9999;
-                return ai - bi;
-            });
-        } else {
-            divisionsToShow.sort(function (a, b) {
+        divisionsToShow = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(divisionsToShow)
+            : divisionsToShow.sort(function (a, b) {
                 var na = parseInt(a), nb = parseInt(b);
                 if (!isNaN(na) && !isNaN(nb)) return na - nb;
                 return String(a).localeCompare(String(b));
             });
-        }
 
         if (divisionsToShow.length === 0) {
             container.innerHTML += '<div style="padding: 40px; text-align: center; color: #6b7280;"><p>No divisions configured.</p></div>';
