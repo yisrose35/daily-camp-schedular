@@ -87,8 +87,7 @@
     let _initialHydrationDone = false;
     let _reconnectAttempts = 0;  // ★ NEW: Track reconnection attempts
     let _reconnectTimeout = null;  // ★ NEW: Reconnect timer
-    let _lastRealtimeRefresh = 0;  // ★ Throttle realtime-triggered refreshes
-    let _realtimeRefreshTimer = null;  // ★ Debounce timer for realtime refresh
+    let _lastSeenUpdatedAt = {};  // ★ Track last seen updated_at per record to skip spurious events
 
     // =========================================================================
     // LOGGING
@@ -917,27 +916,24 @@
             divisions: payload.new?.divisions
         });
 
+        // ★ Skip spurious events: only refresh if the record actually changed.
+        //   Compare updated_at timestamp — if we've already seen this exact
+        //   version, it's a duplicate/heartbeat event, not a real edit.
+        var recordId = record.id || 'unknown';
+        var incomingTs = record.updated_at || '';
+        if (eventType !== 'DELETE' && incomingTs && _lastSeenUpdatedAt[recordId] === incomingTs) {
+            log('Skipping duplicate event for record', recordId, '(same updated_at)');
+            return;
+        }
+        _lastSeenUpdatedAt[recordId] = incomingTs;
+
         var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
         showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
 
-        // ★ Debounce + throttle: avoid rapid-fire refreshes that cause visual
-        //   flashing, while guaranteeing multi-user changes are never lost.
-        //   - Debounce 2s: burst events collapse into one refresh.
-        //   - Throttle 15s: if too soon, DEFER (not drop) to the end of the
-        //     throttle window so remote changes always arrive.
-        var MIN_REFRESH_GAP = 15000; // 15 seconds
-        var DEBOUNCE_MS = 2000;
-        if (_realtimeRefreshTimer) clearTimeout(_realtimeRefreshTimer);
-        var now = Date.now();
-        var elapsed = now - _lastRealtimeRefresh;
-        // If enough time has passed, debounce briefly then refresh.
-        // If too soon, defer to the end of the throttle window.
-        var delay = elapsed >= MIN_REFRESH_GAP ? DEBOUNCE_MS
-                  : (MIN_REFRESH_GAP - elapsed) + 500; // defer to end of window + small buffer
-        _realtimeRefreshTimer = setTimeout(function() {
-            _lastRealtimeRefresh = Date.now();
+        // Real change — refresh immediately
+        setTimeout(function() {
             refreshMultiSchedulerView(_currentDateKey, true);
-        }, delay);
+        }, 500);
     }
 
     // =========================================================================
