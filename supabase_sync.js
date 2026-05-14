@@ -87,6 +87,8 @@
     let _initialHydrationDone = false;
     let _reconnectAttempts = 0;  // ★ NEW: Track reconnection attempts
     let _reconnectTimeout = null;  // ★ NEW: Reconnect timer
+    let _lastRealtimeRefresh = 0;  // ★ Throttle realtime-triggered refreshes
+    let _realtimeRefreshTimer = null;  // ★ Debounce timer for realtime refresh
 
     // =========================================================================
     // LOGGING
@@ -918,10 +920,21 @@
         var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
         showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
 
-        // Always do a full cloud reload so the view reflects the latest state.
-        setTimeout(function() {
+        // ★ Throttle + debounce: avoid rapid-fire refreshes that cause visual
+        //   flashing. At most one refresh per 15 seconds, debounced by 2s so
+        //   burst events (e.g. multi-record upsert) collapse into one refresh.
+        var MIN_REFRESH_GAP = 15000; // 15 seconds
+        var DEBOUNCE_MS = 2000;
+        if (_realtimeRefreshTimer) clearTimeout(_realtimeRefreshTimer);
+        _realtimeRefreshTimer = setTimeout(function() {
+            var now = Date.now();
+            if (now - _lastRealtimeRefresh < MIN_REFRESH_GAP) {
+                log('Throttled realtime refresh (last was', Math.round((now - _lastRealtimeRefresh)/1000), 's ago)');
+                return;
+            }
+            _lastRealtimeRefresh = now;
             refreshMultiSchedulerView(_currentDateKey, true);
-        }, 500);
+        }, DEBOUNCE_MS);
     }
 
     // =========================================================================

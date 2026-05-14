@@ -1106,6 +1106,12 @@ function saveDiv(){
     var name=(document.getElementById('dmName').value||'').trim();
     if(!name){toast('Name required','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
+    // ★ Snapshot old bunks before applying changes so we can detect removals
+    var oldBunks=[];
+    var srcDiv=editingDiv||name;
+    if(structure[srcDiv]&&structure[srcDiv].grades){
+        Object.values(structure[srcDiv].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){oldBunks.push(b)})});
+    }
     var grades={};
     // Iterate grade rows in DOM order so drag-reorder is preserved.
     var rows=document.querySelectorAll('#dmGrades .dm-grade-row');
@@ -1129,8 +1135,71 @@ function saveDiv(){
     });
     structure[name]={color:color,grades:grades,gradeOrder:gradeOrder};
     save();closeModal('divModal');render(curPage);toast(editingDiv?'Division updated':'Division created');
+    // ★ Purge orphaned bunks from saved schedules
+    var newBunks=[];
+    Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
+    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
+    if(removed.length>0)_purgeOrphanedBunks(removed);
 }
-function deleteDiv(n){if(!confirm('Delete "'+n+'"?'))return;delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted')}
+function deleteDiv(n){
+    if(!confirm('Delete "'+n+'"?'))return;
+    // ★ Collect all bunks from this division before deleting
+    var removedBunks=[];
+    if(structure[n]&&structure[n].grades){
+        Object.values(structure[n].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){removedBunks.push(b)})});
+    }
+    delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
+    // ★ Purge orphaned bunks from saved schedules
+    if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
+}
+// ★ Remove orphaned bunk data from all saved schedule records.
+//   When a bunk is removed from camp structure, its schedule data becomes
+//   invisible to the UI but persists in Supabase. This cleans it up.
+function _purgeOrphanedBunks(removedBunks){
+    if(!removedBunks||removedBunks.length===0)return;
+    console.log('[Me] Purging',removedBunks.length,'orphaned bunks from schedules:',removedBunks);
+    // 1. Clean from in-memory schedule (current session)
+    if(window.scheduleAssignments){
+        removedBunks.forEach(function(b){delete window.scheduleAssignments[b]});
+    }
+    if(window.scheduleSegments){
+        removedBunks.forEach(function(b){delete window.scheduleSegments[b]});
+    }
+    // 2. Clean from all cloud schedule records (async, best-effort)
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId){console.warn('[Me] Cannot purge cloud — DB not available');return}
+        var bunkSet=new Set(removedBunks);
+        client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
+            .then(function(res){
+                if(res.error||!res.data){console.warn('[Me] Purge query error:',res.error);return}
+                var updates=[];
+                res.data.forEach(function(record){
+                    var sd=record.schedule_data||{};
+                    var sa=Object.assign({},sd.scheduleAssignments||{});
+                    var la=Object.assign({},sd.leagueAssignments||{});
+                    var modified=false;
+                    removedBunks.forEach(function(b){
+                        if(sa[b]!==undefined){delete sa[b];modified=true}
+                        if(la[b]!==undefined){delete la[b]}
+                    });
+                    if(modified){
+                        updates.push(client.from('daily_schedules')
+                            .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                            .eq('id',record.id));
+                    }
+                });
+                if(updates.length>0){
+                    Promise.all(updates).then(function(){
+                        console.log('[Me] ✅ Purged orphaned bunks from',updates.length,'schedule records');
+                    }).catch(function(e){console.warn('[Me] Purge update error:',e)});
+                }else{
+                    console.log('[Me] No schedule records contained orphaned bunks');
+                }
+            }).catch(function(e){console.warn('[Me] Purge fetch error:',e)});
+    }catch(e){console.warn('[Me] Purge exception:',e)}
+}
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────
 function renderBB(){
