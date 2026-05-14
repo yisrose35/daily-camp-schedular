@@ -1897,9 +1897,11 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       const height = (layer.endMin - layer.startMin) * DAW_PIXELS_PER_MINUTE;
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
-      let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
-        ? `${layer.durationMin}-${layer.durationMax}m`
-        : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
+      const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+      const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+      let durLabel = _dMin && _dMax && _dMin !== _dMax
+        ? `${_dMin}-${_dMax}m`
+        : `${_dMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
       if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
         const pre  = layer.preChangeMin  || 0;
         const post = layer.postChangeMin || 0;
@@ -1913,7 +1915,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
-        <span class="band-label">${typeDef?.name || layer.type}</span>
+        <span class="band-label">${layer.leagueName || typeDef?.name || layer.type}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         <div class="band-resize band-resize-bottom"></div>
       </div>`;
@@ -2177,7 +2179,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         }
 
         if (!layerSource[grade]) layerSource[grade] = [];
-        layerSource[grade].push({
+        const _newLayer = {
           id: 'daw_' + Math.random().toString(36).slice(2, 9),
           type,
           startMin,
@@ -2187,7 +2189,15 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           durationMin: layerDef.anchor ? (endMin - startMin) : 30,
           durationMax: layerDef.anchor ? (endMin - startMin) : 50,
           periodMin: layerDef.anchor ? (endMin - startMin) : 30,
-        });
+        };
+
+        // Auto-assign league for league layers on first drop
+        if (type === 'league' || type === 'specialty_league') {
+          const _firstLeague = _mbFirstLeagueForGrade(grade);
+          if (_firstLeague) _newLayer.leagueName = _firstLeague;
+        }
+
+        layerSource[grade].push(_newLayer);
 
         onSave();
         onRender();
@@ -2407,6 +2417,28 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         <div class="ms-daw-pop-hint">0 = skip that subcategory. List comes from Facilities → Special Activities → Subcategory.</div>
       </div>`;
       })()}
+      ${(layer.type === 'league' || layer.type === 'specialty_league') ? (() => {
+        const _gs = window.loadGlobalSettings?.() || {};
+        const _lbn = _gs.leaguesByName || {};
+        const _gradeLeagues = Object.keys(_lbn).filter(n =>
+          _lbn[n] && _lbn[n].enabled !== false &&
+          Array.isArray(_lbn[n].divisions) &&
+          _lbn[n].divisions.includes(String(grade))
+        );
+        if (_gradeLeagues.length <= 1) return ''; // auto-assigned, no picker needed
+        return `
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">League</div>
+      <div class="ms-daw-pop-field">
+        <label>Assigned League</label>
+        <div class="ms-daw-pop-row">
+          <select id="daw-pop-league-name" style="flex:1;">
+            ${_gradeLeagues.map(n => '<option value="' + n + '"' + (n === layer.leagueName ? ' selected' : '') + '>' + n + '</option>').join('')}
+          </select>
+        </div>
+        <div class="ms-daw-pop-hint">This grade has ${_gradeLeagues.length} leagues. Pick which one this layer uses.</div>
+      </div>`;
+      })() : ''}
       <div class="ms-daw-pop-divider"></div>
       <div class="ms-daw-pop-section">Rotation <span style="font-weight:400;font-size:10px;letter-spacing:0;text-transform:none;color:#cbd5e1;">optional</span></div>
       <div class="ms-daw-pop-field">
@@ -2636,6 +2668,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
     }
 
+    // League: save selected league name
+    if (layer.type === 'league' || layer.type === 'specialty_league') {
+      const leagueSelect = popover.querySelector('#daw-pop-league-name');
+      if (leagueSelect) layer.leagueName = leagueSelect.value;
+    }
+
     // Change Time: save preChangeMin / postChangeMin for swim
     if (layer.type === 'swim') {
       const preEl  = popover.querySelector('#daw-pop-pre-change');
@@ -2712,7 +2750,7 @@ async function dawAddLayerDialog(grade) {
   if (!dawLayers[grade]) dawLayers[grade] = [];
   const layerDef = DAW_LAYER_TYPES.find(t => t.type === result.type);
   
- dawLayers[grade].push({
+ const _addedLayer = {
     id: 'daw_' + Math.random().toString(36).slice(2, 9),
     type: result.type,
     startMin: Math.max(divStart, startMin),
@@ -2722,8 +2760,16 @@ async function dawAddLayerDialog(grade) {
     durationMin: layerDef?.anchor ? (endMin - startMin) : 30,
     durationMax: layerDef?.anchor ? (endMin - startMin) : 50,
     periodMin: layerDef?.anchor ? (endMin - startMin) : 30,
-  });
-  
+  };
+
+  // Auto-assign league for league layers
+  if (result.type === 'league' || result.type === 'specialty_league') {
+    const _firstLeague = _mbFirstLeagueForGrade(grade);
+    if (_firstLeague) _addedLayer.leagueName = _firstLeague;
+  }
+
+  dawLayers[grade].push(_addedLayer);
+
   saveDAWLayers();
   renderDAWGrid();
 }
@@ -2759,12 +2805,16 @@ async function dawCopyLayersDialog() {
     const tStart = parseTimeToMinutes(targetDiv.startTime) || 540;
     const tEnd = parseTimeToMinutes(targetDiv.endTime) || 960;
     
-    dawLayers[targetGrade] = source.map(l => ({
-      ...l,
-      id: 'daw_' + Math.random().toString(36).slice(2, 9),
-      startMin: Math.max(tStart, l.startMin),
-      endMin: Math.min(tEnd, l.endMin),
-    }));
+    dawLayers[targetGrade] = source.map(l => {
+      const copy = {
+        ...JSON.parse(JSON.stringify(l)),
+        id: 'daw_' + Math.random().toString(36).slice(2, 9),
+        startMin: Math.max(tStart, l.startMin),
+        endMin: Math.min(tEnd, l.endMin),
+      };
+      _mbRemapLeagueForGrade(copy, targetGrade);
+      return copy;
+    });
     copied++;
   });
   
