@@ -912,7 +912,11 @@
                     if (typeof divData !== 'object' || divData === null) return;
 
                     const parentColor = divData.color || getNextUniqueDivisionColor(gradeBasedDivisions);
-                    const gradeNames = Object.keys(divData.grades || {});
+                    const allGrades = Object.keys(divData.grades || {});
+                    const ord = divData.gradeOrder;
+                    const gradeNames = Array.isArray(ord) && ord.length
+                        ? ord.filter(g => g in (divData.grades || {})).concat(allGrades.filter(g => !ord.includes(g)))
+                        : allGrades;
 
                     divGroups[divName] = { color: parentColor, grades: [] };
 
