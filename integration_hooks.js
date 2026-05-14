@@ -846,13 +846,14 @@
             return true;
         }
 
-        // Invalidate the in-memory cache so we re-read whatever was most
-        // recently written to localStorage. Callers like campistry_me.save()
-        // write directly via localStorage.setItem before invoking us, which
-        // leaves _localCache stale — pushing that stale snapshot to cloud
-        // (with a fresh timestamp) corrupts subsequent hydrations.
-        _localCache = null;
-
+        // _localCache is already up-to-date: all callers go through
+        // saveGlobalSettings → updateLocalSetting → setLocalSettings,
+        // which writes to _localCache, IDB, AND localStorage.  Nullifying
+        // _localCache here forces getLocalSettings() to fall back to the
+        // STRIPPED localStorage snapshot (which intentionally omits heavy
+        // keys like camperRoster, families, enrollments).  That re-read
+        // then becomes the new _localCache — permanently losing those keys
+        // until the next cloud hydration restores them.
         const localSettings = getLocalSettings();
         const allChanges = { ...localSettings, ..._pendingChanges };
         _pendingChanges = allChanges;
