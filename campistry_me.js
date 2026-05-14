@@ -542,15 +542,9 @@ function viewCamper(n){
     var d=roster[n];if(!d)return;
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
 
-    // Header with photo placeholder
-    var photoUrl=d.photoUrl||'';
-    var photoHtml=photoUrl
-        ?'<img src="'+esc(photoUrl)+'" style="width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--s200)">'
-        :'<div style="width:72px;height:72px;border-radius:12px;background:var(--s100);border:2px dashed var(--s300);display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer" onclick="CampistryMe.uploadPhoto(\''+je(n)+'\')" title="Click to add photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--s400)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span style="font-size:.6rem;color:var(--s400);margin-top:2px">Add Photo</span></div>';
-
     var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
     var altHtml=altDisplay?'<div style="font-size:.85rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
-    document.getElementById('cvHead').innerHTML='<div style="display:flex;gap:16px;align-items:flex-start;padding:4px 0">'+photoHtml+'<div style="flex:1"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
+    document.getElementById('cvHead').innerHTML='<div style="padding:4px 0"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div>';
 
     var b='';
 
@@ -3828,27 +3822,6 @@ function exportCsv(){
 }
 
 // ═══ BOOT ════════════════════════════════════════════════════════
-// Photo upload (stores as base64 data URL in camper record)
-function uploadPhoto(camperName){
-    var inp=document.createElement('input');
-    inp.type='file';inp.accept='image/*';
-    inp.onchange=function(){
-        var file=inp.files[0];if(!file)return;
-        if(file.size>2*1024*1024){toast('Photo must be under 2MB','error');return}
-        var reader=new FileReader();
-        reader.onload=function(e){
-            if(roster[camperName]){
-                roster[camperName].photoUrl=e.target.result;
-                save();
-                viewCamper(camperName); // refresh the modal
-                toast('Photo added');
-            }
-        };
-        reader.readAsDataURL(file);
-    };
-    inp.click();
-}
-
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 
 window.CampistryMe={
@@ -3870,7 +3843,6 @@ window.CampistryMe={
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
-    uploadPhoto:uploadPhoto,
     // Billing — family ledger system
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,

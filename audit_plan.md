@@ -487,3 +487,9 @@ New rotation constraint: exact frequency for specials, escalating frequency bonu
 Re-audit slice 3 (auto pipeline) once a quarter. Pipelines drift. The two prior bugs that introduced regressions ("`enabled === true`" and "stale write-guard cache") both happened *after* fixes were in place, because new contributors didn't know the pattern. Treat slice 3 as recurring.
 
 Same for slice 1 (cloud sync) — the persistence layer is where silent data loss lives.
+
+## Known Issues / Future Features
+
+| # | Area | Description | Priority |
+|---|------|-------------|----------|
+| 1 | Camper Photos | Camper photo upload was removed (Day 6) — it stored base64 data URLs directly in the roster object which bloats `camp_state_kv` and risks hitting Supabase row size limits. Re-implement using Supabase Storage with URL references instead of inline base64. | Medium |
