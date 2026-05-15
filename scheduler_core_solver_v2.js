@@ -48,12 +48,11 @@
         rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
         wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
         sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25,  // per gap ≥15min
-        // swim-no-change and period-viol are v1-seed-induced and not fixable
-        // by v2 moves. ZEROED in cost — they're still counted in the breakdown
-        // for diagnostics but no longer slow down evaluate() with their per-
-        // schedule scans (iterations dropped 86k → 44k when they were on).
-        // The user can re-enable via globalSettings if they want SA to try.
-        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 0,
+        // swim-no-change: cost 100/each. v2 now HAS moveAddChange to fix
+        //   these, so the cost steers SA toward synthesizing Change blocks.
+        // period-viol: cost 0. Still v2-uncatchable for seed-state — kept
+        //   in breakdown for diagnostics only.
+        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 100,
         periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 0
       }
     };
@@ -889,6 +888,89 @@
     return null;
   }
 
+  // --- addChange (atomic): find a Swim block without an adjacent Change,
+  //     synthesize a 10-min Change block right before or after it. Closes
+  //     the user's reported "swim without change" issue, which is otherwise
+  //     un-fixable by v2 because all other moves treat Change/Swim as
+  //     immovable.
+  //
+  //     Insertion requires:
+  //       - The 10-min window before/after the Swim is currently empty
+  //         (no other activity occupies it)
+  //       - The window stays within the bunk's day
+  //
+  //     The new Change slot is marked _fixed:true (anchor semantics) so
+  //     subsequent SA iterations don't try to delete/move it.
+  function moveAddChange(schedule, ctx, rng) {
+    const CHANGE_DUR = 10; // standard Change block duration
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const slots = schedule[bunk];
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(slots) || !Array.isArray(pbs)) continue;
+      const real = slots
+        .filter(s => s && !s.continuation && s._startMin != null)
+        .sort((a, b) => a._startMin - b._startMin);
+      // Find a Swim missing adjacent Change
+      const swimIdxs = [];
+      for (let i = 0; i < real.length; i++) {
+        const s = real[i];
+        if ((s._activity || '').toLowerCase() !== 'swim') continue;
+        const before = real[i - 1];
+        const after = real[i + 1];
+        const bIsCh = before && /change/i.test(before._activity || '') && before._endMin === s._startMin;
+        const aIsCh = after && /change/i.test(after._activity || '') && after._startMin === s._endMin;
+        if (!bIsCh && !aIsCh) swimIdxs.push({ swim: s, before, after });
+      }
+      if (swimIdxs.length === 0) continue;
+      const target = swimIdxs[Math.floor(rng() * swimIdxs.length)];
+      const swim = target.swim;
+
+      // Try inserting BEFORE the swim (preferred — pre-change is more common)
+      let insertStart = swim._startMin - CHANGE_DUR;
+      let insertEnd = swim._startMin;
+      let insertSide = 'before';
+      const conflictBefore = target.before && target.before._endMin > insertStart;
+      if (conflictBefore) {
+        // Try inserting AFTER the swim instead
+        insertStart = swim._endMin;
+        insertEnd = swim._endMin + CHANGE_DUR;
+        insertSide = 'after';
+        const conflictAfter = target.after && target.after._startMin < insertEnd;
+        if (conflictAfter) continue; // no room either side
+      }
+      // Find swim's index in the bunk's slots array (not the sorted real list)
+      const swimSlotIdx = slots.findIndex(s => s === swim);
+      if (swimSlotIdx < 0) continue;
+      const newSlot = {
+        field: 'Change', sport: null, _activity: 'Change',
+        type: insertSide === 'before' ? 'pre-change' : 'post-change',
+        _autoMode: true, _fixed: true, _activityLocked: true,
+        _startMin: insertStart, _endMin: insertEnd,
+        _source: 'v2-addChange', continuation: false
+      };
+      // Insertion index in the bunk's slots: before swim → swimSlotIdx,
+      // after swim → swimSlotIdx + 1
+      const insertIdx = (insertSide === 'before') ? swimSlotIdx : swimSlotIdx + 1;
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk].splice(insertIdx, 0, newSlot);
+      // Mirror bucket grid insertion atomically via bucketPatch
+      return {
+        schedule: next,
+        bucketPatch: {
+          kind: 'insert', grade, bunk,
+          idx: insertIdx,
+          newBucket: { startMin: insertStart, endMin: insertEnd }
+        }
+      };
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
@@ -898,7 +980,8 @@
     bucketExtend: moveBucketExtend,
     gapTargeted:  moveGapTargeted,
     bucketInsert: moveBucketInsert,
-    bucketDelete: moveBucketDelete
+    bucketDelete: moveBucketDelete,
+    addChange:    moveAddChange
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -911,14 +994,15 @@
   //     doesn't waste budget on equivalent shuffles when gaps remain
   const MOVE_WEIGHTS = {
     replace:      1,
-    swap:         0.5,  // mostly sideways
-    inject:       2,    // holes are expensive (less common now)
-    relocate:    0.5,   // small effect
-    crossSwap:    0.5,  // useful but indirect for gap reduction
-    bucketExtend: 3,    // closes wall-clock gaps directly
-    gapTargeted:  4,    // top priority — explicitly targets gaps
-    bucketInsert: 4,    // closes structural bucket-grid gaps
-    bucketDelete: 1     // cleanup, rarely needed now
+    swap:         0.5,
+    inject:       2,
+    relocate:    0.5,
+    crossSwap:    0.5,
+    bucketExtend: 3,
+    gapTargeted:  4,
+    bucketInsert: 4,
+    bucketDelete: 1,
+    addChange:    3     // fixes user-reported swim-without-Change issue
   };
 
   function pickMove(stats, rng) {
