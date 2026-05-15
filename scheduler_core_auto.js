@@ -15450,6 +15450,7 @@
                 var fieldCap = 1;
                 var fieldShareType = 'not_sharable';
                 var fieldAllowedPairs = {};
+                var fieldGradeShareRules = {};
                 for (var fi = 0; fi < _perfFields.length; fi++) {
                     var pf = _perfFields[fi];
                     if (!pf || !pf.name) continue;
@@ -15458,8 +15459,21 @@
                         fieldShareType = sw.type || 'not_sharable';
                         fieldCap = parseInt(sw.capacity) || (fieldShareType === 'not_sharable' ? 1 : 2);
                         fieldAllowedPairs = sw.allowedPairs || {};
+                        fieldGradeShareRules = pf.gradeShareRules || {};
                         break;
                     }
+                }
+
+                // ★ Day 15 fix: apply gradeShareRules override for the OWNER grade,
+                //   mirroring the same resolution used in commitWriteIfLegal
+                //   (scheduler_core_auto.js:1474-1486), canBlockFit (utils:887-903),
+                //   and the free-slot fallback (auto:14228-14232). Without this,
+                //   perfection-pass extensions silently bypass per-grade caps.
+                var _ownerGradeForOverride = perfBunkGrade[String(ownerBunk)] || '';
+                var _override = fieldGradeShareRules[_ownerGradeForOverride] || fieldGradeShareRules[String(_ownerGradeForOverride)];
+                if (_override) {
+                    fieldShareType = _override.type || 'not_sharable';
+                    fieldCap = parseInt(_override.capacity) || (fieldShareType === 'not_sharable' ? 1 : 2);
                 }
 
                 // ★ Day 14 fix: count DISTINCT bunks occupying the field at this time,
