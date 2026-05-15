@@ -42,11 +42,12 @@
       kickSize:     parseInt(a1.solverV2KickSize)      || 5,      // # slots to randomize per kick
       seed:         parseInt(a1.solverV2Seed)          || Date.now(),
       cost: {
-        hardViolation:   parseFloat(a1.solverV2CostHardViolation)   || 1e9,
-        hole:            parseFloat(a1.solverV2CostHole)            || 100,
-        sameDayRepeat:   parseFloat(a1.solverV2CostSameDayRepeat)   || 30,
-        rotationUnfair:  parseFloat(a1.solverV2CostRotationUnfair)  || 20,
-        wallClockGapMin: parseFloat(a1.solverV2CostWallClockGapMin) || 1
+        hardViolation:    parseFloat(a1.solverV2CostHardViolation)    || 1e9,
+        hole:             parseFloat(a1.solverV2CostHole)             || 100,
+        sameDayRepeat:    parseFloat(a1.solverV2CostSameDayRepeat)    || 30,
+        rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
+        wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
+        sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25   // extra penalty per gap ≥15min
       }
     };
   }
@@ -97,11 +98,14 @@
     const rotUnfair = computeRotationUnfairness(schedule, ctx);
     cost += rotUnfair * cfg.cost.rotationUnfair;
 
-    // Term 5: Wall-clock gaps over 5 min (period transitions = free)
-    const gapMin = countWallClockGapMinutes(schedule, ctx);
-    cost += gapMin * cfg.cost.wallClockGapMin;
+    // Term 5: Wall-clock gaps over 5 min (period transitions = free).
+    //         Also adds a flat per-significant-gap bonus so SA optimizes for
+    //         eliminating gaps entirely (vs. just shaving them).
+    const gapInfo = countWallClockGapMinutes(schedule, ctx);
+    cost += gapInfo.gapMin * cfg.cost.wallClockGapMin;
+    cost += gapInfo.sigGaps * cfg.cost.sigGapBonus;
 
-    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin } };
+    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps } };
   }
 
   // -------------------------------------------------------------------------
@@ -324,8 +328,11 @@
     return 0;
   }
 
+  // Returns { gapMin, sigGaps } so the cost can apply both a per-minute
+  // and a per-significant-gap penalty. The per-gap bonus pushes SA to
+  // CLOSE gaps entirely rather than just shrink them slightly.
   function countWallClockGapMinutes(schedule, ctx) {
-    let minutes = 0;
+    let minutes = 0, sigGaps = 0;
     for (const slots of Object.values(schedule)) {
       if (!Array.isArray(slots)) continue;
       const real = slots
@@ -334,9 +341,10 @@
       for (let i = 1; i < real.length; i++) {
         const gap = real[i]._startMin - real[i-1]._endMin;
         if (gap > 5) minutes += (gap - 5);
+        if (gap >= 15) sigGaps++;
       }
     }
-    return minutes;
+    return { gapMin: minutes, sigGaps };
   }
 
   // -------------------------------------------------------------------------
@@ -787,16 +795,22 @@
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
   // when gaps dominate the cost. Other moves still get sampled for diversity.
+  // Tuned weights after state-sync fix:
+  //   - State-sync bug fixed → bucketInsert no longer risks holes, bump 2 → 4
+  //   - bucketExtend works reliably → bump 2 → 3
+  //   - gapTargeted is the highest-leverage move → 3 → 4
+  //   - moves that don't close gaps (replace/swap/relocate) stay low so SA
+  //     doesn't waste budget on equivalent shuffles when gaps remain
   const MOVE_WEIGHTS = {
     replace:      1,
-    swap:         1,
-    inject:       2,    // holes are expensive
+    swap:         0.5,  // mostly sideways
+    inject:       2,    // holes are expensive (less common now)
     relocate:    0.5,   // small effect
-    crossSwap:    1,
-    bucketExtend: 2,
-    gapTargeted:  3,
-    bucketInsert: 2,    // grid mutation, expensive but high-leverage
-    bucketDelete: 1.5   // removes phantom holes
+    crossSwap:    0.5,  // useful but indirect for gap reduction
+    bucketExtend: 3,    // closes wall-clock gaps directly
+    gapTargeted:  4,    // top priority — explicitly targets gaps
+    bucketInsert: 4,    // closes structural bucket-grid gaps
+    bucketDelete: 1     // cleanup, rarely needed now
   };
 
   function pickMove(stats, rng) {
@@ -907,8 +921,9 @@
 
     log('SA starting. Initial cost=' + currentEval.cost +
         ' (holes=' + currentEval.breakdown.holes +
-        ', repeats=' + currentEval.breakdown.repeats +
+        ', sigGaps=' + currentEval.breakdown.sigGaps +
         ', gapMin=' + currentEval.breakdown.gapMin +
+        ', repeats=' + currentEval.breakdown.repeats +
         ', hardViol=' + currentEval.hardViolations.length + ')');
 
     while (Date.now() < deadline) {
