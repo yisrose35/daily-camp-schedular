@@ -714,11 +714,15 @@
         // =================================================================
         if (effectiveProps.accessRestrictions?.enabled) {
             const divisionRules = effectiveProps.accessRestrictions.divisions || {};
-            if (!(block.divName in divisionRules)) {
+            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+            //   the original grade type (3). Matches the auto solver's
+            //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
+            const _divNameStr = String(block.divName);
+            if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                 return false;
             }
-            const divRule = divisionRules[block.divName];
+            const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
             if (Array.isArray(divRule) && divRule.length > 0) {
                 const bunkStr = String(block.bunk);
                 const bunkNum = parseInt(block.bunk);
