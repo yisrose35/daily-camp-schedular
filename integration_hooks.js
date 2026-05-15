@@ -1517,6 +1517,30 @@
     // CLOUD HYDRATION ON STARTUP
     // =========================================================================
 
+    // Lightweight hash of cloud KV rows — used to detect whether cloud data
+    // actually changed since the last hydration. Avoids redundant dispatches
+    // when the Supabase realtime subscription echoes our own writes.
+    function _kvRowsHash(kvRows) {
+        if (!Array.isArray(kvRows) || kvRows.length === 0) return 'empty';
+        // Combine key + updated_at for each row — cheap and collision-resistant
+        // enough for duplicate detection (we don't need crypto strength).
+        return kvRows.map(r => r.key + ':' + (r.updated_at || '')).sort().join('|');
+    }
+
+    // Dispatch `campistry-cloud-hydrated` with throttle + dedup guards.
+    // First dispatch (initial hydration) always goes through.
+    // Subsequent dispatches are throttled to once per HYDRATION_THROTTLE_MS.
+    function _dispatchHydrated() {
+        const now = Date.now();
+        // First hydration must always fire (unblocks sync system).
+        if (_lastHydrationDispatchAt > 0 && now - _lastHydrationDispatchAt < HYDRATION_THROTTLE_MS) {
+            log('campistry-cloud-hydrated throttled (' + (now - _lastHydrationDispatchAt) + 'ms since last)');
+            return;
+        }
+        _lastHydrationDispatchAt = now;
+        window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+    }
+
     async function hydrateFromCloud() {
         const client = window.CampistryDB?.getClient?.();
         const campId = window.CampistryDB?.getCampId?.();
@@ -1550,7 +1574,7 @@
                 if (kvError.code === '42501') {
                     log('RLS denied camp_state_kv read (expected for viewer role) — using local settings');
                     _cloudHydrationDone = true;
-                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                    _dispatchHydrated();
                     return;
                 }
                 if (kvError.code !== 'PGRST116' && kvError.code !== '42P01') {
@@ -1566,6 +1590,17 @@
             // cloud keys whose individual timestamps are newer.
             let cloudPerKeyTime = null;
             if (Array.isArray(kvRows) && kvRows.length > 0) {
+                // Content hash check — skip redundant hydration if cloud
+                // data hasn't changed since our last read. This catches
+                // Supabase realtime echoes that slip past the self-write
+                // guard (e.g. round-trip >3s).
+                const hash = _kvRowsHash(kvRows);
+                if (_lastHydrationHash && hash === _lastHydrationHash && _cloudHydrationDone) {
+                    log('Cloud data unchanged (hash match) — skipping redundant hydration');
+                    return;
+                }
+                _lastHydrationHash = hash;
+
                 cloudState = {};
                 cloudPerKeyTime = {};
                 let maxUpdated = 0;
@@ -1603,7 +1638,7 @@
                         logError('Hydration failed (legacy table):', legacyError);
                     }
                     _cloudHydrationDone = true;
-                    window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                    _dispatchHydrated();
                     return;
                 }
 
@@ -1723,6 +1758,11 @@
                 
                 setLocalSettings(mergedState);
 
+                // Suppress realtime echo — setLocalSettings wrote to localStorage/IDB
+                // which may eventually trigger a cloud sync. Marking now prevents the
+                // realtime subscription from re-hydrating for our own write.
+                _lastSelfWriteAt = Date.now();
+
                 // Do NOT assign window.divisions directly from the flat top-level key —
                 // that bypasses the campStructure → grade-based transformation in app1.loadData().
                 // The campistry-cloud-hydrated event triggers app1 to rebuild from campStructure.
@@ -1732,14 +1772,14 @@
                 });
 
                 _cloudHydrationDone = true;
-                window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+                _dispatchHydrated();
             }
         } catch (e) {
             logError('Hydration exception:', e);
 
             // Let the campistry-cloud-hydrated event trigger app1 to rebuild from campStructure
             _cloudHydrationDone = true;
-            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+            _dispatchHydrated();
             return;
         }
 
@@ -1751,7 +1791,7 @@
         if (!_cloudHydrationDone) {
             log('Hydration complete with no cloud rows — dispatching anyway so sync system unblocks');
             _cloudHydrationDone = true;
-            window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated'));
+            _dispatchHydrated();
         }
     }
 
@@ -1765,6 +1805,9 @@
 
     let _campStateChannel = null;
     let _lastSelfWriteAt = 0;
+    let _lastHydrationDispatchAt = 0;       // throttle: min interval between dispatches
+    let _lastHydrationHash = null;          // content hash: skip if cloud unchanged
+    const HYDRATION_THROTTLE_MS = 10000;    // 10s — cloud doesn't change faster than this in practice
     let _campStateDebounceTimer = null;
     let _campStateSubscribed = false;
     let _campStateReconnectTimer = null;
