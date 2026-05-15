@@ -600,28 +600,114 @@
     return null;
   }
 
+  // --- gapTargeted: scan EVERY bunk for the largest current wall-clock gap,
+  //     then specifically attack it with the most promising strategy. This
+  //     is the workhorse move when gaps are the dominant cost — it doesn't
+  //     waste budget on random changes elsewhere.
+  function moveGapTargeted(schedule, ctx, rng) {
+    let worstGap = null;
+    for (const [bunk, slots] of Object.entries(schedule)) {
+      if (!Array.isArray(slots)) continue;
+      const real = [];
+      slots.forEach((s, i) => { if (s && !s.continuation && s._startMin != null) real.push({ s, i }); });
+      real.sort((a, b) => a.s._startMin - b.s._startMin);
+      for (let k = 0; k < real.length - 1; k++) {
+        const gap = real[k + 1].s._startMin - real[k].s._endMin;
+        if (gap > 5 && (!worstGap || gap > worstGap.gap)) {
+          worstGap = {
+            bunk, gap,
+            prevIdx: real[k].i, prevSlot: real[k].s,
+            nextIdx: real[k + 1].i, nextSlot: real[k + 1].s,
+            gapStart: real[k].s._endMin, gapEnd: real[k + 1].s._startMin
+          };
+        }
+      }
+    }
+    if (!worstGap) return null;
+    // Pick a strategy at random (or in order — random gives diversity)
+    const strategies = ['extend-prev', 'extend-next-back', 'replace-prev-with-longer'];
+    const strat = strategies[Math.floor(rng() * strategies.length)];
+    const next = _cloneSchedule(schedule);
+    next[worstGap.bunk] = next[worstGap.bunk].slice();
+
+    if (strat === 'extend-prev' && _isMovable(worstGap.prevSlot)) {
+      // Stretch the previous activity's _endMin to fill the gap
+      next[worstGap.bunk][worstGap.prevIdx] = Object.assign({}, worstGap.prevSlot, {
+        _endMin: worstGap.gapEnd, _source: 'v2-gapTargeted-extPrev'
+      });
+      return next;
+    }
+    if (strat === 'extend-next-back' && _isMovable(worstGap.nextSlot)) {
+      // Stretch the next activity's _startMin earlier to fill the gap
+      next[worstGap.bunk][worstGap.nextIdx] = Object.assign({}, worstGap.nextSlot, {
+        _startMin: worstGap.gapStart, _source: 'v2-gapTargeted-extNext'
+      });
+      return next;
+    }
+    if (strat === 'replace-prev-with-longer' && _isMovable(worstGap.prevSlot)) {
+      // Replace the previous activity with a different one whose natural
+      // duration is closer to (prev.start → gap.end). For now, just pick
+      // a random alternative — the cost evaluator filters bad picks.
+      const grade = _bunkGrade(worstGap.bunk, ctx.divisions);
+      const pool = _candidateActivities(grade, ctx);
+      const newAct = pool[Math.floor(rng() * pool.length)];
+      const newField = _findFieldForActivity(newAct, ctx);
+      if (!newField) return null;
+      next[worstGap.bunk][worstGap.prevIdx] = {
+        field: newField.name, sport: newAct, _activity: newAct,
+        _autoMode: true, _autoSolved: true,
+        _startMin: worstGap.prevSlot._startMin, _endMin: worstGap.gapEnd,
+        _source: 'v2-gapTargeted-replace', continuation: false
+      };
+      return next;
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
     inject:       moveInject,
     relocate:     moveRelocate,
     crossSwap:    moveCrossSwap,
-    bucketExtend: moveBucketExtend
+    bucketExtend: moveBucketExtend,
+    gapTargeted:  moveGapTargeted
+  };
+
+  // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
+  // when gaps dominate the cost. Other moves still get sampled for diversity.
+  const MOVE_WEIGHTS = {
+    replace:      1,
+    swap:         1,
+    inject:       2,    // holes are expensive
+    relocate:    0.5,   // small effect
+    crossSwap:    1,
+    bucketExtend: 2,
+    gapTargeted:  3
   };
 
   function pickMove(stats, rng) {
     const names = Object.keys(MOVES);
-    // Until we have enough samples, sample uniformly. Once each move has been
-    // proposed ≥20 times, weight by acceptance rate (with epsilon-greedy
-    // exploration to avoid starving moves that look bad early).
     const totalProposes = names.reduce((s, m) => s + (stats.moves[m]?.propose || 0), 0);
+    // Phase 1 (warmup): sample by static MOVE_WEIGHTS so moves we believe in
+    // a-priori (gapTargeted, inject) get more attempts during early SA.
+    // Phase 2 (after each move tried ≥20 times): blend MOVE_WEIGHTS with
+    // observed acceptance rate, plus 15% epsilon-greedy exploration.
     if (totalProposes < names.length * 20 || rng() < 0.15) {
-      return names[Math.floor(rng() * names.length)];
+      // Static weighted pick
+      const weights = names.map(m => MOVE_WEIGHTS[m] ?? 1);
+      const sum = weights.reduce((a, b) => a + b, 0);
+      let r = rng() * sum;
+      for (let i = 0; i < names.length; i++) {
+        r -= weights[i];
+        if (r <= 0) return names[i];
+      }
+      return names[names.length - 1];
     }
-    // Weighted pick: rate = (accept + 1) / (propose + 1) — Laplace smoothing
+    // Adaptive: rate = (accept + 1) / (propose + 1) * static_weight
     const rates = names.map(m => {
       const ms = stats.moves[m] || { propose: 0, accept: 0 };
-      return (ms.accept + 1) / (ms.propose + 1);
+      return ((ms.accept + 1) / (ms.propose + 1)) * (MOVE_WEIGHTS[m] ?? 1);
     });
     const sum = rates.reduce((a, b) => a + b, 0);
     let r = rng() * sum;
