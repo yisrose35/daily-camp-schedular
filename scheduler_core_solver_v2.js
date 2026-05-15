@@ -47,7 +47,8 @@
         sameDayRepeat:    parseFloat(a1.solverV2CostSameDayRepeat)    || 30,
         rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
         wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
-        sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25   // extra penalty per gap ≥15min
+        sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25,  // per gap ≥15min
+        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 200  // per swim missing Change
       }
     };
   }
@@ -105,7 +106,14 @@
     cost += gapInfo.gapMin * cfg.cost.wallClockGapMin;
     cost += gapInfo.sigGaps * cfg.cost.sigGapBonus;
 
-    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps } };
+    // Term 6: Swim-without-Change soft penalty. v2 has no move to ADD a
+    //         Change block, but cross-bunk swaps can sometimes shuffle the
+    //         swim to a bunk that DOES have an adjacent Change. Medium
+    //         weight so SA tries but isn't paralyzed when seed has them.
+    const swimNoChange = countSwimWithoutChange(schedule);
+    cost += swimNoChange * cfg.cost.swimNoChange;
+
+    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange } };
   }
 
   // -------------------------------------------------------------------------
@@ -282,7 +290,42 @@
       });
     });
 
+    // === 7. Period boundary — non-anchor activities must stay within one period ===
+    flat.forEach(c => {
+      const lc = String(c.activity || '').toLowerCase();
+      if (['lunch','swim','change','snack','snacks','dismissal'].includes(lc)) return;
+      const periods = window.campPeriods?.[c.grade];
+      if (!Array.isArray(periods) || periods.length === 0) return;
+      const inside = periods.some(p => c.start >= p.startMin && c.end <= p.endMin);
+      if (!inside) {
+        out.push({ bunk: c.bunk, idx: c.idx, reason: 'period:' + c.activity + ' ' + c.start + '-' + c.end + ' crosses boundary' });
+      }
+    });
+
     return out;
+  }
+
+  // Soft-violations: things that aren't show-stoppers but should be penalized.
+  // Returns a count, used as a separate cost-function term so SA tries to
+  // minimize without being paralyzed by un-fixable seed-state issues.
+  function countSwimWithoutChange(schedule) {
+    let n = 0;
+    for (const [bunk, slots] of Object.entries(schedule)) {
+      if (!Array.isArray(slots)) continue;
+      const real = slots
+        .filter(s => s && !s.continuation && s._activity)
+        .sort((a, b) => (a._startMin ?? 0) - (b._startMin ?? 0));
+      for (let i = 0; i < real.length; i++) {
+        const s = real[i];
+        if ((s._activity || '').toLowerCase() !== 'swim') continue;
+        const before = real[i - 1];
+        const after = real[i + 1];
+        const bIsChange = before && /change/i.test(before._activity || '') && before._endMin === s._startMin;
+        const aIsChange = after && /change/i.test(after._activity || '') && after._startMin === s._endMin;
+        if (!bIsChange && !aIsChange) n++;
+      }
+    }
+    return n;
   }
 
   function countHoles(schedule, ctx) {
@@ -373,6 +416,14 @@
       if ((info.bunks || []).includes(bunk)) return d;
     }
     return null;
+  }
+
+  // Does [startMin, endMin] fit ENTIRELY within at least one period of `grade`?
+  // Used to reject extend/cross-swap moves that would cross period boundaries.
+  function _staysInPeriod(grade, startMin, endMin) {
+    const periods = window.campPeriods?.[grade];
+    if (!Array.isArray(periods) || periods.length === 0) return true;
+    return periods.some(p => p.startMin <= startMin && p.endMin >= endMin);
   }
 
   function _candidateActivities(grade, ctx) {
@@ -592,6 +643,9 @@
       const bucketA = ctx.perBunkSlots[grade]?.[ba]?.[idx];
       const bucketB = ctx.perBunkSlots[grade]?.[bb]?.[idx];
       if (!bucketA || !bucketB) continue;
+      // Period-boundary check: both buckets must lie within a single period
+      if (!_staysInPeriod(grade, bucketA.startMin, bucketA.endMin)) continue;
+      if (!_staysInPeriod(grade, bucketB.startMin, bucketB.endMin)) continue;
       const next = _cloneSchedule(schedule);
       next[ba] = next[ba].slice(); next[bb] = next[bb].slice();
       const sA = next[ba][idx], sB = next[bb][idx];
@@ -617,16 +671,20 @@
       const real = [];
       slots.forEach((s, i) => { if (s && !s.continuation && s._startMin != null) real.push({ s, i }); });
       real.sort((a, b) => a.s._startMin - b.s._startMin);
+      const grade = _bunkGrade(bunk, ctx.divisions);
       const candidates = [];
       for (let k = 0; k < real.length - 1; k++) {
         const gap = real[k + 1].s._startMin - real[k].s._endMin;
         if (gap < 10) continue;
-        // Either side movable is enough — anchors on the other side stay put
-        if (_isMovable(real[k].s)) {
-          candidates.push({ idx: real[k].i, newEnd: real[k + 1].s._startMin, kind: 'fwd' });
+        const prev = real[k].s, nxt = real[k + 1].s;
+        // Extend prev forward to gap end — but ONLY if the new extent stays
+        // entirely within one period.
+        if (_isMovable(prev) && _staysInPeriod(grade, prev._startMin, nxt._startMin)) {
+          candidates.push({ idx: real[k].i, newEnd: nxt._startMin, kind: 'fwd' });
         }
-        if (_isMovable(real[k + 1].s)) {
-          candidates.push({ idx: real[k + 1].i, newStart: real[k].s._endMin, kind: 'back' });
+        // Extend nxt backward — same period check
+        if (_isMovable(nxt) && _staysInPeriod(grade, prev._endMin, nxt._endMin)) {
+          candidates.push({ idx: real[k + 1].i, newStart: prev._endMin, kind: 'back' });
         }
       }
       if (candidates.length === 0) continue;
@@ -674,25 +732,24 @@
     const next = _cloneSchedule(schedule);
     next[worstGap.bunk] = next[worstGap.bunk].slice();
 
-    if (strat === 'extend-prev' && _isMovable(worstGap.prevSlot)) {
-      // Stretch the previous activity's _endMin to fill the gap
+    const grade = _bunkGrade(worstGap.bunk, ctx.divisions);
+
+    if (strat === 'extend-prev' && _isMovable(worstGap.prevSlot)
+        && _staysInPeriod(grade, worstGap.prevSlot._startMin, worstGap.gapEnd)) {
       next[worstGap.bunk][worstGap.prevIdx] = Object.assign({}, worstGap.prevSlot, {
         _endMin: worstGap.gapEnd, _source: 'v2-gapTargeted-extPrev'
       });
       return next;
     }
-    if (strat === 'extend-next-back' && _isMovable(worstGap.nextSlot)) {
-      // Stretch the next activity's _startMin earlier to fill the gap
+    if (strat === 'extend-next-back' && _isMovable(worstGap.nextSlot)
+        && _staysInPeriod(grade, worstGap.gapStart, worstGap.nextSlot._endMin)) {
       next[worstGap.bunk][worstGap.nextIdx] = Object.assign({}, worstGap.nextSlot, {
         _startMin: worstGap.gapStart, _source: 'v2-gapTargeted-extNext'
       });
       return next;
     }
-    if (strat === 'replace-prev-with-longer' && _isMovable(worstGap.prevSlot)) {
-      // Replace the previous activity with a different one whose natural
-      // duration is closer to (prev.start → gap.end). For now, just pick
-      // a random alternative — the cost evaluator filters bad picks.
-      const grade = _bunkGrade(worstGap.bunk, ctx.divisions);
+    if (strat === 'replace-prev-with-longer' && _isMovable(worstGap.prevSlot)
+        && _staysInPeriod(grade, worstGap.prevSlot._startMin, worstGap.gapEnd)) {
       const pool = _candidateActivities(grade, ctx);
       const newAct = pool[Math.floor(rng() * pool.length)];
       const newField = _findFieldForActivity(newAct, ctx);
@@ -722,11 +779,15 @@
       if (!grade) continue;
       const pbs = ctx.perBunkSlots[grade]?.[bunk];
       if (!Array.isArray(pbs) || pbs.length < 2) continue;
-      // Find gap ≥ 15 min (large enough to merit a real activity)
+      // Find gap ≥ 15 min that ALSO lies within a single period (don't
+      // insert across period boundaries — that's a known camp rule).
       const gaps = [];
       for (let i = 0; i < pbs.length - 1; i++) {
         const gap = pbs[i + 1].startMin - pbs[i].endMin;
-        if (gap >= 15) gaps.push({ afterIdx: i, start: pbs[i].endMin, end: pbs[i + 1].startMin });
+        if (gap < 15) continue;
+        const gStart = pbs[i].endMin, gEnd = pbs[i + 1].startMin;
+        if (!_staysInPeriod(grade, gStart, gEnd)) continue;
+        gaps.push({ afterIdx: i, start: gStart, end: gEnd });
       }
       if (gaps.length === 0) continue;
       const g = gaps[Math.floor(rng() * gaps.length)];
@@ -940,6 +1001,7 @@
         ', sigGaps=' + currentEval.breakdown.sigGaps +
         ', gapMin=' + currentEval.breakdown.gapMin +
         ', repeats=' + currentEval.breakdown.repeats +
+        ', swimNoChange=' + currentEval.breakdown.swimNoChange +
         ', hardViol=' + currentEval.hardViolations.length + ')');
 
     while (Date.now() < deadline) {
