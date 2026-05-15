@@ -747,7 +747,12 @@ function showTab(id) {
         }
     }
     if (id === "daily-adjustments") window.initDailyAdjustments?.();
-    if (id === "schedule") window.updateTable?.();
+    if (id === "schedule") {
+        // Only re-render if data changed since last render (flag set by
+        // renderTransposedView when it skips invisible renders).
+        if (window._scheduleNeedsRender !== false) window.updateTable?.();
+        window._scheduleNeedsRender = false;
+    }
     if (id === "camper-locator") window.initCamperLocator?.();
     if (id === "report") window.initReportTab?.();
     if (id === "print") window.initPrintCenter?.();

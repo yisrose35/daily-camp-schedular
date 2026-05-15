@@ -2599,6 +2599,18 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
 
     function renderTransposedView(container) {
         if (!container) { container = document.getElementById('scheduleTable'); if (!container) return; }
+
+        // ★★★ PERF FIX: Skip render when the schedule tab is hidden.
+        // Multiple callers invoke renderStaggeredView/updateTable during init
+        // while the tab has display:none — rendering 7+ divisions of DOM
+        // that will never be seen. Instead, mark dirty and render once when
+        // the tab becomes visible.
+        var _schedTabEl = container.closest('.tab-content') || document.getElementById('schedule');
+        if (_schedTabEl && window.getComputedStyle(_schedTabEl).display === 'none') {
+            window._scheduleNeedsRender = true;
+            return;
+        }
+
         var dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
         if (!window._postEditInProgress) loadScheduleForDate(dateKey);
 
@@ -2653,6 +2665,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
                 if (el) autoWrapper.appendChild(el);
             });
             container.appendChild(autoWrapper);
+            window._scheduleNeedsRender = false;
             window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
             return;
         }
@@ -2839,6 +2852,7 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (window.MultiSchedulerAutonomous && window.MultiSchedulerAutonomous.applyBlockingToGrid) {
             setTimeout(function () { window.MultiSchedulerAutonomous.applyBlockingToGrid(); }, 50);
         }
+        window._scheduleNeedsRender = false;
         window.dispatchEvent(new CustomEvent('campistry-schedule-rendered', { detail: { dateKey: dateKey } }));
     }
 
