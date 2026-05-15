@@ -474,8 +474,22 @@
             // before the solver can touch them. Used in Step 5 merge.
             _preservedScheduleData = structuredClone(window.scheduleAssignments || {});
             _preservedLeagueData = structuredClone(window.leagueAssignments || {});
+
+            // ★ v4.3: Also snapshot _perBunkSlots for non-scoped grades so the
+            // grid renderer can display them after partial gen completes.
+            window._preservedPerBunkSlots = {};
+            Object.keys(window.divisionTimes || {}).forEach(grade => {
+                if (!myBunks.size || !_step0AllowedDivs.includes(grade)) {
+                    const dt = window.divisionTimes[grade];
+                    if (dt?._perBunkSlots) {
+                        window._preservedPerBunkSlots[grade] = structuredClone(dt._perBunkSlots);
+                    }
+                }
+            });
+
             log('[STEP 0] Snapshot preserved: ' + Object.keys(_preservedScheduleData).length +
-                ' bunks, ' + Object.keys(_preservedLeagueData).length + ' league entries');
+                ' bunks, ' + Object.keys(_preservedLeagueData).length + ' league entries, ' +
+                Object.keys(window._preservedPerBunkSlots).length + ' grade slot configs');
         } else {
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
@@ -15964,6 +15978,18 @@
                         window.leagueAssignments[bunk] = data;
                     }
                 }
+            }
+            // Also restore _perBunkSlots for non-scoped grades so the grid renders them
+            if (window._preservedPerBunkSlots) {
+                let restoredGrades = 0;
+                for (const [grade, pbs] of Object.entries(window._preservedPerBunkSlots)) {
+                    if (window.divisionTimes?.[grade]) {
+                        window.divisionTimes[grade]._perBunkSlots = pbs;
+                        restoredGrades++;
+                    }
+                }
+                log('[STEP 5] Restored _perBunkSlots for ' + restoredGrades + ' non-scoped grades');
+                delete window._preservedPerBunkSlots;
             }
             log('[STEP 5] Restored ' + restored + ' non-scoped bunks from pre-solver snapshot');
         }
