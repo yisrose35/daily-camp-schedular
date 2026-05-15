@@ -812,10 +812,12 @@
       }
       if (gaps.length === 0) continue;
       const g = gaps[Math.floor(rng() * gaps.length)];
-      // Try up to 8 candidate activities for this gap
+      // Try up to 3 candidate activities for this gap. Limit kept low so
+      // each move attempt stays fast — SA iteration count matters more
+      // than per-attempt quality once the SA loop is running.
       const pool = _candidateActivities(grade, ctx);
       if (pool.length === 0) continue;
-      const shuffled = pool.slice().sort(() => rng() - 0.5).slice(0, 8);
+      const shuffled = pool.slice().sort(() => rng() - 0.5).slice(0, 3);
       for (const newAct of shuffled) {
         const newField = _findFieldForActivity(newAct, ctx);
         if (!newField) continue;
@@ -1117,9 +1119,19 @@
     // Multi-start is a standard trick for SA — different random walks find
     // different local minima, and the BEST of N is much better than any
     // single run. Each pass uses HALF the total budget.
+    //
+    // CRITICAL: snapshot ctx.perBunkSlots BEFORE pass1 so we can restore it
+    // for pass2's start state. Without this, bucketInsert mutations from
+    // pass1 carry into pass2's seed → phantom holes (slot[idx] = null where
+    // bucket exists).
     const halfBudget = Math.floor(cfg.timeBudgetMs / 2);
+    const preMultiStartPbs = _clonePerBunkSlots(ctx.perBunkSlots);
     cfg.timeBudgetMs = halfBudget;
     const pass1 = runSA(seed, ctx);
+    // Restore grid before pass 2 so both passes start from identical state
+    for (const [grade, byBunk] of Object.entries(preMultiStartPbs)) {
+      ctx.perBunkSlots[grade] = byBunk;
+    }
     cfg.seed = (cfg.seed + 0x9E3779B9) | 0; // golden-ratio offset for second seed
     const pass2 = runSA(seed, ctx);
     cfg.timeBudgetMs = halfBudget * 2; // restore for logging
