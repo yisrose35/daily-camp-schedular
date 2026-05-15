@@ -407,6 +407,39 @@
     return out;
   }
 
+  // --- Bucket-grid patching --------------------------------------------------
+  // Moves that change the BUCKET GRID (insert/delete/extend a bucket in
+  // _perBunkSlots) must NOT mutate ctx.perBunkSlots directly — if SA rejects
+  // the candidate schedule the grid would still have the unwanted change.
+  //
+  // Pattern: move returns either:
+  //    A plain schedule object (no grid change), OR
+  //    { schedule, bucketPatch: { grade, bunk, kind: 'insert'|'extend'|'delete',
+  //                                idx, newBucket?, newBounds? } }
+  //
+  // SA loop:
+  //    - if candidate has bucketPatch AND we accept → applyBucketPatch(ctx, patch)
+  //    - if reject → do nothing (no mutation happened)
+  function applyBucketPatch(ctx, patch) {
+    if (!patch) return;
+    const arr = ctx.perBunkSlots?.[patch.grade]?.[patch.bunk];
+    if (!Array.isArray(arr)) return;
+    if (patch.kind === 'insert') {
+      arr.splice(patch.idx, 0, patch.newBucket);
+    } else if (patch.kind === 'delete') {
+      arr.splice(patch.idx, 1);
+    } else if (patch.kind === 'extend') {
+      arr[patch.idx] = Object.assign({}, arr[patch.idx], patch.newBounds);
+    }
+  }
+  function unwrapCandidate(maybe) {
+    // Normalize: return { schedule, bucketPatch }
+    if (!maybe) return null;
+    if (Array.isArray(maybe) || typeof maybe !== 'object') return null;
+    if (maybe.schedule) return maybe; // already wrapped
+    return { schedule: maybe, bucketPatch: null };
+  }
+
   // --- replace: pick a movable slot, swap its activity for a different one ---
   function moveReplace(schedule, ctx, rng) {
     const bunks = Object.keys(schedule);
@@ -664,6 +697,82 @@
     return null;
   }
 
+  // --- bucketInsert (atomic): splice a NEW bucket into a wall-clock gap in
+  //     the bucket grid. Returns a wrapped candidate { schedule, bucketPatch }
+  //     so the SA loop only commits the grid mutation on accept.
+  function moveBucketInsert(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(pbs) || pbs.length < 2) continue;
+      // Find gap ≥ 15 min (large enough to merit a real activity)
+      const gaps = [];
+      for (let i = 0; i < pbs.length - 1; i++) {
+        const gap = pbs[i + 1].startMin - pbs[i].endMin;
+        if (gap >= 15) gaps.push({ afterIdx: i, start: pbs[i].endMin, end: pbs[i + 1].startMin });
+      }
+      if (gaps.length === 0) continue;
+      const g = gaps[Math.floor(rng() * gaps.length)];
+      const pool = _candidateActivities(grade, ctx);
+      if (pool.length === 0) continue;
+      const newAct = pool[Math.floor(rng() * pool.length)];
+      const newField = _findFieldForActivity(newAct, ctx);
+      if (!newField) continue;
+      // Build the candidate schedule with new slot inserted at afterIdx+1
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk].splice(g.afterIdx + 1, 0, {
+        field: newField.name, sport: newAct, _activity: newAct,
+        _autoMode: true, _autoSolved: true,
+        _startMin: g.start, _endMin: g.end,
+        _source: 'v2-bucketInsert', continuation: false
+      });
+      // Return wrapped candidate with the grid patch — SA applies it on accept
+      return {
+        schedule: next,
+        bucketPatch: {
+          kind: 'insert', grade, bunk,
+          idx: g.afterIdx + 1,
+          newBucket: { startMin: g.start, endMin: g.end }
+        }
+      };
+    }
+    return null;
+  }
+
+  // --- bucketDelete (atomic): remove a null/Free bucket entirely so the
+  //     bunk's day no longer has a "+Add" slot — useful when the grid was
+  //     bloated with buckets the seed couldn't fill.
+  function moveBucketDelete(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      const slots = schedule[bunk];
+      if (!Array.isArray(pbs) || !Array.isArray(slots) || pbs.length < 2) continue;
+      // Find a null or Free slot whose bucket can be safely removed
+      const candidates = [];
+      slots.forEach((s, i) => {
+        if (!s || s.field === 'Free' || s._activity === 'Free') candidates.push(i);
+      });
+      if (candidates.length === 0) continue;
+      const idx = candidates[Math.floor(rng() * candidates.length)];
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk].splice(idx, 1);
+      return {
+        schedule: next,
+        bucketPatch: { kind: 'delete', grade, bunk, idx }
+      };
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
@@ -671,7 +780,9 @@
     relocate:     moveRelocate,
     crossSwap:    moveCrossSwap,
     bucketExtend: moveBucketExtend,
-    gapTargeted:  moveGapTargeted
+    gapTargeted:  moveGapTargeted,
+    bucketInsert: moveBucketInsert,
+    bucketDelete: moveBucketDelete
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -683,7 +794,9 @@
     relocate:    0.5,   // small effect
     crossSwap:    1,
     bucketExtend: 2,
-    gapTargeted:  3
+    gapTargeted:  3,
+    bucketInsert: 2,    // grid mutation, expensive but high-leverage
+    bucketDelete: 1.5   // removes phantom holes
   };
 
   function pickMove(stats, rng) {
@@ -785,10 +898,11 @@
 
       const moveName = pickMove(stats, rng);
       stats.moves[moveName].propose++;
-      const candidate = MOVES[moveName](current, ctx, rng);
-      if (!candidate) continue; // move couldn't find a valid local change
+      const raw = MOVES[moveName](current, ctx, rng);
+      const candidate = unwrapCandidate(raw);
+      if (!candidate || !candidate.schedule) continue; // move couldn't find a valid local change
 
-      const candidateEval = evaluate(candidate, ctx);
+      const candidateEval = evaluate(candidate.schedule, ctx);
       const dC = candidateEval.cost - currentEval.cost;
 
       let accept = false;
@@ -796,12 +910,16 @@
       else if (Math.exp(-dC / T) > rng()) accept = true;
 
       if (accept) {
-        current = candidate;
+        // Apply the bucket-grid patch (if any) atomically with the schedule swap
+        if (candidate.bucketPatch) {
+          applyBucketPatch(ctx, candidate.bucketPatch);
+        }
+        current = candidate.schedule;
         currentEval = candidateEval;
         stats.accepts++;
         stats.moves[moveName].accept++;
         if (candidateEval.cost < bestEval.cost) {
-          best = candidate;
+          best = candidate.schedule;
           bestEval = candidateEval;
           stats.improvements++;
           stats.stallCount = 0;
