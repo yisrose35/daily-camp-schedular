@@ -35,7 +35,7 @@
     const g = window.loadGlobalSettings?.() || {};
     const a1 = g.app1 || {};
     return {
-      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 10000,
+      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 15000,
       tempStart:    parseFloat(a1.solverV2TempStart)   || 100,
       tempEnd:      parseFloat(a1.solverV2TempEnd)     || 0.1,
       kickAfter:    parseInt(a1.solverV2KickAfter)     || 500,    // stall threshold for re-randomize
@@ -1029,8 +1029,25 @@
     // but pre-computed once to avoid repeated work inside the hot loop).
     const ctx = buildContext(cfg, options);
 
-    // Run SA
-    const { best, bestEval, stats, bestPbsSnapshot } = runSA(seed, ctx);
+    // Run SA twice with different RNG seeds, keep the better result.
+    // Multi-start is a standard trick for SA — different random walks find
+    // different local minima, and the BEST of N is much better than any
+    // single run. Each pass uses HALF the total budget.
+    const halfBudget = Math.floor(cfg.timeBudgetMs / 2);
+    cfg.timeBudgetMs = halfBudget;
+    const pass1 = runSA(seed, ctx);
+    cfg.seed = (cfg.seed + 0x9E3779B9) | 0; // golden-ratio offset for second seed
+    const pass2 = runSA(seed, ctx);
+    cfg.timeBudgetMs = halfBudget * 2; // restore for logging
+
+    let best, bestEval, stats, bestPbsSnapshot;
+    if (pass1.bestEval.cost <= pass2.bestEval.cost) {
+      ({ best, bestEval, stats, bestPbsSnapshot } = pass1);
+      log('Multi-start: pass1 won (' + pass1.bestEval.cost + ' < ' + pass2.bestEval.cost + ')');
+    } else {
+      ({ best, bestEval, stats, bestPbsSnapshot } = pass2);
+      log('Multi-start: pass2 won (' + pass2.bestEval.cost + ' < ' + pass1.bestEval.cost + ')');
+    }
 
     // Commit the best schedule back to window.scheduleAssignments,
     // AND restore the bucket grid to its state at the moment `best` was
