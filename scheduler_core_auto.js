@@ -14197,9 +14197,17 @@
                             (d.bunks || []).map(String).includes(String(otherBunk))
                         )?.[0];
                         const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                        // ★ Day 15: include continuation slots in the overlap index.
+                        //   Multi-period blocks store the full span only on the head
+                        //   when _startMin/_endMin are set there; if the head's bucket
+                        //   time doesn't cover our target window, the continuation's
+                        //   bucket time (e.g. 745-775) might, and skipping it makes a
+                        //   busy field look free to the alternative finder. Dedupe by
+                        //   bunk so a multi-bucket activity counts once.
+                        const _bunkSeen = new Set();
                         for (let oi = 0; oi < otherSlots.length; oi++) {
                             const oe = otherSlots[oi];
-                            if (!oe || oe.continuation) continue;
+                            if (!oe) continue;
                             const oField = typeof oe.field === 'object' ? oe.field?.name : oe.field;
                             if (!oField || oField === 'Free') continue;
                             const oslot = otherPbs[oi];
@@ -14207,6 +14215,9 @@
                             const oEnd   = oe._endMin   ?? oslot?.endMin;
                             if (oStart == null || oEnd == null) continue;
                             if (oEnd <= startMin || oStart >= endMin) continue;
+                            const _dedupeKey = oField + '|' + otherBunk;
+                            if (_bunkSeen.has(_dedupeKey)) continue;
+                            _bunkSeen.add(_dedupeKey);
                             if (!idx.has(oField)) idx.set(oField, []);
                             idx.get(oField).push({ grade: otherGrade, oStart, oEnd });
                         }
