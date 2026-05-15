@@ -153,7 +153,12 @@
   };
 
   window.setGlobalDivisions = function(divs, immediate = false) {
-    _divisionCache = structuredClone(divs || {});
+    const next = structuredClone(divs || {});
+    // Skip save when data is identical — avoids cloud-sync churn
+    if (_divisionCache !== null && JSON.stringify(_divisionCache) === JSON.stringify(next)) {
+      return;
+    }
+    _divisionCache = next;
     saveRegistry(immediate);
   };
 
@@ -164,8 +169,13 @@
       console.warn("⚠️ Prevented bunk wipe - using runtime bunks instead");
       bunks = runtimeBunks;
     }
-    
-    _bunkCache = structuredClone(bunks || []);
+
+    const next = structuredClone(bunks || []);
+    // Skip save when data is identical — avoids cloud-sync churn
+    if (_bunkCache !== null && JSON.stringify(_bunkCache) === JSON.stringify(next)) {
+      return;
+    }
+    _bunkCache = next;
     saveRegistry(immediate);
   };
 

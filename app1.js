@@ -884,7 +884,8 @@
         updateWindowApp1();
     }
     
-    function loadData() {
+    function loadData(opts) {
+        var _opts = opts || {};
         const globalData = window.loadGlobalSettings?.() || {};
         const data = globalData.app1 || {};
         const campStructure = globalData.campStructure || {};
@@ -1118,7 +1119,14 @@
             }
             
             updateWindowApp1();
-            syncSpine();
+
+            // Only sync back to global store on initial / user-driven loads.
+            // When refreshing from storage/cloud, the data just came FROM
+            // the store — writing it back creates a cloud-sync feedback loop
+            // (saveGlobalSettings → cloud sync → hydrated event → refresh → repeat).
+            if (!_opts.skipSync) {
+                syncSpine();
+            }
 
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
 
@@ -1220,7 +1228,10 @@
     let _app1RefreshTimer = null;
     function refreshApp1FromStorage(reason) {
         try {
-            loadData();
+            // When refreshing FROM storage/cloud, skip syncSpine() —
+            // data was just read from the shared store so writing it
+            // back triggers a cloud-sync → hydrated → refresh loop.
+            loadData({ skipSync: true });
             setupDivisionButtons();
             renderDivisionDetailPane();
             console.log('[app1] refreshed (' + (reason || 'unknown') + ')');
