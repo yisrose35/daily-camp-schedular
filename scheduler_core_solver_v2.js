@@ -48,7 +48,8 @@
         rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
         wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
         sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25,  // per gap ≥15min
-        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 200  // per swim missing Change
+        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 200, // per swim missing Change
+        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 500  // per activity crossing period boundary
       }
     };
   }
@@ -113,7 +114,13 @@
     const swimNoChange = countSwimWithoutChange(schedule);
     cost += swimNoChange * cfg.cost.swimNoChange;
 
-    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange } };
+    // Term 7: Period boundary violations — non-anchor activities crossing
+    //         a period boundary. Soft cost (default 500/each) so SA prefers
+    //         not to have them, but won't get paralyzed if v1 seed had them.
+    const periodViol = countPeriodViolations(schedule, ctx);
+    cost += periodViol * cfg.cost.periodViolation;
+
+    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange, periodViol } };
   }
 
   // -------------------------------------------------------------------------
@@ -290,19 +297,32 @@
       });
     });
 
-    // === 7. Period boundary — non-anchor activities must stay within one period ===
-    flat.forEach(c => {
-      const lc = String(c.activity || '').toLowerCase();
-      if (['lunch','swim','change','snack','snacks','dismissal'].includes(lc)) return;
-      const periods = window.campPeriods?.[c.grade];
-      if (!Array.isArray(periods) || periods.length === 0) return;
-      const inside = periods.some(p => c.start >= p.startMin && c.end <= p.endMin);
-      if (!inside) {
-        out.push({ bunk: c.bunk, idx: c.idx, reason: 'period:' + c.activity + ' ' + c.start + '-' + c.end + ' crosses boundary' });
-      }
-    });
-
     return out;
+  }
+
+  // Period violations: non-anchor activities crossing period boundaries.
+  // KEPT AS SOFT COST — v1 seed often has these (Lineup, etc.), and treating
+  // them as hard violations paralyzes SA. v2 moves already respect periods
+  // via _staysInPeriod so SA won't CREATE new ones. Seed-state violations
+  // get a high but finite cost so SA prefers schedules without them.
+  function countPeriodViolations(schedule, ctx) {
+    let n = 0;
+    for (const [bunk, slots] of Object.entries(schedule)) {
+      if (!Array.isArray(slots)) continue;
+      let grade = null;
+      for (const [d, info] of Object.entries(ctx.divisions)) if ((info.bunks||[]).includes(bunk)) { grade = d; break; }
+      const periods = window.campPeriods?.[grade];
+      if (!Array.isArray(periods) || periods.length === 0) continue;
+      slots.forEach(s => {
+        if (!s || s.continuation || !s._activity) return;
+        const lc = String(s._activity).toLowerCase();
+        if (['lunch','swim','change','snack','snacks','dismissal','lineup','dismissal'].includes(lc)) return;
+        if (s._startMin == null || s._endMin == null) return;
+        const inside = periods.some(p => s._startMin >= p.startMin && s._endMin <= p.endMin);
+        if (!inside) n++;
+      });
+    }
+    return n;
   }
 
   // Soft-violations: things that aren't show-stoppers but should be penalized.
@@ -1002,6 +1022,7 @@
         ', gapMin=' + currentEval.breakdown.gapMin +
         ', repeats=' + currentEval.breakdown.repeats +
         ', swimNoChange=' + currentEval.breakdown.swimNoChange +
+        ', periodViol=' + currentEval.breakdown.periodViol +
         ', hardViol=' + currentEval.hardViolations.length + ')');
 
     while (Date.now() < deadline) {
