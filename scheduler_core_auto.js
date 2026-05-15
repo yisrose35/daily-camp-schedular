@@ -15348,7 +15348,7 @@
                             ' | sa._fixed=' + !!sa._fixed + ' _pinned=' + !!sa._pinned + ' _league=' + !!sa._league + ' _autoSpecial=' + !!sa._autoSpecial);
                         postSolveSA[u.bunk][u.idx] = {
                             field: 'Free', sport: null, _activity: 'Free',
-                            _autoMode: true, _constraintDemoted: true, continuation: false
+                            _autoMode: true, _fixed: true, _constraintDemoted: true, continuation: false
                         };
                         fixes++;
                     }
@@ -15367,7 +15367,7 @@
                     if (seenActs.has(act)) {
                         postSolveSA[bunk][idx] = {
                             field: 'Free', sport: null, _activity: 'Free',
-                            _autoMode: true, _constraintDemoted: true,
+                            _autoMode: true, _fixed: true, _constraintDemoted: true,
                             _demotedReason: 'same_day_repeat', continuation: false
                         };
                         fixes++;
@@ -16513,7 +16513,7 @@
                     if (lastSport && lastSport === sp) {
                         // Consecutive same-sport — free this slot so fallbackSweep can replace it
                         slots[si] = { field: 'Free', sport: null, _activity: 'Free',
-                                      _autoMode: true, _autoSolved: true, _bbCleared: true,
+                                      _autoMode: true, _fixed: true, _autoSolved: true, _bbCleared: true,
                                       continuation: false };
                         cleared++;
                         lastSport = null; // reset: if next is same sport again it gets cleared too
@@ -16698,6 +16698,77 @@
         };
 
         try { window.AutoSegmentModel?.rebuildFromAssignments(); } catch (_e) { warn('Segment rebuild failed: ' + _e.message); }
+
+        // =====================================================================
+        // STEP 6.5 — FINAL NULL-BUCKET SWEEP (iter 2)
+        // =====================================================================
+        // Second pass of the null-bucket finalizer, AFTER the BB-repair and
+        // the campistry-generation-complete dispatch. Catches nulls introduced
+        // by late-running passes (BB sport-repair, pinned-preservation restore,
+        // event listeners) that fire between STEP 4.97 and return.
+        (function finalNullSweep() {
+            try {
+                let filled_real = 0, filled_free = 0, scanned = 0;
+                const sa = window.scheduleAssignments || {};
+                for (const grade of Object.keys(divisions || {})) {
+                    if (allowedSet && !allowedSet.has(String(grade))) continue;
+                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    if (!pbs) continue;
+                    const bunks = getBunksForGrade(grade, divisions);
+                    for (const bunk of bunks) {
+                        const bunkKey = String(bunk);
+                        const arr = pbs[bunkKey] || [];
+                        const slots = sa[bunkKey];
+                        if (!Array.isArray(slots)) continue;
+                        for (let i = 0; i < arr.length; i++) {
+                            scanned++;
+                            if (slots[i]) continue; // already filled
+                            const bucket = arr[i];
+                            if (!bucket || bucket.startMin == null || bucket.endMin == null) continue;
+                            // Try to find any valid sport+field combo
+                            let placed = null;
+                            try {
+                                const fld = (typeof _findValidAlternativeField === 'function')
+                                    ? _findValidAlternativeField(null, grade, bunk, bucket.startMin, bucket.endMin, null)
+                                    : null;
+                                if (fld) {
+                                    const gs2 = getGlobalSettings();
+                                    const fields2 = gs2.app1?.fields || gs2.fields || [];
+                                    const fObj = fields2.find(f => f && f.name === fld);
+                                    const acts = (fObj && Array.isArray(fObj.activities)) ? fObj.activities : [];
+                                    const chosenAct = acts[0] || null;
+                                    if (chosenAct && !_validateWritePlacement(fld, chosenAct, grade, bunk, bucket.startMin, bucket.endMin)) {
+                                        placed = {
+                                            field: fld, sport: chosenAct, _activity: chosenAct,
+                                            _autoMode: true, _autoSolved: true, _fixed: true,
+                                            _startMin: bucket.startMin, _endMin: bucket.endMin,
+                                            _source: 'final-null-sweep', continuation: false
+                                        };
+                                    }
+                                }
+                            } catch (_eP) {}
+                            if (placed) {
+                                slots[i] = placed;
+                                filled_real++;
+                            } else {
+                                slots[i] = {
+                                    field: 'Free', sport: null, _activity: 'Free',
+                                    _autoMode: true, _fixed: true,
+                                    _startMin: bucket.startMin, _endMin: bucket.endMin,
+                                    _source: 'final-null-sweep-free', continuation: false
+                                };
+                                filled_free++;
+                            }
+                        }
+                    }
+                }
+                if (filled_real || filled_free) {
+                    log('[STEP 6.5] Final null sweep: scanned=' + scanned + ' filledReal=' + filled_real + ' filledFree=' + filled_free);
+                }
+            } catch (eS) {
+                warn('[STEP 6.5] Final null sweep error: ' + eS.message);
+            }
+        })();
 
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;
