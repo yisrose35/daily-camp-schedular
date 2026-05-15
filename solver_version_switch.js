@@ -35,14 +35,17 @@
       const g = window.loadGlobalSettings?.() || {};
       const v = (g.app1?.solverVersion || 'v1').toLowerCase();
 
+      if (v === 'v3' && typeof window.runAutoSchedulerV3 === 'function') {
+        console.log('[SolverSwitch] routing to v3');
+        return window.runAutoSchedulerV3(layers, options);
+      }
       if (v === 'v2' && typeof window.runAutoSchedulerV2 === 'function') {
         console.log('[SolverSwitch] routing to v2');
         return window.runAutoSchedulerV2(layers, options);
       }
-      // Default: v1
       return window._runAutoSchedulerV1(layers, options);
     };
 
-    console.log('[SolverSwitch] installed. Default = v1. Toggle via globalSettings.app1.solverVersion = "v2".');
+    console.log('[SolverSwitch] installed. Default = v1. Toggle via globalSettings.app1.solverVersion = "v1"|"v2"|"v3".');
   }
 })();
