@@ -865,6 +865,21 @@
   // -------------------------------------------------------------------------
   // SIMULATED ANNEALING LOOP
   // -------------------------------------------------------------------------
+  // Deep-clone perBunkSlots so we can snapshot it alongside `best.schedule`.
+  // Each grade has a bunk-keyed map, each bunk maps to an array of bucket
+  // objects. We slice the array (shallow) but the bucket objects are
+  // primitives-only so reference-sharing is safe.
+  function _clonePerBunkSlots(pbs) {
+    const out = {};
+    for (const [grade, byBunk] of Object.entries(pbs)) {
+      out[grade] = {};
+      for (const [bunk, arr] of Object.entries(byBunk)) {
+        out[grade][bunk] = Array.isArray(arr) ? arr.slice() : arr;
+      }
+    }
+    return out;
+  }
+
   function runSA(seed, ctx) {
     const cfg = ctx.config;
     const rng = mulberry32(cfg.seed);
@@ -874,6 +889,12 @@
     let currentEval = evaluate(current, ctx);
     let best = current;
     let bestEval = currentEval;
+    // ★ Snapshot the bucket grid alongside the best schedule. SA mutates
+    //   ctx.perBunkSlots cumulatively via accepted patches, so the bucket
+    //   grid at gen-end can have MORE buckets than `best.schedule` has
+    //   slots — leading to phantom nulls in the audit. Restoring the grid
+    //   from this snapshot at SA end fixes the sync.
+    let bestPbsSnapshot = _clonePerBunkSlots(ctx.perBunkSlots);
 
     const stats = {
       iterations: 0,
@@ -921,6 +942,9 @@
         if (candidateEval.cost < bestEval.cost) {
           best = candidate.schedule;
           bestEval = candidateEval;
+          // Snapshot the bucket grid AT THIS MOMENT — must include any
+          // patch we just applied.
+          bestPbsSnapshot = _clonePerBunkSlots(ctx.perBunkSlots);
           stats.improvements++;
           stats.stallCount = 0;
         } else {
@@ -953,7 +977,7 @@
         ' improvements=' + stats.improvements +
         ' final_best_cost=' + bestEval.cost);
 
-    return { best, bestEval, stats };
+    return { best, bestEval, stats, bestPbsSnapshot };
   }
 
   // -------------------------------------------------------------------------
@@ -975,10 +999,18 @@
     const ctx = buildContext(cfg, options);
 
     // Run SA
-    const { best, bestEval, stats } = runSA(seed, ctx);
+    const { best, bestEval, stats, bestPbsSnapshot } = runSA(seed, ctx);
 
-    // Commit the best schedule back to window.scheduleAssignments
+    // Commit the best schedule back to window.scheduleAssignments,
+    // AND restore the bucket grid to its state at the moment `best` was
+    // captured. This prevents phantom nulls caused by post-best inserts.
     window.scheduleAssignments = best;
+    if (bestPbsSnapshot) {
+      for (const [grade, byBunk] of Object.entries(bestPbsSnapshot)) {
+        if (!window.divisionTimes?.[grade]) continue;
+        window.divisionTimes[grade]._perBunkSlots = byBunk;
+      }
+    }
 
     // Save (delegate to v1's save path — TODO X2: extract this so v2 doesn't
     // depend on v1's whole gen lifecycle; for now we just trigger the same
