@@ -192,11 +192,11 @@ Across gens, the camp-specific weights adapt to what works for THIS specific cam
 ## Build sequence
 
 1. Design doc (this file) ✓
-2. Phase A — constraint graph builder (3-5 days)
-3. Phase B — constructive placement (5-7 days)
-4. Phase C+D — wire validation + reuse smartRepair (1 day)
-5. Phase E — wire SA polish (1 day)
-6. Phase F — learning component (2-3 days)
-7. Parity testing + tuning (3-5 days)
+2. Phase A — constraint graph builder ✓
+3. Phase B — constructive placement (skeleton) ✓
+4. Phase C+D+E — wire SolverV2.runSA + smartRepair via public API ✓
+5. Phase F — learning component (record + weight adaptation) ✓
+6. Parity testing + tuning (pending)
+7. Phase B coverage iteration (Change blocks, leagues, multi-period) (pending)
 
-Total: ~2-3 weeks of focused work. Shipping incrementally — each phase deployed behind the v3 flag as it completes.
+All v3 phases A–F are deployed behind the `solverVersion='v3'` flag. v2 now exposes `window.SolverV2 = { getConfig, buildContext, evaluate, detectHardViolations, runSA, smartRepair }` as a public API so v3 reuses the polished SA loop on its period-aligned constructive seed.

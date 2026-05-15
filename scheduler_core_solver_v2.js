@@ -1087,16 +1087,17 @@
     shiftBlocker: 2     // unblocks addChange when adjacent space is occupied
   };
 
-  function pickMove(stats, rng) {
+  function pickMove(stats, rng, weightMul) {
     const names = Object.keys(MOVES);
+    const w = (m) => (MOVE_WEIGHTS[m] ?? 1) * (weightMul?.[m] ?? 1);
     const totalProposes = names.reduce((s, m) => s + (stats.moves[m]?.propose || 0), 0);
     // Phase 1 (warmup): sample by static MOVE_WEIGHTS so moves we believe in
     // a-priori (gapTargeted, inject) get more attempts during early SA.
     // Phase 2 (after each move tried ≥20 times): blend MOVE_WEIGHTS with
     // observed acceptance rate, plus 15% epsilon-greedy exploration.
     if (totalProposes < names.length * 20 || rng() < 0.15) {
-      // Static weighted pick
-      const weights = names.map(m => MOVE_WEIGHTS[m] ?? 1);
+      // Static weighted pick (× learned multiplier from Phase F if present)
+      const weights = names.map(m => w(m));
       const sum = weights.reduce((a, b) => a + b, 0);
       let r = rng() * sum;
       for (let i = 0; i < names.length; i++) {
@@ -1105,10 +1106,10 @@
       }
       return names[names.length - 1];
     }
-    // Adaptive: rate = (accept + 1) / (propose + 1) * static_weight
+    // Adaptive: rate = (accept + 1) / (propose + 1) * static_weight * learned_mul
     const rates = names.map(m => {
       const ms = stats.moves[m] || { propose: 0, accept: 0 };
-      return ((ms.accept + 1) / (ms.propose + 1)) * (MOVE_WEIGHTS[m] ?? 1);
+      return ((ms.accept + 1) / (ms.propose + 1)) * w(m);
     });
     const sum = rates.reduce((a, b) => a + b, 0);
     let r = rng() * sum;
@@ -1208,7 +1209,7 @@
       const progress = stats.iterations / 50000; // assumed iters cap
       const T = Math.max(cfg.tempEnd, cfg.tempStart * (1 - progress));
 
-      const moveName = pickMove(stats, rng);
+      const moveName = pickMove(stats, rng, cfg.moveWeightMultipliers);
       stats.moves[moveName].propose++;
       const raw = MOVES[moveName](current, ctx, rng);
       const candidate = unwrapCandidate(raw);

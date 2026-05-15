@@ -255,6 +255,12 @@
     if (window.SolverV2?.runSA && window.SolverV2?.smartRepair) {
       log('Phase C+D+E: running v2 SA + smart repair on constructive seed...');
       const v2cfg = window.SolverV2.getConfig();
+      // Inject Phase F learned weight multipliers (no-op on first run for new camp)
+      if (window.SolverV3Learning?.getWeightAdjustments) {
+        v2cfg.moveWeightMultipliers = window.SolverV3Learning.getWeightAdjustments();
+        const muls = Object.keys(v2cfg.moveWeightMultipliers).length;
+        if (muls > 0) log('Applied ' + muls + ' learned weight multipliers');
+      }
       // v3 gets the full configured budget — we already spent constructive time
       const v2ctx = window.SolverV2.buildContext(v2cfg, options);
       // Override perBunkSlots with v3's period-aligned grids
@@ -278,6 +284,25 @@
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
     log('v3 done in ' + elapsed + 's');
+
+    // Phase F: record this run for cross-gen learning
+    if (window.SolverV3Learning?.recordRun && bestEval) {
+      // Map v2 SA's stats.moves -> saStats.byMove shape Phase F expects
+      const byMove = {};
+      if (saStats?.moves) {
+        for (const [name, c] of Object.entries(saStats.moves)) {
+          byMove[name] = { proposed: c.propose || 0, accepted: c.accept || 0 };
+        }
+      }
+      try {
+        window.SolverV3Learning.recordRun({
+          cost: bestEval.cost,
+          costBreakdown: bestEval.breakdown,
+          saStats: { byMove },
+          elapsed: parseFloat(elapsed)
+        });
+      } catch (e) { warn('Phase F recordRun failed: ' + e.message); }
+    }
 
     // Dispatch the generation-complete event so save handlers fire
     window.dispatchEvent(new CustomEvent('campistry-generation-complete', {
