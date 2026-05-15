@@ -1,6 +1,6 @@
 
 // =============================================================================
-// scheduler_core_auto.js — CAMPISTRY AUTO SCHEDULER CORE v4.0
+// scheduler_core_auto.js — CAMPISTRY AUTO SCHEDULER CORE v4.3
 // test comment: copy-auto branch change verified
 // =============================================================================
 // WHAT → WHEN → WHERE Architecture
@@ -442,6 +442,12 @@
 
         // ★ Track which bunks belong to the partial-gen scope (used in Step 0 & Step 5)
         let _partialGenBunks = null;
+        // ★ v4.3: Snapshot of non-scoped bunk data BEFORE the solver runs.
+        // The solver's intermediate phases (Total Solver, perfection pass, safety net)
+        // iterate over ALL bunks and can corrupt non-scoped entries in memory.
+        // This snapshot is used in Step 5 instead of localStorage (which may also be stale).
+        let _preservedScheduleData = null;
+        let _preservedLeagueData = null;
 
         if (_isPartialGen) {
             const divisions = window.divisions || {};
@@ -463,6 +469,13 @@
             window.locationUsageBySlot = {};
             log('[STEP 0] Rebuilt fieldUsageBySlot from ' +
                 (Object.keys(window.scheduleAssignments || {}).length) + ' preserved bunks');
+
+            // ★ v4.3: Deep-clone the preserved (non-scoped) bunk schedules NOW,
+            // before the solver can touch them. Used in Step 5 merge.
+            _preservedScheduleData = structuredClone(window.scheduleAssignments || {});
+            _preservedLeagueData = structuredClone(window.leagueAssignments || {});
+            log('[STEP 0] Snapshot preserved: ' + Object.keys(_preservedScheduleData).length +
+                ' bunks, ' + Object.keys(_preservedLeagueData).length + ' league entries');
         } else {
             window.scheduleAssignments = {};
             window.leagueAssignments = {};
@@ -15931,6 +15944,30 @@
         saveSwimHistory();
         saveWeekHistory(bunkTimelines);
         log('\n[STEP 5] Saving...');
+
+        // ★ v4.3: Restore non-scoped bunks in window.scheduleAssignments from
+        // the pre-solver snapshot. The solver's intermediate phases may have
+        // corrupted these entries in memory — restore them so the UI is correct.
+        if (_isPartialGen && _preservedScheduleData) {
+            let restored = 0;
+            for (const [bunk, slots] of Object.entries(_preservedScheduleData)) {
+                if (!_partialGenBunks.has(bunk)) {
+                    window.scheduleAssignments[bunk] = slots;
+                    restored++;
+                }
+            }
+            // Also restore league data for non-scoped bunks
+            if (_preservedLeagueData) {
+                for (const [bunk, data] of Object.entries(_preservedLeagueData)) {
+                    if (!_partialGenBunks.has(bunk)) {
+                        if (!window.leagueAssignments) window.leagueAssignments = {};
+                        window.leagueAssignments[bunk] = data;
+                    }
+                }
+            }
+            log('[STEP 5] Restored ' + restored + ' non-scoped bunks from pre-solver snapshot');
+        }
+
         if (window.saveCurrentDailyData) {
             try {
                 // ★ v4.0: Strip Free entries and internal flags to reduce size
@@ -15949,17 +15986,19 @@
                 const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                 if (!allDaily[dateKey]) allDaily[dateKey] = {};
 
-                // ★ v4.2: Partial-gen merge — only overwrite the regenerated bunks,
-                // preserve existing schedule data for non-selected divisions.
+                // ★ v4.3: Partial-gen merge — use the pre-solver snapshot (not localStorage)
+                // to restore non-scoped bunks, since the solver corrupts them in memory.
                 let mergedSchedule = clean;
                 let mergedLeagues = window.leagueAssignments || {};
                 if (_isPartialGen && _partialGenBunks && _partialGenBunks.size > 0) {
-                    const prev = allDaily[dateKey]?.scheduleAssignments || {};
-                    const prevLeagues = allDaily[dateKey]?.leagueAssignments || {};
-                    // Start with previously-saved data for ALL bunks
+                    // Use the Step 0 snapshot (immune to solver corruption) as base.
+                    // Fall back to localStorage only if snapshot is somehow missing.
+                    const prev = _preservedScheduleData || allDaily[dateKey]?.scheduleAssignments || {};
+                    const prevLeagues = _preservedLeagueData || allDaily[dateKey]?.leagueAssignments || {};
+                    // Start with preserved (pre-solver) data for ALL non-scoped bunks
                     mergedSchedule = Object.assign({}, prev);
                     mergedLeagues = Object.assign({}, prevLeagues);
-                    // Overwrite ONLY the regenerated bunks with fresh data
+                    // Overwrite ONLY the regenerated bunks with fresh solver output
                     _partialGenBunks.forEach(bunk => {
                         if (clean[bunk] !== undefined) mergedSchedule[bunk] = clean[bunk];
                         else delete mergedSchedule[bunk];
@@ -15968,7 +16007,7 @@
                         else delete mergedLeagues[bunk];
                     });
                     log('[5] Partial merge: updated ' + _partialGenBunks.size + ' bunks, preserved ' +
-                        (Object.keys(mergedSchedule).length - _partialGenBunks.size) + ' existing');
+                        (Object.keys(mergedSchedule).length - _partialGenBunks.size) + ' existing (from snapshot)');
                 }
 
                 // ★ v4.1: Persist _perBunkSlotsData to localStorage so per-bunk activity
