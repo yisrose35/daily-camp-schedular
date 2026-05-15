@@ -48,8 +48,12 @@
         rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
         wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
         sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25,  // per gap ≥15min
-        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 200, // per swim missing Change
-        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 500  // per activity crossing period boundary
+        // swim-no-change and period-viol are usually v1-seed-induced and not
+        // fixable by v2 moves. Weighted LOW so SA still mildly prefers
+        // schedules without them, but doesn't waste budget escaping
+        // un-escapable states. Reported in breakdown either way.
+        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 30,
+        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 50
       }
     };
   }
