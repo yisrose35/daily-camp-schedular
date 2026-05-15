@@ -48,12 +48,13 @@
         rotationUnfair:   parseFloat(a1.solverV2CostRotationUnfair)   || 20,
         wallClockGapMin:  parseFloat(a1.solverV2CostWallClockGapMin)  || 1,
         sigGapBonus:      parseFloat(a1.solverV2CostSigGapBonus)      || 25,  // per gap ≥15min
-        // swim-no-change and period-viol are usually v1-seed-induced and not
-        // fixable by v2 moves. Weighted LOW so SA still mildly prefers
-        // schedules without them, but doesn't waste budget escaping
-        // un-escapable states. Reported in breakdown either way.
-        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 30,
-        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 50
+        // swim-no-change and period-viol are v1-seed-induced and not fixable
+        // by v2 moves. ZEROED in cost — they're still counted in the breakdown
+        // for diagnostics but no longer slow down evaluate() with their per-
+        // schedule scans (iterations dropped 86k → 44k when they were on).
+        // The user can re-enable via globalSettings if they want SA to try.
+        swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 0,
+        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 0
       }
     };
   }
@@ -111,18 +112,19 @@
     cost += gapInfo.gapMin * cfg.cost.wallClockGapMin;
     cost += gapInfo.sigGaps * cfg.cost.sigGapBonus;
 
-    // Term 6: Swim-without-Change soft penalty. v2 has no move to ADD a
-    //         Change block, but cross-bunk swaps can sometimes shuffle the
-    //         swim to a bunk that DOES have an adjacent Change. Medium
-    //         weight so SA tries but isn't paralyzed when seed has them.
-    const swimNoChange = countSwimWithoutChange(schedule);
-    cost += swimNoChange * cfg.cost.swimNoChange;
-
-    // Term 7: Period boundary violations — non-anchor activities crossing
-    //         a period boundary. Soft cost (default 500/each) so SA prefers
-    //         not to have them, but won't get paralyzed if v1 seed had them.
-    const periodViol = countPeriodViolations(schedule, ctx);
-    cost += periodViol * cfg.cost.periodViolation;
+    // Terms 6+7: Swim-no-Change and period violations — both are usually
+    // v1-seed-induced. Skip the expensive scans entirely when their weight
+    // is 0 (default). This restores SA iteration count to pre-X2f-9 levels
+    // (~86k iters/pass on this camp config).
+    let swimNoChange = 0, periodViol = 0;
+    if (cfg.cost.swimNoChange > 0) {
+      swimNoChange = countSwimWithoutChange(schedule);
+      cost += swimNoChange * cfg.cost.swimNoChange;
+    }
+    if (cfg.cost.periodViolation > 0) {
+      periodViol = countPeriodViolations(schedule, ctx);
+      cost += periodViol * cfg.cost.periodViolation;
+    }
 
     return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange, periodViol } };
   }
