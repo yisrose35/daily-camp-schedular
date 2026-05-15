@@ -16011,11 +16011,14 @@
         // (the UI shows "Free" instead of "+Add"). This converts ALL null
         // buckets to something. Iteration 2 will make the probe smarter so
         // fewer fall back to Free.
+        log('[STEP 4.97] Null-bucket finalizer starting...');
         (function nullBucketFinalizer() {
             try {
-                let filled_real = 0, filled_free = 0;
+                let filled_real = 0, filled_free = 0, scanned_buckets = 0, found_nulls = 0;
                 const sa = window.scheduleAssignments || {};
-                for (const grade of Object.keys(divisions || {})) {
+                const divKeys = Object.keys(divisions || {});
+                log('[STEP 4.97] iterating over ' + divKeys.length + ' grades: ' + divKeys.join(','));
+                for (const grade of divKeys) {
                     if (allowedSet && !allowedSet.has(String(grade))) continue;
                     const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
                     if (!pbs) continue;
@@ -16026,7 +16029,9 @@
                         const slots = sa[bunkKey];
                         if (!Array.isArray(slots)) continue;
                         for (let i = 0; i < arr.length; i++) {
+                            scanned_buckets++;
                             if (slots[i]) continue; // already filled
+                            found_nulls++;
                             const bucket = arr[i];
                             if (!bucket || bucket.startMin == null || bucket.endMin == null) continue;
                             // Try to find any valid sport+field combo
@@ -16074,13 +16079,12 @@
                         }
                     }
                 }
-                if (filled_real || filled_free) {
-                    log('[STEP 4.97] Null-bucket finalizer: ' + filled_real + ' filled with real activity, ' + filled_free + ' filled with Free placeholder');
-                }
+                log('[STEP 4.97] finalizer done: scanned=' + scanned_buckets + ' nullsFound=' + found_nulls + ' filledReal=' + filled_real + ' filledFree=' + filled_free);
             } catch (eF) {
-                warn('[STEP 4.97] Null bucket finalizer error: ' + eF.message);
+                warn('[STEP 4.97] Null bucket finalizer error: ' + eF.message + ' stack: ' + eF.stack);
             }
         })();
+        log('[STEP 4.97] Null-bucket finalizer ended.');
 
         // STEP 5 — SAVE
         // =====================================================================
