@@ -2266,10 +2266,16 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
   });
   
   // Keyboard: Delete selected band
-  const dawKeyHandler = (e) => {
+  // ★ Use a module-level reference so we can actually remove the previous
+  //   handler on re-render. Declaring a fresh closure each call and passing
+  //   it to removeEventListener is a no-op — listeners leaked every render.
+  if (window._dawKeyHandler) {
+    document.removeEventListener('keydown', window._dawKeyHandler);
+  }
+  window._dawKeyHandler = (e) => {
     if (currentBuilderMode !== 'auto') return;
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
-    
+
     if ((e.key === 'Delete' || e.key === 'Backspace') && dawSelectedBand) {
       e.preventDefault();
       Object.keys(layerSource).forEach(grade => {
@@ -2285,8 +2291,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       gridEl.querySelectorAll('.ms-daw-popover').forEach(p => p.remove());
     }
   };
-  document.removeEventListener('keydown', dawKeyHandler);
-  document.addEventListener('keydown', dawKeyHandler);
+  document.addEventListener('keydown', window._dawKeyHandler);
 }
 
 function showDAWPopover(bandEl, layer, grade, opts) {

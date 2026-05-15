@@ -586,14 +586,20 @@ function shouldHighlightBunk(bunkName) {
         const dateData = dailyData[dateKey] || {};
         
         // Load schedule assignments
+        // ★ v2: Prefer DATE-SPECIFIC data over in-memory state. Previously,
+        //   any non-empty window.scheduleAssignments short-circuited the load,
+        //   which meant switching dates kept the previous date's schedule
+        //   visible (in-memory shadowed cloud/local data for the new date).
+        //   In-memory is now a last-resort fallback, not the first choice.
         let loadedAssignments = false;
-        if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
-            loadedAssignments = true;
-        } else if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
+        if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
             loadedAssignments = true;
         } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dailyData.scheduleAssignments;
+            loadedAssignments = true;
+        } else if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
+            // No saved data for this date — keep whatever is in memory (last resort).
             loadedAssignments = true;
         }
         if (!loadedAssignments) window.scheduleAssignments = window.scheduleAssignments || {};

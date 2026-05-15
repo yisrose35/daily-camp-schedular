@@ -1123,9 +1123,14 @@ function saveDiv(){
         grades[gn]={bunks:bunks};
     });
     if(editingDiv&&editingDiv!==name){
-        // Rename: update roster references
+        // Rename: update roster references AND propagate to schedule records
         Object.values(roster).forEach(function(c){if(c.division===editingDiv){c.division=name}});
         delete structure[editingDiv];
+        // ★ v2: Propagate rename to in-memory + cloud schedules so divisionTimes
+        //   keys, _division slot references, and any division-keyed sub-structures
+        //   stay consistent. Silent staleness here previously caused UI/print/
+        //   analytics paths to lose schedule data for the renamed division.
+        _propagateDivisionRename(editingDiv, name);
     }
     var gradeOrder=[];
     rows.forEach(function(row){
@@ -1152,9 +1157,128 @@ function deleteDiv(n){
     // ★ Purge orphaned bunks from saved schedules
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
 }
+// ★ Propagate a division rename to all schedule references.
+//   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
+//   fields in slot entries, and updates cloud daily_schedules records.
+function _propagateDivisionRename(oldName, newName){
+    if(!oldName||!newName||oldName===newName)return;
+    console.log('[Me] Propagating division rename:',oldName,'→',newName);
+    // 1. In-memory rename — divisionTimes, unifiedTimes, divisions, availableDivisions
+    function _renameKey(obj){
+        if(!obj||typeof obj!=='object'||Array.isArray(obj))return;
+        if(oldName in obj){obj[newName]=obj[oldName];delete obj[oldName]}
+    }
+    _renameKey(window.divisionTimes);
+    _renameKey(window.unifiedTimes);
+    _renameKey(window.divisions);
+    if(Array.isArray(window.availableDivisions)){
+        var idx=window.availableDivisions.indexOf(oldName);
+        if(idx>=0)window.availableDivisions[idx]=newName;
+    }
+    // 2. Rewrite _division field on every slot in current scheduleAssignments
+    if(window.scheduleAssignments){
+        Object.values(window.scheduleAssignments).forEach(function(slots){
+            if(!Array.isArray(slots))return;
+            slots.forEach(function(s){
+                if(s&&s._division===oldName)s._division=newName;
+            });
+        });
+    }
+    // 3. Propagate to cloud daily_schedules
+    function _toast(msg, kind){
+        try{
+            if(typeof window.showToast==='function')window.showToast(msg, kind||'info');
+            else if(typeof window.toast==='function')window.toast(msg, kind||'info');
+        }catch(_){}
+    }
+    function _retry(fn, label){
+        var attempt=0, max=3;
+        function tryOnce(){
+            attempt++;
+            return fn().catch(function(err){
+                if(attempt>=max)throw err;
+                return new Promise(function(r){setTimeout(r, Math.pow(2,attempt-1)*500)}).then(tryOnce);
+            });
+        }
+        return tryOnce();
+    }
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId){
+            _toast('⚠️ Division renamed locally but cloud schedules not updated (DB unavailable).','warning');
+            return;
+        }
+        _retry(function(){
+            return client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
+                .then(function(r){if(r.error)throw r.error;return r.data||[]});
+        },'fetch').then(function(records){
+            var updates=[];
+            records.forEach(function(record){
+                var sd=record.schedule_data||{};
+                var modified=false;
+                // Rename division-keyed sub-structures
+                ['divisionTimes','unifiedTimes'].forEach(function(k){
+                    if(sd[k]&&typeof sd[k]==='object'&&oldName in sd[k]){
+                        sd[k]=Object.assign({},sd[k]);
+                        sd[k][newName]=sd[k][oldName];
+                        delete sd[k][oldName];
+                        modified=true;
+                    }
+                });
+                // Rewrite _division refs in each slot
+                if(sd.scheduleAssignments&&typeof sd.scheduleAssignments==='object'){
+                    var newSa=Object.assign({},sd.scheduleAssignments);
+                    Object.keys(newSa).forEach(function(bunk){
+                        var slots=newSa[bunk];
+                        if(!Array.isArray(slots))return;
+                        var slotChanged=false;
+                        var newSlots=slots.map(function(s){
+                            if(s&&s._division===oldName){slotChanged=true;return Object.assign({},s,{_division:newName})}
+                            return s;
+                        });
+                        if(slotChanged){newSa[bunk]=newSlots;modified=true}
+                    });
+                    if(modified)sd.scheduleAssignments=newSa;
+                }
+                if(modified){
+                    updates.push(_retry(function(){
+                        return client.from('daily_schedules')
+                            .update({schedule_data:sd,updated_at:new Date().toISOString()})
+                            .eq('id',record.id)
+                            .then(function(r){if(r.error)throw r.error;return r});
+                    },'update '+record.id));
+                }
+            });
+            if(updates.length===0){
+                console.log('[Me] No schedule records referenced the renamed division');
+                return;
+            }
+            return Promise.allSettled(updates).then(function(results){
+                var failed=results.filter(function(r){return r.status==='rejected'});
+                var ok=results.length-failed.length;
+                if(failed.length===0){
+                    console.log('[Me] ✅ Renamed division in',ok,'schedule records');
+                }else{
+                    console.error('[Me] ❌ Division rename had',failed.length,'failures:',failed);
+                    _toast('⚠️ Division renamed but '+failed.length+' schedule record(s) failed. Some old data may persist.','warning');
+                }
+            });
+        }).catch(function(err){
+            console.error('[Me] Division rename propagation failed:',err);
+            _toast('⚠️ Division renamed locally but cloud propagation failed: '+(err.message||err),'error');
+        });
+    }catch(e){
+        console.error('[Me] Division rename exception:',e);
+        _toast('⚠️ Division renamed but cloud cleanup hit an error.','error');
+    }
+}
+
 // ★ Remove orphaned bunk data from all saved schedule records.
 //   When a bunk is removed from camp structure, its schedule data becomes
 //   invisible to the UI but persists in Supabase. This cleans it up.
+//   v2: Adds retry-on-failure (3 attempts) and surfaces failures via toast
+//       so silent network errors don't leave orphan data in the cloud.
 function _purgeOrphanedBunks(removedBunks){
     if(!removedBunks||removedBunks.length===0)return;
     console.log('[Me] Purging',removedBunks.length,'orphaned bunks from schedules:',removedBunks);
@@ -1165,40 +1289,85 @@ function _purgeOrphanedBunks(removedBunks){
     if(window.scheduleSegments){
         removedBunks.forEach(function(b){delete window.scheduleSegments[b]});
     }
-    // 2. Clean from all cloud schedule records (async, best-effort)
+    // Local toast helper (no-op if Campistry's toast helper isn't loaded)
+    function _toast(msg, kind){
+        try{
+            if(typeof window.showToast==='function')window.showToast(msg, kind||'info');
+            else if(typeof window.toast==='function')window.toast(msg, kind||'info');
+        }catch(_){}
+    }
+    // Retry helper with exponential backoff (max 3 attempts)
+    function _retryWithBackoff(fn, label){
+        var attempt=0, maxAttempts=3;
+        function tryOnce(){
+            attempt++;
+            return fn().catch(function(err){
+                if(attempt>=maxAttempts)throw err;
+                var delay=Math.pow(2, attempt-1)*500; // 500ms, 1s, 2s
+                console.warn('[Me] '+label+' attempt '+attempt+' failed, retrying in '+delay+'ms:',err);
+                return new Promise(function(resolve){setTimeout(resolve, delay)}).then(tryOnce);
+            });
+        }
+        return tryOnce();
+    }
+    // 2. Clean from all cloud schedule records (async, with retry + toast on failure)
     try{
         var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
         var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
-        if(!client||!campId){console.warn('[Me] Cannot purge cloud — DB not available');return}
-        var bunkSet=new Set(removedBunks);
-        client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
-            .then(function(res){
-                if(res.error||!res.data){console.warn('[Me] Purge query error:',res.error);return}
-                var updates=[];
-                res.data.forEach(function(record){
-                    var sd=record.schedule_data||{};
-                    var sa=Object.assign({},sd.scheduleAssignments||{});
-                    var la=Object.assign({},sd.leagueAssignments||{});
-                    var modified=false;
-                    removedBunks.forEach(function(b){
-                        if(sa[b]!==undefined){delete sa[b];modified=true}
-                        if(la[b]!==undefined){delete la[b]}
-                    });
-                    if(modified){
-                        updates.push(client.from('daily_schedules')
-                            .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
-                            .eq('id',record.id));
-                    }
+        if(!client||!campId){
+            console.warn('[Me] Cannot purge cloud — DB not available');
+            _toast('⚠️ Removed bunk locally but could not clean cloud data (DB unavailable). Refresh to retry.','warning');
+            return;
+        }
+        _retryWithBackoff(function(){
+            return client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
+                .then(function(res){
+                    if(res.error)throw res.error;
+                    return res.data||[];
                 });
-                if(updates.length>0){
-                    Promise.all(updates).then(function(){
-                        console.log('[Me] ✅ Purged orphaned bunks from',updates.length,'schedule records');
-                    }).catch(function(e){console.warn('[Me] Purge update error:',e)});
-                }else{
-                    console.log('[Me] No schedule records contained orphaned bunks');
+        },'fetch').then(function(records){
+            var updates=[];
+            records.forEach(function(record){
+                var sd=record.schedule_data||{};
+                var sa=Object.assign({},sd.scheduleAssignments||{});
+                var la=Object.assign({},sd.leagueAssignments||{});
+                var modified=false;
+                removedBunks.forEach(function(b){
+                    if(sa[b]!==undefined){delete sa[b];modified=true}
+                    if(la[b]!==undefined){delete la[b];modified=true}
+                });
+                if(modified){
+                    updates.push(_retryWithBackoff(function(){
+                        return client.from('daily_schedules')
+                            .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                            .eq('id',record.id)
+                            .then(function(r){if(r.error)throw r.error;return r});
+                    },'update '+record.id));
                 }
-            }).catch(function(e){console.warn('[Me] Purge fetch error:',e)});
-    }catch(e){console.warn('[Me] Purge exception:',e)}
+            });
+            if(updates.length===0){
+                console.log('[Me] No schedule records contained orphaned bunks');
+                return;
+            }
+            // Use allSettled so one bad record doesn't kill the rest
+            return Promise.allSettled(updates).then(function(results){
+                var failed=results.filter(function(r){return r.status==='rejected'});
+                var ok=results.length-failed.length;
+                if(failed.length===0){
+                    console.log('[Me] ✅ Purged orphaned bunks from',ok,'schedule records');
+                }else{
+                    console.error('[Me] ❌ Purge had',failed.length,'failures (',ok,'succeeded):',failed);
+                    _toast('⚠️ Bunk removed, but '+failed.length+' schedule record(s) failed to update. Try removing again or check connection.','warning');
+                }
+            });
+        }).catch(function(err){
+            console.error('[Me] Purge failed after retries:',err);
+            _toast('⚠️ Removed bunk locally but cloud cleanup failed: '+(err.message||err)+'. Try again.','error');
+        });
+    }catch(e){
+        console.error('[Me] Purge exception:',e);
+        _toast('⚠️ Bunk removed locally but cloud cleanup hit an error. Refresh and try again.','error');
+    }
 }
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────

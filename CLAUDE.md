@@ -132,16 +132,16 @@ When the user says **"day X"** or **"let's do day X"**:
 
 **Day 9**
 - Goal: Layer editor create/edit/delete
-- Files: `auto_schedule_planner.js`
+- Files: `master_schedule_builder.js` (renderDAWGrid + dawXxx functions, ~lines 1331-2820)
 - Tasks:
-  - Read `auto_schedule_planner.js` in full. Understand the layer data model, how layers are created, edited, deleted, reordered
+  - Read `master_schedule_builder.js` (renderDAWGrid and dawXxx helpers) in full. Understand the layer data model, how layers are created, edited, deleted, reordered
   - Test: create a layer, add blocks to it, edit block durations, delete a block, reorder layers. Each operation should feel responsive and correct
   - Fix any bugs in create/edit/delete/reorder
 - Done when: All four layer operations work correctly with no data loss
 
 **Day 10**
 - Goal: Layer save/load and template persistence
-- Files: `auto_schedule_planner.js`, `cloud_sync_helpers.js`
+- Files: `master_schedule_builder.js`, `cloud_sync_helpers.js`
 - Tasks:
   - Verify layers save to `camp_state_kv` and reload correctly after page refresh
   - Verify layers survive logout → login (full round trip through Supabase)
@@ -283,12 +283,13 @@ When the user says **"day X"** or **"let's do day X"**:
 - Done when: 5-day generation is clean and fair
 
 **Day 24**
-- Goal: Full auto builder cloud verification
+- Goal: Full auto builder cloud verification + bunk override feature
 - Tasks:
   - Starting from a fresh session (clear local storage, log out and back in)
   - Set up layers → generate → verify cloud save → reload → confirm all data intact (layers, schedule, rotation counts, league assignments)
   - Fix any gaps in the full cloud round trip
-- Done when: Full auto builder round trip through cloud is verified end-to-end
+  - **[NEW] Bunk Override for Auto Builder:** Add the same bunk override capability that exists in manual builder to auto builder — allow overriding which bunks are included in a division for generation purposes. Model after the existing manual builder implementation.
+- Done when: Full auto builder round trip through cloud is verified end-to-end, bunk override works in auto mode
 
 ---
 
