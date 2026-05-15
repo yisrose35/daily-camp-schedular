@@ -967,6 +967,36 @@
                window.AccessControl?.getDivisionForBunk?.(bunk) || null;
     }
 
+    /**
+     * Find the bunk container element (column in legacy, row in transposed)
+     * and the block container (the column itself in legacy, the strip in transposed).
+     * Returns { container, blockContainer, isTransposed } or null.
+     */
+    function peiFindBunkContainer(wrap, bunk, bunkIdx) {
+        if (!wrap) return null;
+        const isTransposed = !!wrap.querySelector('.asg-tx-scroll');
+        if (isTransposed) {
+            const rows = wrap.querySelectorAll('.asg-tx-row:not(.asg-tx-headrow)');
+            for (const row of rows) {
+                const bunkEl = row.querySelector('.asg-tx-bunk');
+                if (bunkEl && bunkEl.textContent.trim() === bunk) {
+                    const strip = row.querySelector('.asg-tx-strip');
+                    return { container: row, blockContainer: strip || row, isTransposed: true };
+                }
+            }
+            return null;
+        }
+        // Legacy: navigate via first block
+        const scrollEl = wrap.querySelector('.asg-scroll');
+        if (!scrollEl) return null;
+        const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
+        if (!firstBlock) return null;
+        const bodyRow = firstBlock.parentElement.parentElement;
+        const col = bodyRow.children[bunkIdx];
+        if (!col) return null;
+        return { container: col, blockContainer: col, isTransposed: false };
+    }
+
     function peiBunkActivities(bunk, divName) {
         const assignments = window.scheduleAssignments?.[bunk] || [];
         const divSlots = window.divisionTimes?.[divName] || [];
@@ -1058,7 +1088,7 @@
     }
     function peiClearConflictIndicators() {
         _peiConflictOverlays.forEach(el => el.remove()); _peiConflictOverlays = [];
-        document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(blk => { if (blk._peiShadow) { blk.style.boxShadow = ''; blk._peiShadow = false; } });
+        document.querySelectorAll('.asg-block[data-pei-bunk], .asg-tx-block[data-pei-bunk]').forEach(blk => { if (blk._peiShadow) { blk.style.boxShadow = ''; blk._peiShadow = false; } });
     }
 
     function peiShowBanner(msg, type, showUndoHint) {
@@ -1936,12 +1966,8 @@
                 return h && h.textContent.trim() === divName;
             });
             if (wrap) {
-                const fb = wrap.querySelector('.asg-block');
-                if (fb) {
-                    const br = fb.parentElement.parentElement;
-                    const col = br.children[bunkIdx];
-                    if (col) setTimeout(() => peiScanAndInjectGaps(col, bunk, divName, dayStart, dayEnd), 600);
-                }
+                const found = peiFindBunkContainer(wrap, bunk, bunkIdx);
+                if (found) setTimeout(() => peiScanAndInjectGaps(found.blockContainer, bunk, divName, dayStart, dayEnd), 600);
             }
         }
 
@@ -1960,19 +1986,15 @@
         const bunkIdx = bunks.indexOf(bunk);
         if (bunkIdx < 0) return;
 
-        // Find the bunk column
+        // Find the bunk container (column in legacy, row in transposed)
         const wrap = Array.from(document.querySelectorAll('.asg-wrap')).find(w => {
             const h = w.querySelector('.asg-header-title');
             return h && h.textContent.trim() === divName;
         });
         if (!wrap) return;
-        const scrollEl = wrap.querySelector('.asg-scroll');
-        if (!scrollEl) return;
-        const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
-        if (!firstBlock) return;
-        const bodyRow = firstBlock.parentElement.parentElement;
-        const col = bodyRow.children[bunkIdx];
-        if (!col) return;
+        const found = peiFindBunkContainer(wrap, bunk, bunkIdx);
+        if (!found) return;
+        const col = found.blockContainer;
 
         const topPx = (startMin - dayStart) * PEI_PX_PER_MIN + 2;
         const heightPx = (endMin - startMin) * PEI_PX_PER_MIN - 4;
@@ -2048,22 +2070,18 @@
             if (!divName) return;
             const divConfig = peiGetDivConfig(divName);
             const dayStart = peiParseTime(divConfig.startTime) || 540;
+            const dayEnd = peiParseTime(divConfig.endTime) || 960;
+            const totalMin = dayEnd - dayStart;
             const bunks = divConfig.bunks || [];
             const divSlots = window.divisionTimes?.[divName] || [];
+            const isTransposed = !!wrap.querySelector('.asg-tx-scroll');
 
-            const scrollEl = wrap.querySelector('.asg-scroll');
-            if (!scrollEl) return;
-            const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
-            if (!firstBlock) return;
-            const bodyRow = firstBlock.parentElement.parentElement;
-            const bunkCols = Array.from(bodyRow.children).slice(0, bunks.length);
-
-            bunkCols.forEach((col, idx) => {
-                const bunk = bunks[idx];
-                if (!bunk) return;
-                const assignments = window.scheduleAssignments?.[bunk] || [];
+            bunks.forEach((bunk, idx) => {
+                const found = peiFindBunkContainer(wrap, bunk, idx);
+                if (!found) return;
                 const bunkActs = peiBunkActivities(bunk, divName);
-                const blocks = col.querySelectorAll('.asg-block');
+                const blockSel = isTransposed ? '.asg-tx-block' : '.asg-block';
+                const blocks = found.blockContainer.querySelectorAll(blockSel);
 
                 blocks.forEach((blk, bi) => {
                     const matched = bunkActs[bi];
@@ -2071,36 +2089,41 @@
                     const entry = matched.entry;
                     if (!entry._postEdited || entry._startMin === undefined || entry._endMin === undefined) return;
 
-                    // This entry has custom times — find the slot it's in
-                    const slotStart = matched.startMin;  // slot boundary
-                    const slotEnd = matched.endMin;       // slot boundary
+                    const slotStart = matched.startMin;
+                    const slotEnd = matched.endMin;
                     const customStart = entry._startMin;
                     const customEnd = entry._endMin;
 
-                    // If custom times differ from slot boundaries, reposition
                     if (customStart !== slotStart || customEnd !== slotEnd) {
-                        const newTopPx = (customStart - dayStart) * PEI_PX_PER_MIN + 2;
-                        const newHeightPx = (customEnd - customStart) * PEI_PX_PER_MIN - 4;
-                        blk.style.top = newTopPx + 'px';
-                        blk.style.height = newHeightPx + 'px';
+                        if (isTransposed) {
+                            // Transposed: horizontal layout — use left/width percentages
+                            const pctL = ((customStart - dayStart) / totalMin) * 100;
+                            const pctW = ((customEnd - customStart) / totalMin) * 100;
+                            blk.style.left = pctL + '%';
+                            blk.style.width = 'calc(' + pctW + '% - 2px)';
+                        } else {
+                            // Legacy: vertical layout — use top/height pixels
+                            const newTopPx = (customStart - dayStart) * PEI_PX_PER_MIN + 2;
+                            const newHeightPx = (customEnd - customStart) * PEI_PX_PER_MIN - 4;
+                            blk.style.top = newTopPx + 'px';
+                            blk.style.height = newHeightPx + 'px';
+                        }
 
-                        // Update data attributes
                         blk.dataset.peiStartMin = customStart;
                         blk.dataset.peiEndMin = customEnd;
 
-                        // Update duration label
                         const dur = customEnd - customStart;
-                        const allSubs = blk.querySelectorAll('.asg-block-sub');
+                        const subSel = isTransposed ? '.asg-tx-block-sub' : '.asg-block-sub';
+                        const allSubs = blk.querySelectorAll(subSel);
                         for (const sub of allSubs) {
                             if (/\d+min/.test(sub.textContent)) { sub.textContent = dur + 'min'; break; }
                         }
 
-                        // Inject free gap for freed space
                         if (customEnd < slotEnd && (slotEnd - customEnd) >= PEI_MIN_BLOCK_DURATION) {
-                            peiInjectFreeGapDirect(col, customEnd, slotEnd, dayStart, bunk, divName);
+                            peiInjectFreeGapDirect(found.blockContainer, customEnd, slotEnd, dayStart, bunk, divName);
                         }
                         if (customStart > slotStart && (customStart - slotStart) >= PEI_MIN_BLOCK_DURATION) {
-                            peiInjectFreeGapDirect(col, slotStart, customStart, dayStart, bunk, divName);
+                            peiInjectFreeGapDirect(found.blockContainer, slotStart, customStart, dayStart, bunk, divName);
                         }
                     }
                 });
@@ -2201,78 +2224,143 @@
             if (wrap.dataset.peiAugmented === '1') return;
             const header = wrap.querySelector('.asg-header-title');
             const divName = header ? header.textContent.trim() : '';
-            if (!divName) return;
+            if (!divName) { wrap.dataset.peiAugmented = '1'; return; }
             const divConfig = peiGetDivConfig(divName);
             const dayStart = peiParseTime(divConfig.startTime) || 540;
             const bunks = divConfig.bunks || [];
-            const scrollEl = wrap.querySelector('.asg-scroll');
-            if (!scrollEl) return;
-            // Navigate from any block to find bodyRow (blocks are direct children of bunk columns)
-            const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
-            if (!firstBlock) { debugLog('PEI: No blocks found in', divName); return; }
-            const bodyRow = firstBlock.parentElement.parentElement;
-            // Bunk columns are always the first N children; league overlays are appended after
-            const bunkCols = Array.from(bodyRow.children).slice(0, bunks.length);
-            if (bunkCols.length !== bunks.length) { debugLog('PEI: column mismatch', bunkCols.length, bunks.length); return; }
 
-            bunkCols.forEach((col, idx) => {
-                const bunk = bunks[idx];
-                if (!bunk) return;
-                col.dataset.peiBunk = bunk; col.dataset.peiDivision = divName;
+            // Detect transposed view (.asg-tx-scroll) vs legacy (.asg-scroll)
+            const isTransposed = !!wrap.querySelector('.asg-tx-scroll');
+            const scrollEl = wrap.querySelector('.asg-tx-scroll') || wrap.querySelector('.asg-scroll');
+            if (!scrollEl) { wrap.dataset.peiAugmented = '1'; return; }
 
-                // Fix 3: Add "+" buttons to free blocks (no dblclick needed)
-                if (canEditBunk(bunk)) {
-                    col.querySelectorAll('.asg-free').forEach(freeEl => {
-                        const addBtn = document.createElement('div');
-                        addBtn.className = 'pei-add-btn';
-                        addBtn.innerHTML = '+';
-                        addBtn.title = 'Add activity here';
-                        addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;pointer-events:auto;';
-                        // Parent asg-free already uses flex centering
-                        freeEl.appendChild(addBtn);
-                        freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; });
-                        freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; });
-                        addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
-                        addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
-                        addBtn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            peiHandleDoubleClickAdd(col, e);
+            if (isTransposed) {
+                // ── Transposed view: rows = bunks, each row has .asg-tx-bunk + .asg-tx-strip ──
+                const rows = scrollEl.querySelectorAll('.asg-tx-row:not(.asg-tx-headrow)');
+                rows.forEach((row) => {
+                    const bunkEl = row.querySelector('.asg-tx-bunk');
+                    const strip = row.querySelector('.asg-tx-strip');
+                    if (!bunkEl || !strip) return;
+                    const bunk = bunkEl.textContent.trim();
+                    if (!bunk) return;
+                    row.dataset.peiBunk = bunk; row.dataset.peiDivision = divName;
+
+                    // Add "+" buttons to free blocks
+                    if (canEditBunk(bunk)) {
+                        strip.querySelectorAll('.asg-tx-free').forEach(freeEl => {
+                            if (freeEl.querySelector('.pei-add-btn')) return;
+                            const addBtn = document.createElement('div');
+                            addBtn.className = 'pei-add-btn';
+                            addBtn.innerHTML = '+';
+                            addBtn.title = 'Add activity here';
+                            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;pointer-events:auto;';
+                            freeEl.appendChild(addBtn);
+                            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; });
+                            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; });
+                            addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
+                            addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
+                            addBtn.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                peiHandleDoubleClickAdd(row, e);
+                            });
+                        });
+                    }
+                    const bunkActs = peiBunkActivities(bunk, divName);
+                    const blocks = strip.querySelectorAll('.asg-tx-block');
+                    blocks.forEach((blk, bi) => {
+                        const matched = bunkActs[bi];
+                        if (!matched) return;
+                        blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
+                        blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
+                        blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
+                        if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
+                        blk.style.cursor = 'grab';
+
+                        // Resize handles — left/right for transposed (horizontal) layout
+                        const leftH = document.createElement('div'); leftH.className = 'pei-resize-handle pei-resize-top';
+                        leftH.style.cssText = 'position:absolute;top:0;left:0;bottom:0;width:6px;cursor:w-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:5px 0 0 5px;';
+                        blk.appendChild(leftH);
+                        const rightH = document.createElement('div'); rightH.className = 'pei-resize-handle pei-resize-bottom';
+                        rightH.style.cssText = 'position:absolute;top:0;right:0;bottom:0;width:6px;cursor:e-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:0 5px 5px 0;';
+                        blk.appendChild(rightH);
+                        blk.addEventListener('mouseenter', () => { if (!_peiResizing && !_peiMoving) { leftH.style.opacity = '1'; rightH.style.opacity = '1'; } });
+                        blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { leftH.style.opacity = '0'; rightH.style.opacity = '0'; } });
+                        leftH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
+                        rightH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
+                        blk.addEventListener('mousedown', e => {
+                            if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
+                            if (e.button !== 0) return;
+                            _peiPendingMove = { block: blk, startX: e.clientX, startY: e.clientY, started: false };
+                            document.addEventListener('mousemove', peiOnPendingMoveCheck);
+                            document.addEventListener('mouseup', peiOnPendingMoveCancel);
                         });
                     });
-                }
-                const bunkActs = peiBunkActivities(bunk, divName);
-                const blocks = col.querySelectorAll('.asg-block');
-                // Blocks render in same order as peiBunkActivities — match by index
-                blocks.forEach((blk, bi) => {
-                    const matched = bunkActs[bi];
-                    if (!matched) return;
-                    blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
-                    blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
-                    blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
-                    if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
-                    blk.style.cursor = 'grab';
-                    blk.style.overflow = 'visible'; // Override grid CSS overflow:hidden
+                });
+            } else {
+                // ── Legacy view: columns = bunks ──
+                const firstBlock = scrollEl.querySelector('.asg-block') || scrollEl.querySelector('.asg-free');
+                if (!firstBlock) { debugLog('PEI: No blocks found in', divName); wrap.dataset.peiAugmented = '1'; return; }
+                const bodyRow = firstBlock.parentElement.parentElement;
+                const bunkCols = Array.from(bodyRow.children).slice(0, bunks.length);
+                if (bunkCols.length !== bunks.length) { debugLog('PEI: column mismatch', bunkCols.length, bunks.length); wrap.dataset.peiAugmented = '1'; return; }
 
-                    // Resize handles — INSIDE block bounds so overflow:hidden can't clip
-                    const topH = document.createElement('div'); topH.className = 'pei-resize-handle pei-resize-top';
-                    topH.style.cssText = 'position:absolute;top:0;left:0;right:0;height:6px;cursor:n-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:5px 5px 0 0;';
-                    blk.appendChild(topH);
-                    const botH = document.createElement('div'); botH.className = 'pei-resize-handle pei-resize-bottom';
-                    botH.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;cursor:s-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:0 0 5px 5px;';
-                    blk.appendChild(botH);
-                    blk.addEventListener('mouseenter', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '1'; botH.style.opacity = '1'; } });
-                    blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '0'; botH.style.opacity = '0'; } });
-                    topH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
-                    botH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
-                    blk.addEventListener('mousedown', e => {
-                        if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
-                        if (e.button !== 0) return;
-                        _peiPendingMove = { block: blk, startX: e.clientX, startY: e.clientY, started: false };
-                        document.addEventListener('mousemove', peiOnPendingMoveCheck);
-                        document.addEventListener('mouseup', peiOnPendingMoveCancel);
+                bunkCols.forEach((col, idx) => {
+                    const bunk = bunks[idx];
+                    if (!bunk) return;
+                    col.dataset.peiBunk = bunk; col.dataset.peiDivision = divName;
+
+                    // Add "+" buttons to free blocks
+                    if (canEditBunk(bunk)) {
+                        col.querySelectorAll('.asg-free').forEach(freeEl => {
+                            if (freeEl.querySelector('.pei-add-btn')) return;
+                            const addBtn = document.createElement('div');
+                            addBtn.className = 'pei-add-btn';
+                            addBtn.innerHTML = '+';
+                            addBtn.title = 'Add activity here';
+                            addBtn.style.cssText = 'width:26px;height:26px;border-radius:50%;background:rgba(37,99,235,0.1);color:#2563eb;font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:opacity 0.2s,background 0.2s,transform 0.15s;z-index:4;pointer-events:auto;';
+                            freeEl.appendChild(addBtn);
+                            freeEl.addEventListener('mouseenter', () => { addBtn.style.opacity = '1'; });
+                            freeEl.addEventListener('mouseleave', () => { addBtn.style.opacity = '0'; });
+                            addBtn.addEventListener('mouseenter', () => { addBtn.style.background = 'rgba(37,99,235,0.2)'; });
+                            addBtn.addEventListener('mouseleave', () => { addBtn.style.background = 'rgba(37,99,235,0.1)'; });
+                            addBtn.addEventListener('click', (e) => {
+                                e.stopPropagation();
+                                peiHandleDoubleClickAdd(col, e);
+                            });
+                        });
+                    }
+                    const bunkActs = peiBunkActivities(bunk, divName);
+                    const blocks = col.querySelectorAll('.asg-block');
+                    blocks.forEach((blk, bi) => {
+                        const matched = bunkActs[bi];
+                        if (!matched) return;
+                        blk.dataset.peiBunk = bunk; blk.dataset.peiStartMin = matched.startMin; blk.dataset.peiEndMin = matched.endMin;
+                        blk.dataset.peiSlotIdx = matched.slotIdx; blk.dataset.peiDivision = divName;
+                        blk.dataset.peiField = matched.entry.field || ''; blk.dataset.peiActivity = matched.entry._activity || '';
+                        if (!canEditBunk(bunk)) { blk.style.cursor = 'not-allowed'; return; }
+                        blk.style.cursor = 'grab';
+                        blk.style.overflow = 'visible';
+
+                        const topH = document.createElement('div'); topH.className = 'pei-resize-handle pei-resize-top';
+                        topH.style.cssText = 'position:absolute;top:0;left:0;right:0;height:6px;cursor:n-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:5px 5px 0 0;';
+                        blk.appendChild(topH);
+                        const botH = document.createElement('div'); botH.className = 'pei-resize-handle pei-resize-bottom';
+                        botH.style.cssText = 'position:absolute;bottom:0;left:0;right:0;height:6px;cursor:s-resize;z-index:10;opacity:0;transition:opacity 0.15s;border-radius:0 0 5px 5px;';
+                        blk.appendChild(botH);
+                        blk.addEventListener('mouseenter', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '1'; botH.style.opacity = '1'; } });
+                        blk.addEventListener('mouseleave', () => { if (!_peiResizing && !_peiMoving) { topH.style.opacity = '0'; botH.style.opacity = '0'; } });
+                        topH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'top', e); });
+                        botH.addEventListener('mousedown', e => { e.preventDefault(); e.stopPropagation(); peiStartResize(blk, 'bottom', e); });
+                        blk.addEventListener('mousedown', e => {
+                            if (e.target.classList.contains('pei-resize-handle') || e.target.classList.contains('pei-resize-top') || e.target.classList.contains('pei-resize-bottom')) return;
+                            if (e.button !== 0) return;
+                            _peiPendingMove = { block: blk, startX: e.clientX, startY: e.clientY, started: false };
+                            document.addEventListener('mousemove', peiOnPendingMoveCheck);
+                            document.addEventListener('mouseup', peiOnPendingMoveCancel);
+                        });
                     });
                 });
-            });
+            }
             wrap.dataset.peiAugmented = '1';
         });
     }
@@ -2282,18 +2370,18 @@
         if (window.MobileTouchDrag) return;
         document.addEventListener('touchstart', (e) => {
             const target = e.target;
-            if (target.classList.contains('pei-resize-handle')) { e.preventDefault(); const block = target.closest('.asg-block'); if (!block) return; peiStartResize(block, target.classList.contains('pei-resize-top') ? 'top' : 'bottom', { clientY: e.touches[0].clientY, preventDefault() {} }); return; }
-            const block = target.closest('.asg-block[data-pei-bunk]');
+            if (target.classList.contains('pei-resize-handle')) { e.preventDefault(); const block = target.closest('.asg-block, .asg-tx-block'); if (!block) return; peiStartResize(block, target.classList.contains('pei-resize-top') ? 'top' : 'bottom', { clientY: e.touches[0].clientY, preventDefault() {} }); return; }
+            const block = target.closest('.asg-block[data-pei-bunk], .asg-tx-block[data-pei-bunk]');
             if (block) { const sy = e.touches[0].clientY; block._peiLP = setTimeout(() => { peiStartMove(block, { clientY: sy, preventDefault() {} }); if (navigator.vibrate) navigator.vibrate(30); }, PEI_LONG_PRESS_MS); block._peiTS = { x: e.touches[0].clientX, y: sy }; }
         }, { passive: false });
         document.addEventListener('touchmove', (e) => {
             const t = e.touches[0];
-            document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(b => { if (b._peiLP && b._peiTS && Math.sqrt((t.clientX - b._peiTS.x) ** 2 + (t.clientY - b._peiTS.y) ** 2) > 10) { clearTimeout(b._peiLP); b._peiLP = null; } });
+            document.querySelectorAll('.asg-block[data-pei-bunk], .asg-tx-block[data-pei-bunk]').forEach(b => { if (b._peiLP && b._peiTS && Math.sqrt((t.clientX - b._peiTS.x) ** 2 + (t.clientY - b._peiTS.y) ** 2) > 10) { clearTimeout(b._peiLP); b._peiLP = null; } });
             if (_peiResizing) { e.preventDefault(); peiOnResizeMove({ clientX: t.clientX, clientY: t.clientY }); }
             if (_peiMoving) { e.preventDefault(); peiOnMoveMove({ clientX: t.clientX, clientY: t.clientY }); }
         }, { passive: false });
         document.addEventListener('touchend', (e) => {
-            document.querySelectorAll('.asg-block[data-pei-bunk]').forEach(b => { if (b._peiLP) { clearTimeout(b._peiLP); b._peiLP = null; } });
+            document.querySelectorAll('.asg-block[data-pei-bunk], .asg-tx-block[data-pei-bunk]').forEach(b => { if (b._peiLP) { clearTimeout(b._peiLP); b._peiLP = null; } });
             if (_peiResizing) peiOnResizeEnd();
             if (_peiMoving) peiOnMoveEnd();
         });
@@ -2310,7 +2398,7 @@
     function peiInjectStyles() {
         if (document.getElementById('pei-styles')) return;
         const s = document.createElement('style'); s.id = 'pei-styles';
-        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;transition:transform 0.15s,opacity 0.2s,background 0.2s;}.pei-add-btn:hover{transform:scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
+        s.textContent = `.pei-resize-handle{touch-action:none;background:transparent;}.pei-resize-handle:hover{background:rgba(59,130,246,0.4)!important;}@media(pointer:coarse){.pei-resize-handle{height:12px!important;width:12px!important;opacity:.5!important}}.asg-block[data-pei-bunk],.asg-tx-block[data-pei-bunk]{touch-action:none;overflow:visible!important;transition:box-shadow 0.2s}.asg-block[data-pei-bunk]:active,.asg-tx-block[data-pei-bunk]:active{cursor:grabbing!important}.pei-conflict-overlay{pointer-events:none;animation:pei-pulse 1s ease-in-out infinite}@keyframes pei-pulse{0%,100%{opacity:.3}50%{opacity:.6}}@keyframes pei-slide-up{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}@keyframes pei-fade-in{from{opacity:0}to{opacity:1}}.asg-free,.asg-tx-free{cursor:default;position:relative;transition:border-color 0.2s}.asg-free:hover,.asg-tx-free:hover{border-color:#93c5fd!important;background:repeating-linear-gradient(45deg,#eff6ff,#eff6ff 4px,#dbeafe 4px,#dbeafe 8px)!important}.pei-add-btn{font-family:-apple-system,BlinkMacSystemFont,sans-serif;user-select:none;line-height:1;transition:transform 0.15s,opacity 0.2s,background 0.2s;}.pei-add-btn:hover{transform:scale(1.15)!important;box-shadow:0 2px 8px rgba(37,99,235,0.3);}[data-pei-bunk]:hover{background:rgba(59,130,246,.01)}`;
         document.head.appendChild(s);
     }
 
