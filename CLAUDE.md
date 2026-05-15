@@ -219,8 +219,11 @@ When the user says **"day X"** or **"let's do day X"**:
   - **[NEW from main]** Exact frequency constraint: configure a special with an exact frequency (e.g. "exactly 2x per week") in facilities UI. Generate — verify the constraint is enforced, not exceeded. Verify the manual edit gate also rejects violations.
   - **[NEW from main]** Escalating frequency bonuses (`rotation_engine.js`, `scheduler_core_auto.js`): verify the bonus doesn't unfairly favor one bunk, and that cooldown is factored into the escalation correctly
   - **[NEW from main]** Per Half period option: if camp dates define halves, verify rotation can be set to "Per Half" and counts reset at the half boundary
+  - **[ADDED]** `frequencyDays` cooldown: configure a special with `frequencyDays: 3` (min 3 days between visits). Run gen across 5 consecutive days — verify no bunk gets the special twice within 3 days
+  - **[ADDED]** `availableDays`: configure a special with `availableDays: ['Monday','Wednesday']`. Run gen on a Tuesday — verify the special is NOT placed. Run on Monday — verify it IS placed
+  - **[ADDED]** `rotationCohort`: configure cohort `{enabled:true, grades:['Soloists','Duetos']}` for a special. Verify rotation counts pool across the cohort (not per-bunk)
   - Fix any fairness bugs
-- Done when: Rotation is visibly fair, exact frequency enforced, escalation balanced
+- Done when: Rotation is fair, frequency/cooldown/availableDays/cohort all enforced, escalation balanced
 
 **Day 18**
 - Goal: Rotation count correctness on re-generation
@@ -241,8 +244,22 @@ When the user says **"day X"** or **"let's do day X"**:
   - Verify special activity assignments are saved to cloud and reload correctly
   - **[NEW from main]** Multi-period special spanning: configure a special that spans 2+ consecutive periods (e.g. 90-min swim across two 45-min slots). Verify: continuation slots have correct `_startMin/_endMin`, field capacity is counted correctly across spanned periods, pinned preservation handles multi-period pins, manual edit of a spanned special updates all continuation slots
   - **[NEW from main]** Period-boundary alignment: verify multi-period specials align to period boundaries and don't create unfillable gaps
+  - **[ADDED]** `multiPart` activities: configure a 2-part special with `daysBetween: 3`. Run gen across 5 days — verify part 1 places, part 2 places ≥3 days after part 1, never reversed
+  - **[ADDED]** `durations: []` array: configure an activity with multiple permitted durations (e.g., [30, 45, 60]). Verify solver picks the duration that best fits the available slot, not always the first
+  - **[ADDED]** `prepConfig.sync`: test both `staggered` (preps for different bunks can overlap each other) and `synced` (all preps must be at same time)
   - Fix any placement or persistence bugs
-- Done when: Special activities place correctly including multi-period spanning
+- Done when: Special activities place correctly including multi-period, multi-part, multi-duration, and prep-sync variants
+
+**Day 19.5 — Activity config edge cases**
+- Goal: Cover activity config dimensions not addressed by Days 17/19
+- Files: `special_activities.js`, `scheduler_core_auto.js`, `rainy_day_manager.js`
+- Tasks:
+  - **`isIndoor` rainy day fallback:** configure indoor + outdoor versions of similar activities. Trigger rainy day mode — verify only `isIndoor:true` activities get scheduled
+  - **`rainyDayOnly` / `rainyDayExclusive` / `rainyDayAvailable`:** configure each variant; verify rotation engine respects them on rainy vs sunny days
+  - **`subcategory` tags + per-layer subcategory restrictions:** configure layer rule `allowedSubcategories: ['Food']`. Verify only Food-tagged specials land in that layer; Regular and Theme specials skip it
+  - **`subcategoryCap`:** layer rule limiting how many of a subcategory can land (e.g., max 1 Food per day). Verify the cap is enforced
+  - **Mixed-config stress test:** configure ONE special with prep + multiPart + cooldown + per-grade maxUsage + availableDays simultaneously. Run 7-day gen — verify every constraint is honored across all bunks
+- Done when: All non-rotation, non-multi-period activity config dimensions verified live with no violations
 
 **Day 20**
 - Goal: League games in auto builder
