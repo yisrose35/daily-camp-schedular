@@ -2900,6 +2900,14 @@
             const specialPriorityList = [];
             todaysSpecials.forEach(s => {
                 if (!isSpecialAvailableForBunk(s.name, grade, bunk, globalSettings)) return;
+                // ★ Day 14: Skip fullGrade specials from individual-bunk shopping.
+                //   FullGrade means the entire grade must attend together at the
+                //   same time. Per-bunk shopping cannot enforce that — each bunk
+                //   would independently pick (or skip) the special, leading to
+                //   partial-grade placements. FullGrade specials must be placed
+                //   via a layer (Phase 0 grade-wide path) or explicit scheduling.
+                const _specProps = activityProperties[s.name] || s;
+                if (_specProps.fullGrade === true || s.fullGrade === true) return;
                 let score = 0;
                 if (window.RotationEngine?.calculateRotationScore) {
                     score = window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: s.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties });
