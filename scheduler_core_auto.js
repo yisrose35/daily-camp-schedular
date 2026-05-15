@@ -15462,34 +15462,41 @@
                     }
                 }
 
-                var conflictCount = 0;
+                // ★ Day 14 fix: count DISTINCT bunks occupying the field at this time,
+                //   not slot indices. Previous version skipped continuation:true slots,
+                //   which made multi-period blocks invisible — a 2-period Trench block
+                //   only registered its head slot's bucket time, missing the continuation
+                //   buckets. That let perfection-pass extensions stack 4 bunks (2 Majors +
+                //   2 Minors) onto a capacity:2 same_division field at the same time.
+                //   Now: include continuations in the field-occupancy check, and dedupe
+                //   by bunk so a multi-bucket block of the same bunk counts as one.
+                var conflictBunks = new Set();
                 var ownerGrade = perfBunkGrade[String(ownerBunk)] || '';
                 var perfAllSA = window.scheduleAssignments || {};
                 for (var ob in perfAllSA) {
                     if (String(ob) === String(ownerBunk)) continue;
                     var otherSlots = perfAllSA[ob];
                     if (!Array.isArray(otherSlots)) continue;
+                    var og = perfBunkGrade[String(ob)] || '';
+                    var opbs = window._perBunkSlots?.[og]?.[ob] || [];
                     for (var oi = 0; oi < otherSlots.length; oi++) {
                         var oe = otherSlots[oi];
-                        if (!oe || oe.field === 'Free' || oe.continuation) continue;
+                        if (!oe || oe.field === 'Free') continue; // continuation NOT skipped
                         var of_ = (oe.field || '').toLowerCase().trim();
                         if (of_ !== fn) continue;
-                        // Need timing of the other slot — use window._perBunkSlots
-                        var og = perfBunkGrade[String(ob)] || '';
-                        var opbs = window._perBunkSlots?.[og]?.[ob] || [];
                         var os = opbs[oi];
                         if (!os) continue;
                         // [start, end) half-open interval overlap check
                         if (os.startMin < freeSlot.endMin && os.endMin > freeSlot.startMin) {
-                            // Cross-grade check: not_sharable and same_division block cross-grade sharing
+                            // Cross-grade check
                             if (fieldShareType === 'not_sharable') return false;
                             if (fieldShareType === 'same_division' && og !== ownerGrade) return false;
                             if (fieldShareType === 'cross_division') {
                                 var pk = [ownerGrade, og].sort().join('|');
                                 if ((fieldAllowedPairs || {})[pk] !== true) return false;
                             }
-                            conflictCount++;
-                            if (conflictCount + 1 > fieldCap) return false;
+                            conflictBunks.add(String(ob));
+                            if (conflictBunks.size + 1 > fieldCap) return false;
                         }
                     }
                 }
