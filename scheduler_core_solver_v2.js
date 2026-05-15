@@ -603,26 +603,29 @@
   }
 
   // --- bucketExtend: stretch an adjacent activity's _startMin/_endMin to
-  //     close a wall-clock gap. This DOES NOT modify the bucket grid in
-  //     ctx.perBunkSlots — only the slot's own time range, which is what
-  //     the wall-clock-gap cost function actually reads.
+  //     close a wall-clock gap. Critically, EITHER side can be _fixed
+  //     (anchor, special, league) — we only need ONE side to be movable.
+  //     E.g. "Neranitas(_fixed) → 25min gap → Chalk Coloring" closes by
+  //     extending Chalk Coloring backward, even though Neranitas itself
+  //     is fixed.
   function moveBucketExtend(schedule, ctx, rng) {
     const bunks = Object.keys(schedule);
     for (let attempt = 0; attempt < 20; attempt++) {
       const bunk = bunks[Math.floor(rng() * bunks.length)];
       const slots = schedule[bunk];
       if (!Array.isArray(slots) || slots.length < 2) continue;
-      // Pick an adjacent (real, real) pair with a gap
       const real = [];
       slots.forEach((s, i) => { if (s && !s.continuation && s._startMin != null) real.push({ s, i }); });
       real.sort((a, b) => a.s._startMin - b.s._startMin);
       const candidates = [];
       for (let k = 0; k < real.length - 1; k++) {
         const gap = real[k + 1].s._startMin - real[k].s._endMin;
-        if (gap >= 10 && _isMovable(real[k].s)) {
+        if (gap < 10) continue;
+        // Either side movable is enough — anchors on the other side stay put
+        if (_isMovable(real[k].s)) {
           candidates.push({ idx: real[k].i, newEnd: real[k + 1].s._startMin, kind: 'fwd' });
         }
-        if (gap >= 10 && _isMovable(real[k + 1].s)) {
+        if (_isMovable(real[k + 1].s)) {
           candidates.push({ idx: real[k + 1].i, newStart: real[k].s._endMin, kind: 'back' });
         }
       }
@@ -705,9 +708,12 @@
     return null;
   }
 
-  // --- bucketInsert (atomic): splice a NEW bucket into a wall-clock gap in
-  //     the bucket grid. Returns a wrapped candidate { schedule, bucketPatch }
-  //     so the SA loop only commits the grid mutation on accept.
+  // --- bucketInsert (atomic with bounded backtracking): splice a NEW bucket
+  //     into a wall-clock gap. Tries MULTIPLE candidate activities per call
+  //     until one passes a quick local validation (field exists, has the
+  //     activity in its hosted list, no obvious field-capacity blowout).
+  //     The SA cost function still does the final rule check, but this
+  //     pre-filter raises the rate of useful inserts vs random misses.
   function moveBucketInsert(schedule, ctx, rng) {
     const bunks = Object.keys(schedule);
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -724,29 +730,39 @@
       }
       if (gaps.length === 0) continue;
       const g = gaps[Math.floor(rng() * gaps.length)];
+      // Try up to 8 candidate activities for this gap
       const pool = _candidateActivities(grade, ctx);
       if (pool.length === 0) continue;
-      const newAct = pool[Math.floor(rng() * pool.length)];
-      const newField = _findFieldForActivity(newAct, ctx);
-      if (!newField) continue;
-      // Build the candidate schedule with new slot inserted at afterIdx+1
-      const next = _cloneSchedule(schedule);
-      next[bunk] = next[bunk].slice();
-      next[bunk].splice(g.afterIdx + 1, 0, {
-        field: newField.name, sport: newAct, _activity: newAct,
-        _autoMode: true, _autoSolved: true,
-        _startMin: g.start, _endMin: g.end,
-        _source: 'v2-bucketInsert', continuation: false
-      });
-      // Return wrapped candidate with the grid patch — SA applies it on accept
-      return {
-        schedule: next,
-        bucketPatch: {
-          kind: 'insert', grade, bunk,
-          idx: g.afterIdx + 1,
-          newBucket: { startMin: g.start, endMin: g.end }
+      const shuffled = pool.slice().sort(() => rng() - 0.5).slice(0, 8);
+      for (const newAct of shuffled) {
+        const newField = _findFieldForActivity(newAct, ctx);
+        if (!newField) continue;
+        // Quick local validation: is the field accessible to this grade?
+        const ar = newField.accessRestrictions;
+        if (ar?.enabled) {
+          const divs = ar.divisions || {};
+          if (!(grade in divs) && !(String(grade) in divs)) continue;
+          const allow = divs[grade] || divs[String(grade)];
+          if (Array.isArray(allow) && allow.length > 0 && !allow.map(String).includes(String(bunk))) continue;
         }
-      };
+        // Build the candidate
+        const next = _cloneSchedule(schedule);
+        next[bunk] = next[bunk].slice();
+        next[bunk].splice(g.afterIdx + 1, 0, {
+          field: newField.name, sport: newAct, _activity: newAct,
+          _autoMode: true, _autoSolved: true,
+          _startMin: g.start, _endMin: g.end,
+          _source: 'v2-bucketInsert', continuation: false
+        });
+        return {
+          schedule: next,
+          bucketPatch: {
+            kind: 'insert', grade, bunk,
+            idx: g.afterIdx + 1,
+            newBucket: { startMin: g.start, endMin: g.end }
+          }
+        };
+      }
     }
     return null;
   }
