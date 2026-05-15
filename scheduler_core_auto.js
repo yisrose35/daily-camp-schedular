@@ -15993,6 +15993,95 @@
           }
         })();
 
+        // =====================================================================
+        // STEP 4.97 — NULL BUCKET FINALIZER (Day 15+ gap-fix iteration 1)
+        // =====================================================================
+        // Background: a `_perBunkSlots[grade][bunk]` array entry can be a real
+        // bucket whose `scheduleAssignments[bunk][idx]` is still `null` after
+        // every prior phase. This happens when bunkTimelines produces a `slot`
+        // block (via Phase 3 perfection-fill) that lacks `_source === 'capacity_checked'`
+        // or a `field`, so the sport-write loop at ~line 14600 skips it, and
+        // the Total Solver can't find a valid sport+field for the slot either.
+        // The bucket stays null and the UI shows "+Add" — a visible hole.
+        //
+        // Iteration 1: minimal viable fix. For every null bucket with a valid
+        // time range from _perBunkSlots, attempt to write a real activity by
+        // probing sport+field combinations. If no valid combo can be found,
+        // fall back to a Free placeholder so the bucket is at least non-null
+        // (the UI shows "Free" instead of "+Add"). This converts ALL null
+        // buckets to something. Iteration 2 will make the probe smarter so
+        // fewer fall back to Free.
+        (function nullBucketFinalizer() {
+            try {
+                let filled_real = 0, filled_free = 0;
+                const sa = window.scheduleAssignments || {};
+                for (const grade of Object.keys(divisions || {})) {
+                    if (allowedSet && !allowedSet.has(String(grade))) continue;
+                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    if (!pbs) continue;
+                    const bunks = getBunksForGrade(grade, divisions);
+                    for (const bunk of bunks) {
+                        const bunkKey = String(bunk);
+                        const arr = pbs[bunkKey] || [];
+                        const slots = sa[bunkKey];
+                        if (!Array.isArray(slots)) continue;
+                        for (let i = 0; i < arr.length; i++) {
+                            if (slots[i]) continue; // already filled
+                            const bucket = arr[i];
+                            if (!bucket || bucket.startMin == null || bucket.endMin == null) continue;
+                            // Try to find any valid sport+field combo
+                            let placed = null;
+                            try {
+                                const fld = (typeof _findValidAlternativeField === 'function')
+                                    ? _findValidAlternativeField(null, grade, bunk, bucket.startMin, bucket.endMin, null)
+                                    : null;
+                                if (fld) {
+                                    // Probe the field's hosted activities to pick one
+                                    const globalSettings2 = getGlobalSettings();
+                                    const fields2 = globalSettings2.app1?.fields || globalSettings2.fields || [];
+                                    const fObj = fields2.find(f => f && f.name === fld);
+                                    const acts = (fObj && Array.isArray(fObj.activities)) ? fObj.activities : [];
+                                    const chosenAct = acts[0] || null;
+                                    if (chosenAct) {
+                                        // Final rule check before writing
+                                        const reason = _validateWritePlacement(fld, chosenAct, grade, bunk, bucket.startMin, bucket.endMin);
+                                        if (!reason) {
+                                            placed = {
+                                                field: fld, sport: chosenAct,
+                                                _activity: chosenAct, _autoMode: true, _autoSolved: true,
+                                                _startMin: bucket.startMin, _endMin: bucket.endMin,
+                                                _source: 'null-bucket-fill',
+                                                continuation: false
+                                            };
+                                        }
+                                    }
+                                }
+                            } catch (_eP) { /* probe failed — fall through */ }
+                            if (placed) {
+                                slots[i] = placed;
+                                filled_real++;
+                            } else {
+                                // Last resort: Free placeholder so bucket is not null
+                                slots[i] = {
+                                    field: 'Free', sport: null, _activity: 'Free',
+                                    _autoMode: true, _fixed: true,
+                                    _startMin: bucket.startMin, _endMin: bucket.endMin,
+                                    _source: 'null-bucket-fill-free',
+                                    continuation: false
+                                };
+                                filled_free++;
+                            }
+                        }
+                    }
+                }
+                if (filled_real || filled_free) {
+                    log('[STEP 4.97] Null-bucket finalizer: ' + filled_real + ' filled with real activity, ' + filled_free + ' filled with Free placeholder');
+                }
+            } catch (eF) {
+                warn('[STEP 4.97] Null bucket finalizer error: ' + eF.message);
+            }
+        })();
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
