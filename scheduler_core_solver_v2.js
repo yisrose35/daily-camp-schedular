@@ -35,7 +35,7 @@
     const g = window.loadGlobalSettings?.() || {};
     const a1 = g.app1 || {};
     return {
-      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 15000,
+      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 30000,
       tempStart:    parseFloat(a1.solverV2TempStart)   || 100,
       tempEnd:      parseFloat(a1.solverV2TempEnd)     || 0.1,
       kickAfter:    parseInt(a1.solverV2KickAfter)     || 500,    // stall threshold for re-randomize
@@ -971,6 +971,86 @@
     return null;
   }
 
+  // --- shiftBlocker: addChange can fail when a non-anchor activity is
+  //     occupying the 10-min adjacent window. This move tries to RELOCATE
+  //     that blocker to a different time slot so Change can be added.
+  //     Operates only on movable activities; gives up if blocker is also
+  //     anchor/fixed.
+  function moveShiftBlocker(schedule, ctx, rng) {
+    const CHANGE_DUR = 10;
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots)) continue;
+      const real = slots
+        .filter(s => s && !s.continuation && s._startMin != null)
+        .sort((a, b) => a._startMin - b._startMin);
+      // Find Swim missing Change AND a movable blocker on at least one side
+      const targets = [];
+      for (let i = 0; i < real.length; i++) {
+        const s = real[i];
+        if ((s._activity || '').toLowerCase() !== 'swim') continue;
+        const before = real[i - 1];
+        const after = real[i + 1];
+        const bIsCh = before && /change/i.test(before._activity || '') && before._endMin === s._startMin;
+        const aIsCh = after && /change/i.test(after._activity || '') && after._startMin === s._endMin;
+        if (bIsCh || aIsCh) continue; // already has Change
+        // Identify movable blockers
+        if (before && _isMovable(before) && before._endMin > s._startMin - CHANGE_DUR) {
+          targets.push({ blockerIdx: slots.findIndex(x => x === before), side: 'before', swim: s });
+        }
+        if (after && _isMovable(after) && after._startMin < s._endMin + CHANGE_DUR) {
+          targets.push({ blockerIdx: slots.findIndex(x => x === after), side: 'after', swim: s });
+        }
+      }
+      if (targets.length === 0) continue;
+      const t = targets[Math.floor(rng() * targets.length)];
+      if (t.blockerIdx < 0) continue;
+      const blocker = slots[t.blockerIdx];
+      // Try to find an empty time window in this bunk's day where the blocker fits
+      const blockerDur = blocker._endMin - blocker._startMin;
+      const dayStart = Math.min(...real.map(r => r._startMin));
+      const dayEnd = Math.max(...real.map(r => r._endMin));
+      // Build occupied intervals (excluding the blocker we're trying to move)
+      const occupied = real
+        .filter(r => r !== blocker)
+        .map(r => ({ start: r._startMin, end: r._endMin }));
+      // Find a free interval of at least blockerDur within day bounds
+      const free = [];
+      let cursor = dayStart;
+      occupied.sort((a, b) => a.start - b.start);
+      for (const o of occupied) {
+        if (o.start > cursor && o.start - cursor >= blockerDur) {
+          free.push({ start: cursor, end: o.start });
+        }
+        cursor = Math.max(cursor, o.end);
+      }
+      if (cursor < dayEnd && dayEnd - cursor >= blockerDur) {
+        free.push({ start: cursor, end: dayEnd });
+      }
+      if (free.length === 0) continue;
+      const target = free[Math.floor(rng() * free.length)];
+      const newStart = target.start;
+      const newEnd = newStart + blockerDur;
+      // Build candidate: move blocker to new time
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk][t.blockerIdx] = Object.assign({}, blocker, {
+        _startMin: newStart, _endMin: newEnd,
+        _source: 'v2-shiftBlocker'
+      });
+      // NOTE: this doesn't insert the Change block itself — addChange will
+      // get another shot on a later iteration and find space now. So this
+      // move alone won't reduce swimNoChange by 1, but it UNBLOCKS the path
+      // for addChange.
+      return next;
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
@@ -981,7 +1061,8 @@
     gapTargeted:  moveGapTargeted,
     bucketInsert: moveBucketInsert,
     bucketDelete: moveBucketDelete,
-    addChange:    moveAddChange
+    addChange:    moveAddChange,
+    shiftBlocker: moveShiftBlocker
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -1002,7 +1083,8 @@
     gapTargeted:  4,
     bucketInsert: 4,
     bucketDelete: 1,
-    addChange:    3     // fixes user-reported swim-without-Change issue
+    addChange:    3,    // fixes user-reported swim-without-Change issue
+    shiftBlocker: 2     // unblocks addChange when adjacent space is occupied
   };
 
   function pickMove(stats, rng) {
