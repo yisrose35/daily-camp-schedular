@@ -8,8 +8,14 @@
 - **Two builder modes:** Auto Builder (layer-based solver) and Manual Builder (drag-drop skeleton).
 
 ## Active Mission
-40-day polish plan — no new features, perfect what exists. Track progress:
-https://github.com/yisrose35/daily-camp-schedular/issues/66
+
+**⏸️ 40-day polish plan PAUSED at end of Day 15.** Reason: the v1 solver is a strict forward pipeline with no backtracking — Phase 0 decisions box in Phase 3, producing visible holes in the schedule that iter-patches can only mask, not eliminate. Continuing the polish plan on v1 hits diminishing returns.
+
+**🟢 ACTIVE: Solver v2 re-architecture (Option B).** Replace the greedy forward pipeline with a greedy-seed + simulated-annealing local-search optimizer that can revisit any choice during the gen. Design: `docs/SOLVER_V2_DESIGN.md`. Phased rollout (X1 → X4). v1 stays live via `globalSettings.app1.solverVersion` feature flag until v2 hits parity.
+
+The audits we already did (Days 1-15) are NOT wasted — they're the constraint catalog v2 will enforce. The 40-day plan will resume after Phase X4 (likely at Day 16) with v2 as the engine under audit.
+
+40-day plan progress tracker (paused): https://github.com/yisrose35/daily-camp-schedular/issues/66
 
 **Working branch:** `Daily-Audit-Walkthrough`
 
