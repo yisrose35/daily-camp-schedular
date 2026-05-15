@@ -107,10 +107,178 @@
   // -------------------------------------------------------------------------
   // VALIDATORS (stubs — to be filled in Phase X2b)
   // -------------------------------------------------------------------------
+  // Detect hard rule violations. Self-contained so the SA loop doesn't depend
+  // on v1's closure. Mirrors the logic in v1's commitWriteIfLegal + safety net.
   function detectHardViolations(schedule, ctx) {
-    // TODO X2b: iterate all assignments and call v1's _validateWritePlacement
-    // + rule check helpers. Returns an array of { bunk, idx, reason } objects.
-    return [];
+    const out = [];
+    const fieldByName = ctx._fieldByName;
+    const specialByName = ctx._specialByName;
+
+    // Build flat (bunk, grade, field, sport, activity, start, end) list once.
+    const flat = [];
+    for (const [bunk, slots] of Object.entries(schedule)) {
+      if (!Array.isArray(slots)) continue;
+      let grade = null;
+      for (const [d, info] of Object.entries(ctx.divisions)) {
+        if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+      }
+      slots.forEach((s, idx) => {
+        if (!s || s.continuation) return;
+        if (s.field === 'Free' || !s._activity) return;
+        if (s._activity === 'Change' || s.type === 'pre-change' || s.type === 'post-change') return;
+        flat.push({ bunk, grade, idx, field: s.field, activity: s._activity,
+                    start: s._startMin, end: s._endMin });
+      });
+    }
+
+    // === 1. Field access restrictions (per-division + per-bunk allow lists) ===
+    flat.forEach(c => {
+      const cfg = fieldByName[c.field];
+      if (!cfg?.accessRestrictions?.enabled) return;
+      const divs = cfg.accessRestrictions.divisions || {};
+      const gradeKey = String(c.grade);
+      if (!(gradeKey in divs) && !(c.grade in divs)) {
+        out.push({ bunk: c.bunk, idx: c.idx, reason: 'field-access:grade ' + c.grade + ' not allowed on ' + c.field });
+        return;
+      }
+      const allow = divs[gradeKey] || divs[c.grade];
+      if (Array.isArray(allow) && allow.length > 0 && !allow.map(String).includes(String(c.bunk))) {
+        out.push({ bunk: c.bunk, idx: c.idx, reason: 'field-access:bunk ' + c.bunk + ' not in allow-list for ' + c.field });
+      }
+    });
+
+    // === 2. Field time rules (Available/Unavailable, per-division) ===
+    flat.forEach(c => {
+      const cfg = fieldByName[c.field];
+      if (!cfg?.timeRules || cfg.timeRules.length === 0) return;
+      const avail = cfg.timeRules.filter(r => r.type === 'Available' || !r.type || r.available === true);
+      const unavail = cfg.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+      // Available: must lie within at least one applicable rule
+      if (avail.length > 0) {
+        const ok = avail.some(r => {
+          if (r.divisions && r.divisions.length > 0 && !r.divisions.includes(c.grade)) return false;
+          const rs = r.startMin ?? null, re = r.endMin ?? null;
+          if (rs == null || re == null) return true;
+          return c.start >= rs && c.end <= re;
+        });
+        if (!ok) out.push({ bunk: c.bunk, idx: c.idx, reason: 'time-rule:outside-available on ' + c.field });
+      }
+      // Unavailable: no applicable rule may overlap
+      unavail.forEach(r => {
+        if (r.divisions && r.divisions.length > 0 && !r.divisions.includes(c.grade)) return;
+        const rs = r.startMin ?? null, re = r.endMin ?? null;
+        if (rs == null || re == null) return;
+        if (c.start < re && c.end > rs) {
+          out.push({ bunk: c.bunk, idx: c.idx, reason: 'time-rule:in-unavailable ' + rs + '-' + re + ' on ' + c.field });
+        }
+      });
+    });
+
+    // === 3. Field capacity + sharing (cap exceeded, cross-grade on same_division, etc.) ===
+    const byField = {};
+    flat.forEach(c => { if (c.field) (byField[c.field] = byField[c.field] || []).push(c); });
+    for (const [fieldName, claims] of Object.entries(byField)) {
+      const cfg = fieldByName[fieldName];
+      if (!cfg) continue;
+      const globalCap = cfg.sharableWith?.capacity || (cfg.sharableWith?.type === 'not_sharable' ? 1 : 2);
+      const globalShare = cfg.sharableWith?.type || 'not_sharable';
+      const gsr = cfg.gradeShareRules || {};
+
+      // Peak concurrent + cross-grade overlap check
+      for (let i = 0; i < claims.length; i++) {
+        for (let j = i + 1; j < claims.length; j++) {
+          const a = claims[i], b = claims[j];
+          if (a.start >= b.end || a.end <= b.start) continue; // no overlap
+          // not_sharable globally and no per-grade override → conflict
+          const aRule = gsr[a.grade], bRule = gsr[b.grade];
+          const effShareA = aRule?.type || globalShare;
+          const effShareB = bRule?.type || globalShare;
+          if (effShareA === 'not_sharable' || effShareB === 'not_sharable') {
+            out.push({ bunk: a.bunk, idx: a.idx, reason: 'field-share:not_sharable overlap with ' + b.bunk + ' on ' + fieldName });
+            break;
+          }
+          // same_division: cross-grade overlap is illegal
+          if ((effShareA === 'same_division' || effShareB === 'same_division') && a.grade !== b.grade) {
+            out.push({ bunk: a.bunk, idx: a.idx, reason: 'field-share:same_division cross-grade with ' + b.bunk + '/' + b.grade + ' on ' + fieldName });
+          }
+          // cross_division with allowedPairs
+          if (effShareA === 'cross_division') {
+            const pairs = cfg.sharableWith?.allowedPairs || {};
+            const key = [a.grade, b.grade].sort().join('|');
+            if (!pairs[key]) {
+              out.push({ bunk: a.bunk, idx: a.idx, reason: 'field-share:cross_division pair ' + key + ' not allowed on ' + fieldName });
+            }
+          }
+        }
+      }
+      // Peak count vs cap (per grade override aware)
+      const events = [];
+      claims.forEach(c => { events.push({ t: c.start, e: 1, c }); events.push({ t: c.end, e: -1, c }); });
+      events.sort((a, b) => a.t - b.t || a.e - b.e);
+      let cur = 0, peak = 0, peakAt = 0, peakOverlaps = [];
+      events.forEach(ev => {
+        if (ev.e === 1) cur++; else cur--;
+        if (cur > peak) {
+          peak = cur; peakAt = ev.t;
+          peakOverlaps = claims.filter(c => c.start <= ev.t && c.end > ev.t);
+        }
+      });
+      if (peak > globalCap) {
+        out.push({ bunk: peakOverlaps[0]?.bunk, idx: peakOverlaps[0]?.idx, reason: 'field-cap:' + fieldName + ' peak=' + peak + ' cap=' + globalCap });
+      }
+      // Per-grade cap (if any grade has its own override that's tighter than peak for that grade)
+      Object.keys(gsr).forEach(g => {
+        const ruleCap = parseInt(gsr[g]?.capacity) || (gsr[g]?.type === 'not_sharable' ? 1 : 2);
+        const gClaims = claims.filter(c => c.grade === g);
+        const gEv = []; gClaims.forEach(c => { gEv.push({ t: c.start, e: 1 }); gEv.push({ t: c.end, e: -1 }); });
+        gEv.sort((a, b) => a.t - b.t || a.e - b.e);
+        let gc = 0, gp = 0; gEv.forEach(x => { gc += x.e; if (gc > gp) gp = gc; });
+        if (gp > ruleCap) {
+          out.push({ bunk: gClaims[0]?.bunk, idx: gClaims[0]?.idx, reason: 'field-cap-per-grade:' + g + ' on ' + fieldName + ' peak=' + gp + ' cap=' + ruleCap });
+        }
+      });
+    }
+
+    // === 4. Special access restrictions (per-bunk allow lists on specials) ===
+    flat.forEach(c => {
+      const spec = specialByName[c.activity];
+      if (!spec?.accessRestrictions?.enabled) return;
+      const divs = spec.accessRestrictions.divisions || {};
+      const gradeKey = String(c.grade);
+      if (!(gradeKey in divs) && !(c.grade in divs)) {
+        out.push({ bunk: c.bunk, idx: c.idx, reason: 'special-access:grade ' + c.grade + ' not allowed for ' + c.activity });
+        return;
+      }
+      const allow = divs[gradeKey] || divs[c.grade];
+      if (Array.isArray(allow) && allow.length > 0 && !allow.map(String).includes(String(c.bunk))) {
+        out.push({ bunk: c.bunk, idx: c.idx, reason: 'special-access:bunk not in allow-list for ' + c.activity });
+      }
+    });
+
+    // === 5. FullGrade enforcement (special marked fullGrade must hit ALL grade bunks) ===
+    const fullGradeSpecials = (ctx.specials || []).filter(s => s.fullGrade === true);
+    fullGradeSpecials.forEach(spec => {
+      for (const [grade, info] of Object.entries(ctx.divisions)) {
+        const bunks = info.bunks || [];
+        const got = bunks.filter(b => (schedule[b] || []).some(s => s?._activity === spec.name));
+        if (got.length > 0 && got.length < bunks.length) {
+          got.forEach(b => out.push({ bunk: b, idx: -1, reason: 'fullGrade:partial ' + got.length + '/' + bunks.length + ' bunks of ' + grade + ' got ' + spec.name }));
+        }
+      }
+    });
+
+    // === 6. Special maxUsage per bunk per day ===
+    (ctx.specials || []).forEach(spec => {
+      const maxUse = parseInt(spec.maxUsage) || 0;
+      if (maxUse <= 0) return;
+      const byBunk = {};
+      flat.filter(c => c.activity === spec.name).forEach(c => { byBunk[c.bunk] = (byBunk[c.bunk] || 0) + 1; });
+      Object.entries(byBunk).forEach(([b, n]) => {
+        if (n > maxUse) out.push({ bunk: b, idx: -1, reason: 'special-maxUsage:' + spec.name + ' bunk=' + n + ' max=' + maxUse });
+      });
+    });
+
+    return out;
   }
 
   function countHoles(schedule, ctx) {
@@ -172,24 +340,275 @@
   }
 
   // -------------------------------------------------------------------------
-  // MOVE OPERATORS (stubs — to be filled in Phase X2d)
+  // MOVE OPERATORS
   // -------------------------------------------------------------------------
   // Each operator: takes current schedule + ctx, returns a NEW schedule with
   // one local change, or null if no valid move could be found this call.
+  //
+  // Movability rules:
+  //   - Anchor blocks (Swim/Lunch/Change/Snacks/Dismissal) are immovable.
+  //   - _fixed / _pinned / _league / _autoSpecial slots are immovable.
+  //   - Continuation slots are immovable (head bucket is the placeable one).
+  //   - "Free" or null slots are candidates for inject/replace.
+
+  function _isMovable(slot) {
+    if (!slot) return true; // null is movable (inject candidate)
+    if (slot.continuation) return false;
+    if (slot._fixed || slot._pinned || slot._league || slot._autoSpecial) return false;
+    const act = String(slot._activity || '').toLowerCase();
+    if (['lunch', 'swim', 'change', 'snacks', 'snack', 'dismissal'].includes(act)) return false;
+    return true;
+  }
+
+  function _bunkGrade(bunk, divisions) {
+    for (const [d, info] of Object.entries(divisions)) {
+      if ((info.bunks || []).includes(bunk)) return d;
+    }
+    return null;
+  }
+
+  function _candidateActivities(grade, ctx) {
+    // Pool of activities that could plausibly fill a slot for this grade:
+    //   - All fields' `activities` arrays (sports list)
+    //   - All non-fullGrade specials accessible to this grade
+    const acts = new Set();
+    (ctx.fields || []).forEach(f => {
+      const ar = f.accessRestrictions;
+      if (ar?.enabled) {
+        const divs = ar.divisions || {};
+        if (!(grade in divs) && !(String(grade) in divs)) return;
+      }
+      (f.activities || []).forEach(a => acts.add(a));
+    });
+    (ctx.specials || []).forEach(s => {
+      if (s.fullGrade === true) return;
+      const ar = s.accessRestrictions;
+      if (ar?.enabled) {
+        const divs = ar.divisions || {};
+        if (!(grade in divs) && !(String(grade) in divs)) return;
+      }
+      acts.add(s.name);
+    });
+    return [...acts];
+  }
+
+  function _findFieldForActivity(activity, ctx) {
+    return (ctx.fields || []).find(f => Array.isArray(f.activities) && f.activities.includes(activity)) || null;
+  }
+
+  // Shallow-clone schedule so we can mutate one bunk's array without touching
+  // the others. Slot objects are shared by reference — we only replace slots
+  // we change, never mutate them in place.
+  function _cloneSchedule(schedule) {
+    const out = {};
+    for (const [bunk, slots] of Object.entries(schedule)) {
+      out[bunk] = Array.isArray(slots) ? slots.slice() : slots;
+    }
+    return out;
+  }
+
+  // --- replace: pick a movable slot, swap its activity for a different one ---
+  function moveReplace(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    if (bunks.length === 0) return null;
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots) || slots.length === 0) continue;
+      const idx = Math.floor(rng() * slots.length);
+      if (!_isMovable(slots[idx])) continue;
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const pool = _candidateActivities(grade, ctx);
+      if (pool.length < 2) continue;
+      const newAct = pool[Math.floor(rng() * pool.length)];
+      const oldAct = slots[idx]?._activity;
+      if (newAct === oldAct) continue;
+      const newField = _findFieldForActivity(newAct, ctx);
+      if (!newField) continue;
+      const next = _cloneSchedule(schedule);
+      const bucket = ctx.perBunkSlots[grade]?.[bunk]?.[idx];
+      next[bunk] = next[bunk].slice();
+      next[bunk][idx] = {
+        field: newField.name, sport: newAct, _activity: newAct,
+        _autoMode: true, _autoSolved: true,
+        _startMin: bucket?.startMin ?? slots[idx]?._startMin,
+        _endMin: bucket?.endMin ?? slots[idx]?._endMin,
+        _source: 'v2-replace', continuation: false
+      };
+      return next;
+    }
+    return null;
+  }
+
+  // --- swap: swap two movable slots within the same bunk ---
+  function moveSwap(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots) || slots.length < 2) continue;
+      const movable = [];
+      slots.forEach((s, i) => { if (_isMovable(s) && s) movable.push(i); });
+      if (movable.length < 2) continue;
+      const a = movable[Math.floor(rng() * movable.length)];
+      let b = movable[Math.floor(rng() * movable.length)];
+      while (b === a) b = movable[Math.floor(rng() * movable.length)];
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      // Swap activities only — keep bucket times in place
+      const sa = next[bunk][a], sb = next[bunk][b];
+      const bucketA = ctx.perBunkSlots[_bunkGrade(bunk, ctx.divisions)]?.[bunk]?.[a];
+      const bucketB = ctx.perBunkSlots[_bunkGrade(bunk, ctx.divisions)]?.[bunk]?.[b];
+      next[bunk][a] = Object.assign({}, sb, {
+        _startMin: bucketA?.startMin ?? sa?._startMin,
+        _endMin: bucketA?.endMin ?? sa?._endMin,
+        _source: 'v2-swap', continuation: false
+      });
+      next[bunk][b] = Object.assign({}, sa, {
+        _startMin: bucketB?.startMin ?? sb?._startMin,
+        _endMin: bucketB?.endMin ?? sb?._endMin,
+        _source: 'v2-swap', continuation: false
+      });
+      return next;
+    }
+    return null;
+  }
+
+  // --- inject: find a null/Free slot, fill it with a valid activity ---
+  function moveInject(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots)) continue;
+      const holes = [];
+      slots.forEach((s, i) => {
+        if (!s || s.field === 'Free' || s._activity === 'Free') holes.push(i);
+      });
+      if (holes.length === 0) continue;
+      const idx = holes[Math.floor(rng() * holes.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const bucket = ctx.perBunkSlots[grade]?.[bunk]?.[idx];
+      if (!bucket) continue;
+      const pool = _candidateActivities(grade, ctx);
+      if (pool.length === 0) continue;
+      const newAct = pool[Math.floor(rng() * pool.length)];
+      const newField = _findFieldForActivity(newAct, ctx);
+      if (!newField) continue;
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk][idx] = {
+        field: newField.name, sport: newAct, _activity: newAct,
+        _autoMode: true, _autoSolved: true,
+        _startMin: bucket.startMin, _endMin: bucket.endMin,
+        _source: 'v2-inject', continuation: false
+      };
+      return next;
+    }
+    return null;
+  }
+
+  // --- relocate: keep the activity, try a different field that hosts it ---
+  function moveRelocate(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots)) continue;
+      const idx = Math.floor(rng() * slots.length);
+      const s = slots[idx];
+      if (!_isMovable(s) || !s?._activity) continue;
+      const candidates = (ctx.fields || []).filter(f =>
+        Array.isArray(f.activities) && f.activities.includes(s._activity) && f.name !== s.field
+      );
+      if (candidates.length === 0) continue;
+      const newField = candidates[Math.floor(rng() * candidates.length)];
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk][idx] = Object.assign({}, s, { field: newField.name, _source: 'v2-relocate' });
+      return next;
+    }
+    return null;
+  }
+
+  // --- crossSwap: swap a slot between two bunks of the same grade ---
+  function moveCrossSwap(schedule, ctx, rng) {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      const grades = Object.keys(ctx.divisions);
+      const grade = grades[Math.floor(rng() * grades.length)];
+      const bunks = ctx.divisions[grade]?.bunks || [];
+      if (bunks.length < 2) continue;
+      const ba = bunks[Math.floor(rng() * bunks.length)];
+      let bb = bunks[Math.floor(rng() * bunks.length)];
+      while (bb === ba) bb = bunks[Math.floor(rng() * bunks.length)];
+      const slotsA = schedule[ba], slotsB = schedule[bb];
+      if (!Array.isArray(slotsA) || !Array.isArray(slotsB)) continue;
+      const len = Math.min(slotsA.length, slotsB.length);
+      const idx = Math.floor(rng() * len);
+      if (!_isMovable(slotsA[idx]) || !_isMovable(slotsB[idx])) continue;
+      const bucketA = ctx.perBunkSlots[grade]?.[ba]?.[idx];
+      const bucketB = ctx.perBunkSlots[grade]?.[bb]?.[idx];
+      if (!bucketA || !bucketB) continue;
+      const next = _cloneSchedule(schedule);
+      next[ba] = next[ba].slice(); next[bb] = next[bb].slice();
+      const sA = next[ba][idx], sB = next[bb][idx];
+      next[ba][idx] = sB ? Object.assign({}, sB, { _startMin: bucketA.startMin, _endMin: bucketA.endMin, _source: 'v2-crossSwap' }) : null;
+      next[bb][idx] = sA ? Object.assign({}, sA, { _startMin: bucketB.startMin, _endMin: bucketB.endMin, _source: 'v2-crossSwap' }) : null;
+      return next;
+    }
+    return null;
+  }
+
   const MOVES = {
-    swap:        function (schedule, ctx, rng) { return null; },
-    replace:     function (schedule, ctx, rng) { return null; },
-    relocate:    function (schedule, ctx, rng) { return null; },
-    crossSwap:   function (schedule, ctx, rng) { return null; },
-    slide:       function (schedule, ctx, rng) { return null; },
-    inject:      function (schedule, ctx, rng) { return null; }
+    replace:     moveReplace,
+    swap:        moveSwap,
+    inject:      moveInject,
+    relocate:    moveRelocate,
+    crossSwap:   moveCrossSwap,
+    slide:       function (schedule, ctx, rng) { return null; } // TODO: phase X2d
   };
 
   function pickMove(stats, rng) {
-    // Weighted by recent acceptance rate; defaults to uniform until enough samples.
     const names = Object.keys(MOVES);
-    // TODO X2d: use stats.acceptCount / stats.proposeCount per move type
-    return names[Math.floor(rng() * names.length)];
+    // Until we have enough samples, sample uniformly. Once each move has been
+    // proposed ≥20 times, weight by acceptance rate (with epsilon-greedy
+    // exploration to avoid starving moves that look bad early).
+    const totalProposes = names.reduce((s, m) => s + (stats.moves[m]?.propose || 0), 0);
+    if (totalProposes < names.length * 20 || rng() < 0.15) {
+      return names[Math.floor(rng() * names.length)];
+    }
+    // Weighted pick: rate = (accept + 1) / (propose + 1) — Laplace smoothing
+    const rates = names.map(m => {
+      const ms = stats.moves[m] || { propose: 0, accept: 0 };
+      return (ms.accept + 1) / (ms.propose + 1);
+    });
+    const sum = rates.reduce((a, b) => a + b, 0);
+    let r = rng() * sum;
+    for (let i = 0; i < names.length; i++) {
+      r -= rates[i];
+      if (r <= 0) return names[i];
+    }
+    return names[names.length - 1];
+  }
+
+  // Kick: re-randomize `kickSize` movable slots in random bunks to escape
+  // a local minimum. Each kicked slot gets a random valid activity.
+  function applyKick(schedule, ctx, rng, kickSize) {
+    let kicked = 0;
+    let attempts = 0;
+    const newSchedule = _cloneSchedule(schedule);
+    while (kicked < kickSize && attempts < kickSize * 10) {
+      attempts++;
+      const result = moveReplace(newSchedule, ctx, rng);
+      if (result) {
+        // commit into newSchedule by copying back
+        for (const k of Object.keys(result)) newSchedule[k] = result[k];
+        kicked++;
+      }
+    }
+    return newSchedule;
   }
 
   // -------------------------------------------------------------------------
@@ -270,9 +689,19 @@
       }
 
       if (stats.stallCount >= cfg.kickAfter) {
-        // Kick: small re-randomization to escape local minimum
-        // TODO X2d: pick `kickSize` random slots and replace them
+        // Kick: re-randomize a slice of the schedule and re-evaluate. If the
+        // kicked state has lower cost than current, keep it; otherwise accept
+        // it anyway to escape (this is the whole point of a kick).
+        const kicked = applyKick(current, ctx, rng, cfg.kickSize);
+        const kickedEval = evaluate(kicked, ctx);
+        current = kicked;
+        currentEval = kickedEval;
+        if (kickedEval.cost < bestEval.cost) {
+          best = kicked; bestEval = kickedEval;
+          stats.improvements++;
+        }
         stats.stallCount = 0;
+        stats.kicks = (stats.kicks || 0) + 1;
       }
     }
 
@@ -340,12 +769,23 @@
       'general activity slot', 'free'
     ]);
 
+    const fields   = g.app1?.fields || g.fields || [];
+    const specials = g.specialActivities || [];
+
+    // Pre-build lookup maps so the validator's hot loop is O(1) per slot.
+    const _fieldByName = {};
+    fields.forEach(f => { if (f && f.name) _fieldByName[f.name] = f; });
+    const _specialByName = {};
+    specials.forEach(s => { if (s && s.name) _specialByName[s.name] = s; });
+
     return {
       config,
       divisions,
       perBunkSlots,
-      fields: g.app1?.fields || g.fields || [],
-      specials: g.specialActivities || [],
+      fields,
+      specials,
+      _fieldByName,
+      _specialByName,
       allowedDivisions: options?.allowedDivisions || null,
       repetitionIgnoreSet: ignore
     };
