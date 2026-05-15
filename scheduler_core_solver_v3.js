@@ -248,21 +248,32 @@
     }
     ctx.perBunkSlots = perBunkSlots;
 
-    // Phase C+D+E: hand off to v2's SA + smart repair to polish
-    if (typeof window.runAutoSchedulerV2 === 'function') {
-      log('v3: handing off to v2 SA + smart repair for polish...');
-      // v2 expects v1 as seed source; temporarily skip v1 by directly
-      // using our schedule as the seed. The cleanest path is to inline
-      // v2's SA logic — but we can also just call v2 and let it re-run
-      // v1 as seed. For now, accept v2 wraps and runs SA on whatever's
-      // in window.scheduleAssignments.
-      // The simplest integration: v2 reads scheduleAssignments + perBunkSlots
-      // as its starting point. We've already set those. v2's SA loop
-      // will start from there.
-
-      // BUT v2's buildSeed calls _runAutoSchedulerV1 which wipes our work.
-      // For this minimum-viable phase, we skip v2 and just return our
-      // constructive output. Phase E integration is a TODO.
+    // Phase C+D+E: hand off to v2's SA + smart repair to polish.
+    // v2 exposes a public API (window.SolverV2) that lets us invoke runSA +
+    // smartRepair directly on our constructive seed, bypassing v1.
+    let saStats = null, bestEval = null;
+    if (window.SolverV2?.runSA && window.SolverV2?.smartRepair) {
+      log('Phase C+D+E: running v2 SA + smart repair on constructive seed...');
+      const v2cfg = window.SolverV2.getConfig();
+      // v3 gets the full configured budget — we already spent constructive time
+      const v2ctx = window.SolverV2.buildContext(v2cfg, options);
+      // Override perBunkSlots with v3's period-aligned grids
+      v2ctx.perBunkSlots = perBunkSlots;
+      const saResult = window.SolverV2.runSA(schedule, v2ctx);
+      window.scheduleAssignments = saResult.best;
+      if (saResult.bestPbsSnapshot) {
+        for (const [grade, byBunk] of Object.entries(saResult.bestPbsSnapshot)) {
+          if (!window.divisionTimes?.[grade]) continue;
+          window.divisionTimes[grade]._perBunkSlots = byBunk;
+        }
+        v2ctx.perBunkSlots = saResult.bestPbsSnapshot;
+      }
+      window.SolverV2.smartRepair(window.scheduleAssignments, v2ctx);
+      saStats = saResult.stats;
+      bestEval = saResult.bestEval;
+      log('Phase C+D+E done. cost=' + bestEval?.cost);
+    } else {
+      warn('v2 public API unavailable — returning constructive-only output');
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
@@ -274,10 +285,14 @@
     }));
 
     return {
-      success: true,
+      success: (bestEval?.hardViolations?.length || 0) === 0,
       version: 'v3',
       elapsed: parseFloat(elapsed),
-      constraintGraph: cg
+      constraintGraph: cg,
+      cost: bestEval?.cost,
+      costBreakdown: bestEval?.breakdown,
+      warnings: bestEval?.hardViolations || [],
+      saStats
     };
   };
 

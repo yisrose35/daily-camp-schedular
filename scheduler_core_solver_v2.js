@@ -1272,6 +1272,152 @@
   }
 
   // -------------------------------------------------------------------------
+  // SMART REPAIR — top-level so v3 can call it via SolverV2 API
+  // -------------------------------------------------------------------------
+  function smartRepairTop(scheduleRef, ctxRef) {
+    let totalFixes = 0;
+    const MAX_ITERATIONS = 50;
+    const passLog = { swimNoChange: 0, gaps: 0, holes: 0 };
+
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      let madeChange = false;
+
+      // Pass 1: swim-no-change
+      for (const bunk of Object.keys(scheduleRef)) {
+        const slots = scheduleRef[bunk];
+        if (!Array.isArray(slots)) continue;
+        const grade = _bunkGrade(bunk, ctxRef.divisions);
+        if (!grade) continue;
+        const real = slots
+          .filter(s => s && !s.continuation && s._startMin != null)
+          .sort((a, b) => a._startMin - b._startMin);
+        for (let i = 0; i < real.length; i++) {
+          const s = real[i];
+          if ((s._activity || '').toLowerCase() !== 'swim') continue;
+          const before = real[i - 1];
+          const after = real[i + 1];
+          const bIsCh = before && /change/i.test(before._activity || '') && before._endMin === s._startMin;
+          const aIsCh = after && /change/i.test(after._activity || '') && after._startMin === s._endMin;
+          if (bIsCh || aIsCh) continue;
+          const fix = _attemptAddChangeAtTop(scheduleRef, ctxRef, bunk, s);
+          if (fix) { madeChange = true; totalFixes++; passLog.swimNoChange++; break; }
+        }
+        if (madeChange) break;
+      }
+      if (madeChange) continue;
+
+      // Pass 2: close gaps
+      let gapClosed = false;
+      for (const bunk of Object.keys(scheduleRef)) {
+        if (gapClosed) break;
+        const slots = scheduleRef[bunk];
+        if (!Array.isArray(slots)) continue;
+        const grade = _bunkGrade(bunk, ctxRef.divisions);
+        const real = slots
+          .filter(s => s && !s.continuation && s._startMin != null)
+          .sort((a, b) => a._startMin - b._startMin);
+        for (let k = 0; k < real.length - 1; k++) {
+          const prev = real[k], nxt = real[k + 1];
+          const gap = nxt._startMin - prev._endMin;
+          if (gap < 15) continue;
+          if (_isMovable(prev) && _staysInPeriod(grade, prev._startMin, nxt._startMin)) {
+            const idx = slots.indexOf(prev);
+            slots[idx] = Object.assign({}, prev, { _endMin: nxt._startMin, _source: 'v2-repair-extPrev' });
+            madeChange = true; gapClosed = true; totalFixes++; passLog.gaps++; break;
+          }
+          if (_isMovable(nxt) && _staysInPeriod(grade, prev._endMin, nxt._endMin)) {
+            const idx = slots.indexOf(nxt);
+            slots[idx] = Object.assign({}, nxt, { _startMin: prev._endMin, _source: 'v2-repair-extNext' });
+            madeChange = true; gapClosed = true; totalFixes++; passLog.gaps++; break;
+          }
+        }
+      }
+      if (madeChange) continue;
+
+      // Pass 3: fill holes
+      let holeFilled = false;
+      for (const bunk of Object.keys(scheduleRef)) {
+        if (holeFilled) break;
+        const slots = scheduleRef[bunk];
+        if (!Array.isArray(slots)) continue;
+        const grade = _bunkGrade(bunk, ctxRef.divisions);
+        const pbs = ctxRef.perBunkSlots[grade]?.[bunk];
+        if (!Array.isArray(pbs)) continue;
+        for (let i = 0; i < pbs.length; i++) {
+          const s = slots[i];
+          if (s && s.field !== 'Free' && s._activity !== 'Free') continue;
+          const bucket = pbs[i];
+          if (!bucket) continue;
+          const pool = _candidateActivities(grade, ctxRef);
+          for (const act of pool.slice(0, 5)) {
+            const field = _findFieldForActivity(act, ctxRef);
+            if (!field) continue;
+            slots[i] = {
+              field: field.name, sport: act, _activity: act,
+              _autoMode: true, _autoSolved: true, _fixed: true,
+              _startMin: bucket.startMin, _endMin: bucket.endMin,
+              _source: 'v2-repair-fillHole', continuation: false
+            };
+            madeChange = true; holeFilled = true; totalFixes++; passLog.holes++; break;
+          }
+          if (holeFilled) break;
+        }
+      }
+      if (madeChange) continue;
+      break;
+    }
+    log('Smart repair: ' + totalFixes + ' total fixes ' +
+        '(swim-no-change=' + passLog.swimNoChange +
+        ', gaps=' + passLog.gaps +
+        ', holes=' + passLog.holes + ')');
+    return totalFixes;
+  }
+
+  function _attemptAddChangeAtTop(schedule, ctx, bunk, swim) {
+    const CHANGE_DUR = 10;
+    const slots = schedule[bunk];
+    const grade = _bunkGrade(bunk, ctx.divisions);
+    if (!grade || !Array.isArray(slots)) return false;
+    const real = slots
+      .filter(s => s && !s.continuation && s._startMin != null)
+      .sort((a, b) => a._startMin - b._startMin);
+    const swimIdx = real.findIndex(r => r === swim);
+    const before = real[swimIdx - 1];
+    const after = real[swimIdx + 1];
+    const beforeStart = swim._startMin - CHANGE_DUR;
+    const beforeEnd = swim._startMin;
+    if (!before || before._endMin <= beforeStart) {
+      const swimSlotIdx = slots.findIndex(s => s === swim);
+      if (swimSlotIdx < 0) return false;
+      slots.splice(swimSlotIdx, 0, {
+        field: 'Change', sport: null, _activity: 'Change',
+        type: 'pre-change', _autoMode: true, _fixed: true, _activityLocked: true,
+        _startMin: beforeStart, _endMin: beforeEnd,
+        _source: 'v2-repair-addChange-pre', continuation: false
+      });
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (Array.isArray(pbs)) pbs.splice(swimSlotIdx, 0, { startMin: beforeStart, endMin: beforeEnd });
+      return true;
+    }
+    const afterStart = swim._endMin;
+    const afterEnd = swim._endMin + CHANGE_DUR;
+    if (!after || after._startMin >= afterEnd) {
+      const swimSlotIdx = slots.findIndex(s => s === swim);
+      if (swimSlotIdx < 0) return false;
+      slots.splice(swimSlotIdx + 1, 0, {
+        field: 'Change', sport: null, _activity: 'Change',
+        type: 'post-change', _autoMode: true, _fixed: true, _activityLocked: true,
+        _startMin: afterStart, _endMin: afterEnd,
+        _source: 'v2-repair-addChange-post', continuation: false
+      });
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (Array.isArray(pbs)) pbs.splice(swimSlotIdx + 1, 0, { startMin: afterStart, endMin: afterEnd });
+      return true;
+    }
+    return false;
+  }
+
+  // -------------------------------------------------------------------------
   // PUBLIC ENTRY
   // -------------------------------------------------------------------------
   window.runAutoSchedulerV2 = async function (layers, options) {
@@ -1581,6 +1727,19 @@
       repetitionIgnoreSet: ignore
     };
   }
+
+  // -------------------------------------------------------------------------
+  // PUBLIC API — for v3 (and future external callers) to invoke SA + repair
+  // on a pre-built schedule WITHOUT going through v1 seeding.
+  // -------------------------------------------------------------------------
+  window.SolverV2 = {
+    getConfig,
+    buildContext,
+    evaluate,
+    detectHardViolations,
+    runSA,
+    smartRepair: smartRepairTop
+  };
 
   log('scheduler_core_solver_v2.js loaded — skeleton ready (Phase X1)');
 })();
