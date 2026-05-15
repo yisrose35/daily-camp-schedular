@@ -697,19 +697,22 @@
       const real = [];
       slots.forEach((s, i) => { if (s && !s.continuation && s._startMin != null) real.push({ s, i }); });
       real.sort((a, b) => a.s._startMin - b.s._startMin);
+      const grade = _bunkGrade(bunk, ctx.divisions);
       const candidates = [];
       for (let k = 0; k < real.length - 1; k++) {
         const gap = real[k + 1].s._startMin - real[k].s._endMin;
         if (gap < 10) continue;
         const prev = real[k].s, nxt = real[k + 1].s;
-        // Period boundaries: NOT enforced at move time — they're penalized
-        // in the cost function instead. Enforcing here was overly strict
-        // (rejected many gap-closing extends) without obviously helping
-        // since v1 seed already produces cross-period activities.
-        if (_isMovable(prev)) {
+        // Re-introduced X2f-15: period-boundary check on extends. Without
+        // this, v2 routinely crosses period boundaries to close gaps
+        // (18 violations/gen vs v1 seed's 3). Cost-function approach was
+        // too expensive (slowed SA from 86k→44k iters/pass). Move-time
+        // check is cheap and only rejects moves that WOULD create new
+        // violations beyond what v1 seed already had.
+        if (_isMovable(prev) && _staysInPeriod(grade, prev._startMin, nxt._startMin)) {
           candidates.push({ idx: real[k].i, newEnd: nxt._startMin, kind: 'fwd' });
         }
-        if (_isMovable(nxt)) {
+        if (_isMovable(nxt) && _staysInPeriod(grade, prev._endMin, nxt._endMin)) {
           candidates.push({ idx: real[k + 1].i, newStart: prev._endMin, kind: 'back' });
         }
       }
@@ -760,19 +763,22 @@
 
     const grade = _bunkGrade(worstGap.bunk, ctx.divisions);
 
-    if (strat === 'extend-prev' && _isMovable(worstGap.prevSlot)) {
+    if (strat === 'extend-prev' && _isMovable(worstGap.prevSlot)
+        && _staysInPeriod(grade, worstGap.prevSlot._startMin, worstGap.gapEnd)) {
       next[worstGap.bunk][worstGap.prevIdx] = Object.assign({}, worstGap.prevSlot, {
         _endMin: worstGap.gapEnd, _source: 'v2-gapTargeted-extPrev'
       });
       return next;
     }
-    if (strat === 'extend-next-back' && _isMovable(worstGap.nextSlot)) {
+    if (strat === 'extend-next-back' && _isMovable(worstGap.nextSlot)
+        && _staysInPeriod(grade, worstGap.gapStart, worstGap.nextSlot._endMin)) {
       next[worstGap.bunk][worstGap.nextIdx] = Object.assign({}, worstGap.nextSlot, {
         _startMin: worstGap.gapStart, _source: 'v2-gapTargeted-extNext'
       });
       return next;
     }
-    if (strat === 'replace-prev-with-longer' && _isMovable(worstGap.prevSlot)) {
+    if (strat === 'replace-prev-with-longer' && _isMovable(worstGap.prevSlot)
+        && _staysInPeriod(grade, worstGap.prevSlot._startMin, worstGap.gapEnd)) {
       const pool = _candidateActivities(grade, ctx);
       const newAct = pool[Math.floor(rng() * pool.length)];
       const newField = _findFieldForActivity(newAct, ctx);
