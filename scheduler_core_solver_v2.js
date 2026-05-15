@@ -561,13 +561,100 @@
     return null;
   }
 
+  // --- bucketInsert: scan _perBunkSlots for adjacent buckets with a wall-
+  //     clock gap, splice in a new bucket+slot to close it. This is the move
+  //     that lets v2 exceed v1's bucket layout. Critically, every accepted
+  //     move runs through evaluate(), so a bad insert (violating capacity,
+  //     access, etc.) gets rejected by the cost function.
+  function moveBucketInsert(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(pbs) || pbs.length < 2) continue;
+      // Find gap between adjacent buckets > 10 min (skip the 5-min period
+      // transitions that v1 builds in by design).
+      const gapCandidates = [];
+      for (let i = 0; i < pbs.length - 1; i++) {
+        const gap = pbs[i + 1].startMin - pbs[i].endMin;
+        if (gap >= 10) gapCandidates.push({ afterIdx: i, start: pbs[i].endMin, end: pbs[i + 1].startMin, dur: gap });
+      }
+      if (gapCandidates.length === 0) continue;
+      const cand = gapCandidates[Math.floor(rng() * gapCandidates.length)];
+      // Pick an activity that can fit the duration
+      const pool = _candidateActivities(grade, ctx);
+      if (pool.length === 0) continue;
+      const newAct = pool[Math.floor(rng() * pool.length)];
+      const newField = _findFieldForActivity(newAct, ctx);
+      if (!newField) continue;
+      // Splice a new bucket into both _perBunkSlots and scheduleAssignments
+      // at position afterIdx + 1. NOTE: this mutates ctx.perBunkSlots which
+      // is shared across all SA iterations — that's intentional because once
+      // a bucket is added it stays for the rest of the run.
+      const newBucket = { startMin: cand.start, endMin: cand.end };
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk].splice(cand.afterIdx + 1, 0, {
+        field: newField.name, sport: newAct, _activity: newAct,
+        _autoMode: true, _autoSolved: true,
+        _startMin: cand.start, _endMin: cand.end,
+        _source: 'v2-bucketInsert', continuation: false
+      });
+      // Mirror into perBunkSlots so subsequent moves see the new bucket
+      pbs.splice(cand.afterIdx + 1, 0, newBucket);
+      return next;
+    }
+    return null;
+  }
+
+  // --- bucketExtend: pick an activity whose _endMin < its bucket end OR
+  //     whose bucket is shorter than the gap to the next bucket; stretch it.
+  function moveBucketExtend(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(pbs) || pbs.length < 2) continue;
+      // Find adjacent pair with a wall-clock gap >= 10 min
+      const candidates = [];
+      for (let i = 0; i < pbs.length - 1; i++) {
+        const gap = pbs[i + 1].startMin - pbs[i].endMin;
+        if (gap >= 10) {
+          // Try extending bucket i forward or bucket i+1 backward
+          candidates.push({ idx: i, kind: 'forward', newEnd: pbs[i + 1].startMin });
+          candidates.push({ idx: i + 1, kind: 'backward', newStart: pbs[i].endMin });
+        }
+      }
+      if (candidates.length === 0) continue;
+      const c = candidates[Math.floor(rng() * candidates.length)];
+      const slot = schedule[bunk]?.[c.idx];
+      if (!_isMovable(slot) || !slot?._activity) continue;
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      if (c.kind === 'forward') {
+        next[bunk][c.idx] = Object.assign({}, slot, { _endMin: c.newEnd, _source: 'v2-bucketExtend-fwd' });
+        pbs[c.idx] = Object.assign({}, pbs[c.idx], { endMin: c.newEnd });
+      } else {
+        next[bunk][c.idx] = Object.assign({}, slot, { _startMin: c.newStart, _source: 'v2-bucketExtend-back' });
+        pbs[c.idx] = Object.assign({}, pbs[c.idx], { startMin: c.newStart });
+      }
+      return next;
+    }
+    return null;
+  }
+
   const MOVES = {
-    replace:     moveReplace,
-    swap:        moveSwap,
-    inject:      moveInject,
-    relocate:    moveRelocate,
-    crossSwap:   moveCrossSwap,
-    slide:       function (schedule, ctx, rng) { return null; } // TODO: phase X2d
+    replace:      moveReplace,
+    swap:         moveSwap,
+    inject:       moveInject,
+    relocate:     moveRelocate,
+    crossSwap:    moveCrossSwap,
+    bucketInsert: moveBucketInsert,
+    bucketExtend: moveBucketExtend
   };
 
   function pickMove(stats, rng) {
