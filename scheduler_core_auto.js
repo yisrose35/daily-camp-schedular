@@ -1069,21 +1069,48 @@
         }
 
         function canUsePoolAtTime(grade, startMin, endMin) {
-            // Pool is exclusive PER GRADE — unlimited bunks within same grade,
-            // but zero bunks from any other grade at the same time.
-            // We DON'T use rtCanUse here because its capacity check (count >= cap)
-            // would block the 2nd bunk of the same grade. Instead we only check
-            // whether a DIFFERENT grade has registered in any overlapping bucket.
+            // ── POOL SHARING v2 (2026-05-17) ────────────────────────────
+            // Old rule: pool is exclusive per grade (one grade at a time, any
+            // number of bunks within that grade). This created infeasible
+            // schedules for grades whose swim band overlapped another grade's
+            // swim band entirely (e.g. Trios 12:43-2:14 vs Quartet 1:30-2:10
+            // + Minors 12:15-12:55 — leaves zero swim window for Trios).
+            //
+            // New rule: pool is shared across grades up to LANE CAPACITY.
+            // The human camp scheduler clearly does this — same-day PDF shows
+            // Trios bunks swimming concurrently with Majors, Quartet, Quints,
+            // and Minors throughout the day, never all together. Default
+            // capacity 12 lanes matches a typical camp pool; configurable
+            // via globalSettings.app1.poolLaneCapacity.
+            //
+            // TODO (future): per-grade-pair sharing config. The user should
+            // be able to say "Trios may share pool with Quartet" or "Majors
+            // and Minors must NEVER share" via the Me page facilities UI.
+            // Schema idea: globalSettings.app1.poolSharingRules = {
+            //   capacity: 12,
+            //   defaultMode: 'open' | 'exclusive' | 'whitelist',
+            //   allowedPairs: [['Trios','Quartet'], ['Majors','Minors']],
+            //   blockedPairs: [['Quints','Soloists']]
+            // }
+            // For now: open sharing, capacity-gated only.
+            var _poolCap = 12;
+            try {
+                if (window.globalSettings && window.globalSettings.app1 &&
+                    typeof window.globalSettings.app1.poolLaneCapacity === 'number' &&
+                    window.globalSettings.app1.poolLaneCapacity > 0) {
+                    _poolCap = window.globalSettings.app1.poolLaneCapacity;
+                }
+            } catch (_e) {}
+
             const key = _rtKey('pool', '_pool');
             const buckets = _resourceBuckets[key];
             if (!buckets) return true;
             for (let m = startMin; m < endMin; m += 5) {
                 const b = buckets[m];
                 if (!b) continue;
-                // Same grade already registered → fine, any number of bunks OK
-                if (b.grades.has(grade)) continue;
-                // A DIFFERENT grade is on the pool → blocked
-                if (b.grades.size > 0) return false;
+                // Capacity-gated only. b.count is total bunk-slot occupancy
+                // across all grades (rtRegister increments per bunk per 5-min).
+                if (b.count >= _poolCap) return false;
             }
             return true;
         }
