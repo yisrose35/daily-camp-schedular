@@ -1163,13 +1163,21 @@
         usage[a] = (usage[a] || 0) + 1;
       }
 
-      // Build candidate activity list filtered by maxUsage.
+      // Build candidate activity list (X2f-18b): SPECIALS ONLY.
+      // Sports were rendering purple + below-dMin when inserted here because
+      // (a) we tag the new slot _fixed:true (the renderer styles _fixed slots
+      // as pinned/special purple) and (b) sports usually have dMin ≥ 25 min
+      // while our gap window is 5–30. Restricting the pool to specials means
+      // only filler-style activities (Slush/Popcorn/Snack/etc.) can land
+      // here. Also enforce that the special's minimum duration fits the gap.
       const pool = _candidateActivities(grade, ctx).filter(act => {
         const spec = specByName[act];
-        if (!spec) return true; // sport / non-special — no maxUsage
+        if (!spec) return false; // skip pure sports — wrong rendering + dMin
         const maxUse = parseInt(spec.maxUsage) || 0;
-        if (maxUse <= 0) return true;
-        return (usage[act] || 0) < maxUse;
+        if (maxUse > 0 && (usage[act] || 0) >= maxUse) return false;
+        const dMin = parseInt(spec.dMin || spec.duration || spec.preferredDuration) || 0;
+        if (dMin > 0 && dMin > gap.dur) return false;
+        return true;
       });
       if (pool.length === 0) continue;
 
@@ -1239,7 +1247,6 @@
   function moveFitDuration(schedule, ctx, rng) {
     const MIN_GAP = MIN_FILLER_DUR;  // only bother with gaps ≥ smallest filler
     const MAX_GAP = 45;              // beyond this is addBucket/Insert territory
-    const TRANSITION_MAX = 5;        // allow crossing transitions up to this size
     const bunks = Object.keys(schedule);
 
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -1271,26 +1278,12 @@
       const newEnd = pick.next._startMin;
       const newDur = newEnd - pick.slot._startMin;
 
-      // Period guard: allow extension if it stays inside one period OR
-      // crosses exactly one transition zone of ≤TRANSITION_MAX min.
-      const stays = _staysInPeriod(grade, pick.slot._startMin, newEnd);
-      if (!stays) {
-        // Check whether the crossed region is a single short transition.
-        const periods = window.campPeriods?.[grade] || [];
-        const crossedTransitions = [];
-        for (let p = 0; p < periods.length - 1; p++) {
-          const transStart = periods[p].endMin;
-          const transEnd = periods[p + 1].startMin;
-          if (transStart >= pick.slot._startMin && transEnd <= newEnd) {
-            crossedTransitions.push(transEnd - transStart);
-          }
-        }
-        // Reject if we cross any "real" period boundary (transition > TRANSITION_MAX)
-        if (crossedTransitions.some(t => t > TRANSITION_MAX) || crossedTransitions.length === 0) {
-          continue;
-        }
-        // Allow: only inter-period transitions, all ≤TRANSITION_MAX min
-      }
+      // Period guard (X2f-18b): STRICT — never cross a period boundary.
+      // The inter-period transition zones (typically 5 min) are deliberate
+      // buffers in the bell schedule, NOT gaps to be absorbed. Earlier
+      // experiment with allowing TRANSITION_MAX-sized crossings produced
+      // visible transition-zone violations in the rendered grid.
+      if (!_staysInPeriod(grade, pick.slot._startMin, newEnd)) continue;
 
       // Find this slot's actual index in the bunk's slots array
       const slotIdx = slots.findIndex(s => s === pick.slot);
