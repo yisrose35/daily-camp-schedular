@@ -17048,33 +17048,13 @@
                     }
 
                     if (_sfBunkInserts.length > 0) {
-                        // Mirror into scheduleAssignments using the FULL canonical
-                        // field set that survives DivisionTimes' render-rebuild.
-                        // Missing `field`, `_pinned`, `_autoSpecial`, `continuation`,
-                        // or `sport` causes the post-gen rebuild to drop the entry
-                        // as orphaned data. Format mirrors a Phase 2.5 Slush entry.
+                        // Mirror into scheduleAssignments (renderer's source of truth)
                         if (!Array.isArray(_sfSA[bunk])) _sfSA[bunk] = [];
                         _sfBunkInserts.forEach(function (b) {
-                            // Use the special's configured location as the field.
-                            // Find the special def to get its `location` (the room/area).
-                            var _specDef = (_sfSpecials || []).find(function (s) { return s.name === b.event; });
-                            var _specProps = _sfActProps[b.event] || {};
-                            var _fieldName = (_specProps && _specProps.location) ||
-                                             (_specDef && _specDef.location) ||
-                                             b.event; // fallback: activity name as field
                             _sfSA[bunk].push({
                                 _startMin: b.startMin, _endMin: b.endMin,
-                                _activity: b.event,
-                                field: _fieldName,
-                                sport: null,
-                                continuation: false,
-                                _fixed: true,
-                                _pinned: true,
-                                _activityLocked: true,
-                                _autoMode: true,
-                                _autoSpecial: true,
-                                _bunkOverride: true,
-                                _source: 'sliver-fill',
+                                _activity: b.event, type: 'special',
+                                _fixed: true, _source: 'sliver-fill',
                                 _assignedSpecial: b.event
                             });
                         });
