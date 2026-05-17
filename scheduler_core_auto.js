@@ -3275,8 +3275,86 @@
                 return updated.filter(function(w) { return w.duration > 0; });
             }
 
-            // Find time within a specific range (for stagger band preference)
+            // ─────────────────────────────────────────────────────────
+            // GLOBAL-PLANNER POSITION SCORING (period-aware best-fit)
+            // ─────────────────────────────────────────────────────────
+            // Old behavior was first-fit (earliest valid position wins).
+            // This anchored short specials to the START of their period and
+            // left an unfillable remainder on the right — the visible "+ Add"
+            // gaps users reported (e.g. Neranitas 10:50–11:10 with Period 1
+            // running to 11:30, leaving a 20-min dead zone Phase 3 can't fill
+            // because the special is pinned and Belts can't cross 11:30).
+            //
+            // New behavior enumerates ALL valid positions in the free windows
+            // and picks the one with the best period-alignment score:
+            //
+            //   • +200 if position aligns to a period start or end
+            //   • -1500 per period-internal remainder that's > 0 but smaller
+            //     than the grade's smallest sport (unfillable leftover)
+            //   • +60 per period-internal remainder that's >= sportDMin
+            //     (a real activity can be placed there later)
+            //   • tiny earliest-first tiebreak so deterministic when scores tie
+            //
+            // sportDMinFloor + bunk periods are read from outer-scope closure.
+            // If neither is available the scorer falls back to first-fit.
+            function _gpSportDMinFor(bunk) {
+                try {
+                    var dm = shoppingLists?.[bunk]?.sports?.constraints?.dMin;
+                    var floor = (typeof TYPE_FLOORS !== 'undefined' && TYPE_FLOORS.sport) || 25;
+                    return Math.max(dm || 25, floor);
+                } catch (e) { return 25; }
+            }
+            function _gpPeriodsFor(grade) {
+                try {
+                    var p = window.campPeriods && window.campPeriods[grade];
+                    if (!Array.isArray(p) || p.length === 0) return null;
+                    return p.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                } catch (e) { return null; }
+            }
+            function _gpScorePosition(t, dur, periods, sportDMin) {
+                if (!periods) return 0;
+                var endT = t + dur;
+                var score = 0;
+                // Find every period the special intersects
+                var intersected = [];
+                for (var i = 0; i < periods.length; i++) {
+                    var p = periods[i];
+                    if (endT > p.startMin && t < p.endMin) intersected.push(p);
+                }
+                if (intersected.length === 0) return 0;
+                if (intersected.length === 1) {
+                    var p1 = intersected[0];
+                    var leftRem = t - p1.startMin;
+                    var rightRem = p1.endMin - endT;
+                    if (leftRem === 0) score += 200;       // aligned to period start
+                    if (rightRem === 0) score += 200;      // aligned to period end
+                    if (leftRem > 0) {
+                        if (leftRem < sportDMin) score -= 1500;
+                        else score += 60;
+                    }
+                    if (rightRem > 0) {
+                        if (rightRem < sportDMin) score -= 1500;
+                        else score += 60;
+                    }
+                } else {
+                    // Multi-period special: prefer spanning entire periods edge-to-edge
+                    var first = intersected[0], last = intersected[intersected.length - 1];
+                    if (t === first.startMin) score += 150;
+                    if (endT === last.endMin) score += 150;
+                    // Penalize incomplete coverage of inner periods (shouldn't happen
+                    // if startMin/endMin chain, but guard anyway)
+                    for (var k = 1; k < intersected.length - 1; k++) {
+                        if (intersected[k - 1].endMin !== intersected[k].startMin) score -= 200;
+                    }
+                }
+                return score;
+            }
+
+            // Find best time within a specific range (for stagger band preference)
             function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName, activity) {
+                var periods = _gpPeriodsFor(grade);
+                var sportDMin = _gpSportDMinFor(bunk);
+                var best = null, bestScore = -Infinity;
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
@@ -3286,14 +3364,19 @@
                     for (var t = effStart; t + dur <= effEnd; t += 5) {
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
-                        return { startMin: t, endMin: t + dur };
+                        // Tiny earliest-first tiebreak so equal scores stay deterministic
+                        var s = _gpScorePosition(t, dur, periods, sportDMin) - (t / 100000);
+                        if (s > bestScore) { bestScore = s; best = { startMin: t, endMin: t + dur }; }
                     }
                 }
-                return null;
+                return best;
             }
 
-            // Find time anywhere in free windows
+            // Find best time anywhere in free windows
             function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName, activity) {
+                var periods = _gpPeriodsFor(grade);
+                var sportDMin = _gpSportDMinFor(bunk);
+                var best = null, bestScore = -Infinity;
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
                     if (!win || win.start == null) continue;
@@ -3301,10 +3384,11 @@
                     for (var t = win.start; t + dur <= win.end; t += 5) {
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
-                        return { startMin: t, endMin: t + dur };
+                        var s = _gpScorePosition(t, dur, periods, sportDMin) - (t / 100000);
+                        if (s > bestScore) { bestScore = s; best = { startMin: t, endMin: t + dur }; }
                     }
                 }
-                return null;
+                return best;
             }
 
             function findTimeForFieldGP(fieldName, bunk, grade, duration, freeWindows, activity) {
@@ -12377,8 +12461,13 @@
                                     score -= Math.floor(variance / 100);
                                 }
 
-                                // Draft position bonus (preserve GlobalPlanner's intent)
-                                if (pos === draftStart) score += 200;
+                                // Draft position bonus (preserve GlobalPlanner's intent).
+                                // Reduced from +200 to +25 (2026-05-16) so Phase 2.5's
+                                // dead-gap penalties can outweigh the draft anchor when
+                                // GlobalPlanner picked a position that leaves an unfillable
+                                // remainder inside the period. Without this, every elite
+                                // and tabu restart re-converged on the same flawed draft.
+                                if (pos === draftStart) score += 25;
 
                                 // Change-adjacency bonus: special ends right at pre-change start,
                                 // or starts right at post-change end. Outweighs draft position so
@@ -12427,7 +12516,7 @@
                                             else if (egSize > 0 && egSize < sportFillMin) { endScore -= 2500; }
                                             else if (egSize > 0) endScore += 50;
                                         }
-                                        if (endPos === draftStart) endScore += 200;
+                                        if (endPos === draftStart) endScore += 25;
                                         if (_p25PreChgStarts[endPos + specialDur]) endScore += 350;
                                         if (_p25PostChgEnds[endPos])               endScore += 350;
                                         candidatePositions.push({ pos: endPos, score: endScore, deadGapCount: endDeadGaps });
