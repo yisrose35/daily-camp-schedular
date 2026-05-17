@@ -1313,6 +1313,48 @@
       return 0;
     }
 
+    // X2f-18d: return {dMin,dMax} for an activity so we can accept any duration
+    // within the activity's legal range, not just its preferred duration.
+    // This is NOT "extending beyond duration" — dMax IS the activity's max
+    // configured duration; running it at dMax is by-the-book legal.
+    function actBounds(actName) {
+      const sp = specByName[actName];
+      if (sp) {
+        const dPref = parseInt(sp.duration || sp.preferredDuration) || 0;
+        const dMin = parseInt(sp.dMin) || dPref || 0;
+        const dMax = parseInt(sp.dMax) || dPref || dMin;
+        return { dMin, dMax, dPref };
+      }
+      const layers = ctx.layers || [];
+      for (const L of layers) {
+        if (L && L.activities && L.activities[actName]) {
+          const a = L.activities[actName];
+          const dPref = parseInt(a.duration) || 0;
+          const dMin = parseInt(a.dMin) || dPref || 0;
+          const dMax = parseInt(a.dMax) || dPref || dMin;
+          return { dMin, dMax, dPref };
+        }
+      }
+      return { dMin: 0, dMax: 0, dPref: 0 };
+    }
+
+    // X2f-18d: walls (Lunch/Swim/Change/Cleanup/Main/Shiur) are sacred and
+    // never moved. But the Phase 2.5 _autoSpecial fillers (Neranitas/Drama/
+    // Ice Cream/etc.) that pinned themselves into dead-gap-creating positions
+    // are eligible for swap — otherwise the gaps they created can never close.
+    function _isWall(slot) {
+      if (!slot) return false;
+      const a = String(slot._activity || slot.event || '').toLowerCase();
+      return /^(swim|lunch|cleanup|change|pre[-\s]?change|post[-\s]?change|main\s*activity|shiur|dismissal|snack)/i.test(a);
+    }
+    function _isSwappableForGap(slot) {
+      if (!slot) return false;
+      if (_isWall(slot)) return false;
+      // Skip continuations of multi-slot activities (multi-period specials).
+      if (slot.continuation) return false;
+      return true;
+    }
+
     function gapHasFiller(grade, gap, usage) {
       for (const sp of (ctx.specials || [])) {
         if (!sp || !sp.name) continue;
@@ -1366,7 +1408,9 @@
         const nSlot = slots[nIdx];
         const nBucket = pbs[nIdx];
         if (!nSlot || !nBucket) continue;
-        if (!_isMovable(nSlot)) continue;
+        // X2f-18d: walls untouchable, but pinned _autoSpecial that caused
+        // the dead gap IS eligible to swap.
+        if (!_isSwappableForGap(nSlot)) continue;
         const curDur = nBucket.endMin - nBucket.startMin;
         const targetDur = curDur + dg.dur;
         const newStart = side === 'left' ? nBucket.startMin : dg.startMin;
@@ -1375,11 +1419,17 @@
         // Must stay within one period of the grade.
         if (!_staysInPeriod(grade, newStart, newEnd)) continue;
 
-        // Build candidate activities whose configured duration == targetDur
-        // (exact match — we don't pad).
+        // X2f-18d: accept any activity whose CONFIGURED dMin/dMax range
+        // includes targetDur. This is the activity's own legal duration
+        // range — running an activity at its dMax is by definition allowed,
+        // not "extending beyond duration." If the activity has no flex
+        // (dMin==dMax==pref), it only matches exactly, same as before.
         const pool = _candidateActivities(grade, ctx).filter(act => {
-          const d = actDuration(act);
-          if (d !== targetDur) return false;
+          const b = actBounds(act);
+          const dPref = b.dPref || b.dMin;
+          if (!dPref) return false;
+          // targetDur must be within [dMin, dMax]
+          if (targetDur < b.dMin || targetDur > b.dMax) return false;
           // accessible field?
           const fs = fieldByActivity[act] || [];
           if (fs.length === 0) return false;
