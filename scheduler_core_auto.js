@@ -16880,6 +16880,122 @@
             }
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // REAL-GAP VERIFIER — truthful post-heal gap detector
+        // ═══════════════════════════════════════════════════════════════════
+        // Why: the existing verifier counts any block with an _activity as
+        // "filled", which includes Free placeholders, Change/Lunch/Cleanup
+        // walls, and self-heal absorptions where Shiur was grown to swallow
+        // a 10-min hole. Result: the log says "✅ complete" while the
+        // rendered grid still shows visible gaps.
+        //
+        // This verifier walks each bunk's timeline at MINUTE granularity
+        // from grade start to grade end and flags every minute that's:
+        //   - Empty (no block covers it)
+        //   - Covered only by Free/placeholder/synthetic blocks
+        //
+        // Consecutive flagged minutes are grouped into named gaps.
+        // Output: [REAL-GAP] lines, plus a summary count distinct from
+        // the existing (misleading) "filled" counter.
+        try {
+            var _rgFreeRe = /^(free|\+\s*add|placeholder|unfilled)/i;
+            var _rgGapList = [];
+            var _rgBunksWithGaps = 0;
+
+            function _rgIsFiller(block) {
+                if (!block) return true;
+                var name = block.event || (block.layer && block.layer.name) || block.type || '';
+                if (_rgFreeRe.test(String(name))) return true;
+                if (block._synthetic || block._isPlaceholder) return true;
+                if ((block.type || '').toLowerCase() === 'slot' && _rgFreeRe.test(String(block.event || ''))) return true;
+                return false;
+            }
+
+            allGrades.forEach(function (grade) {
+                var div = divisions[grade] || divisions[String(grade)] || {};
+                var gStart = parseTimeToMinutes(div.startTime) || 540;
+                var gEnd   = parseTimeToMinutes(div.endTime)   || 960;
+                getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                    var tl = (bunkTimelines[bunk] || []).slice().sort(function (a, b) {
+                        return (a.startMin || 0) - (b.startMin || 0);
+                    });
+
+                    // Build a minute → block map for this bunk
+                    var covered = {};
+                    for (var i = 0; i < tl.length; i++) {
+                        var b = tl[i];
+                        if (!b || b.startMin == null || b.endMin == null) continue;
+                        var s = Math.max(b.startMin, gStart);
+                        var e = Math.min(b.endMin, gEnd);
+                        var filler = _rgIsFiller(b);
+                        for (var m = s; m < e; m += 5) {
+                            // Real activity overrides placeholder at same minute
+                            if (covered[m] === undefined || covered[m] === 'filler') {
+                                covered[m] = filler ? 'filler' : 'real';
+                            }
+                        }
+                    }
+
+                    // Walk grade window; group runs of (uncovered OR filler) minutes
+                    var gapStart = null;
+                    var bunkGapsBefore = _rgGapList.length;
+                    for (var m2 = gStart; m2 < gEnd; m2 += 5) {
+                        var state = covered[m2];
+                        var isGap = (state === undefined) || (state === 'filler');
+                        if (isGap && gapStart === null) gapStart = m2;
+                        if (!isGap && gapStart !== null) {
+                            _rgGapList.push({ bunk: bunk, grade: grade, start: gapStart, end: m2, kind: 'mid-day' });
+                            gapStart = null;
+                        }
+                    }
+                    if (gapStart !== null) {
+                        _rgGapList.push({ bunk: bunk, grade: grade, start: gapStart, end: gEnd, kind: 'end-of-day' });
+                    }
+                    if (_rgGapList.length > bunkGapsBefore) _rgBunksWithGaps++;
+                });
+            });
+
+            // Filter out trivial sub-5-min noise and gaps that match expected
+            // bell-schedule transitions (e.g. 12:55-1:00, 2:10-2:15).
+            var _rgIntentional = function (start, end, grade) {
+                var periods = (window.campPeriods && window.campPeriods[grade]) || [];
+                for (var i = 0; i < periods.length - 1; i++) {
+                    var pEnd = periods[i].endMin, nStart = periods[i + 1].startMin;
+                    if (pEnd === start && nStart === end) return true;
+                }
+                return false;
+            };
+            _rgGapList = _rgGapList.filter(function (g) {
+                if ((g.end - g.start) < 5) return false;
+                if (_rgIntentional(g.start, g.end, g.grade)) return false;
+                return true;
+            });
+
+            if (_rgGapList.length === 0) {
+                log('\n[REAL-GAP] ✅ Honest verifier: ZERO real gaps across all bunks.');
+            } else {
+                var _rgTotalMin = _rgGapList.reduce(function (s, g) { return s + (g.end - g.start); }, 0);
+                log('\n[REAL-GAP] ⚠️  Honest verifier found ' + _rgGapList.length +
+                    ' real gaps across ' + _rgBunksWithGaps + ' bunks (' + _rgTotalMin + ' total minutes of dead time)');
+                log('[REAL-GAP] This counts ONLY uncovered or Free-only minutes — not Change/Lunch/Cleanup.');
+                _rgGapList.slice(0, 20).forEach(function (g) {
+                    function fmt(m) {
+                        var h = Math.floor(m / 60), mm = m % 60;
+                        var p = h >= 12 ? 'pm' : 'am';
+                        var h12 = ((h + 11) % 12) + 1;
+                        return h12 + ':' + (mm < 10 ? '0' : '') + mm + p;
+                    }
+                    log('  [REAL-GAP] ' + g.bunk + ' (' + g.grade + ') ' +
+                        fmt(g.start) + '–' + fmt(g.end) + ' (' + (g.end - g.start) + 'min, ' + g.kind + ')');
+                });
+                if (_rgGapList.length > 20) {
+                    log('  [REAL-GAP] ... and ' + (_rgGapList.length - 20) + ' more gaps not shown');
+                }
+            }
+        } catch (_rgErr) {
+            warn('[REAL-GAP] verifier error: ' + (_rgErr && _rgErr.message));
+        }
+
         // ★ v9.5 BACK-TO-BACK SPORT REPAIR — direct scheduleAssignments pass
         // Runs after all healing so changes are NOT overwritten by bunkTimeline re-sync.
         // The patched fallbackSweep skips adjacent same-sport candidates, so cleared slots
