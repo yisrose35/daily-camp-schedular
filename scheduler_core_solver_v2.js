@@ -1500,11 +1500,7 @@
           const real = slots
             .filter(s => s && !s.continuation && s._startMin != null)
             .sort((a, b) => a._startMin - b._startMin);
-          for (let k = 0; k < real.length - 1; k++) {
-            const gap = real[k + 1].s._startMin - real[k].s._endMin;
-            // The above access pattern needed: each entry is the slot itself, not {s, i}
-          }
-          // Re-iterate with the correct pattern:
+          // Iterate over real slots: each is the slot object itself
           for (let k = 0; k < real.length - 1; k++) {
             const prev = real[k], nxt = real[k + 1];
             const gap = nxt._startMin - prev._endMin;
