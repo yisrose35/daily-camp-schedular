@@ -234,10 +234,21 @@
 
             if (!divSlots[i] || !divSlots[end]) { i = end + 1; continue; }
 
+            // ★★★ FIX: Prefer entry's own _startMin/_endMin over divSlot times.
+            // The bell-schedule slot grid is fixed period boundaries; pinned
+            // walls (lunch, change, swim) and SA-placed activities carry their
+            // OWN absolute times. Reading from divSlots paints the block at the
+            // period boundary instead of where the activity actually is, which
+            // makes lunch (13:00) appear under the 12:20 column when its slot
+            // index happens to be the Period 3 slot. Fall back to divSlots
+            // only when the entry doesn't carry explicit times.
+            var entryStart = (typeof entry._startMin === 'number') ? entry._startMin : divSlots[i].startMin;
+            var entryEnd   = (typeof entry._endMin   === 'number') ? entry._endMin   : divSlots[end].endMin;
+
             out.push({
-                startMin: divSlots[i].startMin,
-                endMin:   divSlots[end].endMin,
-                duration: divSlots[end].endMin - divSlots[i].startMin,
+                startMin: entryStart,
+                endMin:   entryEnd,
+                duration: entryEnd - entryStart,
                 entry:    entry,
                 slotIdx:  i,  // ★★★ v2.1: Track slot index for edit
                 isLeague: !!(entry._league || entry._h2h)
