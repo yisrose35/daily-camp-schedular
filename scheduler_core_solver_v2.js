@@ -53,10 +53,25 @@
         // period-viol: cost 0. Still v2-uncatchable for seed-state — kept
         //   in breakdown for diagnostics only.
         swimNoChange:     parseFloat(a1.solverV2CostSwimNoChange)     || 100,
-        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 0
+        periodViolation:  parseFloat(a1.solverV2CostPeriodViolation)  || 0,
+        // unfillableSliver: stiff per-occurrence penalty for any wall-clock
+        //   gap whose duration is in (5, minFillerDur) — i.e. too big to be
+        //   a period transition (≤5min) but too small for any filler
+        //   activity to occupy (Slush/Popcorn = 10min). These are the gaps
+        //   v1 most often creates by stuffing a 20-min activity into a
+        //   30-min slot. SA needs strong signal to AVOID these placements
+        //   and to UNDO them via moveFitDuration when found.
+        unfillableSliver: parseFloat(a1.solverV2CostUnfillableSliver) || 500
       }
     };
   }
+
+  // Smallest-filler-duration cutoff used by the unfillableSliver detector.
+  // Any gap strictly less than this can't be closed by ANY filler activity,
+  // so SA should treat it as an outright bad placement to avoid creating.
+  // Hard-coded for now (matches Slush/Popcorn 10-min standard); future:
+  // derive from min(ctx.specials.duration) for activities marked as fillers.
+  const MIN_FILLER_DUR = 10;
 
   // -------------------------------------------------------------------------
   // SEED — warm-start from v1's existing pipeline
@@ -125,7 +140,37 @@
       cost += periodViol * cfg.cost.periodViolation;
     }
 
-    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange, periodViol } };
+    // Term 8: unfillable slivers — wall-clock gaps in (5, MIN_FILLER_DUR).
+    //   These are too big to be transition zones (≤5min) and too small for
+    //   any filler activity (Slush/Popcorn = 10min). They're "dead" minutes
+    //   that NO move can close — the only fix is to avoid creating them.
+    //   This term gives SA strong signal to swap out 20-in-30 placements.
+    let unfillable = 0;
+    if (cfg.cost.unfillableSliver > 0) {
+      unfillable = countUnfillableSlivers(schedule);
+      cost += unfillable * cfg.cost.unfillableSliver;
+    }
+
+    return { cost, hardViolations, breakdown: { holes, repeats, rotUnfair, gapMin: gapInfo.gapMin, sigGaps: gapInfo.sigGaps, swimNoChange, periodViol, unfillable } };
+  }
+
+  // Walk each bunk's real (non-continuation) slots in time order; count gaps
+  // whose duration is in (5, MIN_FILLER_DUR). These are the placements where
+  // an activity of duration d sits in a slot of size S leaving S-d slivered
+  // remainder that no filler can ever occupy.
+  function countUnfillableSlivers(schedule) {
+    let n = 0;
+    for (const slots of Object.values(schedule)) {
+      if (!Array.isArray(slots)) continue;
+      const real = slots
+        .filter(s => s && !s.continuation && s._startMin != null && s._endMin != null)
+        .sort((a, b) => a._startMin - b._startMin);
+      for (let i = 1; i < real.length; i++) {
+        const gap = real[i]._startMin - real[i - 1]._endMin;
+        if (gap > 5 && gap < MIN_FILLER_DUR) n++;
+      }
+    }
+    return n;
   }
 
   // -------------------------------------------------------------------------
@@ -1173,6 +1218,111 @@
     return null;
   }
 
+  // --- fitDuration (atomic): when a movable slot has a non-empty trailing
+  //     gap of [10, 45] min, try EXTENDING its _endMin to swallow some of
+  //     that gap — provided either:
+  //       (a) the extension stays within the slot's period (safe), OR
+  //       (b) the extension crosses ONLY a 5-min transition zone (allowed
+  //           per X2f-17 trade-off decision), AND
+  //       (c) the new bigger duration doesn't leave a NEW unfillable sliver
+  //           between the extended slot and its next neighbor.
+  //
+  //     This is the move that closes "20-min activity stuffed in 30-min
+  //     slot" placements — it grows the activity to fit, instead of leaving
+  //     the sliver.
+  //
+  //     Pairs with the unfillableSliver cost term: cost gives signal, this
+  //     move provides the corrective action.
+  //
+  //     Atomic via bucketPatch:'extend' so ctx.perBunkSlots[i].endMin stays
+  //     in lockstep with schedule[bunk][i]._endMin.
+  function moveFitDuration(schedule, ctx, rng) {
+    const MIN_GAP = MIN_FILLER_DUR;  // only bother with gaps ≥ smallest filler
+    const MAX_GAP = 45;              // beyond this is addBucket/Insert territory
+    const TRANSITION_MAX = 5;        // allow crossing transitions up to this size
+    const bunks = Object.keys(schedule);
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const slots = schedule[bunk];
+      if (!Array.isArray(slots)) continue;
+
+      // Collect (slot, trailingGap, nextSlot) triples for movable slots.
+      const real = slots
+        .filter(s => s && !s.continuation && s._startMin != null && s._endMin != null)
+        .sort((a, b) => a._startMin - b._startMin);
+      const candidates = [];
+      for (let i = 0; i < real.length - 1; i++) {
+        const cur = real[i], nxt = real[i + 1];
+        if (!_isMovable(cur)) continue;
+        const gap = nxt._startMin - cur._endMin;
+        if (gap < MIN_GAP || gap > MAX_GAP) continue;
+        candidates.push({ slot: cur, next: nxt, gap });
+      }
+      if (candidates.length === 0) continue;
+
+      const pick = candidates[Math.floor(rng() * candidates.length)];
+
+      // How far can we extend? Prefer "absorb the whole gap" but fall back
+      // to "absorb everything but a transition-sized tail" if the whole
+      // absorption would land us inside the next slot.
+      const newEnd = pick.next._startMin;
+      const newDur = newEnd - pick.slot._startMin;
+
+      // Period guard: allow extension if it stays inside one period OR
+      // crosses exactly one transition zone of ≤TRANSITION_MAX min.
+      const stays = _staysInPeriod(grade, pick.slot._startMin, newEnd);
+      if (!stays) {
+        // Check whether the crossed region is a single short transition.
+        const periods = window.campPeriods?.[grade] || [];
+        const crossedTransitions = [];
+        for (let p = 0; p < periods.length - 1; p++) {
+          const transStart = periods[p].endMin;
+          const transEnd = periods[p + 1].startMin;
+          if (transStart >= pick.slot._startMin && transEnd <= newEnd) {
+            crossedTransitions.push(transEnd - transStart);
+          }
+        }
+        // Reject if we cross any "real" period boundary (transition > TRANSITION_MAX)
+        if (crossedTransitions.some(t => t > TRANSITION_MAX) || crossedTransitions.length === 0) {
+          continue;
+        }
+        // Allow: only inter-period transitions, all ≤TRANSITION_MAX min
+      }
+
+      // Find this slot's actual index in the bunk's slots array
+      const slotIdx = slots.findIndex(s => s === pick.slot);
+      if (slotIdx < 0) continue;
+
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk][slotIdx] = Object.assign({}, pick.slot, {
+        _endMin: newEnd,
+        _source: 'v2-fitDuration'
+      });
+
+      // Atomic bucket-grid patch so ctx.perBunkSlots stays aligned.
+      // Find the matching pbs index (by startMin, since slot order matches).
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      let pbsIdx = -1;
+      if (Array.isArray(pbs)) {
+        pbsIdx = pbs.findIndex(b => b && b.startMin === pick.slot._startMin && b.endMin === pick.slot._endMin);
+      }
+
+      return {
+        schedule: next,
+        bucketPatch: (pbsIdx >= 0) ? {
+          kind: 'extend', grade, bunk,
+          idx: pbsIdx,
+          newBounds: { startMin: pick.slot._startMin, endMin: newEnd }
+        } : null
+      };
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
@@ -1185,7 +1335,8 @@
     bucketDelete: moveBucketDelete,
     addChange:    moveAddChange,
     shiftBlocker: moveShiftBlocker,
-    addBucket:    moveAddBucket
+    addBucket:    moveAddBucket,
+    fitDuration:  moveFitDuration
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -1208,7 +1359,8 @@
     bucketDelete: 1,
     addChange:    3,    // fixes user-reported swim-without-Change issue
     shiftBlocker: 2,    // unblocks addChange when adjacent space is occupied
-    addBucket:    3     // closes per-bunk-slot gaps that pruning left behind
+    addBucket:    3,    // closes per-bunk-slot gaps that pruning left behind
+    fitDuration:  4     // extends a too-short activity to absorb its trailing gap
   };
 
   function pickMove(stats, rng, weightMul) {
@@ -1325,6 +1477,7 @@
         ', repeats=' + currentEval.breakdown.repeats +
         ', swimNoChange=' + currentEval.breakdown.swimNoChange +
         ', periodViol=' + currentEval.breakdown.periodViol +
+        ', unfillable=' + (currentEval.breakdown.unfillable ?? 0) +
         ', hardViol=' + currentEval.hardViolations.length + ')');
 
     while (Date.now() < deadline) {
