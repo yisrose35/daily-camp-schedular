@@ -16896,6 +16896,170 @@
         }
 
         // ═══════════════════════════════════════════════════════════════════
+        // SLIVER-FILL PASS — insert short-duration filler specials into
+        // intra-period gaps the main pipeline left empty.
+        // ═══════════════════════════════════════════════════════════════════
+        // Why: specials with configured durations (e.g. Shiur 1 = 20min)
+        // cannot be extended — that would violate the user's contract. But
+        // when a 20-min special lands in a 30-min period, the trailing 10min
+        // is genuinely empty. The human scheduler fills these with 10-min
+        // glue blocks (Slush, Popcorn). The pipeline currently leaves them
+        // as dead time.
+        //
+        // This pass:
+        //   - Finds intra-period gaps ≥ 10min (single-period only)
+        //   - Picks a filler special whose configured duration ≤ gap size
+        //   - Respects maxUsage / maxUsagePerGrade caps
+        //   - Respects bunk access via isSpecialAvailableForBunk
+        //   - Never extends or shifts existing blocks
+        //   - Writes to both bunkTimelines AND window.scheduleAssignments
+        try {
+            var _sfSettings = window.globalSettings || (typeof globalSettings !== 'undefined' ? globalSettings : {});
+            var _sfSpecials = (_sfSettings.app1 && _sfSettings.app1.specialActivities) || _sfSettings.specialActivities || [];
+            var _sfActProps = (_sfSettings.app1 && _sfSettings.app1.activityProperties) || _sfSettings.activityProperties || {};
+
+            // Filler pool: any special with configured duration ≤ 20min.
+            // Sorted by duration descending so we prefer the largest filler
+            // that still fits (better use of available time).
+            var _sfDurOf = function (s) {
+                return s.duration || s.durationMin || s.defaultDuration || s.periodMin || 0;
+            };
+            var _sfFillers = _sfSpecials
+                .filter(function (s) { var d = _sfDurOf(s); return d > 0 && d <= 20; })
+                .sort(function (a, b) { return _sfDurOf(b) - _sfDurOf(a); });
+
+            if (_sfFillers.length === 0) {
+                log('[SLIVER-FILL] No short-duration fillers configured (none with dur ≤ 20min).');
+            } else {
+                // Tally current usage per special so we honor maxUsage caps
+                var _sfUsage = {};
+                Object.values(window.scheduleAssignments || {}).forEach(function (slots) {
+                    (slots || []).forEach(function (s) {
+                        var n = s && s._activity;
+                        if (n) _sfUsage[n] = (_sfUsage[n] || 0) + 1;
+                    });
+                });
+
+                var _sfFilled = 0, _sfSkipped = 0, _sfSkipReasons = {};
+                Object.entries(bunkTimelines).forEach(function (entry) {
+                    var bunk = entry[0];
+                    var tl = (entry[1] || []).slice().sort(function (a, b) {
+                        return (a.startMin || 0) - (b.startMin || 0);
+                    });
+                    var grade = _bgc[String(bunk)];
+                    if (!grade) return;
+                    var periods = (window.campPeriods && window.campPeriods[grade]) || [];
+                    if (periods.length === 0) return;
+
+                    // Find which period (if any) fully contains gap [gs, ge]
+                    var _sfIntraPeriod = function (gs, ge) {
+                        for (var pi = 0; pi < periods.length; pi++) {
+                            if (gs >= periods[pi].startMin && ge <= periods[pi].endMin) {
+                                return { period: periods[pi], idx: pi };
+                            }
+                        }
+                        return null;
+                    };
+
+                    // Walk pairwise — note we don't mutate tl while iterating;
+                    // we collect insertions and apply at the end.
+                    var _sfInserts = [];
+                    for (var i = 0; i < tl.length - 1; i++) {
+                        var gapStart = tl[i].endMin, gapEnd = tl[i + 1].startMin;
+                        var gapSize = gapEnd - gapStart;
+                        if (gapSize < 10) continue;
+                        var hit = _sfIntraPeriod(gapStart, gapEnd);
+                        if (!hit) continue; // inter-period — leave alone
+
+                        var chosen = null, chosenDur = 0;
+                        for (var fi = 0; fi < _sfFillers.length; fi++) {
+                            var f = _sfFillers[fi];
+                            var fdur = _sfDurOf(f);
+                            if (fdur > gapSize) continue;
+
+                            var fprops = _sfActProps[f.name] || f;
+                            var cap = parseInt(fprops.maxUsage) || 0;
+                            if (cap > 0 && (_sfUsage[f.name] || 0) >= cap) {
+                                _sfSkipReasons['maxUsage:' + f.name] = (_sfSkipReasons['maxUsage:' + f.name] || 0) + 1;
+                                continue;
+                            }
+                            var gradeCap = parseInt((fprops.maxUsagePerGrade || {})[grade]) || 0;
+                            if (gradeCap > 0 && (_sfUsage[f.name] || 0) >= gradeCap) {
+                                _sfSkipReasons['gradeCap:' + f.name + ':' + grade] = (_sfSkipReasons['gradeCap:' + f.name + ':' + grade] || 0) + 1;
+                                continue;
+                            }
+                            if (typeof isSpecialAvailableForBunk === 'function' &&
+                                !isSpecialAvailableForBunk(f.name, grade, bunk, _sfSettings)) {
+                                _sfSkipReasons['access:' + f.name] = (_sfSkipReasons['access:' + f.name] || 0) + 1;
+                                continue;
+                            }
+
+                            chosen = f; chosenDur = fdur; break;
+                        }
+
+                        if (!chosen) {
+                            _sfSkipped++;
+                            log('  [SLIVER-FILL] ⚠️  ' + bunk + ' ' + gapStart + '-' + gapEnd +
+                                ' (' + gapSize + 'min in P' + (hit.idx + 1) + ') — no eligible filler');
+                            continue;
+                        }
+
+                        var insertEnd = gapStart + chosenDur;
+                        _sfInserts.push({
+                            startMin: gapStart, endMin: insertEnd,
+                            type: 'special', event: chosen.name,
+                            layer: null,
+                            _classification: 'sliver-fill', _committed: true, _autoGenerated: true,
+                            _activityLocked: true, _fixed: true, _source: 'sliver-fill',
+                            _assignedSpecial: chosen.name,
+                            _isSpecialLocation: false
+                        });
+
+                        _sfUsage[chosen.name] = (_sfUsage[chosen.name] || 0) + 1;
+                        _sfFilled++;
+                        log('  [SLIVER-FILL] ✓ ' + bunk + ' (' + grade + ') ' + chosen.name +
+                            ' @ ' + gapStart + '-' + insertEnd +
+                            ' (' + chosenDur + 'min sliver in P' + (hit.idx + 1) + ')');
+                    }
+
+                    if (_sfInserts.length > 0) {
+                        // Merge into bunkTimelines
+                        bunkTimelines[bunk] = tl.concat(_sfInserts).sort(function (a, b) {
+                            return (a.startMin || 0) - (b.startMin || 0);
+                        });
+                        // Mirror into scheduleAssignments (renderer's source of truth)
+                        var sa = window.scheduleAssignments || (window.scheduleAssignments = {});
+                        if (!Array.isArray(sa[bunk])) sa[bunk] = [];
+                        _sfInserts.forEach(function (b) {
+                            sa[bunk].push({
+                                _startMin: b.startMin, _endMin: b.endMin,
+                                _activity: b.event, type: 'special',
+                                _fixed: true, _source: 'sliver-fill',
+                                _assignedSpecial: b.event
+                            });
+                        });
+                        sa[bunk].sort(function (a, b) {
+                            return (a._startMin || 0) - (b._startMin || 0);
+                        });
+                    }
+                });
+
+                if (_sfFilled > 0 || _sfSkipped > 0) {
+                    log('\n[SLIVER-FILL] Inserted ' + _sfFilled + ' fillers; ' + _sfSkipped + ' slivers had no eligible filler.');
+                    var _sfReasonKeys = Object.keys(_sfSkipReasons);
+                    if (_sfReasonKeys.length > 0) {
+                        log('[SLIVER-FILL] Skip-reason tally (per-attempt, not per-sliver):');
+                        _sfReasonKeys.forEach(function (k) { log('  ' + k + ': ' + _sfSkipReasons[k]); });
+                    }
+                } else {
+                    log('[SLIVER-FILL] No intra-period slivers found — nothing to fill.');
+                }
+            }
+        } catch (_sfErr) {
+            warn('[SLIVER-FILL] pass error: ' + (_sfErr && _sfErr.message));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
         // REAL-GAP VERIFIER — truthful post-heal gap detector
         // ═══════════════════════════════════════════════════════════════════
         // Why: the existing verifier counts any block with an _activity as
