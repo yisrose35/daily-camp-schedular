@@ -13197,6 +13197,97 @@
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
 
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE −0.5 — PeriodTiler SHADOW MODE
+        // ═══════════════════════════════════════════════════════════════════
+        // Runs against the FINAL bunkTimelines. Logs what shifts the tiler WOULD
+        // propose to eliminate slivers — does NOT mutate. P2-shadow build.
+        // To enable mutation later: set globalSettings.app1.periodTilerEnabled='apply'.
+        try {
+            if (window.PeriodTiler && typeof window.PeriodTiler.tileBunkDay === 'function') {
+                var _tilerTotalShifts = 0;
+                var _tilerTotalSlivers = 0;
+                var _tilerBunksAnalyzed = 0;
+                var _tilerSampleShifts = [];
+                var _tilerSampleSlivers = [];
+                var _SNACK_RE = /^(slush|popcorn|ice\s*cream|snack|nit\s*check|nosh|treat)/i;
+                var _CHANGE_RE = /^(pre[-\s]?change|post[-\s]?change|change)/i;
+                allGrades.forEach(function (grade) {
+                    var periods = (window.campPeriods && window.campPeriods[grade]) || [];
+                    if (!periods.length) return;
+                    var periodsSorted = periods.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                    getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                        var tl = bunkTimelines[bunk] || [];
+                        if (!tl.length) return;
+                        var inhabitants = tl.filter(function (b) {
+                            return b && b.startMin != null && b.endMin != null &&
+                                   (b.endMin - b.startMin) > 0;
+                        }).map(function (b) {
+                            var name = b.event || (b.layer && b.layer.name) || b.type || 'unknown';
+                            var dur = b.endMin - b.startMin;
+                            var isSnack = _SNACK_RE.test(String(name));
+                            var isChange = _CHANGE_RE.test(String(name));
+                            var isFixed = !!(b._fixed || b._classification === 'pinned' || b._source === 'phase0');
+                            // Snacks are the prime sliver creators — treat as movable in shadow.
+                            // Change blocks stay glued to their swim (immovable).
+                            // Everything else: respect _fixed.
+                            var movable = isSnack && !isChange;
+                            var resizable = isSnack && !isChange;
+                            return {
+                                name: name,
+                                kind: isSnack ? 'anchor' : (b.type || 'block'),
+                                configuredStart: b.startMin,
+                                configuredDur: dur,
+                                dMin: dur,
+                                dMax: resizable ? Math.min(dur * 2, 25) : dur,
+                                earliestStart: movable ? Math.max(0, b.startMin - 15) : b.startMin,
+                                latestStart: movable ? (b.startMin + 15) : b.startMin,
+                                isMovable: movable && !isFixed,
+                                isResizable: resizable && !isFixed
+                            };
+                        });
+                        var result = window.PeriodTiler.tileBunkDay({
+                            bunk: bunk, grade: grade, periods: periodsSorted,
+                            inhabitants: inhabitants, minSportDMin: 25
+                        });
+                        _tilerBunksAnalyzed++;
+                        _tilerTotalShifts += result.shifts.length;
+                        _tilerTotalSlivers += result.unsolvableSlivers.length;
+                        if (_tilerSampleShifts.length < 5 && result.shifts.length > 0) {
+                            result.shifts.slice(0, 2).forEach(function (s) {
+                                _tilerSampleShifts.push({ bunk: bunk, shift: s });
+                            });
+                        }
+                        if (_tilerSampleSlivers.length < 5 && result.unsolvableSlivers.length > 0) {
+                            result.unsolvableSlivers.slice(0, 2).forEach(function (s) {
+                                _tilerSampleSlivers.push({ bunk: bunk, sliver: s });
+                            });
+                        }
+                    });
+                });
+                log('[PeriodTiler SHADOW] analyzed ' + _tilerBunksAnalyzed + ' bunks → ' +
+                    'WOULD propose ' + _tilerTotalShifts + ' shifts | ' +
+                    _tilerTotalSlivers + ' unsolvable slivers');
+                if (_tilerSampleShifts.length > 0) {
+                    log('[PeriodTiler SHADOW] sample shifts:');
+                    _tilerSampleShifts.forEach(function (x) {
+                        var s = x.shift;
+                        log('  ' + x.bunk + ' @ ' + s.period + ': ' + s.name +
+                            ' ' + s.oldStart + '→' + s.newStart +
+                            ' (dur ' + s.oldDur + '→' + s.newDur + ')');
+                    });
+                }
+                if (_tilerSampleSlivers.length > 0) {
+                    log('[PeriodTiler SHADOW] sample unsolvable:');
+                    _tilerSampleSlivers.forEach(function (x) {
+                        log('  ' + x.bunk + ' @ ' + x.sliver.period + ': ' + x.sliver.why);
+                    });
+                }
+            }
+        } catch (_tilerErr) {
+            warn('[PeriodTiler SHADOW] error: ' + (_tilerErr && _tilerErr.message));
+        }
+
         // Debug exports
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));

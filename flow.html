@@ -665,10 +665,12 @@
 <script src="period_packer.js"></script>
 <script src="auto_solver_engine.js"></script>
     <script src="feasibility_oracle.js"></script>
+    <script src="period_tiler.js"></script>
     <script src="scheduler_core_auto.js"></script>
     <!-- v2 and v3 solvers parked. Files kept in repo (scheduler_core_solver_v2.js,
          scheduler_core_v3_*.js, solver_version_switch.js) but not loaded.
-         There is one solver: v1 (scheduler_core_auto.js). Improve it in place. -->
+         There is one solver: v1 (scheduler_core_auto.js). Improve it in place.
+         period_tiler.js is the Phase −0.5 pre-pass (P1 pure fn; not wired into pipeline yet). -->
 <script src="swim_debug.js"></script>
 
 
