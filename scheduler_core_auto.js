@@ -16940,23 +16940,13 @@
                     });
                 });
 
-                // Rebuild bunk→grade map locally — _bgc isn't in scope here
-                // (it's declared inside the diagnoses forEach that may have
-                // already returned). Cheap to rebuild and decouples this pass.
-                var _sfBunkGrade = {};
-                (allGrades || []).forEach(function (g) {
-                    (getBunksForGrade(g, divisions) || []).forEach(function (b) {
-                        _sfBunkGrade[String(b)] = g;
-                    });
-                });
-
                 var _sfFilled = 0, _sfSkipped = 0, _sfSkipReasons = {};
                 Object.entries(bunkTimelines).forEach(function (entry) {
                     var bunk = entry[0];
                     var tl = (entry[1] || []).slice().sort(function (a, b) {
                         return (a.startMin || 0) - (b.startMin || 0);
                     });
-                    var grade = _sfBunkGrade[String(bunk)];
+                    var grade = _bgc[String(bunk)];
                     if (!grade) return;
                     var periods = (window.campPeriods && window.campPeriods[grade]) || [];
                     if (periods.length === 0) return;
