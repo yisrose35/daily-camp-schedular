@@ -13315,6 +13315,26 @@
             warn('[PeriodTiler SHADOW] error: ' + (_tilerErr && _tilerErr.message));
         }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // PHASE −1 (shadow) — Day Packer input collection (Commit 1)
+        // ═══════════════════════════════════════════════════════════════════
+        // Pure read. Surfaces what data a per-bunk full-day planner needs
+        // to plan all activities together (the way the human does), instead
+        // of the sequential pin-then-fill pipeline.
+        try {
+            if (window.DayPacker && typeof window.DayPacker.runShadowCollection === 'function') {
+                window.DayPacker.runShadowCollection({
+                    bunkTimelines: bunkTimelines,
+                    allGrades: allGrades,
+                    getBunksForGrade: function (g) { return getBunksForGrade(g, divisions); },
+                    campPeriods: window.campPeriods || {},
+                    log: log
+                });
+            }
+        } catch (_dpErr) {
+            warn('[DayPacker] shadow error: ' + (_dpErr && _dpErr.message));
+        }
+
         // Debug exports
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
