@@ -1352,6 +1352,16 @@
       if (_isWall(slot)) return false;
       // Skip continuations of multi-slot activities (multi-period specials).
       if (slot.continuation) return false;
+      // X2f-18e: NEVER touch user-pinned specials. User-pinned slots have
+      // _pinned:true OR _source:'phase0' (configured-time specials with
+      // isAnchor) OR _source:'manual'. Only auto-placed Phase 2.5/3 fillers
+      // (_autoSpecial / _source:'phase2.5' / 'phase3') are eligible — those
+      // are the ones the solver chose freely and that may have created the
+      // dead gap by their placement.
+      if (slot._pinned === true) return false;
+      const src = String(slot._source || '');
+      if (src === 'phase0' || src === 'manual' || src === 'user') return false;
+      // Movable-by-SA or auto-pinned fillers are fair game.
       return true;
     }
 
