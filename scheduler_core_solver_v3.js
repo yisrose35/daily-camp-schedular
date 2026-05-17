@@ -248,38 +248,31 @@
     }
     ctx.perBunkSlots = perBunkSlots;
 
-    // Phase C+D+E: hand off to v2's SA + smart repair to polish.
-    // v2 exposes a public API (window.SolverV2) that lets us invoke runSA +
-    // smartRepair directly on our constructive seed, bypassing v1.
+    // Phase C: validation only (NO v2 SA handoff).
+    //
+    // Why no v2 SA: v2's cost function doesn't know about layer-rule
+    // constraints (lunch position, dMin/dMax, change-block size,
+    // prep-block coupling). When v2 SA polishes v3's clean constructive
+    // output, it mangles the schedule — moving lunch out of position,
+    // inflating change blocks beyond 10min, dropping sports below their
+    // layer's dMin — because none of those things show up in its cost.
+    //
+    // v3's Phase B already produces period-aligned, hard-pin-respecting
+    // schedules with zero structural violations (verified in parity test:
+    // 3/3 runs had holes=0, sigGaps=0, periodViol=0, swimNoChange=0).
+    // Skip the polish step until v2's cost function learns layer rules.
     let saStats = null, bestEval = null;
-    if (window.SolverV2?.runSA && window.SolverV2?.smartRepair) {
-      log('Phase C+D+E: running v2 SA + smart repair on constructive seed...');
-      const v2cfg = window.SolverV2.getConfig();
-      // Inject Phase F learned weight multipliers (no-op on first run for new camp)
-      if (window.SolverV3Learning?.getWeightAdjustments) {
-        v2cfg.moveWeightMultipliers = window.SolverV3Learning.getWeightAdjustments();
-        const muls = Object.keys(v2cfg.moveWeightMultipliers).length;
-        if (muls > 0) log('Applied ' + muls + ' learned weight multipliers');
+    if (window.SolverV2?.evaluate) {
+      try {
+        const v2cfg = window.SolverV2.getConfig();
+        const v2ctx = window.SolverV2.buildContext(v2cfg, options);
+        v2ctx.perBunkSlots = perBunkSlots;
+        bestEval = window.SolverV2.evaluate(schedule, v2ctx);
+        log('Phase C: validated. cost=' + bestEval.cost +
+            ' hardViol=' + bestEval.hardViolations.length);
+      } catch (e) {
+        warn('Phase C evaluate failed: ' + e.message);
       }
-      // v3 gets the full configured budget — we already spent constructive time
-      const v2ctx = window.SolverV2.buildContext(v2cfg, options);
-      // Override perBunkSlots with v3's period-aligned grids
-      v2ctx.perBunkSlots = perBunkSlots;
-      const saResult = window.SolverV2.runSA(schedule, v2ctx);
-      window.scheduleAssignments = saResult.best;
-      if (saResult.bestPbsSnapshot) {
-        for (const [grade, byBunk] of Object.entries(saResult.bestPbsSnapshot)) {
-          if (!window.divisionTimes?.[grade]) continue;
-          window.divisionTimes[grade]._perBunkSlots = byBunk;
-        }
-        v2ctx.perBunkSlots = saResult.bestPbsSnapshot;
-      }
-      window.SolverV2.smartRepair(window.scheduleAssignments, v2ctx);
-      saStats = saResult.stats;
-      bestEval = saResult.bestEval;
-      log('Phase C+D+E done. cost=' + bestEval?.cost);
-    } else {
-      warn('v2 public API unavailable — returning constructive-only output');
     }
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
