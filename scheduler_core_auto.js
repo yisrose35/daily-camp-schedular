@@ -12822,6 +12822,32 @@
                                 ' Gaps: [' + _psGapSummary + ']. Adjust adjacent pinned walls to avoid sub-5min remainders.');
                         }
 
+                        // ★ ANTI-ORPHAN GUARD: if even the BEST candidate creates a sub-fillMin
+                        // remainder, AND no clean-fit position exists, defer this special entirely
+                        // rather than pin it + an unfillable gap. Phase 3 then has a clean period
+                        // to fill with a sport (e.g. a 30-min Elbow Tag in place of 20-min Shiur +
+                        // 10-min orphan). Skipped only when safe — fullGrade and exact-frequency
+                        // specials must place even with a gap, so we don't defer those.
+                        if (best.deadGapCount > 0 || (typeof best.score === 'number' && best.score < -2000)) {
+                            var _spCfg = (typeof activityProperties === 'object' && activityProperties)
+                                ? activityProperties[special.name] : null;
+                            var _isFullGrade = !!(_spCfg && _spCfg.fullGrade);
+                            var _hasExactFreq = !!(_spCfg && (_spCfg.exactFrequency || _spCfg.exactFrequencyPerWeek));
+                            var _hasCleanAlternative = false;
+                            for (var _cp2 = 0; _cp2 < candidatePositions.length; _cp2++) {
+                                if (candidatePositions[_cp2].deadGapCount === 0 && candidatePositions[_cp2].score >= 0) {
+                                    _hasCleanAlternative = true; break;
+                                }
+                            }
+                            if (!_isFullGrade && !_hasExactFreq && !_hasCleanAlternative) {
+                                if (totalIters < 1) {
+                                    log('[Phase2.5] [ANTI-ORPHAN] Deferring "' + special.name + '" for bunk ' + bunk +
+                                        ' — every position creates an unfillable remainder. Phase 3 will fill the period with a sport.');
+                                }
+                                continue;
+                            }
+                        }
+
                         // Place the special at the best position (configured duration — never shortened)
                         var bestStart = best.pos;
                         var bestEnd = bestStart + specialDur;
