@@ -16931,17 +16931,12 @@
             if (_sfFillers.length === 0) {
                 log('[SLIVER-FILL] No short-duration fillers configured (none with dur ≤ 20min).');
             } else {
-                // Tally PER-BUNK current usage per special so we honor maxUsage
-                // caps correctly. maxUsage is per-bunk-per-period (e.g. 1×/week
-                // PER BUNK), not global per day. Counting global usage would
-                // wrongly block all bunks after the first one gets the filler.
-                var _sfBunkUsage = {};  // _sfBunkUsage[bunk][activity] = count
-                Object.entries(window.scheduleAssignments || {}).forEach(function (entry) {
-                    var bunk = entry[0];
-                    _sfBunkUsage[bunk] = _sfBunkUsage[bunk] || {};
-                    (entry[1] || []).forEach(function (s) {
+                // Tally current usage per special so we honor maxUsage caps
+                var _sfUsage = {};
+                Object.values(window.scheduleAssignments || {}).forEach(function (slots) {
+                    (slots || []).forEach(function (s) {
                         var n = s && s._activity;
-                        if (n) _sfBunkUsage[bunk][n] = (_sfBunkUsage[bunk][n] || 0) + 1;
+                        if (n) _sfUsage[n] = (_sfUsage[n] || 0) + 1;
                     });
                 });
 
@@ -17003,16 +16998,12 @@
 
                                 var fprops = _sfActProps[f.name] || f;
                                 var cap = parseInt(fprops.maxUsage) || 0;
-                                var bunkUsedToday = (_sfBunkUsage[bunk] && _sfBunkUsage[bunk][f.name]) || 0;
-                                // Per-bunk cap (maxUsage is per-bunk-per-period;
-                                // we only count today, but if special is already
-                                // in this bunk's schedule today, the cap is hit).
-                                if (cap > 0 && bunkUsedToday >= cap) {
-                                    _sfSkipReasons['bunkMaxUsage:' + f.name] = (_sfSkipReasons['bunkMaxUsage:' + f.name] || 0) + 1;
+                                if (cap > 0 && (_sfUsage[f.name] || 0) >= cap) {
+                                    _sfSkipReasons['maxUsage:' + f.name] = (_sfSkipReasons['maxUsage:' + f.name] || 0) + 1;
                                     continue;
                                 }
                                 var gradeCap = parseInt((fprops.maxUsagePerGrade || {})[grade]) || 0;
-                                if (gradeCap > 0 && bunkUsedToday >= gradeCap) {
+                                if (gradeCap > 0 && (_sfUsage[f.name] || 0) >= gradeCap) {
                                     _sfSkipReasons['gradeCap:' + f.name + ':' + grade] = (_sfSkipReasons['gradeCap:' + f.name + ':' + grade] || 0) + 1;
                                     continue;
                                 }
@@ -17036,10 +17027,7 @@
                             _sfBunkInserts.push({
                                 startMin: sliceStart, endMin: insertEnd, event: chosen.name
                             });
-                            // Decrement this bunk's budget for the chosen filler.
-                            // Per-bunk because maxUsage is per-bunk-per-period.
-                            _sfBunkUsage[bunk] = _sfBunkUsage[bunk] || {};
-                            _sfBunkUsage[bunk][chosen.name] = (_sfBunkUsage[bunk][chosen.name] || 0) + 1;
+                            _sfUsage[chosen.name] = (_sfUsage[chosen.name] || 0) + 1;
                             _sfFilled++;
                             log('  [SLIVER-FILL] ✓ ' + bunk + ' (' + grade + ') ' + chosen.name +
                                 ' @ ' + sliceStart + '-' + insertEnd +
