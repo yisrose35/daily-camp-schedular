@@ -16904,19 +16904,41 @@
 
             function _rgIsFiller(block) {
                 if (!block) return true;
-                var name = block.event || (block.layer && block.layer.name) || block.type || '';
+                var name = block.event || block._activity ||
+                           (block.layer && block.layer.name) || block.type || '';
+                if (!name) return true;
                 if (_rgFreeRe.test(String(name))) return true;
                 if (block._synthetic || block._isPlaceholder) return true;
                 if ((block.type || '').toLowerCase() === 'slot' && _rgFreeRe.test(String(block.event || ''))) return true;
                 return false;
             }
 
+            // ★ v2 (2026-05-17): read window.scheduleAssignments (renderer's
+            // source of truth) in addition to in-scope bunkTimelines. v1 only
+            // walked bunkTimelines and missed every real gap because the
+            // renderer reads scheduleAssignments — they diverge after the
+            // bunkTimelines → assignments sync at STEP 5 Save. Without this,
+            // we reported 1 real gap when the rendered grid had 8+ visible
+            // "+ Add" empty buckets. assignments entries use _startMin/_endMin
+            // and _activity (vs startMin/endMin/event on bunkTimelines).
+            var _rgSA = window.scheduleAssignments || {};
+
             allGrades.forEach(function (grade) {
                 var div = divisions[grade] || divisions[String(grade)] || {};
                 var gStart = parseTimeToMinutes(div.startTime) || 540;
                 var gEnd   = parseTimeToMinutes(div.endTime)   || 960;
                 getBunksForGrade(grade, divisions).forEach(function (bunk) {
-                    var tl = (bunkTimelines[bunk] || []).slice().sort(function (a, b) {
+                    // Prefer scheduleAssignments (matches what renderer shows).
+                    // Fall back to bunkTimelines if assignments aren't yet synced.
+                    var saTl = (_rgSA[bunk] || []).map(function (s) {
+                        return {
+                            startMin: s._startMin, endMin: s._endMin,
+                            event: s._activity, type: s.type,
+                            _fixed: s._fixed, _source: s._source
+                        };
+                    });
+                    var btTl = bunkTimelines[bunk] || [];
+                    var tl = (saTl.length > 0 ? saTl : btTl).slice().sort(function (a, b) {
                         return (a.startMin || 0) - (b.startMin || 0);
                     });
 
