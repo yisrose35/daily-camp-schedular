@@ -3311,39 +3311,90 @@
                     return p.slice().sort(function (a, b) { return a.startMin - b.startMin; });
                 } catch (e) { return null; }
             }
-            function _gpScorePosition(t, dur, periods, sportDMin) {
+            // Collect everything already placed for this bunk (Phase 0 walls +
+            // sports/specials drafted earlier in Phase B) as sorted {s,e} segments.
+            // Used by the scorer to detect "this candidate pairs with an existing
+            // placement to fill the period completely" instead of flagging a 20-min
+            // leftover as dead when it's actually about to be filled by what's
+            // already there.
+            function _gpExistingForBunk(bunk) {
+                var segs = [];
+                try {
+                    var bt = bunkTimelines[bunk] || [];
+                    for (var i = 0; i < bt.length; i++) {
+                        if (bt[i] && bt[i].startMin != null && bt[i].endMin != null) {
+                            segs.push({ s: bt[i].startMin, e: bt[i].endMin });
+                        }
+                    }
+                } catch (e) {}
+                try {
+                    var dr = draftResults[bunk] || {};
+                    var lists = [dr.specials || [], dr.sports || []];
+                    for (var li = 0; li < lists.length; li++) {
+                        for (var j = 0; j < lists[li].length; j++) {
+                            var ct = lists[li][j] && lists[li][j].claimedTime;
+                            if (ct && ct.startMin != null && ct.endMin != null) {
+                                segs.push({ s: ct.startMin, e: ct.endMin });
+                            }
+                        }
+                    }
+                } catch (e) {}
+                segs.sort(function (a, b) { return a.s - b.s; });
+                return segs;
+            }
+            function _gpScorePosition(t, dur, periods, sportDMin, existing) {
                 if (!periods) return 0;
                 var endT = t + dur;
                 var score = 0;
-                // Find every period the special intersects
                 var intersected = [];
                 for (var i = 0; i < periods.length; i++) {
                     var p = periods[i];
                     if (endT > p.startMin && t < p.endMin) intersected.push(p);
                 }
                 if (intersected.length === 0) return 0;
-                if (intersected.length === 1) {
-                    var p1 = intersected[0];
-                    var leftRem = t - p1.startMin;
-                    var rightRem = p1.endMin - endT;
-                    if (leftRem === 0) score += 200;       // aligned to period start
-                    if (rightRem === 0) score += 200;      // aligned to period end
-                    if (leftRem > 0) {
-                        if (leftRem < sportDMin) score -= 1500;
-                        else score += 60;
+                existing = existing || [];
+
+                // For each intersected period, build the occupancy after adding
+                // (t, endT) on top of existing placements in that period. Then
+                // compute the leftover gaps inside the period and score them.
+                for (var pi = 0; pi < intersected.length; pi++) {
+                    var pd = intersected[pi];
+                    var occ = [{ s: Math.max(t, pd.startMin), e: Math.min(endT, pd.endMin) }];
+                    for (var ei = 0; ei < existing.length; ei++) {
+                        var ex = existing[ei];
+                        if (ex.e > pd.startMin && ex.s < pd.endMin) {
+                            occ.push({ s: Math.max(ex.s, pd.startMin), e: Math.min(ex.e, pd.endMin) });
+                        }
                     }
-                    if (rightRem > 0) {
-                        if (rightRem < sportDMin) score -= 1500;
-                        else score += 60;
+                    occ.sort(function (a, b) { return a.s - b.s; });
+                    // Compute period gaps around occupancy
+                    var cursor = pd.startMin;
+                    var gaps = [];
+                    for (var oi = 0; oi < occ.length; oi++) {
+                        if (occ[oi].s > cursor) gaps.push(occ[oi].s - cursor);
+                        cursor = Math.max(cursor, occ[oi].e);
                     }
-                } else {
-                    // Multi-period special: prefer spanning entire periods edge-to-edge
-                    var first = intersected[0], last = intersected[intersected.length - 1];
-                    if (t === first.startMin) score += 150;
-                    if (endT === last.endMin) score += 150;
-                    // Penalize incomplete coverage of inner periods (shouldn't happen
-                    // if startMin/endMin chain, but guard anyway)
-                    for (var k = 1; k < intersected.length - 1; k++) {
+                    if (cursor < pd.endMin) gaps.push(pd.endMin - cursor);
+
+                    var hasGap = false;
+                    for (var gi = 0; gi < gaps.length; gi++) {
+                        var g = gaps[gi];
+                        if (g <= 0) continue;
+                        hasGap = true;
+                        if (g < sportDMin) score -= 1500;  // unfillable leftover
+                        else score += 60;                  // sport-sized, fillable
+                    }
+                    // Perfect-fit bonus: period is completely covered by occupancy
+                    if (!hasGap) score += 500;
+                    // Period-edge alignment bonus (only when this candidate is
+                    // the one touching the edge — not someone else's existing)
+                    if (t === pd.startMin) score += 100;
+                    if (endT === pd.endMin) score += 100;
+                }
+
+                // Multi-period chain integrity
+                if (intersected.length > 1) {
+                    for (var k = 1; k < intersected.length; k++) {
                         if (intersected[k - 1].endMin !== intersected[k].startMin) score -= 200;
                     }
                 }
@@ -3354,6 +3405,7 @@
             function findTimeInRange(fieldName, bunk, grade, dur, freeWindows, rangeStart, rangeEnd, specialName, activity) {
                 var periods = _gpPeriodsFor(grade);
                 var sportDMin = _gpSportDMinFor(bunk);
+                var existing = _gpExistingForBunk(bunk);
                 var best = null, bestScore = -Infinity;
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
@@ -3365,7 +3417,7 @@
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
                         // Tiny earliest-first tiebreak so equal scores stay deterministic
-                        var s = _gpScorePosition(t, dur, periods, sportDMin) - (t / 100000);
+                        var s = _gpScorePosition(t, dur, periods, sportDMin, existing) - (t / 100000);
                         if (s > bestScore) { bestScore = s; best = { startMin: t, endMin: t + dur }; }
                     }
                 }
@@ -3376,6 +3428,7 @@
             function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName, activity) {
                 var periods = _gpPeriodsFor(grade);
                 var sportDMin = _gpSportDMinFor(bunk);
+                var existing = _gpExistingForBunk(bunk);
                 var best = null, bestScore = -Infinity;
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
@@ -3384,7 +3437,7 @@
                     for (var t = win.start; t + dur <= win.end; t += 5) {
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
-                        var s = _gpScorePosition(t, dur, periods, sportDMin) - (t / 100000);
+                        var s = _gpScorePosition(t, dur, periods, sportDMin, existing) - (t / 100000);
                         if (s > bestScore) { bestScore = s; best = { startMin: t, endMin: t + dur }; }
                     }
                 }
