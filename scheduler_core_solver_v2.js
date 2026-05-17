@@ -1051,6 +1051,128 @@
     return null;
   }
 
+  // --- addBucket (atomic): close per-bunk-slot gaps by SYNTHESIZING a new
+  //     bucket of the gap's exact dimensions and assigning a filler-eligible
+  //     activity to it. Mirrors moveAddChange's two-step atomic splice
+  //     (schedule + bucketPatch).
+  //
+  //     Why this exists: v1's per-bunk-slot pruning drops sub-dMin slivers
+  //     (e.g. 720-730 in Duetos), leaving holes that no other v2 move can
+  //     touch because they all operate on EXISTING buckets. Without
+  //     addBucket, addressing those holes requires moving the boundaries
+  //     of neighboring buckets — which trips period-violation rules.
+  //
+  //     Detection: scan _perBunkSlots[grade][bunk] for consecutive pairs
+  //     where pbs[i+1].startMin > pbs[i].endMin (a per-bunk gap).
+  //
+  //     Activity selection:
+  //       - Use _candidateActivities (same pool as inject/replace)
+  //       - Filter by per-bunk-per-day maxUsage check so we don't pick
+  //         specials that are already at their cap (rejected by the hard
+  //         validator anyway, but this saves SA budget)
+  //       - Need a field that lists the activity AND no field-conflict at
+  //         the new time (validator catches this — we don't pre-check)
+  //
+  //     The new bucket is marked _fixed:true so subsequent SA moves don't
+  //     try to mutate or delete it (same as addChange's Change blocks).
+  function moveAddBucket(schedule, ctx, rng) {
+    const MIN_GAP = 5;        // ignore < 5 min — usually period transitions
+    const MAX_GAP = 30;       // > 30 min is bucketInsert/extend territory
+    const bunks = Object.keys(schedule);
+
+    // Pre-build a specials-by-name lookup once per call so the maxUsage
+    // filter is O(1). Specials list is small (< 100 typically), so the
+    // micro-optimisation isn't critical, but it keeps the hot path clean.
+    const specByName = {};
+    (ctx.specials || []).forEach(s => { if (s && s.name) specByName[s.name] = s; });
+
+    for (let attempt = 0; attempt < 20; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const slots = schedule[bunk];
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(slots) || !Array.isArray(pbs) || pbs.length < 2) continue;
+
+      // Find per-bunk-slot gaps. Walk pbs in time order (already sorted by
+      // construction) and record any (i, i+1) where there's daylight between
+      // the two buckets' boundaries.
+      const gaps = [];
+      for (let i = 0; i < pbs.length - 1; i++) {
+        const cur = pbs[i], nxt = pbs[i + 1];
+        if (!cur || !nxt || cur.endMin == null || nxt.startMin == null) continue;
+        const span = nxt.startMin - cur.endMin;
+        if (span >= MIN_GAP && span <= MAX_GAP) {
+          gaps.push({ afterIdx: i, startMin: cur.endMin, endMin: nxt.startMin, dur: span });
+        }
+      }
+      if (gaps.length === 0) continue;
+
+      const gap = gaps[Math.floor(rng() * gaps.length)];
+
+      // Build per-bunk usage map so we can filter out specials already at cap.
+      const usage = {};
+      for (const s of slots) {
+        if (!s || s.continuation || !s._activity) continue;
+        const a = String(s._activity);
+        usage[a] = (usage[a] || 0) + 1;
+      }
+
+      // Build candidate activity list filtered by maxUsage.
+      const pool = _candidateActivities(grade, ctx).filter(act => {
+        const spec = specByName[act];
+        if (!spec) return true; // sport / non-special — no maxUsage
+        const maxUse = parseInt(spec.maxUsage) || 0;
+        if (maxUse <= 0) return true;
+        return (usage[act] || 0) < maxUse;
+      });
+      if (pool.length === 0) continue;
+
+      // Try up to a few activities; first one with an accessible field wins.
+      // Don't iterate the entire pool — keeps the move cheap and SA picks
+      // diversity over time.
+      const tryActs = pool.slice().sort(() => rng() - 0.5).slice(0, 8);
+      let picked = null;
+      for (const act of tryActs) {
+        const field = _findFieldForActivity(act, ctx);
+        if (!field) continue;
+        picked = { act, field };
+        break;
+      }
+      if (!picked) continue;
+
+      const newSlot = {
+        field: picked.field.name,
+        sport: picked.act,
+        _activity: picked.act,
+        _autoMode: true,
+        _autoSolved: true,
+        _fixed: true,
+        _startMin: gap.startMin,
+        _endMin: gap.endMin,
+        _source: 'v2-addBucket',
+        continuation: false
+      };
+
+      // Insert at array-index (gap.afterIdx + 1) so schedule + pbs stay in
+      // lockstep. Both arrays grow by 1; all subsequent indices shift up.
+      const insertIdx = gap.afterIdx + 1;
+      const next = _cloneSchedule(schedule);
+      next[bunk] = next[bunk].slice();
+      next[bunk].splice(insertIdx, 0, newSlot);
+
+      return {
+        schedule: next,
+        bucketPatch: {
+          kind: 'insert', grade, bunk,
+          idx: insertIdx,
+          newBucket: { startMin: gap.startMin, endMin: gap.endMin }
+        }
+      };
+    }
+    return null;
+  }
+
   const MOVES = {
     replace:      moveReplace,
     swap:         moveSwap,
@@ -1062,7 +1184,8 @@
     bucketInsert: moveBucketInsert,
     bucketDelete: moveBucketDelete,
     addChange:    moveAddChange,
-    shiftBlocker: moveShiftBlocker
+    shiftBlocker: moveShiftBlocker,
+    addBucket:    moveAddBucket
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -1084,7 +1207,8 @@
     bucketInsert: 4,
     bucketDelete: 1,
     addChange:    3,    // fixes user-reported swim-without-Change issue
-    shiftBlocker: 2     // unblocks addChange when adjacent space is occupied
+    shiftBlocker: 2,    // unblocks addChange when adjacent space is occupied
+    addBucket:    3     // closes per-bunk-slot gaps that pruning left behind
   };
 
   function pickMove(stats, rng, weightMul) {
