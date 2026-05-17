@@ -147,7 +147,7 @@
     //   This term gives SA strong signal to swap out 20-in-30 placements.
     let unfillable = 0;
     if (cfg.cost.unfillableSliver > 0) {
-      unfillable = countUnfillableSlivers(schedule);
+      unfillable = countUnfillableSlivers(schedule, ctx);
       cost += unfillable * cfg.cost.unfillableSliver;
     }
 
@@ -155,19 +155,61 @@
   }
 
   // Walk each bunk's real (non-continuation) slots in time order; count gaps
-  // whose duration is in (5, MIN_FILLER_DUR). These are the placements where
-  // an activity of duration d sits in a slot of size S leaving S-d slivered
-  // remainder that no filler can ever occupy.
-  function countUnfillableSlivers(schedule) {
+  // that no available activity can fill.
+  //
+  // X2f-18c: ELIGIBILITY-BASED instead of size-based. The old check only
+  // caught gaps in (5, MIN_FILLER_DUR) — but a 10-min gap on a bunk that's
+  // already used Slush/Popcorn/Ice Cream to maxUsage is just as dead. We
+  // now ask the real question: is there ANY specials-pool activity with
+  //   dMin ≤ gap, accessible to the bunk's grade, under maxUsage,
+  // available right now? If no → this gap is unfillable, cost it.
+  //
+  // Gaps ≤ 5 min are still considered legal inter-period buffers and
+  // never costed (matches the bell-schedule transition convention).
+  function countUnfillableSlivers(schedule, ctx) {
     let n = 0;
-    for (const slots of Object.values(schedule)) {
+    const specials = (ctx && ctx.specials) || [];
+    const divisions = (ctx && ctx.divisions) || {};
+
+    for (const [bunk, slots] of Object.entries(schedule)) {
       if (!Array.isArray(slots)) continue;
+      const grade = _bunkGrade(bunk, divisions);
+      if (!grade) continue;
+
+      // Per-bunk usage count for maxUsage filter.
+      const usage = {};
+      for (const s of slots) {
+        if (!s || s.continuation || !s._activity) continue;
+        const a = String(s._activity);
+        usage[a] = (usage[a] || 0) + 1;
+      }
+
       const real = slots
         .filter(s => s && !s.continuation && s._startMin != null && s._endMin != null)
         .sort((a, b) => a._startMin - b._startMin);
+
       for (let i = 1; i < real.length; i++) {
         const gap = real[i]._startMin - real[i - 1]._endMin;
-        if (gap > 5 && gap < MIN_FILLER_DUR) n++;
+        if (gap <= 5) continue;     // legal transition buffer
+        if (gap > 45) continue;     // huge gap — different problem class
+        // Does ANY eligible filler fit this gap?
+        let fillable = false;
+        for (const sp of specials) {
+          if (!sp || !sp.name) continue;
+          if (sp.fullGrade === true) continue;
+          const ar = sp.accessRestrictions;
+          if (ar && ar.enabled) {
+            const divs = ar.divisions || {};
+            if (!(grade in divs) && !(String(grade) in divs)) continue;
+          }
+          const maxUse = parseInt(sp.maxUsage) || 0;
+          if (maxUse > 0 && (usage[sp.name] || 0) >= maxUse) continue;
+          const dMin = parseInt(sp.dMin || sp.duration || sp.preferredDuration) || 0;
+          if (dMin > 0 && dMin > gap) continue;
+          fillable = true;
+          break;
+        }
+        if (!fillable) n++;
       }
     }
     return n;
@@ -1226,7 +1268,157 @@
     return null;
   }
 
-  // --- fitDuration (atomic): when a movable slot has a non-empty trailing
+  // --- absorbDeadGap (atomic): close per-bunk gaps that NO filler can occupy
+  //     by SWAPPING a neighbor's activity for one whose configured duration
+  //     covers the (neighbor-bucket + gap), then EXTENDING the neighbor's
+  //     bucket to span both. This honors the user's principle: "20-min
+  //     activity in a 30-min slot leaves a 10-min unfillable hole; pick a
+  //     different activity (a 30-min one) instead." We do NOT extend any
+  //     activity beyond its configured duration — we replace it.
+  //
+  //     Detection: scan _perBunkSlots[grade][bunk] for consecutive pairs with
+  //     a gap, then ask countUnfillableSlivers' eligibility logic whether
+  //     ANY filler exists for the gap. If no filler exists → "dead" gap.
+  //
+  //     Repair candidate: try the slot BEFORE the gap (and then the slot
+  //     AFTER) for activities whose configured duration ≥ neighbor.dur + gap.
+  //     Cap at neighbor.dur + gap so we don't overshoot the next neighbor.
+  //
+  //     Atomic via bucketPatch:'extend' so ctx.perBunkSlots stays in lockstep.
+  function moveAbsorbDeadGap(schedule, ctx, rng) {
+    const bunks = Object.keys(schedule);
+    const specByName = ctx._specialByName || {};
+    const fieldByActivity = {};
+    (ctx.fields || []).forEach(f => {
+      (f.activities || []).forEach(a => {
+        if (!fieldByActivity[a]) fieldByActivity[a] = [];
+        fieldByActivity[a].push(f);
+      });
+    });
+
+    function actDuration(actName) {
+      const sp = specByName[actName];
+      if (sp) {
+        const d = parseInt(sp.duration || sp.preferredDuration || sp.dMin) || 0;
+        return d;
+      }
+      // sport: read from layer config if available, else 0 (skip)
+      const layers = ctx.layers || [];
+      for (const L of layers) {
+        if (L && L.activities && L.activities[actName]) {
+          const d = parseInt(L.activities[actName].duration || L.activities[actName].dMin) || 0;
+          if (d > 0) return d;
+        }
+      }
+      return 0;
+    }
+
+    function gapHasFiller(grade, gap, usage) {
+      for (const sp of (ctx.specials || [])) {
+        if (!sp || !sp.name) continue;
+        if (sp.fullGrade === true) continue;
+        const ar = sp.accessRestrictions;
+        if (ar && ar.enabled) {
+          const divs = ar.divisions || {};
+          if (!(grade in divs) && !(String(grade) in divs)) continue;
+        }
+        const maxUse = parseInt(sp.maxUsage) || 0;
+        if (maxUse > 0 && (usage[sp.name] || 0) >= maxUse) continue;
+        const dMin = parseInt(sp.dMin || sp.duration || sp.preferredDuration) || 0;
+        if (dMin > 0 && dMin > gap) continue;
+        return true;
+      }
+      return false;
+    }
+
+    for (let attempt = 0; attempt < 25; attempt++) {
+      const bunk = bunks[Math.floor(rng() * bunks.length)];
+      const grade = _bunkGrade(bunk, ctx.divisions);
+      if (!grade) continue;
+      const slots = schedule[bunk];
+      const pbs = ctx.perBunkSlots[grade]?.[bunk];
+      if (!Array.isArray(slots) || !Array.isArray(pbs) || pbs.length < 2) continue;
+
+      // Per-bunk usage for the filler-availability check.
+      const usage = {};
+      for (const s of slots) {
+        if (!s || s.continuation || !s._activity) continue;
+        usage[s._activity] = (usage[s._activity] || 0) + 1;
+      }
+
+      // Find dead gaps.
+      const deadGaps = [];
+      for (let i = 0; i < pbs.length - 1; i++) {
+        const cur = pbs[i], nxt = pbs[i + 1];
+        if (!cur || !nxt) continue;
+        const gap = nxt.startMin - cur.endMin;
+        if (gap <= 5 || gap > 45) continue;
+        if (gapHasFiller(grade, gap, usage)) continue;
+        deadGaps.push({ leftIdx: i, rightIdx: i + 1, startMin: cur.endMin, endMin: nxt.startMin, dur: gap });
+      }
+      if (deadGaps.length === 0) continue;
+
+      const dg = deadGaps[Math.floor(rng() * deadGaps.length)];
+
+      // Try absorbing into the LEFT neighbor first, then RIGHT.
+      for (const side of ['left', 'right']) {
+        const nIdx = side === 'left' ? dg.leftIdx : dg.rightIdx;
+        const nSlot = slots[nIdx];
+        const nBucket = pbs[nIdx];
+        if (!nSlot || !nBucket) continue;
+        if (!_isMovable(nSlot)) continue;
+        const curDur = nBucket.endMin - nBucket.startMin;
+        const targetDur = curDur + dg.dur;
+        const newStart = side === 'left' ? nBucket.startMin : dg.startMin;
+        const newEnd   = side === 'left' ? dg.endMin       : nBucket.endMin;
+
+        // Must stay within one period of the grade.
+        if (!_staysInPeriod(grade, newStart, newEnd)) continue;
+
+        // Build candidate activities whose configured duration == targetDur
+        // (exact match — we don't pad).
+        const pool = _candidateActivities(grade, ctx).filter(act => {
+          const d = actDuration(act);
+          if (d !== targetDur) return false;
+          // accessible field?
+          const fs = fieldByActivity[act] || [];
+          if (fs.length === 0) return false;
+          // maxUsage gate
+          const sp = specByName[act];
+          if (sp) {
+            const maxUse = parseInt(sp.maxUsage) || 0;
+            if (maxUse > 0 && (usage[act] || 0) >= maxUse) return false;
+          }
+          return true;
+        });
+        if (pool.length === 0) continue;
+
+        const pickAct = pool[Math.floor(rng() * pool.length)];
+        const pickField = (fieldByActivity[pickAct] || [])[0];
+        if (!pickField) continue;
+
+        const next = _cloneSchedule(schedule);
+        next[bunk] = next[bunk].slice();
+        next[bunk][nIdx] = {
+          field: pickField.name, sport: pickAct, _activity: pickAct,
+          _autoMode: true, _autoSolved: true,
+          _startMin: newStart, _endMin: newEnd,
+          _source: 'v2-absorbDeadGap', continuation: false
+        };
+
+        return {
+          schedule: next,
+          bucketPatch: {
+            kind: 'extend', grade, bunk, idx: nIdx,
+            newBounds: { startMin: newStart, endMin: newEnd }
+          }
+        };
+      }
+    }
+    return null;
+  }
+
+  // --- (REMOVED X2f-18c) fitDuration: when a movable slot has a non-empty trailing
   //     gap of [10, 45] min, try EXTENDING its _endMin to swallow some of
   //     that gap — provided either:
   //       (a) the extension stays within the slot's period (safe), OR
@@ -1329,7 +1521,7 @@
     addChange:    moveAddChange,
     shiftBlocker: moveShiftBlocker,
     addBucket:    moveAddBucket,
-    fitDuration:  moveFitDuration
+    absorbDeadGap: moveAbsorbDeadGap
   };
 
   // Weight `gapTargeted` 3x in selection — it's the highest-leverage move
@@ -1353,7 +1545,7 @@
     addChange:    3,    // fixes user-reported swim-without-Change issue
     shiftBlocker: 2,    // unblocks addChange when adjacent space is occupied
     addBucket:    3,    // closes per-bunk-slot gaps that pruning left behind
-    fitDuration:  4     // extends a too-short activity to absorb its trailing gap
+    absorbDeadGap: 5    // X2f-18c: swaps activity to legitimately fill bucket+gap
   };
 
   function pickMove(stats, rng, weightMul) {
@@ -1760,44 +1952,13 @@
         }
         if (madeChange) continue; // restart outer loop
 
-        // ─── Pass 2: Close significant gaps via deterministic extend ────
-        let gapClosed = false;
-        for (const bunk of Object.keys(scheduleRef)) {
-          if (gapClosed) break;
-          const slots = scheduleRef[bunk];
-          if (!Array.isArray(slots)) continue;
-          const grade = _bunkGrade(bunk, ctxRef.divisions);
-          const real = slots
-            .filter(s => s && !s.continuation && s._startMin != null)
-            .sort((a, b) => a._startMin - b._startMin);
-          // Iterate over real slots: each is the slot object itself
-          for (let k = 0; k < real.length - 1; k++) {
-            const prev = real[k], nxt = real[k + 1];
-            const gap = nxt._startMin - prev._endMin;
-            if (gap < 15) continue; // ignore small gaps (period transitions)
-            // Try extend prev forward (if movable AND stays in period)
-            if (_isMovable(prev) && _staysInPeriod(grade, prev._startMin, nxt._startMin)) {
-              const idx = slots.indexOf(prev);
-              slots[idx] = Object.assign({}, prev, { _endMin: nxt._startMin, _source: 'v2-repair-extPrev' });
-              madeChange = true;
-              gapClosed = true;
-              totalFixes++;
-              passLog.gaps++;
-              break;
-            }
-            // Try extend next backward
-            if (_isMovable(nxt) && _staysInPeriod(grade, prev._endMin, nxt._endMin)) {
-              const idx = slots.indexOf(nxt);
-              slots[idx] = Object.assign({}, nxt, { _startMin: prev._endMin, _source: 'v2-repair-extNext' });
-              madeChange = true;
-              gapClosed = true;
-              totalFixes++;
-              passLog.gaps++;
-              break;
-            }
-          }
-        }
-        if (madeChange) continue;
+        // ─── Pass 2 (DISABLED X2f-18c): was "extend prev/next to close gap"
+        // but this stretched activities beyond their configured duration AND
+        // mutated schedule._endMin without updating ctx.perBunkSlots, causing
+        // schedule↔bucket desync that mis-rendered rows. The legitimate
+        // gap-closer is moveAbsorbDeadGap (SA-driven) which both swaps the
+        // activity AND patches the bucket atomically.
+        //
 
         // ─── Pass 3: Fill any remaining null/Free slots with best activity ─
         let holeFilled = false;
@@ -1940,6 +2101,51 @@
     // ★ SMART REPAIR — directed, deterministic fixes for residual issues.
     //   SA finds a good neighborhood; repair polishes specific violations.
     smartRepair(window.scheduleAssignments, ctx);
+
+    // ★ INVARIANT CHECK (X2f-18c): schedule[bunk][i] and perBunkSlots[grade][bunk][i]
+    //   MUST be index-aligned at the same start/end. The renderer reads
+    //   bucket bounds for column positions and slot._activity for labels —
+    //   any drift between them mis-renders rows (e.g. lunch appearing in the
+    //   wrong column on Trios 2). Logs the first mismatch per bunk so we can
+    //   trace which move desynced.
+    (function _checkAlignment() {
+      const divs = window.divisions || {};
+      let bunkCount = 0, mismatchCount = 0;
+      const firstFew = [];
+      for (const [bunk, slots] of Object.entries(window.scheduleAssignments || {})) {
+        if (!Array.isArray(slots)) continue;
+        bunkCount++;
+        const grade = _bunkGrade(bunk, divs);
+        if (!grade) continue;
+        const pbs = window.divisionTimes?.[grade]?._perBunkSlots?.[bunk];
+        if (!Array.isArray(pbs)) continue;
+        if (pbs.length !== slots.length) {
+          mismatchCount++;
+          if (firstFew.length < 5) firstFew.push(bunk + ': lengths ' + slots.length + ' vs ' + pbs.length);
+          continue;
+        }
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i], b = pbs[i];
+          if (!s || !b) continue;
+          if (s._startMin !== b.startMin || s._endMin !== b.endMin) {
+            mismatchCount++;
+            if (firstFew.length < 5) {
+              firstFew.push(bunk + '[' + i + '] ' + (s._activity || '?') +
+                ' schedule=' + s._startMin + '-' + s._endMin +
+                ' bucket=' + b.startMin + '-' + b.endMin +
+                ' src=' + (s._source || '?'));
+            }
+            break; // one per bunk is enough for diagnostics
+          }
+        }
+      }
+      if (mismatchCount > 0) {
+        warn('[v2 ALIGNMENT] ' + mismatchCount + '/' + bunkCount + ' bunks desync. First:');
+        firstFew.forEach(m => warn('  ' + m));
+      } else {
+        log('[v2 ALIGNMENT] OK — all ' + bunkCount + ' bunks index-aligned');
+      }
+    })();
 
     // Save (delegate to v1's save path — TODO X2: extract this so v2 doesn't
     // depend on v1's whole gen lifecycle; for now we just trigger the same
