@@ -14857,13 +14857,28 @@
 
         // Write pinned + custom blocks
         let pinnedWriteCount = 0, customWriteCount = 0;
+        let _overlapFallbackCount = 0;
         allGrades.forEach(grade => {
             const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
                 (bunkTimelines[bunk] || []).forEach(block => {
-                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    // ★ v2026-05-17: exact-match findIndex silently dropped blocks
+                    // whose startMin/endMin were modified after _perBunkSlots was
+                    // initialized — common after self-heal extends or POST-GAP
+                    // micro-absorbs. Fall back to overlap match so resized blocks
+                    // still get written into the slot they cover.
+                    let idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    if (idx === -1 && block.startMin != null && block.endMin != null) {
+                        // Overlap fallback: pick the slot whose start matches OR
+                        // whose range fully contains this block's start.
+                        idx = arr.findIndex(s =>
+                            s.startMin === block.startMin ||
+                            (s.startMin <= block.startMin && s.endMin > block.startMin)
+                        );
+                        if (idx !== -1) _overlapFallbackCount++;
+                    }
                     if (idx === -1 || window.scheduleAssignments[String(bunk)][idx]) return;
 
                     const isCustom = (block.type || '').toLowerCase() === 'custom' && block._customField;
@@ -15090,7 +15105,7 @@
         window._autoDivisionTimesBuilt = true;
         window._preGenClearActive = false;
 
-        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events');
+        log('[2.7] ✅ ' + specialWriteCount + ' specials, ' + pinnedWriteCount + ' pinned, ' + sportWriteCount + ' sports, ' + anchorWriteCount + ' anchors, ' + customWriteCount + ' custom, ' + rotationEventWriteCount + ' rotation events' + (_overlapFallbackCount > 0 ? ' [' + _overlapFallbackCount + ' overlap-fallback writes]' : ''));
         if (_stepRulesRescued.length > 0) {
             log('[2.7] ↪ Relocated ' + _stepRulesRescued.length + ' rule-violating write(s) to valid alternative field(s):');
             _stepRulesRescued.forEach(r => {
