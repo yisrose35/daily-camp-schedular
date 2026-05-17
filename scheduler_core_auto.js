@@ -3456,6 +3456,185 @@
 
             log(GP + ' Phase A: ' + sortedSpecials.length + ' specials to distribute (scarce-first)');
 
+            // ═══════════════════════════════════════════════════════
+            // PHASE A2.5: PERIOD COMPOSER — runs BEFORE A3.
+            // ═══════════════════════════════════════════════════════
+            // The human scheduler doesn't place activities one at a time and
+            // hope they fit — they look at one period (40 min) and pick a
+            // SUBSET of activities whose durations sum to exactly the
+            // remaining time: Slush(10) + Belts(30) = 40, etc.
+            //
+            // Runs BEFORE A3 so it can claim non-scarce activities into
+            // partially-empty periods (e.g. fill the leftover next to a
+            // pinned Main activity wall). A3's scarcity round-robin then
+            // distributes the SCARCE activities fairly across bunks.
+            //
+            // Only considers non-scarce activities — scarce items stay for
+            // A3 to distribute round-robin so no single bunk hogs them.
+            //
+            // Bounded: max 4 items per subset, max 30 subsets per chunk,
+            // max 50 compose-passes per bunk.
+            var composerPlaced = 0;
+            allBunkList.forEach(function(list) {
+                var bunk = list.bunk, grade = list.grade;
+                var sl = shoppingLists[bunk];
+                var result = draftResults[bunk];
+                var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : (sl.specials?.required || 0);
+                if (result.specials.length >= cap) return;
+
+                var periodList = (window.campPeriods && window.campPeriods[grade]) || [];
+                if (!Array.isArray(periodList) || periodList.length === 0) return;
+                periodList = periodList.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+
+                function getOccupiedSegments() {
+                    var occ = [];
+                    try {
+                        var bt = bunkTimelines[bunk] || [];
+                        for (var i = 0; i < bt.length; i++) {
+                            if (bt[i] && bt[i].startMin != null && bt[i].endMin != null) {
+                                occ.push({ s: bt[i].startMin, e: bt[i].endMin });
+                            }
+                        }
+                    } catch (e) {}
+                    ['specials', 'sports', 'elective', 'generic'].forEach(function (k) {
+                        (result[k] || []).forEach(function (x) {
+                            if (x && x.claimedTime && x.claimedTime.startMin != null) {
+                                occ.push({ s: x.claimedTime.startMin, e: x.claimedTime.endMin });
+                            }
+                        });
+                    });
+                    occ.sort(function (a, b) { return a.s - b.s; });
+                    return occ;
+                }
+
+                function getAvailableSpecials() {
+                    var avail = [];
+                    var pl = (sl.specials && sl.specials.priorityList) || [];
+                    for (var i = 0; i < pl.length; i++) {
+                        var sp = pl[i];
+                        if (!sp || result.usedActivities.has(sp.name)) continue;
+                        // Skip scarce — let A3's round-robin distribute them fairly
+                        if (sp.isScarce) continue;
+                        if (!_canPickSpecialBySubcategory(sp, sl, result)) continue;
+                        var d = sp.totalDuration || sp.dMin || sp.duration || 30;
+                        if (d < 5) continue;
+                        avail.push({ name: sp.name, duration: d, item: sp });
+                    }
+                    return avail;
+                }
+
+                function findExactSubsets(target, items) {
+                    var results = [];
+                    var seenKeys = {};
+                    function recurse(idx, picked, sum) {
+                        if (results.length >= 30) return;
+                        if (sum === target && picked.length > 0) {
+                            var key = picked.map(function (p) { return p.name; }).sort().join('|');
+                            if (!seenKeys[key]) { seenKeys[key] = true; results.push(picked.slice()); }
+                            return;
+                        }
+                        if (sum > target || picked.length >= 4) return;
+                        for (var i = idx; i < items.length; i++) {
+                            if (sum + items[i].duration > target) continue;
+                            picked.push(items[i]);
+                            recurse(i + 1, picked, sum + items[i].duration);
+                            picked.pop();
+                        }
+                    }
+                    recurse(0, [], 0);
+                    return results;
+                }
+
+                function scoreSubset(subset) {
+                    var s = -subset.length * 10;
+                    for (var i = 0; i < subset.length; i++) {
+                        var it = subset[i].item;
+                        if (it.rotationScore != null) s += (100 - it.rotationScore);
+                    }
+                    return s;
+                }
+
+                var madeProgress = true, safety = 50;
+                while (madeProgress && safety-- > 0) {
+                    madeProgress = false;
+                    if (result.specials.length >= cap) break;
+
+                    for (var pi = 0; pi < periodList.length; pi++) {
+                        var p = periodList[pi];
+                        var occ = getOccupiedSegments();
+                        var freeInside = [];
+                        var cursor = p.startMin;
+                        for (var oi = 0; oi < occ.length; oi++) {
+                            var o = occ[oi];
+                            if (o.e <= p.startMin || o.s >= p.endMin) continue;
+                            var oStart = Math.max(o.s, p.startMin);
+                            var oEnd = Math.min(o.e, p.endMin);
+                            if (oStart > cursor) freeInside.push({ s: cursor, e: oStart, d: oStart - cursor });
+                            cursor = Math.max(cursor, oEnd);
+                        }
+                        if (cursor < p.endMin) freeInside.push({ s: cursor, e: p.endMin, d: p.endMin - cursor });
+
+                        for (var fi = 0; fi < freeInside.length; fi++) {
+                            var free = freeInside[fi];
+                            if (free.d < 5) continue;
+                            var avail = getAvailableSpecials();
+                            if (avail.length === 0) break;
+                            var subsets = findExactSubsets(free.d, avail);
+                            if (subsets.length === 0) continue;
+                            var bestSubset = null, bestScore = -Infinity;
+                            for (var ssi = 0; ssi < subsets.length; ssi++) {
+                                var sc = scoreSubset(subsets[ssi]);
+                                if (sc > bestScore) { bestScore = sc; bestSubset = subsets[ssi]; }
+                            }
+                            if (!bestSubset) continue;
+
+                            var placeStart = free.s;
+                            var stagedPlacements = [];
+                            var ok = true;
+                            for (var bi = 0; bi < bestSubset.length; bi++) {
+                                if (result.specials.length + stagedPlacements.length >= cap) { ok = false; break; }
+                                var pick = bestSubset[bi];
+                                var pickEnd = placeStart + pick.duration;
+                                if (pick.item.location && !isFieldStillAvailableGP(pick.item.location, placeStart, pickEnd, bunk, grade, pick.name)) { ok = false; break; }
+                                if (!canAssignSpecialToGrade(pick.name, grade, placeStart, pickEnd)) { ok = false; break; }
+                                stagedPlacements.push({ pick: pick, start: placeStart, end: pickEnd });
+                                placeStart = pickEnd;
+                            }
+                            if (!ok || stagedPlacements.length === 0) continue;
+
+                            for (var pi2 = 0; pi2 < stagedPlacements.length; pi2++) {
+                                var st = stagedPlacements[pi2];
+                                if (st.pick.item.location) {
+                                    claimFieldGlobal(st.pick.item.location, st.start, st.end, bunk, grade, st.pick.name);
+                                }
+                                registerSpecialAssignment(st.pick.name, grade, st.start, st.end);
+                                result.specials.push({
+                                    name: st.pick.item.name, type: st.pick.item.type || 'special',
+                                    rotationScore: st.pick.item.rotationScore, duration: st.pick.item.duration,
+                                    dMin: st.pick.item.dMin, dMax: st.pick.item.dMax, dIdeal: st.pick.item.dIdeal,
+                                    isFlexDuration: st.pick.item.isFlexDuration, capacity: st.pick.item.capacity,
+                                    location: st.pick.item.location, isScarce: st.pick.item.isScarce,
+                                    isIndoor: st.pick.item.isIndoor, prepDuration: st.pick.item.prepDuration,
+                                    totalDuration: st.pick.item.totalDuration, timeWindow: st.pick.item.timeWindow,
+                                    _linkedPair: st.pick.item._linkedPair, _layer: st.pick.item._layer,
+                                    subcategory: st.pick.item.subcategory || '',
+                                    claimedTime: { startMin: st.start, endMin: st.end },
+                                    claimedField: st.pick.item.location,
+                                    _composerPlaced: true
+                                });
+                                result.usedActivities.add(st.pick.name);
+                                _markSpecialSubcategoryAssigned(st.pick.item, result);
+                                composerPlaced++;
+                            }
+                            madeProgress = true;
+                            break;
+                        }
+                        if (madeProgress) break;
+                    }
+                }
+            });
+            log(GP + ' Phase A2.5 Composer (pre-A3): ' + composerPlaced + ' specials placed into period subsets (non-scarce only)');
+
             // A3: For each special, assign round-robin across grades
             for (var si = 0; si < sortedSpecials.length; si++) {
                 var specialInfo = sortedSpecials[si];
@@ -3557,193 +3736,9 @@
                 }
             }
 
-            // ═══════════════════════════════════════════════════════
-            // PHASE A3.5: PERIOD COMPOSER (subset-sum per period)
-            // ═══════════════════════════════════════════════════════
-            // The human scheduler doesn't place activities one at a time and
-            // hope they fit — they look at one period (e.g. 40 min) and pick
-            // a SUBSET of activities whose durations sum to exactly 40:
-            //   Pioneering(40) alone, or Belts(30) + Slush(10), or
-            //   Shiur(30) + Powerade(10), etc.
-            //
-            // After A3's scarcity round-robin places one activity at a time,
-            // we walk every bunk and look for periods that are partially full
-            // (some occupied time + remaining time too short for a sport but
-            // big enough for a short special). For each such free chunk, we
-            // enumerate subsets of the bunk's UNPLACED specials whose
-            // durations sum exactly to the free time, and place the best
-            // subset atomically. This is the "think before placing" step.
-            //
-            // Bounded: max 4 items per subset, max 30 subsets enumerated per
-            // chunk, max 50 compose-passes per bunk.
-            var composerPlaced = 0;
-            allBunkList.forEach(function(list) {
-                var bunk = list.bunk, grade = list.grade;
-                var sl = shoppingLists[bunk];
-                var result = draftResults[bunk];
-                var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : (sl.specials?.required || 0);
-                if (result.specials.length >= cap) return;
-
-                var periodList = (window.campPeriods && window.campPeriods[grade]) || [];
-                if (!Array.isArray(periodList) || periodList.length === 0) return;
-                periodList = periodList.slice().sort(function (a, b) { return a.startMin - b.startMin; });
-
-                function getOccupiedSegments() {
-                    var occ = [];
-                    try {
-                        var bt = bunkTimelines[bunk] || [];
-                        for (var i = 0; i < bt.length; i++) {
-                            if (bt[i] && bt[i].startMin != null && bt[i].endMin != null) {
-                                occ.push({ s: bt[i].startMin, e: bt[i].endMin });
-                            }
-                        }
-                    } catch (e) {}
-                    ['specials', 'sports', 'elective', 'generic'].forEach(function (k) {
-                        (result[k] || []).forEach(function (x) {
-                            if (x && x.claimedTime && x.claimedTime.startMin != null) {
-                                occ.push({ s: x.claimedTime.startMin, e: x.claimedTime.endMin });
-                            }
-                        });
-                    });
-                    occ.sort(function (a, b) { return a.s - b.s; });
-                    return occ;
-                }
-
-                function getAvailableSpecials() {
-                    var avail = [];
-                    var pl = (sl.specials && sl.specials.priorityList) || [];
-                    for (var i = 0; i < pl.length; i++) {
-                        var sp = pl[i];
-                        if (!sp || result.usedActivities.has(sp.name)) continue;
-                        if (!_canPickSpecialBySubcategory(sp, sl, result)) continue;
-                        var d = sp.totalDuration || sp.dMin || sp.duration || 30;
-                        if (d < 5) continue;
-                        avail.push({ name: sp.name, duration: d, item: sp });
-                    }
-                    return avail;
-                }
-
-                // Find subsets summing EXACTLY to target. Bounded recursion.
-                function findExactSubsets(target, items) {
-                    var results = [];
-                    var seenKeys = {};
-                    function recurse(idx, picked, sum) {
-                        if (results.length >= 30) return;
-                        if (sum === target && picked.length > 0) {
-                            var key = picked.map(function (p) { return p.name; }).sort().join('|');
-                            if (!seenKeys[key]) { seenKeys[key] = true; results.push(picked.slice()); }
-                            return;
-                        }
-                        if (sum > target || picked.length >= 4) return;
-                        for (var i = idx; i < items.length; i++) {
-                            if (sum + items[i].duration > target) continue;
-                            picked.push(items[i]);
-                            recurse(i + 1, picked, sum + items[i].duration);
-                            picked.pop();
-                        }
-                    }
-                    recurse(0, [], 0);
-                    return results;
-                }
-
-                function scoreSubset(subset) {
-                    // Prefer fewer items (less fragmentation), higher priority items
-                    var s = -subset.length * 10;
-                    for (var i = 0; i < subset.length; i++) {
-                        var it = subset[i].item;
-                        // rotationScore: lower = more needed → higher score
-                        if (it.rotationScore != null) s += (100 - it.rotationScore);
-                        if (it.isScarce) s += 20;
-                    }
-                    return s;
-                }
-
-                var madeProgress = true, safety = 50;
-                while (madeProgress && safety-- > 0) {
-                    madeProgress = false;
-                    if (result.specials.length >= cap) break;
-
-                    for (var pi = 0; pi < periodList.length; pi++) {
-                        var p = periodList[pi];
-                        var occ = getOccupiedSegments();
-                        // Free chunks INSIDE this period
-                        var freeInside = [];
-                        var cursor = p.startMin;
-                        for (var oi = 0; oi < occ.length; oi++) {
-                            var o = occ[oi];
-                            if (o.e <= p.startMin || o.s >= p.endMin) continue;
-                            var oStart = Math.max(o.s, p.startMin);
-                            var oEnd = Math.min(o.e, p.endMin);
-                            if (oStart > cursor) freeInside.push({ s: cursor, e: oStart, d: oStart - cursor });
-                            cursor = Math.max(cursor, oEnd);
-                        }
-                        if (cursor < p.endMin) freeInside.push({ s: cursor, e: p.endMin, d: p.endMin - cursor });
-
-                        for (var fi = 0; fi < freeInside.length; fi++) {
-                            var free = freeInside[fi];
-                            if (free.d < 5) continue;
-                            var avail = getAvailableSpecials();
-                            if (avail.length === 0) break;
-                            var subsets = findExactSubsets(free.d, avail);
-                            if (subsets.length === 0) continue;
-                            // Pick best
-                            var bestSubset = null, bestScore = -Infinity;
-                            for (var si = 0; si < subsets.length; si++) {
-                                var sc = scoreSubset(subsets[si]);
-                                if (sc > bestScore) { bestScore = sc; bestSubset = subsets[si]; }
-                            }
-                            if (!bestSubset) continue;
-
-                            // Place sequentially. Validate each step; abort
-                            // chunk if any item fails (don't half-fill).
-                            var placeStart = free.s;
-                            var stagedPlacements = [];
-                            var ok = true;
-                            for (var bi = 0; bi < bestSubset.length; bi++) {
-                                if (result.specials.length + stagedPlacements.length >= cap) { ok = false; break; }
-                                var pick = bestSubset[bi];
-                                var pickDur = pick.duration;
-                                var pickEnd = placeStart + pickDur;
-                                if (pick.item.location && !isFieldStillAvailableGP(pick.item.location, placeStart, pickEnd, bunk, grade, pick.name)) { ok = false; break; }
-                                if (!canAssignSpecialToGrade(pick.name, grade, placeStart, pickEnd)) { ok = false; break; }
-                                stagedPlacements.push({ pick: pick, start: placeStart, end: pickEnd });
-                                placeStart = pickEnd;
-                            }
-                            if (!ok || stagedPlacements.length === 0) continue;
-
-                            // Commit
-                            for (var pi2 = 0; pi2 < stagedPlacements.length; pi2++) {
-                                var st = stagedPlacements[pi2];
-                                if (st.pick.item.location) {
-                                    claimFieldGlobal(st.pick.item.location, st.start, st.end, bunk, grade, st.pick.name);
-                                }
-                                registerSpecialAssignment(st.pick.name, grade, st.start, st.end);
-                                result.specials.push({
-                                    name: st.pick.item.name, type: st.pick.item.type || 'special',
-                                    rotationScore: st.pick.item.rotationScore, duration: st.pick.item.duration,
-                                    dMin: st.pick.item.dMin, dMax: st.pick.item.dMax, dIdeal: st.pick.item.dIdeal,
-                                    isFlexDuration: st.pick.item.isFlexDuration, capacity: st.pick.item.capacity,
-                                    location: st.pick.item.location, isScarce: st.pick.item.isScarce,
-                                    isIndoor: st.pick.item.isIndoor, prepDuration: st.pick.item.prepDuration,
-                                    totalDuration: st.pick.item.totalDuration, timeWindow: st.pick.item.timeWindow,
-                                    _linkedPair: st.pick.item._linkedPair, _layer: st.pick.item._layer,
-                                    subcategory: st.pick.item.subcategory || '',
-                                    claimedTime: { startMin: st.start, endMin: st.end },
-                                    claimedField: st.pick.item.location,
-                                    _composerPlaced: true
-                                });
-                                result.usedActivities.add(st.pick.name);
-                                _markSpecialSubcategoryAssigned(st.pick.item, result);
-                                composerPlaced++;
-                            }
-                            madeProgress = true;
-                            break; // restart period scan (occupancy changed)
-                        }
-                        if (madeProgress) break;
-                    }
-                }
-            });
-            log(GP + ' Phase A3.5 Composer: ' + composerPlaced + ' specials placed into period subsets');
+            // (Phase A3.5 Composer relocated to A2.5 above — runs BEFORE A3
+            //  so it gets first pick at non-scarce specials, then A3 handles
+            //  scarcity-first round-robin for what remains.)
 
             // A4: Fallback — bunks still missing specials
             allBunkList.forEach(function(list) {
