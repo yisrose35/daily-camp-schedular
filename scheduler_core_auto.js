@@ -14637,6 +14637,90 @@
                     && !bunkList.map(String).includes(String(bunk))) return 'special access: bunk not in allowed list';
             }
 
+            // ★ Day 17 fix: rotation gate at write-time.
+            // Phase 0/1 special placement commit slots from layer-template /
+            // bunkTimelines without consulting cross-day rotation rules
+            // (maxUsage, exactFrequency, frequencyDays). Phase 2.x has its
+            // own gates (line ~2952) and Phase 4.9 was patched separately,
+            // but committed slots from earlier phases pre-empt those checks.
+            // This gate runs at the single choke point every commit site
+            // uses, so all phases inherit the same enforcement.
+            // Out of scope here: rotationCohort (needs lifetime counts),
+            // availableDays (caller already filters), same-day duplicate
+            // protection (different bug class).
+            if (spByName && activityName && bunk != null) {
+                try {
+                    const _ru = window.SchedulerCoreUtils;
+                    const _today = (typeof currentDate !== 'undefined' && currentDate)
+                        ? currentDate
+                        : (window.currentScheduleDate || new Date().toISOString().slice(0, 10));
+                    const _all = (typeof allDailyData !== 'undefined' && allDailyData)
+                        ? allDailyData
+                        : (window.loadAllDailyData ? window.loadAllDailyData() : {});
+                    const _bunkKey = String(bunk);
+                    function _crossDayCount(periodStart) {
+                        let c = 0;
+                        for (const dk of Object.keys(_all)) {
+                            if (dk >= _today) continue;
+                            if (periodStart && dk < periodStart) continue;
+                            const sl = _all[dk] && _all[dk].scheduleAssignments && _all[dk].scheduleAssignments[_bunkKey];
+                            if (Array.isArray(sl) && sl.some(function (e) {
+                                return e && !e.continuation && (e._activity === activityName || e.field === activityName);
+                            })) c++;
+                        }
+                        return c;
+                    }
+                    // maxUsage gate (+ per-grade override)
+                    const _maxUsage = parseInt(spByName.maxUsage) || 0;
+                    const _maxPeriod = spByName.maxUsagePeriod || 'half';
+                    const _periodStart = (_ru && _ru.getPeriodStartDate)
+                        ? _ru.getPeriodStartDate(_maxPeriod, _today)
+                        : null;
+                    if (_maxUsage > 0) {
+                        let _cap = _maxUsage;
+                        const _perGrade = parseInt((spByName.maxUsagePerGrade || {})[grade]) || 0;
+                        if (_perGrade > 0) _cap = _perGrade;
+                        if (_crossDayCount(_periodStart) >= _cap) {
+                            return 'rotation: maxUsage ' + _cap + '/' + _maxPeriod + ' exceeded';
+                        }
+                    }
+                    // exactFrequency ceiling (also a floor, but floor is rewarded by
+                    // rotation scoring elsewhere — here we only block the ceiling).
+                    const _exact = parseInt((spByName.exactFrequencyPerGrade || {})[grade])
+                        || parseInt(spByName.exactFrequency) || 0;
+                    if (_exact > 0) {
+                        const _exPeriod = spByName.exactFrequencyPeriod || '1week';
+                        const _exPS = (_ru && _ru.getPeriodStartDate)
+                            ? _ru.getPeriodStartDate(_exPeriod, _today)
+                            : null;
+                        if (_crossDayCount(_exPS) >= _exact) {
+                            return 'rotation: exactFrequency ' + _exact + '/' + _exPeriod + ' exceeded';
+                        }
+                    }
+                    // frequencyDays cooldown — minimum days between visits
+                    const _cd = parseInt(spByName.frequencyDays) || 0;
+                    if (_cd > 0) {
+                        const _keys = Object.keys(_all).sort();
+                        for (let i = _keys.length - 1; i >= 0; i--) {
+                            if (_keys[i] >= _today) continue;
+                            const sl = _all[_keys[i]] && _all[_keys[i]].scheduleAssignments
+                                && _all[_keys[i]].scheduleAssignments[_bunkKey];
+                            if (Array.isArray(sl) && sl.some(function (e) {
+                                return e && !e.continuation && (e._activity === activityName || e.field === activityName);
+                            })) {
+                                const _dDiff = Math.floor((new Date(_today) - new Date(_keys[i])) / 86400000);
+                                if (_dDiff < _cd) {
+                                    return 'rotation: cooldown ' + _dDiff + 'd/' + _cd + 'd';
+                                }
+                                break; // most-recent prior visit is enough
+                            }
+                        }
+                    }
+                } catch (_e) {
+                    // Fail-open on errors — never let a gate bug block all gen.
+                }
+            }
+
             return null;
         }
         const _stepRulesBlocked = []; // diagnostic accumulator
