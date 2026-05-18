@@ -2590,7 +2590,15 @@ window.getAllSpecialActivities = function() {
     if((!specialActivities||specialActivities.length===0)&&(!rainyDayActivities||rainyDayActivities.length===0)){
         console.log('[SPECIAL_ACTIVITIES] Arrays empty - auto-loading from storage...');
         const settings=window.loadGlobalSettings?.()||{};
-        const allActivities=settings.specialActivities||settings.app1?.specialActivities||[];
+        // ★ Day 17 fix: an empty array is truthy in JS, so the previous
+        // `settings.specialActivities || settings.app1?.specialActivities`
+        // silently picked an empty top-level array over a populated app1
+        // array. That made every special temporarily disappear (and let
+        // saveGlobalSpecialActivities clobber the populated copy on the
+        // next save). Pick the first source that actually has entries.
+        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:null;
+        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:null;
+        const allActivities=(_topArr&&_topArr.length>0)?_topArr:((_app1Arr&&_app1Arr.length>0)?_app1Arr:[]);
         if(allActivities.length>0){
             specialActivities=[];rainyDayActivities=[];
             allActivities.forEach(s=>{const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
