@@ -105,9 +105,22 @@
             availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
             allFieldsDat = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
+            // ★ Day 18 fix: respect each item's actual `type` field from
+            // Facilities. specialActivities array can contain items typed
+            // "Special", "General", or "Sport" — previously every item was
+            // hard-coded to 'special', so a General-typed Facilities entry
+            // was misclassified. Normalize to lowercase enum.
+            function _normType(raw, fallback) {
+                if (!raw) return fallback;
+                const k = String(raw).toLowerCase().trim();
+                if (k === 'sport' || k === 'sports') return 'sport';
+                if (k === 'special' || k === 'specials') return 'special';
+                if (k === 'general' || k === 'generals') return 'general';
+                return fallback;
+            }
             allActivities = [
                 ...allFieldsDat.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
-                ...specials.map(s => ({ name: s.name, type: 'special', max: s.maxUsage || 0 }))
+                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0 }))
             ];
             const seen = new Set();
             allActivities = allActivities.filter(a => { if (seen.has(a.name)) return false; seen.add(a.name); return true; });
@@ -1116,6 +1129,7 @@
                             <option value="sport">Sports Only</option>
                             <option value="special">Special Only</option>
                             <option value="general">General Only</option>
+                            <option value="other">Other Only</option>
                         </select>
                     </div>
                     <div style="flex:1;min-width:140px;">
@@ -1201,11 +1215,10 @@
         let filteredActivities = allActivities;
         if (filter === 'sport') filteredActivities = allActivities.filter(a => a.type === 'sport');
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
-        // 'general' filter is handled below after we synthesize extraActivities
-        // from usedActivityNames — the general bucket isn't in the master list,
-        // it's built from anchors + legacy specials, so we start empty here
-        // and let the extraActivities merge step populate it.
-        if (filter === 'general') filteredActivities = [];
+        if (filter === 'general') filteredActivities = allActivities.filter(a => a.type === 'general');
+        // 'other' is built downstream from schedule items not in any master
+        // list, so start empty and let the extraActivities merge populate it.
+        if (filter === 'other') filteredActivities = [];
 
         const actSearch = (document.getElementById('rotation-activity-filter')?.value || '').trim().toLowerCase();
         if (actSearch) filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1387,17 +1400,18 @@
 
         const extraActivities = [];
         usedActivityNames.forEach(name => {
-            // ★ Day 18: anything not in the sports/specials master list is
-            // classified as "general" (anchors like Swim/Lunch/Change/Cleanup/
-            // Main activity, plus deleted or renamed legacy specials). The
-            // user wants these tracked too — they may want to see "Soloists 1
-            // had Lunch 12 times" — so we surface them with their own bucket
-            // rather than hiding. Previously labeled "other" (jargon).
-            if (!masterNames.has(name)) extraActivities.push({ name, type: 'general', max: 0 });
+            // ★ Day 18 (revised): Facilities is the source of truth for type.
+            // Sport/Special/General all come from the loadMasterData call.
+            // "Other" is reserved for activities that appear on the schedule
+            // but aren't in any Facilities master list — i.e. custom layers
+            // or one-off scheduled activities. Anchors like Swim/Lunch/Change
+            // fall here too because they aren't Facilities entries.
+            if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });
         });
-        // Surface general activities under both 'all' and 'general' filters.
-        // 'sport' / 'special' filters intentionally exclude generals.
-        if (extraActivities.length && (filter === 'all' || filter === 'general')) {
+        // 'Other' extras are only schedule-derived (custom/scheduled), so
+        // surface them under 'all' or 'other'. 'sport'/'special'/'general'
+        // filters intentionally exclude them.
+        if (extraActivities.length && (filter === 'all' || filter === 'other')) {
             filteredActivities = filteredActivities.concat(extraActivities);
             if (actSearch) {
                 filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1462,11 +1476,17 @@
                 if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
                 else if (total === 0) totalStyle += 'color:#d97706;';
 
+                // ★ Day 18: 4 distinct type buckets.
+                //   Sport / Special / General all come from Facilities master list.
+                //   Other = activity on schedule but not in any Facilities master
+                //   (custom layers, one-off scheduled activities, anchors).
                 const typeLabel = act.type === 'special'
-                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Special</span>'
-                    : (act.type === 'general' || act.type === 'other')
-                        ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Anchor (Swim/Lunch/Change/etc.) or legacy special not in current master list">General</span>'
-                        : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
+                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Special activity from Facilities">Special</span>'
+                    : act.type === 'general'
+                        ? '<span style="background:#d1fae5;color:#047857;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="General activity from Facilities">General</span>'
+                        : act.type === 'other'
+                            ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Custom layer or scheduled activity (not in Facilities master list)">Other</span>'
+                            : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Sport from Facilities">Sport</span>';
 
                 html += `
                     <tr style="background:${rowBg};">
