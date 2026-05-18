@@ -15642,16 +15642,46 @@
         // move — done automatically once Phase 3 has finished sport sizing.
         // =====================================================================
         if (phase25Deferred.length > 0) {
-            log('\n[STEP 4.9] Deferred-special recapture: ' + phase25Deferred.length + ' specials queued');
             const recaptureSA = window.scheduleAssignments || {};
+
+            // ★ DEDUPE: The deferred queue accumulates across all SA iterations
+            // inside runAutoScheduler. Only the final (elite) schedule matters.
+            // Collapse to one entry per (bunk, name) pair, and skip any special
+            // that is already present in the final schedule for that bunk.
+            const dedupedDeferred = [];
+            const seenKeys = new Set();
+            for (let _qi = 0; _qi < phase25Deferred.length; _qi++) {
+                const d = phase25Deferred[_qi];
+                const key = d.bunk + '|' + d.name;
+                if (seenKeys.has(key)) continue;
+                seenKeys.add(key);
+                // Already on this bunk's final schedule? Skip — special is in place
+                // (placed via a different iteration's Phase 2.5 or by Phase 3 CSP).
+                const existing = recaptureSA[d.bunk];
+                if (Array.isArray(existing) && existing.some(s =>
+                    s && !s.continuation && (s._activity === d.name || s._assignedSpecial === d.name)
+                )) {
+                    continue;
+                }
+                dedupedDeferred.push(d);
+            }
+
+            log('\n[STEP 4.9] Deferred-special recapture: ' + dedupedDeferred.length + ' specials queued (deduped from ' + phase25Deferred.length + ')');
             let recapturedCount = 0;
             let unrecapturable = [];
 
-            for (let _di = 0; _di < phase25Deferred.length; _di++) {
-                const def = phase25Deferred[_di];
+            for (let _di = 0; _di < dedupedDeferred.length; _di++) {
+                const def = dedupedDeferred[_di];
                 const slots = recaptureSA[def.bunk];
                 if (!Array.isArray(slots) || slots.length === 0) {
                     unrecapturable.push(def);
+                    continue;
+                }
+
+                // ★ DUPLICATE GUARD (race-condition catch): re-check the bunk's
+                // schedule right before swapping in. A prior recapture in this
+                // same loop may have placed this special already.
+                if (slots.some(s => s && !s.continuation && (s._activity === def.name || s._assignedSpecial === def.name))) {
                     continue;
                 }
 
@@ -15714,7 +15744,7 @@
                 recapturedCount++;
             }
 
-            log('[Phase4.9] ★ Recapture complete: ' + recapturedCount + '/' + phase25Deferred.length +
+            log('[Phase4.9] ★ Recapture complete: ' + recapturedCount + '/' + dedupedDeferred.length +
                 ' specials placed; ' + unrecapturable.length + ' could not be swapped in');
             if (unrecapturable.length > 0) {
                 unrecapturable.forEach(function(d) {
