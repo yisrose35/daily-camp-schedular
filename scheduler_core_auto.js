@@ -16036,6 +16036,22 @@
                             if (!canUseSpecialAtTime(def.name, def.grade, s._startMin, s._endMin)) continue;
                         } catch (e) { /* skip safety */ }
                     }
+                    // ★ Day 19 fix: field capacity + same-division sharing gate.
+                    // Phase 4.9 previously only checked time rules and rotation
+                    // (Day 17 fix), but skipped isFieldAvailable. Result: a
+                    // recaptured special could land on a field that was already
+                    // at capacity, or share with a different-division bunk
+                    // when the field is type:same_division. Live evidence:
+                    // Foam Pit ended up with 3 bunks (Majors 4, Majors 5,
+                    // Quints 6) at 830-850 with capacity=2 and cross-division
+                    // sharing forbidden. This gate stops that.
+                    if (def.location && typeof isFieldAvailable === 'function') {
+                        try {
+                            if (!isFieldAvailable(def.location, s._startMin, s._endMin, def.bunk, def.grade, def.name)) {
+                                continue;
+                            }
+                        } catch (e) { /* fail-open on gate error */ }
+                    }
                     swapIdx = _si;
                     break;
                 }
@@ -16065,6 +16081,13 @@
                 });
                 slots[swapIdx] = newEntry;
 
+                // ★ Day 19: claim the field so subsequent recaptures in this
+                // same pass see this slot as occupied. Without claimField the
+                // ledger stays stale and a second recapture for the same
+                // location+time can land on top of this one.
+                if (def.location && typeof claimField === 'function') {
+                    try { claimField(def.location, target._startMin, target._endMin, def.bunk, def.grade, def.name); } catch (e) {}
+                }
                 // Mark usage so other systems (rotation, frequency) credit it.
                 if (typeof registerSpecialUsage === 'function') {
                     try { registerSpecialUsage(def.name, def.grade, target._startMin, target._endMin); } catch (e) {}
