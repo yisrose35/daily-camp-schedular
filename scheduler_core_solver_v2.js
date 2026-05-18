@@ -35,7 +35,8 @@
     const g = window.loadGlobalSettings?.() || {};
     const a1 = g.app1 || {};
     return {
-      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 30000,
+      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 10000,  // ★ v2.1: lowered from 30000 — SA hits final cost in <5s on real data; remaining budget is wasted
+      multiStart:   (a1.solverV2MultiStart === undefined) ? false : !!a1.solverV2MultiStart,  // ★ v2.1: disabled by default — pass2 has never beaten pass1 on real data
       tempStart:    parseFloat(a1.solverV2TempStart)   || 100,
       tempEnd:      parseFloat(a1.solverV2TempEnd)     || 0.1,
       kickAfter:    parseInt(a1.solverV2KickAfter)     || 500,    // stall threshold for re-randomize
@@ -2115,34 +2116,38 @@
       return false;
     }
 
-    // Run SA twice with different RNG seeds, keep the better result.
-    // Multi-start is a standard trick for SA — different random walks find
-    // different local minima, and the BEST of N is much better than any
-    // single run. Each pass uses HALF the total budget.
-    //
-    // CRITICAL: snapshot ctx.perBunkSlots BEFORE pass1 so we can restore it
-    // for pass2's start state. Without this, bucketInsert mutations from
-    // pass1 carry into pass2's seed → phantom holes (slot[idx] = null where
-    // bucket exists).
-    const halfBudget = Math.floor(cfg.timeBudgetMs / 2);
-    const preMultiStartPbs = _clonePerBunkSlots(ctx.perBunkSlots);
-    cfg.timeBudgetMs = halfBudget;
-    const pass1 = runSA(seed, ctx);
-    // Restore grid before pass 2 so both passes start from identical state
-    for (const [grade, byBunk] of Object.entries(preMultiStartPbs)) {
-      ctx.perBunkSlots[grade] = byBunk;
-    }
-    cfg.seed = (cfg.seed + 0x9E3779B9) | 0; // golden-ratio offset for second seed
-    const pass2 = runSA(seed, ctx);
-    cfg.timeBudgetMs = halfBudget * 2; // restore for logging
-
+    // ★ v2.1: Multi-start is OFF by default (cfg.multiStart).
+    // Pass2 never beat pass1 on real data — both converge to the same local
+    // minimum because the seed dominates. Skipping pass2 cuts SA time in
+    // half. Re-enable via globalSettings.app1.solverV2MultiStart = true if
+    // a use case ever benefits from it.
     let best, bestEval, stats, bestPbsSnapshot;
-    if (pass1.bestEval.cost <= pass2.bestEval.cost) {
-      ({ best, bestEval, stats, bestPbsSnapshot } = pass1);
-      log('Multi-start: pass1 won (' + pass1.bestEval.cost + ' < ' + pass2.bestEval.cost + ')');
+    if (cfg.multiStart) {
+      // CRITICAL: snapshot ctx.perBunkSlots BEFORE pass1 so we can restore it
+      // for pass2's start state. Without this, bucketInsert mutations from
+      // pass1 carry into pass2's seed → phantom holes.
+      const halfBudget = Math.floor(cfg.timeBudgetMs / 2);
+      const preMultiStartPbs = _clonePerBunkSlots(ctx.perBunkSlots);
+      cfg.timeBudgetMs = halfBudget;
+      const pass1 = runSA(seed, ctx);
+      for (const [grade, byBunk] of Object.entries(preMultiStartPbs)) {
+        ctx.perBunkSlots[grade] = byBunk;
+      }
+      cfg.seed = (cfg.seed + 0x9E3779B9) | 0;
+      const pass2 = runSA(seed, ctx);
+      cfg.timeBudgetMs = halfBudget * 2;
+
+      if (pass1.bestEval.cost <= pass2.bestEval.cost) {
+        ({ best, bestEval, stats, bestPbsSnapshot } = pass1);
+        log('Multi-start: pass1 won (' + pass1.bestEval.cost + ' < ' + pass2.bestEval.cost + ')');
+      } else {
+        ({ best, bestEval, stats, bestPbsSnapshot } = pass2);
+        log('Multi-start: pass2 won (' + pass2.bestEval.cost + ' < ' + pass1.bestEval.cost + ')');
+      }
     } else {
-      ({ best, bestEval, stats, bestPbsSnapshot } = pass2);
-      log('Multi-start: pass2 won (' + pass2.bestEval.cost + ' < ' + pass1.bestEval.cost + ')');
+      // Single SA pass — uses the full time budget.
+      const single = runSA(seed, ctx);
+      ({ best, bestEval, stats, bestPbsSnapshot } = single);
     }
 
     // Commit the best schedule back to window.scheduleAssignments,

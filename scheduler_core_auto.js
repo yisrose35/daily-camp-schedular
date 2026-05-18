@@ -9831,8 +9831,8 @@
         // SCORING ENGINE
         // =====================================================================
 
-        const MAX_ITERATIONS = 35;  // ★ v11.0: more iterations for deeper SA-style exploration
-        const BASE_STALE_STOP = 10; // ★ v11.0: more patience before stopping
+        const MAX_ITERATIONS = 15;  // ★ v11.1: lowered from 35 — gens never exceed ~22 anyway, and BEST is hit by iter 4-6 on real data
+        const BASE_STALE_STOP = 3;  // ★ v11.1: lowered from 10 — empirically iters 5-15 after BEST are wasted exploration
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
