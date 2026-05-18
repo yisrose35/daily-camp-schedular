@@ -600,8 +600,13 @@
 
   function _availableForBunk(item, alreadyPicked, globalUsage) {
     if (alreadyPicked[item.name]) return false; // no duplicates on same bunk
-    var used = globalUsage[item.name] || 0;
-    if (item.maxUsage && used >= item.maxUsage) return false;
+    // NOTE: maxUsage is NOT enforced here as a camp-wide cap. In the user's
+    // config it appears to mean "one occurrence per bunk" or "one per slot",
+    // not "one occurrence camp-wide." Treating it as global broke subcategory
+    // caps (e.g. 4 Food items × maxUsage 1 = only 4 bunks could ever get
+    // Food, leaving 31/35 bunks with unmet caps). v1 doesn't enforce
+    // maxUsage globally either; the sharing/scheduling layer handles
+    // capacity. We let the duplicate-prevention above handle per-bunk caps.
     return true;
   }
 
