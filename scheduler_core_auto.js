@@ -15814,6 +15814,20 @@
             let recapturedCount = 0;
             let unrecapturable = [];
 
+            // ★★★ FIX: Phase 4.9 must honor the same rotation constraints
+            // that Phase 2.5 enforces. Without these gates, a special that
+            // Phase 2.5 deferred (because no gap fit cleanly) could be
+            // swapped in here regardless of maxUsage/frequencyDays/
+            // availableDays/exactFrequency/rotationCohort/maxUsagePerGrade.
+            // Real impact found in Day 17 audit: Ice Cream (maxUsage:1/week)
+            // got placed on consecutive days for the same bunk via this path.
+            const _p49GetPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
+            const _p49AllDaily = (typeof allDailyData !== 'undefined') ? allDailyData : (window.loadAllDailyData ? window.loadAllDailyData() : {});
+            const _p49Today = window.currentScheduleDate || currentDate || new Date().toISOString().slice(0, 10);
+            const _p49DayName = (typeof dayName !== 'undefined' && dayName) ? dayName : (function() {
+                try { return new Date(_p49Today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' }); } catch (_) { return ''; }
+            })();
+
             for (let _di = 0; _di < dedupedDeferred.length; _di++) {
                 const def = dedupedDeferred[_di];
                 const slots = recaptureSA[def.bunk];
@@ -15827,6 +15841,94 @@
                 // same loop may have placed this special already.
                 if (slots.some(s => s && !s.continuation && (s._activity === def.name || s._assignedSpecial === def.name))) {
                     continue;
+                }
+
+                // ★★★ ROTATION CONSTRAINT GATES (must match Phase 2.5) ★★★
+                const _p49Props = (activityProperties && activityProperties[def.name]) || def.special || {};
+                const _p49Grade = def.grade;
+
+                // availableDays gate
+                if (Array.isArray(_p49Props.availableDays) && _p49Props.availableDays.length > 0 && _p49DayName) {
+                    if (!_p49Props.availableDays.map(d => d.toLowerCase()).includes(_p49DayName.toLowerCase())) {
+                        log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — not allowed on ' + _p49DayName);
+                        unrecapturable.push(def); continue;
+                    }
+                }
+
+                // maxUsage (and per-grade override) gate
+                let _p49MaxUsage = parseInt(_p49Props.maxUsage) || 0;
+                if (_p49Grade && _p49Props.maxUsagePerGrade && _p49Props.maxUsagePerGrade[_p49Grade] > 0) {
+                    _p49MaxUsage = _p49Props.maxUsagePerGrade[_p49Grade];
+                }
+                if (_p49MaxUsage > 0 && _p49GetPeriodCount) {
+                    const _p49MaxPeriod = _p49Props.maxUsagePeriod || 'half';
+                    const _p49Used = _p49GetPeriodCount(def.bunk, def.name, _p49MaxPeriod, _p49Today);
+                    if (_p49Used >= _p49MaxUsage) {
+                        log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — maxUsage ' + _p49Used + '/' + _p49MaxUsage + ' (' + _p49MaxPeriod + ')');
+                        unrecapturable.push(def); continue;
+                    }
+                }
+
+                // exactFrequency (ceiling side) gate
+                let _p49ExactFreq = parseInt(_p49Props.exactFrequency) || 0;
+                if (_p49Grade && _p49Props.exactFrequencyPerGrade && _p49Props.exactFrequencyPerGrade[_p49Grade] > 0) {
+                    _p49ExactFreq = _p49Props.exactFrequencyPerGrade[_p49Grade];
+                }
+                if (_p49ExactFreq > 0 && _p49GetPeriodCount) {
+                    const _p49EfPeriod = _p49Props.exactFrequencyPeriod || '1week';
+                    const _p49EfUsed = _p49GetPeriodCount(def.bunk, def.name, _p49EfPeriod, _p49Today);
+                    if (_p49EfUsed >= _p49ExactFreq) {
+                        log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — exactFreq ' + _p49EfUsed + '/' + _p49ExactFreq);
+                        unrecapturable.push(def); continue;
+                    }
+                }
+
+                // frequencyDays cooldown gate (look back N days)
+                const _p49Cd = parseInt(_p49Props.frequencyDays) || 0;
+                if (_p49Cd > 0) {
+                    const _cdKeys = Object.keys(_p49AllDaily).sort();
+                    let _cdSkip = false;
+                    for (let _cdk = _cdKeys.length - 1; _cdk >= 0; _cdk--) {
+                        if (_cdKeys[_cdk] >= _p49Today) continue;
+                        const _cdSlots = _p49AllDaily[_cdKeys[_cdk]]?.scheduleAssignments?.[String(def.bunk)];
+                        if (Array.isArray(_cdSlots) && _cdSlots.some(e =>
+                            e && !e.continuation && (e._activity === def.name || e.field === def.name))) {
+                            const _cdDiff = Math.floor((new Date(_p49Today) - new Date(_cdKeys[_cdk])) / 86400000);
+                            if (_cdDiff < _p49Cd) {
+                                log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — cooldown ' + _cdDiff + 'd < ' + _p49Cd + 'd');
+                                _cdSkip = true;
+                            }
+                            break;
+                        }
+                    }
+                    if (_cdSkip) { unrecapturable.push(def); continue; }
+                }
+
+                // rotationCohort gate (lifetime count must equal cohort min)
+                const _p49Rc = _p49Props.rotationCohort;
+                if (_p49Rc && _p49Rc.enabled && Array.isArray(_p49Rc.grades) && _p49Rc.grades.length > 0) {
+                    try {
+                        const _cohortBunks = [];
+                        _p49Rc.grades.forEach(g => {
+                            (getBunksForGrade(g, divisions) || []).forEach(b => {
+                                if (isSpecialAvailableForBunk(def.name, g, b, globalSettings)) {
+                                    _cohortBunks.push(String(b));
+                                }
+                            });
+                        });
+                        if (_cohortBunks.length > 0 && _cohortBunks.includes(String(def.bunk))) {
+                            const _myCount = getLifetimeSpecialCount(String(def.bunk), def.name);
+                            let _minCount = Infinity;
+                            _cohortBunks.forEach(b => {
+                                const _c = getLifetimeSpecialCount(b, def.name);
+                                if (_c < _minCount) _minCount = _c;
+                            });
+                            if (_myCount > _minCount) {
+                                log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — cohort: my=' + _myCount + ' > min=' + _minCount);
+                                unrecapturable.push(def); continue;
+                            }
+                        }
+                    } catch (_cohErr) { /* defensive — don't block recapture on cohort calc failure */ }
                 }
 
                 // Find a swap candidate: a sport-placed slot whose duration
