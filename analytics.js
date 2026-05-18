@@ -1238,19 +1238,36 @@
             ? (cloudData.countsByDate[liveDate] || {})
             : {};
 
+        // ★ Day 18 fix: activity-name canonicalization.
+        // Legacy cloud rotation_counts rows can use slightly different
+        // capitalization / spacing than the current master special list
+        // (e.g. "Minute to Win it" vs "Minute To Win It", "Arts and Crafts 2"
+        // vs "Arts & Crafts 2"). Without folding, the counts split across
+        // two rows in the table and the user sees a low count under one
+        // name while the rest hides under the legacy name. Build a
+        // case-insensitive lookup so cloud keys fold into the master name.
+        const _canonByLower = {};
+        masterNames.forEach(n => { _canonByLower[String(n).toLowerCase().trim()] = n; });
+        const _canonName = (raw) => {
+            if (raw == null) return raw;
+            const key = String(raw).toLowerCase().trim();
+            return _canonByLower[key] || raw;
+        };
         if (hasCloud) {
             bunks.forEach(bunk => {
                 const cBunk = cloudData.counts[bunk] || {};
                 const todayBunk = cloudToday[bunk] || {};
                 Object.keys(cBunk).forEach(act => {
                     if (!cBunk[act]) return;
+                    const canon = _canonName(act);
                     // Subtract today's cloud contribution — we add the live schedule below
                     const historical = cBunk[act] - (todayBunk[act] || 0);
                     if (historical > 0) {
                         liveCounts[bunk] = liveCounts[bunk] || {};
-                        liveCounts[bunk][act] = historical;
+                        // Accumulate so multiple legacy variants of the same name merge
+                        liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + historical;
                     }
-                    usedActivityNames.add(act);
+                    usedActivityNames.add(canon);
                 });
                 // Per-bunk fallback: when cloud has zero entries for this bunk
                 // (e.g. cloud sync hasn't caught up yet, or an older bunk that
@@ -1260,9 +1277,10 @@
                     const hBunk = hCounts[bunk] || {};
                     Object.keys(hBunk).forEach(act => {
                         if (!hBunk[act]) return;
+                        const canon = _canonName(act);
                         liveCounts[bunk] = liveCounts[bunk] || {};
-                        liveCounts[bunk][act] = hBunk[act];
-                        usedActivityNames.add(act);
+                        liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + hBunk[act];
+                        usedActivityNames.add(canon);
                     });
                 }
             });
@@ -1271,9 +1289,10 @@
                 bunks.forEach(bunk => {
                     const cLD = cloudData.lastDone[bunk] || {};
                     Object.keys(cLD).forEach(act => {
+                        const canon = _canonName(act);
                         lastDone[bunk] = lastDone[bunk] || {};
-                        if (!lastDone[bunk][act] || cLD[act] > lastDone[bunk][act]) {
-                            lastDone[bunk][act] = cLD[act];
+                        if (!lastDone[bunk][canon] || cLD[act] > lastDone[bunk][canon]) {
+                            lastDone[bunk][canon] = cLD[act];
                         }
                     });
                 });
@@ -1284,9 +1303,10 @@
                 const hBunk = hCounts[bunk] || {};
                 Object.keys(hBunk).forEach(act => {
                     if (!hBunk[act]) return;
+                    const canon = _canonName(act);
                     liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = hBunk[act];
-                    usedActivityNames.add(act);
+                    liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + hBunk[act];
+                    usedActivityNames.add(canon);
                 });
             });
         }
@@ -1313,8 +1333,9 @@
                     if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                         rawAct = entry.sport;
                     }
-                    const act = (typeof rawAct === 'string' ? rawAct : '').trim();
-                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                    const trimmed = (typeof rawAct === 'string' ? rawAct : '').trim();
+                    if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
+                    const act = _canonName(trimmed);
                     usedActivityNames.add(act);
                     liveCounts[bunk] = liveCounts[bunk] || {};
                     liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + 1;
@@ -1337,8 +1358,9 @@
                         if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                             rawAct = entry.sport;
                         }
-                        const act = (typeof rawAct === 'string' ? rawAct : '').trim();
-                        if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                        const trimmed = (typeof rawAct === 'string' ? rawAct : '').trim();
+                        if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
+                        const act = _canonName(trimmed);
                         usedActivityNames.add(act);
                         lastDone[bunk] = lastDone[bunk] || {};
                         if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
@@ -1373,8 +1395,9 @@
                 if (!ts) return;
                 try {
                     const d = new Date(ts).toISOString().split('T')[0];
+                    const canon = _canonName(act);
                     lastDone[bunk] = lastDone[bunk] || {};
-                    if (!lastDone[bunk][act] || d > lastDone[bunk][act]) lastDone[bunk][act] = d;
+                    if (!lastDone[bunk][canon] || d > lastDone[bunk][canon]) lastDone[bunk][canon] = d;
                 } catch (_) {}
             });
         });
