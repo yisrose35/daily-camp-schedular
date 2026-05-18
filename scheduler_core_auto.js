@@ -252,7 +252,21 @@
 
     function getSpecialDuration(specialName, activityProperties, gs) {
         const all = getSpecialDurations(specialName, activityProperties, gs);
-        return all.length > 0 ? all[0] : null; // null = use layer dMin/dMax range
+        const base = all.length > 0 ? all[0] : null;
+        if (base == null) return null;
+        // ★ Day 19.5 fix: when prep is "attached", the user expects the activity
+        // to occupy ONE combined block (e.g. 40min Baking + 10min attached prep
+        // = a single 50min Baking block). The camp tells the bunk "10min is prep,
+        // 40min is the activity" — the system just sees a 50min activity. So
+        // fold attached prep into the returned duration. Flexible prep (a
+        // separate practice slot elsewhere in the day) is untouched here —
+        // flexPrep handles it as its own block named e.g. "Skits (Prep)".
+        const cfg = getSpecialConfig(specialName, gs);
+        const pc = cfg && cfg.prepConfig;
+        const isAttached = !pc || pc.timing !== 'flexible';
+        const prepDur = parseInt(cfg && cfg.prepDuration) || 0;
+        if (isAttached && prepDur > 0) return base + prepDur;
+        return base;
     }
 
     function getSpecialCapacity(specialName, activityProperties, gs) {
@@ -12499,21 +12513,12 @@
                         }
                         // ★ v14.0: Always use configured duration from special_activities config.
                         // Draft duration may be wrong; getSpecialDuration() is authoritative.
+                        // ★ Day 19.5: getSpecialDuration now folds attached prep into the
+                        // returned duration, so this single source of truth handles both
+                        // bare specials (40min) and attached-prep specials (40+10 = 50min)
+                        // identically — no per-site totalDuration accounting needed.
                         const configuredDur = getSpecialDuration(special.name || special.event || '', activityProperties, globalSettings);
-                        // ★ Day 19.5 fix: include attached prepDuration in the slot we
-                        // search for. Without this, a Baking with 40min duration + 10min
-                        // attached prep would be placed in a 40min slot, silently
-                        // dropping the prep. Use `special.totalDuration` if Phase-0 set
-                        // it (preferred), otherwise compute from current cfg.
-                        const _spName = special.name || special.event || '';
-                        const _spCfg = getSpecialConfig(_spName, globalSettings);
-                        const _spPrepCfg = _spCfg && _spCfg.prepConfig;
-                        const _spPrepAttached = !_spPrepCfg || _spPrepCfg.timing !== 'flexible';
-                        const _spPrepDur = (_spCfg?.prepDuration || 0);
-                        const _spAttachedPrep = _spPrepAttached ? _spPrepDur : 0;
-                        const baseSpecialDur = configuredDur || special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
-                        // Slot-search dimension: must accommodate prep too when attached.
-                        const specialDur = special.totalDuration || (baseSpecialDur + _spAttachedPrep);
+                        const specialDur = configuredDur || special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
                         const fieldName = special.claimedField || special.location;
                         const draftStart = special.claimedTime.startMin;
 
@@ -13014,10 +13019,6 @@
                                     bunk: bunk, grade: grade,
                                     name: special.name,
                                     duration: specialDur,
-                                    // ★ Day 19.5: carry totalDuration (special + attached prep) so
-                                    // Phase 4.9 swap can refuse slots too small to hold prep too.
-                                    totalDuration: (special.totalDuration || specialDur),
-                                    prepDuration: (special.prepDuration || 0),
                                     location: fieldName,
                                     layer: special._layer || null,
                                     special: special
@@ -16046,16 +16047,10 @@
                     if (/^(swim|lunch|cleanup|change|main\s*activity|shiur|dismissal|snack)/i.test(act)) continue;
                     if (s._assignedSpecial) continue; // already a special
                     const slotDur = (s._endMin != null && s._startMin != null) ? (s._endMin - s._startMin) : 0;
-                    // ★ Day 19.5 fix: honor totalDuration (special + attached prep).
-                    // Previously checked `slotDur !== def.duration` which silently
-                    // dropped attached prep — a Baking with 40min duration + 10min
-                    // attached prep would swap into a 40min sport slot, losing the
-                    // prep. Now require the slot to be at least totalDuration AND
-                    // not larger than 2x special duration (avoid placing a small
-                    // special into a much larger gap that should host something else).
-                    const _p49Total = def.totalDuration || def.duration;
-                    if (slotDur < _p49Total) continue;
-                    if (slotDur > def.duration && slotDur !== _p49Total) continue;
+                    // ★ Day 19.5: def.duration is now the FOLDED duration
+                    // (special + attached prep, courtesy of getSpecialDuration).
+                    // Sport slot must match exactly.
+                    if (slotDur !== def.duration) continue;
                     // Time rule check via canUseSpecialAtTime if available
                     if (typeof canUseSpecialAtTime === 'function') {
                         try {
