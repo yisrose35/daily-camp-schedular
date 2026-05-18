@@ -155,7 +155,14 @@
                 .from(TABLE)
                 .select('bunk, activity, count, date_key')
                 .eq('camp_id', campId)
-                .order('id', { ascending: true })
+                // Order by the composite PK so pagination is deterministic.
+                // rotation_counts has no surrogate `id` column — its PK is
+                // (camp_id, date_key, bunk, activity). camp_id is already
+                // filtered in the .eq() above, so date_key+bunk+activity is
+                // sufficient for a stable cursor.
+                .order('date_key', { ascending: true })
+                .order('bunk', { ascending: true })
+                .order('activity', { ascending: true })
                 .range(from, to)
                 .then(function(result) {
                     if (result.error) throw result.error;
