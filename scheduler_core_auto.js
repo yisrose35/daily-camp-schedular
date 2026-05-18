@@ -424,6 +424,12 @@
         const startTime = Date.now();
         const warnings = [];
 
+        // ★ Phase 2.5 anti-orphan defer queue. Specials whose only legal positions
+        // would create unfillable remainders get pushed here instead of pinned.
+        // Phase 3.9 (after sport solver completes) tries to swap them back in by
+        // finding a sport whose slot exactly matches the special's duration.
+        const phase25Deferred = [];
+
       try { // ★ top-level try — finally clears generation flags no matter what
 
         // =====================================================================
@@ -12844,6 +12850,17 @@
                                     log('[Phase2.5] [ANTI-ORPHAN] Deferring "' + special.name + '" for bunk ' + bunk +
                                         ' — every position creates an unfillable remainder. Phase 3 will fill the period with a sport.');
                                 }
+                                // Queue for Phase 3.9 recapture — try to swap this special back in
+                                // after sports are placed, by finding a sport whose slot exactly
+                                // matches the special's duration.
+                                phase25Deferred.push({
+                                    bunk: bunk, grade: grade,
+                                    name: special.name,
+                                    duration: specialDur,
+                                    location: fieldName,
+                                    layer: special._layer || null,
+                                    special: special
+                                });
                                 continue;
                             }
                         }
@@ -15612,6 +15629,99 @@
                     warnings.push({ type: 'solver_error', message: e.message });
                 }
             } else { warn('[4] No solver loaded'); }
+        }
+
+
+        // =====================================================================
+        // STEP 4.9 — DEFERRED SPECIAL RECAPTURE
+        // =====================================================================
+        // For each special Phase 2.5 deferred (because every legal position
+        // would have created an orphan gap), find a sport in this bunk's
+        // schedule whose slot exactly matches the special's duration and
+        // swap the special in. This is the "switch Elbow Tag and Shiur 1"
+        // move — done automatically once Phase 3 has finished sport sizing.
+        // =====================================================================
+        if (phase25Deferred.length > 0) {
+            log('\n[STEP 4.9] Deferred-special recapture: ' + phase25Deferred.length + ' specials queued');
+            const recaptureSA = window.scheduleAssignments || {};
+            let recapturedCount = 0;
+            let unrecapturable = [];
+
+            for (let _di = 0; _di < phase25Deferred.length; _di++) {
+                const def = phase25Deferred[_di];
+                const slots = recaptureSA[def.bunk];
+                if (!Array.isArray(slots) || slots.length === 0) {
+                    unrecapturable.push(def);
+                    continue;
+                }
+
+                // Find a swap candidate: a sport-placed slot whose duration
+                // exactly equals the special's duration. We must also verify
+                // the special is allowed at that time per access/time rules.
+                let swapIdx = -1;
+                for (let _si = 0; _si < slots.length; _si++) {
+                    const s = slots[_si];
+                    if (!s || s.continuation) continue;
+                    if (s._pinned === true) continue;
+                    // Only swap with Phase 3-placed sports / fillers — not walls,
+                    // specials, or anything the user configured directly.
+                    const act = String(s._activity || '').toLowerCase();
+                    if (/^(swim|lunch|cleanup|change|main\s*activity|shiur|dismissal|snack)/i.test(act)) continue;
+                    if (s._assignedSpecial) continue; // already a special
+                    const slotDur = (s._endMin != null && s._startMin != null) ? (s._endMin - s._startMin) : 0;
+                    if (slotDur !== def.duration) continue;
+                    // Time rule check via canUseSpecialAtTime if available
+                    if (typeof canUseSpecialAtTime === 'function') {
+                        try {
+                            if (!canUseSpecialAtTime(def.name, def.grade, s._startMin, s._endMin)) continue;
+                        } catch (e) { /* skip safety */ }
+                    }
+                    swapIdx = _si;
+                    break;
+                }
+
+                if (swapIdx < 0) {
+                    unrecapturable.push(def);
+                    continue;
+                }
+
+                // Atomic swap: replace the sport slot with the special.
+                // The displaced sport is the activity that was at this position;
+                // we drop it (Phase 3 already gave the bunk full coverage, so
+                // losing one sport is acceptable to honor the configured special).
+                const target = slots[swapIdx];
+                const displaced = target._activity || '(unknown)';
+                const newEntry = Object.assign({}, target, {
+                    _activity: def.name,
+                    _assignedSpecial: def.name,
+                    _specialLocation: def.location,
+                    _specialDuration: def.duration,
+                    field: def.location || target.field,
+                    type: 'special',
+                    event: def.name,
+                    _source: 'phase4.9-recapture',
+                    _isSpecialLocation: true,
+                    _pinned: false
+                });
+                slots[swapIdx] = newEntry;
+
+                // Mark usage so other systems (rotation, frequency) credit it.
+                if (typeof registerSpecialUsage === 'function') {
+                    try { registerSpecialUsage(def.name, def.grade, target._startMin, target._endMin); } catch (e) {}
+                }
+                log('[Phase4.9] RECAPTURED ' + def.name + ' for ' + def.bunk + ' at ' +
+                    target._startMin + '-' + target._endMin + ' (displaced "' + displaced + '")');
+                recapturedCount++;
+            }
+
+            log('[Phase4.9] ★ Recapture complete: ' + recapturedCount + '/' + phase25Deferred.length +
+                ' specials placed; ' + unrecapturable.length + ' could not be swapped in');
+            if (unrecapturable.length > 0) {
+                unrecapturable.forEach(function(d) {
+                    log('[Phase4.9]   — unplaced: "' + d.name + '" (' + d.duration + 'min) for ' + d.bunk +
+                        ' — no Phase-3 sport with matching duration');
+                });
+            }
         }
 
 
