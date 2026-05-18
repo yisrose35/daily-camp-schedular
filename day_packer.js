@@ -673,45 +673,18 @@
       }
     });
 
-    // ── PASS 2: opportunistic filler — fill remaining gap area with any extra ──
-    // Sort all remaining free-game items, prefer filler-named or smallest first.
-    var fillerSorted = plan.freeGame.slice()
-      .filter(function (f) { return _availableForBunk(f, alreadyPicked, globalUsage); })
-      .sort(function (a, b) {
-        // Smaller dMin first — they fit in leftover slivers
-        return a.dMin - b.dMin;
-      });
-
-    var safety = fillerSorted.length * 2;
-    while (gaps.length > 0 && safety-- > 0) {
-      var bestGap = gaps.slice().sort(function (a, b) { return (b.end - b.start) - (a.end - a.start); })[0];
-      var bestGapLen = bestGap.end - bestGap.start;
-      var didPlace = false;
-      for (var k = 0; k < fillerSorted.length; k++) {
-        var f = fillerSorted[k];
-        if (!_availableForBunk(f, alreadyPicked, globalUsage)) continue;
-        if (f.dMin > bestGapLen) continue;
-        var fit2 = _bestFitInGap(bestGap, periods, f);
-        if (!fit2) continue;
-        placements.push({
-          name: f.name,
-          startMin: fit2.startMin,
-          endMin: fit2.endMin,
-          duration: fit2.dur,
-          location: f.location || null,
-          subcategory: f.subcategory,
-          period: fit2.period,
-          scarce: f.scarce,
-          required: false
-        });
-        alreadyPicked[f.name] = true;
-        globalUsage[f.name] = (globalUsage[f.name] || 0) + 1;
-        gaps = _gapsAfterPlacement(gaps, fit2);
-        didPlace = true;
-        break;
-      }
-      if (!didPlace) break; // nothing fits the largest remaining gap → stop
-    }
+    // ── PASS 2 REMOVED ──
+    // Originally this opportunistic filler placed every available free-game
+    // item into any leftover gap. Result: the packer hit every 10-min sliver
+    // adjacent to swim/change buffers, leaving tiny remainders Phase 3 couldn't
+    // tile with sports (sport dMin is 25min). Phase 3 then had to micro-force
+    // Slush blocks and call SPECIAL-ENFORCE 23 times to repair the mess —
+    // score blew up to 11.8M.
+    //
+    // Lesson: the packer's job is satisfying configured subcategoryCaps. The
+    // sport solver (Phase 3) is much better at filling everything else with
+    // properly-sized sports. So PASS 1 commits the required Food+Regular and
+    // bows out; Phase 3 / Phase 4.9 handle the rest.
 
     return {
       placements: placements,
