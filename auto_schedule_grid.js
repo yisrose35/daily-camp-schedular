@@ -114,7 +114,7 @@
             console.warn('[AutoGrid] Could not find slot index for', bunk, startMin, '-', endMin);
             // Fallback: use enhancedEditCell with time range
             if (typeof window.enhancedEditCell === 'function') {
-                var currentText = entry ? (entry._activity || entry.field || '') : '';
+                var currentText = entry ? (window.getActivityDisplayName ? window.getActivityDisplayName(entry) : (entry._activity || entry.field || '')) : '';
                 window.enhancedEditCell(bunk, startMin, endMin, currentText);
             }
             return;
@@ -129,7 +129,7 @@
         }
         // Fallback: legacy edit modal
         else if (typeof window.enhancedEditCell === 'function') {
-            var text = existingEntry ? (existingEntry._activity || existingEntry.field || '') : '';
+            var text = existingEntry ? (window.getActivityDisplayName ? window.getActivityDisplayName(existingEntry) : (existingEntry._activity || existingEntry.field || '')) : '';
             window.enhancedEditCell(bunk, startMin, endMin, text);
         }
         else {
@@ -830,7 +830,7 @@
                 if (act.duration < 1) return;
 
                 var style = blockStyle(act.entry);
-                var name  = act.entry?._activity || act.entry?.field || '';
+                var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 
@@ -1280,7 +1280,7 @@
                 if (blockH < 2) return;
 
                 var style = blockStyle(act.entry);
-                var name  = act.entry?._activity || act.entry?.field || '';
+                var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
 

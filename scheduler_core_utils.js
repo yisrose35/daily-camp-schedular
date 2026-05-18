@@ -31,6 +31,24 @@
     // 1. BASIC HELPERS
     // =================================================================
 
+    // ★ Day 19.5: display-name helper for multiPart activities.
+    // Returns "Baking 1/3" when slot has _partLabel (stamped by the gen
+    // for multiPart specials), otherwise falls back to _activity or field.
+    // Use this anywhere render code needs the visible activity name —
+    // schedule grid, print center, calendar, daily adjustments, etc.
+    Utils.getActivityDisplayName = function (slot) {
+        if (!slot) return '';
+        if (slot._partLabel) return slot._partLabel;
+        if (slot._partNumber && slot._totalParts && slot._activity) {
+            return slot._activity + ' ' + slot._partNumber + '/' + slot._totalParts;
+        }
+        return slot._activity || slot.field || slot.event || '';
+    };
+    // Also expose on window for non-Utils call sites
+    if (typeof window !== 'undefined') {
+        window.getActivityDisplayName = Utils.getActivityDisplayName;
+    }
+
     Utils.parseTimeToMinutes = function (str) {
         if (str == null) return null;
         if (typeof str === "number") return str;

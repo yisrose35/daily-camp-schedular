@@ -735,6 +735,31 @@
             });
             return count;
         }
+        // ★ Day 19.5: multiPart part-number helper.
+        // Returns the part number this placement would be (1-indexed) given
+        // prior occurrences in history. Used by both Phase 2.x write site
+        // and Phase 4.9 recapture to stamp slot._partNumber for display.
+        // Returns null when the activity isn't a multiPart special.
+        function getMultiPartInfo(bunk, specialName) {
+            const sp = (typeof getSpecialActivityByName === 'function')
+                ? getSpecialActivityByName(specialName) : null;
+            const mp = sp && sp.multiPart;
+            if (!mp || !mp.enabled) return null;
+            const total = parseInt(mp.totalParts) || 0;
+            if (total <= 0) return null;
+            let priorCount = 0;
+            for (const dk in allDailyData) {
+                if (dk >= currentDate) continue;
+                const slots = allDailyData[dk]?.scheduleAssignments?.[String(bunk)];
+                if (Array.isArray(slots) && slots.some(e =>
+                    e && !e.continuation && (e._activity === specialName || e.field === specialName))) {
+                    priorCount++;
+                }
+            }
+            const partNumber = priorCount + 1;
+            if (partNumber > total) return null; // already capped, write site should refuse
+            return { partNumber: partNumber, totalParts: total };
+        }
         // Lifetime visit count for rotation-cohort enforcement.
         // Counts every prior day in allDailyData where this bunk had this
         // special on its schedule.
@@ -2997,22 +3022,35 @@
                 }
 
                 // Multi-part: enforce daysBetween gap between consecutive parts
+                // ★ Day 19.5: also enforce totalParts cap (don't place a 4th part
+                // when totalParts=3) and capture prior count so writers can stamp
+                // _partNumber on the slot for "Baking 1/3" display.
                 const mpCfg = (activityProperties[s.name] || s).multiPart || s.multiPart;
-                if (mpCfg && mpCfg.enabled && mpCfg.daysBetween > 0) {
+                if (mpCfg && mpCfg.enabled) {
+                    // Count prior occurrences of this special for this bunk (any day before today).
                     const sortedKeys = Object.keys(allDailyData).sort();
+                    let priorCount = 0;
                     let lastDone = null;
                     for (let _dk = sortedKeys.length - 1; _dk >= 0; _dk--) {
                         if (sortedKeys[_dk] >= currentDate) continue;
                         const _slots = allDailyData[sortedKeys[_dk]]?.scheduleAssignments?.[String(bunk)];
                         if (Array.isArray(_slots) && _slots.some(e => e && !e.continuation && (e._activity === s.name || e.field === s.name))) {
-                            lastDone = sortedKeys[_dk]; break;
+                            priorCount++;
+                            if (!lastDone) lastDone = sortedKeys[_dk];
                         }
                     }
-                    if (lastDone) {
+                    // Total-parts cap: refuse if all parts already done.
+                    const _mpTotal = parseInt(mpCfg.totalParts) || 0;
+                    if (_mpTotal > 0 && priorCount >= _mpTotal) {
+                        log('[multiPart] skip ' + s.name + ' for ' + bunk + ' (all ' + _mpTotal + ' parts already placed)');
+                        return;
+                    }
+                    // daysBetween: gap since last placement must be >= configured.
+                    if (lastDone && mpCfg.daysBetween > 0) {
                         const msPerDay = 86400000;
                         const daysDiff = Math.floor((new Date(currentDate) - new Date(lastDone)) / msPerDay);
                         if (daysDiff < mpCfg.daysBetween) {
-                            log('[multiPart] skip ' + s.name + ' for ' + bunk + ' (only ' + daysDiff + 'd since last, need ' + mpCfg.daysBetween + 'd)');
+                            log('[multiPart] skip ' + s.name + ' for ' + bunk + ' (only ' + daysDiff + 'd since part ' + priorCount + ', need ' + mpCfg.daysBetween + 'd)');
                             return;
                         }
                     }
@@ -15004,11 +15042,19 @@
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _rulesWhy });
                         return;
                     }
+                    // ★ Day 19.5: stamp multiPart info + pre-computed display
+                    // label so render code can show "Baking 1/3" via the
+                    // window.getActivityDisplayName(slot) helper. _activity
+                    // stays unchanged for cross-day matching/analytics.
+                    const _mpInfo = getMultiPartInfo(bunk, block._assignedSpecial);
                     window.scheduleAssignments[String(bunk)][idx] = {
                         field: fn, sport: null, _activity: block._assignedSpecial,
                         _fixed: true, _bunkOverride: true, _activityLocked: true,
                         _autoSpecial: true, _autoMode: true, continuation: false,
-                        _startMin: block.startMin, _endMin: block.endMin
+                        _startMin: block.startMin, _endMin: block.endMin,
+                        _partNumber: _mpInfo ? _mpInfo.partNumber : null,
+                        _totalParts: _mpInfo ? _mpInfo.totalParts : null,
+                        _partLabel: _mpInfo ? (block._assignedSpecial + ' ' + _mpInfo.partNumber + '/' + _mpInfo.totalParts) : null
                     };
                     registerSpecialFieldUsage([idx], fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
                     // ★ v4.0: Write to BOTH lock systems — AutoFieldLocks for the solver,
@@ -16114,6 +16160,8 @@
                 // losing one sport is acceptable to honor the configured special).
                 const target = slots[swapIdx];
                 const displaced = target._activity || '(unknown)';
+                // ★ Day 19.5: stamp multiPart info + display label.
+                const _p49MpInfo = getMultiPartInfo(def.bunk, def.name);
                 const newEntry = Object.assign({}, target, {
                     _activity: def.name,
                     _assignedSpecial: def.name,
@@ -16124,7 +16172,10 @@
                     event: def.name,
                     _source: 'phase4.9-recapture',
                     _isSpecialLocation: true,
-                    _pinned: false
+                    _pinned: false,
+                    _partNumber: _p49MpInfo ? _p49MpInfo.partNumber : null,
+                    _totalParts: _p49MpInfo ? _p49MpInfo.totalParts : null,
+                    _partLabel: _p49MpInfo ? (def.name + ' ' + _p49MpInfo.partNumber + '/' + _p49MpInfo.totalParts) : null
                 });
                 slots[swapIdx] = newEntry;
 
