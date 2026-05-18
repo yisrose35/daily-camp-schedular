@@ -501,6 +501,284 @@
     return totals;
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // COMMIT 3 — BIN PACKER (Session B)
+  // ─────────────────────────────────────────────────────────────
+  // For each bunk, given the plan (pinned + freeGame + gaps + caps),
+  // pick a set of free-game specials AND assign each a concrete
+  // {startMin, endMin, durationChosen} so the day is tiled.
+  //
+  // The packer is a pure function: input plan + globalUsage state,
+  // output placements. The caller is responsible for committing the
+  // placements to bunkTimelines and decrementing global counters.
+  //
+  // Strategy (intentionally simple, not exhaustive search):
+  //   1. Identify required picks from subcategoryCaps (e.g. Food:1, Regular:1).
+  //   2. For each required subcategory, build candidate pool sorted by
+  //      scarcity (scarce first), then by maxUsage availability.
+  //   3. Greedy place: walk gaps largest-first, pick a candidate whose
+  //      duration set has an option that fits.
+  //   4. If a required subcategory can't be placed, record it as
+  //      unplaced and continue (Phase 4.9 recapture will retry).
+  //   5. After required picks, fill remaining gap area with extra
+  //      free-game items (filler-class first if obvious filler names).
+  //
+  // The packer never crosses period boundaries — a pick is rejected
+  // if any of its candidate placements would span two periods.
+  // ─────────────────────────────────────────────────────────────
+
+  // Find the period that contains [s, e). Returns null if it spans 2+.
+  function _periodForRange(periods, s, e) {
+    for (var i = 0; i < periods.length; i++) {
+      var p = periods[i];
+      if (s >= p.startMin && e <= p.endMin) return p;
+    }
+    return null;
+  }
+
+  // Pick a duration option from a freeGame item that fits in [gapStart, gapEnd]
+  // AND keeps the placement within a single period.
+  // Returns { startMin, endMin, dur, period } or null.
+  function _bestFitInGap(gap, periods, item) {
+    var gapLen = gap.end - gap.start;
+    if (gapLen < item.dMin) return null;
+    // Prefer larger durations that still fit, so we waste less remainder space.
+    var sortedDurs = item.durations.slice().sort(function (a, b) { return b - a; });
+    for (var i = 0; i < sortedDurs.length; i++) {
+      var d = sortedDurs[i];
+      if (d > gapLen) continue;
+      if (d < item.dMin) break;
+      // Try placing at gap.start (left-aligned). Must stay inside one period.
+      var s = gap.start, e = s + d;
+      var p = _periodForRange(periods, s, e);
+      if (!p) continue;
+      // Window check
+      if (s < item.window.start || e > item.window.end) continue;
+      return { startMin: s, endMin: e, dur: d, period: p.name };
+    }
+    return null;
+  }
+
+  // Recompute gaps after a placement is committed.
+  function _gapsAfterPlacement(gaps, placement) {
+    var out = [];
+    for (var i = 0; i < gaps.length; i++) {
+      var g = gaps[i];
+      if (placement.endMin <= g.start || placement.startMin >= g.end) {
+        out.push(g);
+        continue;
+      }
+      if (placement.startMin > g.start) {
+        out.push({ start: g.start, end: placement.startMin, period: g.period });
+      }
+      if (placement.endMin < g.end) {
+        out.push({ start: placement.endMin, end: g.end, period: g.period });
+      }
+    }
+    return out;
+  }
+
+  function _gapTotal(gaps) {
+    return gaps.reduce(function (s, g) { return s + (g.end - g.start); }, 0);
+  }
+
+  // Sort candidates so the packer picks scarce + maxUsage-limited items
+  // first within a subcategory.
+  function _sortCandidates(items, globalUsage) {
+    return items.slice().sort(function (a, b) {
+      // Scarce first
+      if (a.scarce !== b.scarce) return a.scarce ? -1 : 1;
+      // Items closer to their maxUsage cap should be skipped (less available)
+      // — so sort by (maxUsage - used) ascending only if maxUsage set
+      var aRem = (a.maxUsage || 9999) - (globalUsage[a.name] || 0);
+      var bRem = (b.maxUsage || 9999) - (globalUsage[b.name] || 0);
+      if (aRem !== bRem) return aRem - bRem; // tighter availability first
+      // Larger durations next (uses bigger gaps)
+      return (b.dMax || 0) - (a.dMax || 0);
+    });
+  }
+
+  function _availableForBunk(item, alreadyPicked, globalUsage) {
+    if (alreadyPicked[item.name]) return false; // no duplicates on same bunk
+    var used = globalUsage[item.name] || 0;
+    if (item.maxUsage && used >= item.maxUsage) return false;
+    return true;
+  }
+
+  /**
+   * Pack one bunk's day.
+   * @param {object} plan  — output of buildBunkPlan
+   * @param {object} globalUsage — map<specialName, usageCount>; mutated as picks happen
+   * @returns {{ placements: [...], unplacedRequired: [...], gapsRemaining: [...] }}
+   */
+  function packBunkDay(plan, globalUsage) {
+    globalUsage = globalUsage || {};
+    var placements = [];
+    var alreadyPicked = {};
+    var gaps = plan.gaps.slice();
+    var periods = plan.periods;
+    var caps = plan.subcategoryCaps || {};
+    var unplacedRequired = [];
+
+    // Group freeGame by subcategoryKey
+    var bySubcat = {};
+    plan.freeGame.forEach(function (f) {
+      var k = f.subcategoryKey || 'regular';
+      (bySubcat[k] = bySubcat[k] || []).push(f);
+    });
+
+    // ── PASS 1: required picks per subcategoryCap ──
+    var subKeys = Object.keys(caps);
+    subKeys.forEach(function (subKey) {
+      var needed = caps[subKey] || 0;
+      if (needed <= 0) return;
+      var pool = bySubcat[subKey] || [];
+      var pickedThisSub = 0;
+      var sorted = _sortCandidates(pool, globalUsage);
+      for (var i = 0; i < sorted.length && pickedThisSub < needed; i++) {
+        var item = sorted[i];
+        if (!_availableForBunk(item, alreadyPicked, globalUsage)) continue;
+        // Try gaps largest-first
+        var gapsSorted = gaps.slice().sort(function (a, b) { return (b.end - b.start) - (a.end - a.start); });
+        var placed = null;
+        for (var g = 0; g < gapsSorted.length; g++) {
+          var fit = _bestFitInGap(gapsSorted[g], periods, item);
+          if (fit) { placed = { item: item, fit: fit }; break; }
+        }
+        if (placed) {
+          placements.push({
+            name: placed.item.name,
+            startMin: placed.fit.startMin,
+            endMin: placed.fit.endMin,
+            duration: placed.fit.dur,
+            location: placed.item.location || null,
+            subcategory: placed.item.subcategory,
+            period: placed.fit.period,
+            scarce: placed.item.scarce,
+            required: true
+          });
+          alreadyPicked[placed.item.name] = true;
+          globalUsage[placed.item.name] = (globalUsage[placed.item.name] || 0) + 1;
+          gaps = _gapsAfterPlacement(gaps, placed.fit);
+          pickedThisSub++;
+        }
+      }
+      if (pickedThisSub < needed) {
+        unplacedRequired.push({ subcategory: subKey, needed: needed, placed: pickedThisSub });
+      }
+    });
+
+    // ── PASS 2: opportunistic filler — fill remaining gap area with any extra ──
+    // Sort all remaining free-game items, prefer filler-named or smallest first.
+    var fillerSorted = plan.freeGame.slice()
+      .filter(function (f) { return _availableForBunk(f, alreadyPicked, globalUsage); })
+      .sort(function (a, b) {
+        // Smaller dMin first — they fit in leftover slivers
+        return a.dMin - b.dMin;
+      });
+
+    var safety = fillerSorted.length * 2;
+    while (gaps.length > 0 && safety-- > 0) {
+      var bestGap = gaps.slice().sort(function (a, b) { return (b.end - b.start) - (a.end - a.start); })[0];
+      var bestGapLen = bestGap.end - bestGap.start;
+      var didPlace = false;
+      for (var k = 0; k < fillerSorted.length; k++) {
+        var f = fillerSorted[k];
+        if (!_availableForBunk(f, alreadyPicked, globalUsage)) continue;
+        if (f.dMin > bestGapLen) continue;
+        var fit2 = _bestFitInGap(bestGap, periods, f);
+        if (!fit2) continue;
+        placements.push({
+          name: f.name,
+          startMin: fit2.startMin,
+          endMin: fit2.endMin,
+          duration: fit2.dur,
+          location: f.location || null,
+          subcategory: f.subcategory,
+          period: fit2.period,
+          scarce: f.scarce,
+          required: false
+        });
+        alreadyPicked[f.name] = true;
+        globalUsage[f.name] = (globalUsage[f.name] || 0) + 1;
+        gaps = _gapsAfterPlacement(gaps, fit2);
+        didPlace = true;
+        break;
+      }
+      if (!didPlace) break; // nothing fits the largest remaining gap → stop
+    }
+
+    return {
+      placements: placements,
+      unplacedRequired: unplacedRequired,
+      gapsRemaining: gaps,
+      gapMinRemaining: _gapTotal(gaps)
+    };
+  }
+
+  /**
+   * Pack every bunk. Returns a map<bunk, packResult>.
+   * Bunks with scarce required picks go FIRST so they don't lose those
+   * items to non-scarce-required bunks.
+   *
+   * @param {object} opts {
+   *   bunkTimelines, allGrades, getBunksForGrade, campPeriods,
+   *   specials, subcategoryCaps, log
+   * }
+   */
+  function packAllBunks(opts) {
+    opts = opts || {};
+    var log = opts.log || function () {};
+    var bunkTimelines = opts.bunkTimelines || {};
+    var allGrades = opts.allGrades || [];
+    var getBunksForGrade = opts.getBunksForGrade || function () { return []; };
+    var campPeriods = opts.campPeriods || {};
+
+    // Build all plans first
+    var planByBunk = {};
+    var bunkGrade = {};
+    allGrades.forEach(function (grade) {
+      var periods = campPeriods[grade] || [];
+      (getBunksForGrade(grade) || []).forEach(function (bunk) {
+        bunkGrade[bunk] = grade;
+        planByBunk[bunk] = buildBunkPlan(bunk, grade, {
+          periods: periods,
+          bunkTimeline: bunkTimelines[bunk] || [],
+          specials: opts.specials,
+          subcategoryCaps: opts.subcategoryCaps
+        });
+      });
+    });
+
+    // Sort bunks: those with a required scarce candidate first
+    var bunkOrder = Object.keys(planByBunk).sort(function (a, b) {
+      var aScarce = planByBunk[a].freeGame.some(function (f) { return f.scarce; }) ? 0 : 1;
+      var bScarce = planByBunk[b].freeGame.some(function (f) { return f.scarce; }) ? 0 : 1;
+      if (aScarce !== bScarce) return aScarce - bScarce;
+      // Then by tightest schedule (least gap room)
+      return planByBunk[a].totalGapMin - planByBunk[b].totalGapMin;
+    });
+
+    var globalUsage = {};
+    var resultByBunk = {};
+    var totals = { bunks: 0, placements: 0, unplacedReq: 0, gapMinRemain: 0 };
+
+    bunkOrder.forEach(function (bunk) {
+      var result = packBunkDay(planByBunk[bunk], globalUsage);
+      resultByBunk[bunk] = result;
+      totals.bunks++;
+      totals.placements += result.placements.length;
+      totals.unplacedReq += result.unplacedRequired.length;
+      totals.gapMinRemain += result.gapMinRemaining;
+    });
+
+    log('[DayPacker Pack] ' + totals.bunks + ' bunks → ' + totals.placements +
+        ' placements, ' + totals.unplacedReq + ' unmet caps, ' +
+        totals.gapMinRemain + ' min gap remaining');
+
+    return { resultByBunk: resultByBunk, globalUsage: globalUsage, totals: totals, planByBunk: planByBunk };
+  }
+
   // Expose
   window.DayPacker = {
     collectBunkPlanInput: collectBunkPlanInput,
@@ -508,6 +786,9 @@
     // Commit 2:
     buildBunkPlan: buildBunkPlan,
     runShadowPlan: runShadowPlan,
+    // Commit 3 (Session B):
+    packBunkDay: packBunkDay,
+    packAllBunks: packAllBunks,
     _categorize: _categorize  // exported for tests
   };
 })();

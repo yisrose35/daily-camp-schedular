@@ -12263,6 +12263,113 @@
                 }
             }
 
+            // ═══════════════════════════════════════════════════════════════
+            // DAY PACKER — Commit 3 (Session B) — REAL PLACEMENT
+            // ═══════════════════════════════════════════════════════════════
+            // Behind feature flag globalSettings.app1.useDayPacker (default: false).
+            // When ON, the packer tiles each bunk's day BEFORE Phase 2.5 runs.
+            // Phase 2.5's per-bunk loop is then skipped for any bunk the packer
+            // already covered, because shoppingLists[bunk].specials.list is
+            // cleared after the packer commits the placements.
+            //
+            // Why first iteration only? Same reason as the shadow log — later
+            // SA iterations reuse the packer's first-pass placements via the
+            // elite pool; re-packing each iteration would thrash the seed.
+            // ═══════════════════════════════════════════════════════════════
+            const _packedBunks = new Set();
+            if (totalIters < 1) {
+                try {
+                    var _useDP = false;
+                    try {
+                        var _gs = window.globalSettings || {};
+                        _useDP = !!(_gs.app1 && _gs.app1.useDayPacker);
+                    } catch (_e) {}
+                    if (_useDP && window.DayPacker && typeof window.DayPacker.packAllBunks === 'function') {
+                        var _dpSubcatCaps2 = {};
+                        try {
+                            if (typeof shoppingLists !== 'undefined' && shoppingLists) {
+                                Object.keys(shoppingLists).forEach(function (b) {
+                                    var sc = shoppingLists[b] && shoppingLists[b].specials &&
+                                             shoppingLists[b].specials.subcategoryCap;
+                                    if (sc && typeof sc === 'object') _dpSubcatCaps2[b] = sc;
+                                });
+                            }
+                        } catch (_capErr2) {}
+
+                        log('═══════════════════════════════════════════════════════════');
+                        log('[DayPacker] ★ COMMIT 3 ACTIVE — bin-packing all bunks');
+                        log('═══════════════════════════════════════════════════════════');
+
+                        var _packResult = window.DayPacker.packAllBunks({
+                            bunkTimelines: bunkTimelines,
+                            allGrades: allGrades,
+                            getBunksForGrade: function (g) { return getBunksForGrade(g, divisions); },
+                            campPeriods: window.campPeriods || {},
+                            specials: todaysSpecials,
+                            subcategoryCaps: _dpSubcatCaps2,
+                            log: log
+                        });
+
+                        // Commit placements to bunkTimelines + ledgers
+                        var _packedCount = 0;
+                        Object.keys(_packResult.resultByBunk).forEach(function (bunk) {
+                            var rec = _packResult.resultByBunk[bunk];
+                            if (!rec || !rec.placements || rec.placements.length === 0) return;
+                            var grade = null;
+                            for (var _gi = 0; _gi < allGrades.length; _gi++) {
+                                if (getBunksForGrade(allGrades[_gi], divisions).indexOf(bunk) !== -1) {
+                                    grade = allGrades[_gi]; break;
+                                }
+                            }
+                            if (!grade) return;
+
+                            rec.placements.forEach(function (pl) {
+                                bunkTimelines[bunk] = bunkTimelines[bunk] || [];
+                                bunkTimelines[bunk].push({
+                                    startMin: pl.startMin, endMin: pl.endMin,
+                                    type: 'special', event: pl.name,
+                                    layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                                    _assignedSpecial: pl.name,
+                                    _specialLocation: pl.location || null,
+                                    _specialDuration: pl.duration,
+                                    _isSpecialLocation: true, _source: 'day-packer'
+                                });
+                                try { registerSpecialUsage(pl.name, grade, pl.startMin, pl.endMin); } catch (_e1) {}
+                                try { registerCrossGrade(grade, 'special', pl.startMin, pl.endMin, pl.name); } catch (_e2) {}
+                                if (pl.location && fieldLedger && fieldLedger[pl.location]) {
+                                    fieldLedger[pl.location].claims.push({
+                                        bunk: bunk, grade: grade, activity: pl.name,
+                                        startMin: pl.startMin, endMin: pl.endMin
+                                    });
+                                }
+                                _packedCount++;
+                            });
+                            ensureTimelineIntegrity(bunk);
+                            // Clear this bunk's drafted specials so Phase 2.5's inner
+                            // loop has nothing to place — the packer's choices stand.
+                            // (Phase 2.5 iterates draftResults[bunk].specials, not
+                            //  shoppingLists[bunk].specials.list.)
+                            if (draftResults[bunk] && Array.isArray(draftResults[bunk].specials)) {
+                                draftResults[bunk].specials = [];
+                            }
+                            _packedBunks.add(bunk);
+                        });
+
+                        log('[DayPacker] ★ Committed ' + _packedCount + ' placements across ' +
+                            _packedBunks.size + ' bunks. Phase 2.5 will skip these.');
+                        if (_packResult.totals.unplacedReq > 0) {
+                            log('[DayPacker] ⚠ ' + _packResult.totals.unplacedReq +
+                                ' subcategory caps could not be satisfied — Phase 4.9 will retry');
+                        }
+                    }
+                } catch (_dpPackErr) {
+                    warn('[DayPacker] pack error: ' + (_dpPackErr && _dpPackErr.message));
+                    if (_dpPackErr && _dpPackErr.stack) warn(_dpPackErr.stack);
+                }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,
