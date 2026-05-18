@@ -138,20 +138,40 @@
         // is in flight, _loadGen will diverge and we'll discard the result.
         var startGen = _loadGen;
 
-        return client
-            .from(TABLE)
-            .select('bunk, activity, count, date_key')
-            .eq('camp_id', campId)
-            .then(function(result) {
-                if (result.error) {
-                    console.error('[RotationCloud] Load error:', result.error.message);
-                    return { counts: {}, lastDone: {}, countsByDate: {} };
-                }
+        // ★★★ FIX: paginate to bypass Supabase's 1000-row default limit ★★★
+        // Without explicit .range(), Supabase returns at most 1000 rows.
+        // For a real camp (35 bunks × ~9 activities × N days), this caps out
+        // fast — a 4-week camp easily exceeds 9000 rows. Truncation meant
+        // every consumer (analytics, scheduler scoring, fairness checks)
+        // saw a 1000-row slice of history. Cohort pooling and Per Half
+        // counts silently undercounted.
+        //
+        // We fetch 1000 rows at a time, ordered by id, and concatenate.
+        var PAGE_SIZE = 1000;
+        function fetchAll(allRows, page) {
+            var from = page * PAGE_SIZE;
+            var to = from + PAGE_SIZE - 1;
+            return client
+                .from(TABLE)
+                .select('bunk, activity, count, date_key')
+                .eq('camp_id', campId)
+                .order('id', { ascending: true })
+                .range(from, to)
+                .then(function(result) {
+                    if (result.error) throw result.error;
+                    var rows = result.data || [];
+                    allRows.push.apply(allRows, rows);
+                    if (rows.length < PAGE_SIZE) return allRows;
+                    return fetchAll(allRows, page + 1);
+                });
+        }
 
+        return fetchAll([], 0)
+            .then(function(allData) {
                 var counts = {};
                 var lastDone = {};
                 var countsByDate = {}; // ★ Per-date breakdown for smart merging
-                (result.data || []).forEach(function(row) {
+                allData.forEach(function(row) {
                     counts[row.bunk] = counts[row.bunk] || {};
                     counts[row.bunk][row.activity] = (counts[row.bunk][row.activity] || 0) + row.count;
 
@@ -177,11 +197,11 @@
                 }
                 _cache = fresh;
                 _cacheTime = Date.now();
-                console.log('[RotationCloud] Loaded rotation data:', (result.data || []).length, 'rows');
+                console.log('[RotationCloud] Loaded rotation data:', allData.length, 'rows (paginated)');
                 return _cache;
             })
             .catch(function(e) {
-                console.error('[RotationCloud] Load failed:', e);
+                console.error('[RotationCloud] Load failed:', e.message || e);
                 return { counts: {}, lastDone: {}, countsByDate: {} };
             });
     }
