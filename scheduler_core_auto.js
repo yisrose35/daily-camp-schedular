@@ -12226,6 +12226,31 @@
                 } catch (e) { console.warn('[Phase2.4] rotation pre-placement failed:', e); }
             }
 
+            // ═══════════════════════════════════════════════════════════════
+            // DAY PACKER — Plan Shadow (Commit 2)
+            // ═══════════════════════════════════════════════════════════════
+            // BEFORE Phase 2.5 makes any free-game placement decisions, emit
+            // the plan picture: what's pinned, what gaps remain, and which
+            // specials the bin-packer would consider as free-game candidates.
+            // First iteration only — keeps log noise low.
+            // ═══════════════════════════════════════════════════════════════
+            if (totalIters < 1) {
+                try {
+                    if (window.DayPacker && typeof window.DayPacker.runShadowPlan === 'function') {
+                        window.DayPacker.runShadowPlan({
+                            bunkTimelines: bunkTimelines,
+                            allGrades: allGrades,
+                            getBunksForGrade: function (g) { return getBunksForGrade(g, divisions); },
+                            campPeriods: window.campPeriods || {},
+                            specials: todaysSpecials,
+                            log: log
+                        });
+                    }
+                } catch (_dpPlanErr) {
+                    warn('[DayPacker Plan] shadow error: ' + (_dpPlanErr && _dpPlanErr.message));
+                }
+            }
+
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
             // By converting these to immovable walls BEFORE the packer runs,

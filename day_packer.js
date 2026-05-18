@@ -232,10 +232,259 @@
     return summary;
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // COMMIT 2 — PLAN BUILDER
+  // ─────────────────────────────────────────────────────────────
+  // The "human's mental list" before they sit down to schedule:
+  //   PINNED items (walls + user pins) define the immovable structure.
+  //   FREE-GAME items have a duration and a TIME WINDOW (allowed range,
+  //     NOT a preferred time). The bin-packer is free to land them
+  //     anywhere inside their window.
+  //
+  // This function gathers the plan. It does NOT pack. Session B will.
+  // Session A's job: prove we can describe the plan correctly.
+  // ─────────────────────────────────────────────────────────────
+
+  function _periodCapacity(periods) {
+    return periods.reduce(function (s, p) { return s + (p.endMin - p.startMin); }, 0);
+  }
+
+  // PINNED detector — anything in bunkTimelines that cannot move.
+  // Walls (swim/lunch/change/cleanup/main/shiur/snack/dismissal) +
+  // explicit user pins (_pinned:true or _source in {phase0,manual,user}).
+  function _isPinnedEntry(b) {
+    if (!b) return false;
+    if (b._pinned === true) return true;
+    var src = String(b._source || '').toLowerCase();
+    if (src === 'phase0' || src === 'manual' || src === 'user') return true;
+    var name = String(b.event || (b.layer && b.layer.name) || b.type || '').toLowerCase();
+    if (/^(swim|lunch|cleanup|change|pre[-\s]?change|post[-\s]?change|main\s*activity|shiur|dismissal|snack)/i.test(name)) return true;
+    return false;
+  }
+
+  // Collect every configured special the camp knows about.
+  function _allConfiguredSpecials(opts) {
+    if (opts.specials && Array.isArray(opts.specials)) return opts.specials;
+    var out = [];
+    try {
+      if (typeof window.getAllSpecialActivities === 'function') out = window.getAllSpecialActivities() || [];
+      else if (typeof window.getGlobalSpecialActivities === 'function') out = window.getGlobalSpecialActivities() || [];
+    } catch (e) {}
+    return out;
+  }
+
+  // Effective time window for a special on a specific bunk's grade.
+  // Window = intersection of (special.windowStart/End if set) AND (grade's
+  // schedulable day from periods[0].startMin to periods[last].endMin).
+  function _specialWindow(spec, periods) {
+    var dayStart = periods.length ? periods[0].startMin : 0;
+    var dayEnd   = periods.length ? periods[periods.length - 1].endMin : 1440;
+    var ws = (typeof spec.windowStart === 'number') ? spec.windowStart : dayStart;
+    var we = (typeof spec.windowEnd   === 'number') ? spec.windowEnd   : dayEnd;
+    return { start: Math.max(ws, dayStart), end: Math.min(we, dayEnd) };
+  }
+
+  // Does this special pass access restrictions for this grade/bunk?
+  function _specialAccessibleByBunk(spec, grade, bunk) {
+    var ar = spec && spec.accessRestrictions;
+    if (!ar || ar.enabled !== true) return true;
+    var divs = ar.divisions || {};
+    var gKey = String(grade);
+    if (!(gKey in divs) && !(grade in divs)) return false;
+    var allow = divs[gKey] || divs[grade];
+    if (Array.isArray(allow) && allow.length > 0) {
+      return allow.map(String).includes(String(bunk));
+    }
+    return true;
+  }
+
+  // Duration vector — a special may have dMin/dMax OR a durations:[...] array.
+  // Returns { min, max, options: [...] }.
+  function _specialDurations(spec) {
+    var opts = [];
+    if (Array.isArray(spec.durations) && spec.durations.length) {
+      opts = spec.durations.slice().sort(function (a, b) { return a - b; });
+    } else {
+      var dMin = parseInt(spec.dMin || spec.duration || spec.preferredDuration) || 0;
+      var dMax = parseInt(spec.dMax || spec.duration || spec.preferredDuration) || dMin;
+      if (dMin > 0) opts.push(dMin);
+      if (dMax > 0 && dMax !== dMin) opts.push(dMax);
+    }
+    return {
+      min: opts.length ? opts[0] : 0,
+      max: opts.length ? opts[opts.length - 1] : 0,
+      options: opts
+    };
+  }
+
+  // Compute the gap segments inside the period grid that are NOT occupied
+  // by pinned items. These are what the bin-packer needs to fill.
+  function _computeGapSegments(periods, pinned) {
+    var gaps = [];
+    var pSorted = pinned.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+    periods.forEach(function (p) {
+      var cursor = p.startMin;
+      pSorted.forEach(function (pin) {
+        // Only pins overlapping THIS period
+        if (pin.endMin <= p.startMin || pin.startMin >= p.endMin) return;
+        var overlapS = Math.max(pin.startMin, p.startMin);
+        var overlapE = Math.min(pin.endMin, p.endMin);
+        if (overlapS > cursor) gaps.push({ start: cursor, end: overlapS, period: p.name });
+        cursor = Math.max(cursor, overlapE);
+      });
+      if (cursor < p.endMin) gaps.push({ start: cursor, end: p.endMin, period: p.name });
+    });
+    return gaps;
+  }
+
+  /**
+   * Build the full per-bunk plan.
+   * PINNED comes from bunkTimelines (walls already placed by Phase 2.3/2.4
+   * before this is called).
+   * FREE-GAME enumerates every configured special the bunk is allowed to
+   * receive, with its duration options and time window.
+   * GAPS lists the segments inside the period grid that need filling.
+   *
+   * @returns { pinned: [...], freeGame: [...], periods: [...], gaps: [...],
+   *           totalPinnedMin, totalGapMin, freeGameSpecialsCount }
+   */
+  function buildBunkPlan(bunk, grade, opts) {
+    opts = opts || {};
+    var periods = (opts.periods || []).slice().sort(function (a, b) { return a.startMin - b.startMin; });
+    var tl = opts.bunkTimeline || [];
+
+    // PINNED — filter bunkTimeline to immovables only
+    var pinned = [];
+    tl.forEach(function (b) {
+      if (!b || b.startMin == null || b.endMin == null) return;
+      if (b.endMin - b.startMin <= 0) return;
+      if (!_isPinnedEntry(b)) return;
+      var name = b.event || (b.layer && b.layer.name) || b.type || 'unknown';
+      pinned.push({
+        name: name,
+        startMin: b.startMin, endMin: b.endMin, dur: b.endMin - b.startMin,
+        kind: _categorize(name),
+        source: b._source || null
+      });
+    });
+
+    // GAPS — segments of period grid not covered by pinned
+    var gaps = _computeGapSegments(periods, pinned);
+
+    // FREE-GAME — every configured special this bunk is allowed to receive
+    var allSpecials = _allConfiguredSpecials(opts);
+    var freeGame = [];
+    allSpecials.forEach(function (sp) {
+      if (!sp || !sp.name) return;
+      if (!_specialAccessibleByBunk(sp, grade, bunk)) return;
+      var durs = _specialDurations(sp);
+      if (durs.min <= 0) return;
+      var win = _specialWindow(sp, periods);
+      if (win.end - win.start < durs.min) return; // window too small for any duration
+      freeGame.push({
+        name: sp.name,
+        durations: durs.options,
+        dMin: durs.min,
+        dMax: durs.max,
+        window: { start: win.start, end: win.end },
+        location: sp.location || (sp.accessRestrictions && sp.accessRestrictions.location) || null,
+        scarce: !!sp.scarcity || !!sp.isScarce,
+        maxUsage: parseInt(sp.maxUsage) || 0,
+        sharable: !!(sp.sharableWith && sp.sharableWith.type && sp.sharableWith.type !== 'not_sharable')
+      });
+    });
+
+    return {
+      bunk: bunk, grade: grade,
+      periods: periods,
+      pinned: pinned,
+      gaps: gaps,
+      freeGame: freeGame,
+      totalPinnedMin: pinned.reduce(function (s, p) { return s + p.dur; }, 0),
+      totalGapMin: gaps.reduce(function (s, g) { return s + (g.end - g.start); }, 0),
+      freeGameSpecialsCount: freeGame.length,
+      periodCapacity: _periodCapacity(periods)
+    };
+  }
+
+  /**
+   * Shadow-mode driver. Iterates every bunk, builds a plan, logs it.
+   * Read-only — does NOT mutate anything. Hook this BEFORE Phase 2.5 to
+   * see what the bin-packer would receive as input.
+   */
+  function runShadowPlan(opts) {
+    opts = opts || {};
+    var log = opts.log || function () {};
+    var bunkTimelines = opts.bunkTimelines || {};
+    var allGrades = opts.allGrades || [];
+    var getBunksForGrade = opts.getBunksForGrade || function () { return []; };
+    var campPeriods = opts.campPeriods || {};
+
+    log('═══════════════════════════════════════════════════════════');
+    log('[DayPacker Commit 2] PLAN SHADOW — pre-Phase-2.5 snapshot');
+    log('═══════════════════════════════════════════════════════════');
+
+    var totals = {
+      bunks: 0, totalPinnedMin: 0, totalGapMin: 0, totalFreeGame: 0
+    };
+    var sampleEmitted = 0;
+
+    allGrades.forEach(function (grade) {
+      var periods = campPeriods[grade] || [];
+      var bunks = getBunksForGrade(grade) || [];
+      bunks.forEach(function (bunk) {
+        var plan = buildBunkPlan(bunk, grade, {
+          periods: periods,
+          bunkTimeline: bunkTimelines[bunk] || [],
+          specials: opts.specials  // allow caller to pass pre-loaded list
+        });
+        totals.bunks++;
+        totals.totalPinnedMin += plan.totalPinnedMin;
+        totals.totalGapMin    += plan.totalGapMin;
+        totals.totalFreeGame  += plan.freeGameSpecialsCount;
+
+        // Sample emit: first bunk of each grade
+        if (sampleEmitted < 7 && bunks[0] === bunk) {
+          sampleEmitted++;
+          log('--- PLAN ' + bunk + ' (' + grade + ') ---');
+          log('  pinned (' + plan.pinned.length + ', ' + plan.totalPinnedMin + 'min):');
+          plan.pinned.forEach(function (p) {
+            log('    ' + p.startMin + '-' + p.endMin + ' ' + p.name + ' [' + p.kind + ']');
+          });
+          log('  gaps to fill (' + plan.gaps.length + ', ' + plan.totalGapMin + 'min):');
+          plan.gaps.forEach(function (g) {
+            log('    ' + g.start + '-' + g.end + ' (' + (g.end - g.start) + 'min) in ' + g.period);
+          });
+          log('  free-game candidates (' + plan.freeGame.length + '):');
+          plan.freeGame.forEach(function (f) {
+            var durStr = f.durations.length > 1
+              ? '[' + f.durations.join(',') + ']'
+              : String(f.durations[0] || f.dMin);
+            log('    ' + f.name + ' dur=' + durStr + 'min window=' + f.window.start + '-' + f.window.end +
+                (f.scarce ? ' SCARCE' : '') +
+                (f.maxUsage ? ' max=' + f.maxUsage : '') +
+                (f.sharable ? ' (sharable)' : ''));
+          });
+        }
+      });
+    });
+
+    log('───────────────────────────────────────────────────────────');
+    log('[DayPacker Commit 2] Totals: ' + totals.bunks + ' bunks, ' +
+        totals.totalPinnedMin + 'min pinned, ' +
+        totals.totalGapMin + 'min gap to fill, ' +
+        Math.round(totals.totalFreeGame / Math.max(totals.bunks, 1)) + ' free-game specials/bunk avg');
+    log('═══════════════════════════════════════════════════════════');
+    return totals;
+  }
+
   // Expose
   window.DayPacker = {
     collectBunkPlanInput: collectBunkPlanInput,
     runShadowCollection: runShadowCollection,
+    // Commit 2:
+    buildBunkPlan: buildBunkPlan,
+    runShadowPlan: runShadowPlan,
     _categorize: _categorize  // exported for tests
   };
 })();
