@@ -16036,20 +16036,46 @@
                             if (!canUseSpecialAtTime(def.name, def.grade, s._startMin, s._endMin)) continue;
                         } catch (e) { /* skip safety */ }
                     }
-                    // ★ Day 19 fix: field capacity + same-division sharing gate.
-                    // Phase 4.9 previously only checked time rules and rotation
-                    // (Day 17 fix), but skipped isFieldAvailable. Result: a
-                    // recaptured special could land on a field that was already
-                    // at capacity, or share with a different-division bunk
-                    // when the field is type:same_division. Live evidence:
-                    // Foam Pit ended up with 3 bunks (Majors 4, Majors 5,
-                    // Quints 6) at 830-850 with capacity=2 and cross-division
-                    // sharing forbidden. This gate stops that.
-                    if (def.location && typeof isFieldAvailable === 'function') {
+                    // ★ Day 19 fix (revised): field capacity + sharing gate.
+                    // isFieldAvailable relies on fieldLedger which is built
+                    // from the `fields` config; special locations (Foam Pit,
+                    // VR, Baking, etc.) aren't in fieldLedger so the helper
+                    // returned true for them, letting Phase 4.9 overbook
+                    // (live evidence: Foam Pit had 4 bunks at 855-875 on
+                    // capacity=2 with cross-division sharing forbidden).
+                    // Read concurrent claims directly from scheduleAssignments
+                    // — the authoritative source — and consult the special's
+                    // own sharableWith config instead of the field ledger.
+                    if (def.location) {
                         try {
-                            if (!isFieldAvailable(def.location, s._startMin, s._endMin, def.bunk, def.grade, def.name)) {
-                                continue;
+                            const _specCfg = (typeof getSpecialActivityByName === 'function')
+                                ? getSpecialActivityByName(def.name) : null;
+                            const _sw = _specCfg?.sharableWith || {};
+                            const _cap = parseInt(_sw.capacity) ||
+                                (_sw.type === 'all' ? 999
+                                : _sw.type === 'not_sharable' ? 1
+                                : 2);
+                            const _shareType = _sw.type;
+                            const _saMap = window.scheduleAssignments || {};
+                            let _concurrent = 0;
+                            let _crossDiv = false;
+                            for (const _ob in _saMap) {
+                                if (_ob === def.bunk) continue;
+                                const _arr = _saMap[_ob];
+                                if (!Array.isArray(_arr)) continue;
+                                for (const _os of _arr) {
+                                    if (!_os || _os.continuation) continue;
+                                    if (_os.field !== def.location) continue;
+                                    if (_os._startMin >= s._endMin || _os._endMin <= s._startMin) continue;
+                                    _concurrent++;
+                                    const _og = (_ob.match(/^(\w+)/) || [])[1];
+                                    if (_og && _og !== def.grade) _crossDiv = true;
+                                }
                             }
+                            // +1 for this candidate placement itself
+                            if (_concurrent + 1 > _cap) continue;
+                            if (_shareType === 'not_sharable' && _concurrent > 0) continue;
+                            if (_shareType === 'same_division' && _crossDiv) continue;
                         } catch (e) { /* fail-open on gate error */ }
                     }
                     swapIdx = _si;
