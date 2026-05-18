@@ -1115,6 +1115,7 @@
                             <option value="all">All Activities</option>
                             <option value="sport">Sports Only</option>
                             <option value="special">Special Only</option>
+                            <option value="general">General Only</option>
                         </select>
                     </div>
                     <div style="flex:1;min-width:140px;">
@@ -1200,6 +1201,11 @@
         let filteredActivities = allActivities;
         if (filter === 'sport') filteredActivities = allActivities.filter(a => a.type === 'sport');
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
+        // 'general' filter is handled below after we synthesize extraActivities
+        // from usedActivityNames — the general bucket isn't in the master list,
+        // it's built from anchors + legacy specials, so we start empty here
+        // and let the extraActivities merge step populate it.
+        if (filter === 'general') filteredActivities = [];
 
         const actSearch = (document.getElementById('rotation-activity-filter')?.value || '').trim().toLowerCase();
         if (actSearch) filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1381,9 +1387,17 @@
 
         const extraActivities = [];
         usedActivityNames.forEach(name => {
-            if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });
+            // ★ Day 18: anything not in the sports/specials master list is
+            // classified as "general" (anchors like Swim/Lunch/Change/Cleanup/
+            // Main activity, plus deleted or renamed legacy specials). The
+            // user wants these tracked too — they may want to see "Soloists 1
+            // had Lunch 12 times" — so we surface them with their own bucket
+            // rather than hiding. Previously labeled "other" (jargon).
+            if (!masterNames.has(name)) extraActivities.push({ name, type: 'general', max: 0 });
         });
-        if (extraActivities.length && filter === 'all') {
+        // Surface general activities under both 'all' and 'general' filters.
+        // 'sport' / 'special' filters intentionally exclude generals.
+        if (extraActivities.length && (filter === 'all' || filter === 'general')) {
             filteredActivities = filteredActivities.concat(extraActivities);
             if (actSearch) {
                 filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1450,8 +1464,8 @@
 
                 const typeLabel = act.type === 'special'
                     ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Special</span>'
-                    : act.type === 'other'
-                        ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Used in schedule but not in master activity list">Other</span>'
+                    : (act.type === 'general' || act.type === 'other')
+                        ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Anchor (Swim/Lunch/Change/etc.) or legacy special not in current master list">General</span>'
                         : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
 
                 html += `
