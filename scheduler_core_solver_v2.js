@@ -35,7 +35,7 @@
     const g = window.loadGlobalSettings?.() || {};
     const a1 = g.app1 || {};
     return {
-      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 10000,  // ★ v2.1: lowered from 30000 — SA hits final cost in <5s on real data; remaining budget is wasted
+      timeBudgetMs: parseInt(a1.solverV2TimeBudgetMs) || 3000,   // ★ v2.2: lowered from 10000 — SA stops improving after ~1-2s on real data (improvements=0 for last 90% of budget)
       multiStart:   (a1.solverV2MultiStart === undefined) ? false : !!a1.solverV2MultiStart,  // ★ v2.1: disabled by default — pass2 has never beaten pass1 on real data
       tempStart:    parseFloat(a1.solverV2TempStart)   || 100,
       tempEnd:      parseFloat(a1.solverV2TempEnd)     || 0.1,
