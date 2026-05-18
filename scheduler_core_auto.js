@@ -12237,12 +12237,24 @@
             if (totalIters < 1) {
                 try {
                     if (window.DayPacker && typeof window.DayPacker.runShadowPlan === 'function') {
+                        // Build per-bunk subcategoryCap map from each bunk's shopping list
+                        var _dpSubcatCaps = {};
+                        try {
+                            if (typeof shoppingLists !== 'undefined' && shoppingLists) {
+                                Object.keys(shoppingLists).forEach(function (b) {
+                                    var sc = shoppingLists[b] && shoppingLists[b].specials &&
+                                             shoppingLists[b].specials.subcategoryCap;
+                                    if (sc && typeof sc === 'object') _dpSubcatCaps[b] = sc;
+                                });
+                            }
+                        } catch (_capErr) { /* best effort */ }
                         window.DayPacker.runShadowPlan({
                             bunkTimelines: bunkTimelines,
                             allGrades: allGrades,
                             getBunksForGrade: function (g) { return getBunksForGrade(g, divisions); },
                             campPeriods: window.campPeriods || {},
                             specials: todaysSpecials,
+                            subcategoryCaps: _dpSubcatCaps,
                             log: log
                         });
                     }

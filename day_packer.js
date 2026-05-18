@@ -381,6 +381,8 @@
       if (durs.min <= 0) return;
       var win = _specialWindow(sp, periods);
       if (win.end - win.start < durs.min) return; // window too small for any duration
+      var _subRaw = (typeof sp.subcategory === 'string') ? sp.subcategory.trim() : '';
+      var _subKey = _subRaw ? _subRaw.toLowerCase() : 'regular';
       freeGame.push({
         name: sp.name,
         durations: durs.options,
@@ -390,8 +392,16 @@
         location: sp.location || (sp.accessRestrictions && sp.accessRestrictions.location) || null,
         scarce: !!sp.scarcity || !!sp.isScarce,
         maxUsage: parseInt(sp.maxUsage) || 0,
-        sharable: !!(sp.sharableWith && sp.sharableWith.type && sp.sharableWith.type !== 'not_sharable')
+        sharable: !!(sp.sharableWith && sp.sharableWith.type && sp.sharableWith.type !== 'not_sharable'),
+        subcategory: _subRaw || 'Regular',
+        subcategoryKey: _subKey
       });
+    });
+
+    // Subcategory breakdown — how many free-game items in each subcategory
+    var subcategoryCounts = {};
+    freeGame.forEach(function (f) {
+      subcategoryCounts[f.subcategory] = (subcategoryCounts[f.subcategory] || 0) + 1;
     });
 
     return {
@@ -400,6 +410,8 @@
       pinned: pinned,
       gaps: gaps,
       freeGame: freeGame,
+      subcategoryCounts: subcategoryCounts,
+      subcategoryCaps: (opts.subcategoryCaps && opts.subcategoryCaps[bunk]) || null,
       totalPinnedMin: pinned.reduce(function (s, p) { return s + p.dur; }, 0),
       totalGapMin: gaps.reduce(function (s, g) { return s + (g.end - g.start); }, 0),
       freeGameSpecialsCount: freeGame.length,
@@ -436,7 +448,8 @@
         var plan = buildBunkPlan(bunk, grade, {
           periods: periods,
           bunkTimeline: bunkTimelines[bunk] || [],
-          specials: opts.specials  // allow caller to pass pre-loaded list
+          specials: opts.specials,  // allow caller to pass pre-loaded list
+          subcategoryCaps: opts.subcategoryCaps  // per-bunk caps from shopping list
         });
         totals.bunks++;
         totals.totalPinnedMin += plan.totalPinnedMin;
@@ -460,11 +473,21 @@
             var durStr = f.durations.length > 1
               ? '[' + f.durations.join(',') + ']'
               : String(f.durations[0] || f.dMin);
-            log('    ' + f.name + ' dur=' + durStr + 'min window=' + f.window.start + '-' + f.window.end +
+            log('    [' + f.subcategory + '] ' + f.name + ' dur=' + durStr + 'min window=' + f.window.start + '-' + f.window.end +
                 (f.scarce ? ' SCARCE' : '') +
                 (f.maxUsage ? ' max=' + f.maxUsage : '') +
                 (f.sharable ? ' (sharable)' : ''));
           });
+          // Subcategory breakdown + required caps
+          var subKeys = Object.keys(plan.subcategoryCounts).sort();
+          if (subKeys.length > 0) {
+            var subStr = subKeys.map(function (k) {
+              var avail = plan.subcategoryCounts[k];
+              var cap = plan.subcategoryCaps && plan.subcategoryCaps[k.toLowerCase()];
+              return k + ': ' + avail + ' available' + (cap != null ? ' / NEED ' + cap : '');
+            }).join(', ');
+            log('  subcategory mix: ' + subStr);
+          }
         }
       });
     });
