@@ -1242,16 +1242,25 @@
         // Legacy cloud rotation_counts rows can use slightly different
         // capitalization / spacing than the current master special list
         // (e.g. "Minute to Win it" vs "Minute To Win It", "Arts and Crafts 2"
-        // vs "Arts & Crafts 2"). Without folding, the counts split across
-        // two rows in the table and the user sees a low count under one
-        // name while the rest hides under the legacy name. Build a
-        // case-insensitive lookup so cloud keys fold into the master name.
+        // vs "Arts & Crafts 2"), AND anchor activities like "Lunch" can
+        // appear in both cases ("Lunch" / "lunch") because they aren't in
+        // the master specials list at all. Without folding, the counts
+        // split across two rows in the table and the user sees a low
+        // count under one name while the rest hides under the variant.
+        // Strategy: master-list names always win as canonical; for unknown
+        // names (anchors, deleted specials), the FIRST-seen casing wins
+        // and later variants merge into it. _canonByLower is mutated as
+        // we encounter new names so the second variant folds into the first.
         const _canonByLower = {};
         masterNames.forEach(n => { _canonByLower[String(n).toLowerCase().trim()] = n; });
         const _canonName = (raw) => {
             if (raw == null) return raw;
             const key = String(raw).toLowerCase().trim();
-            return _canonByLower[key] || raw;
+            if (_canonByLower[key]) return _canonByLower[key];
+            // First time we see this unknown-to-master name → remember its casing
+            const trimmed = String(raw).trim();
+            _canonByLower[key] = trimmed;
+            return trimmed;
         };
         if (hasCloud) {
             bunks.forEach(bunk => {
