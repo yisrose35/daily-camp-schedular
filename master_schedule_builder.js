@@ -1607,8 +1607,9 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       let durLabel = layer.durationMin && layer.durationMax && layer.durationMin !== layer.durationMax
         ? `${layer.durationMin}-${layer.durationMax}m`
         : `${layer.durationMin || layer.periodMin || (layer.endMin - layer.startMin)}m`;
-      // Swim: show pre+swim+post breakdown on the chip
-      if (layer.type === 'swim' && (layer.preChangeMin || layer.postChangeMin)) {
+      // Swim (or split with swim): show pre+swim+post breakdown on the chip
+      const _hasSplitSwimBand = layer.type === 'split' && layer.subEvents?.some(se => se.event?.toLowerCase() === 'swim');
+      if ((layer.type === 'swim' || _hasSplitSwimBand) && (layer.preChangeMin || layer.postChangeMin)) {
         const pre  = layer.preChangeMin  || 0;
         const post = layer.postChangeMin || 0;
         const swimOnly = layer.durationMin || layer.periodMin || ((layer.endMin - layer.startMin) - pre - post);
@@ -1984,7 +1985,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         <div class="ms-daw-pop-hint"><b>Full Grade:</b> all bunks at once. <b>Staggered:</b> spread across window.</div>
       </div>
       ` : ''}
-      ${layer.type === 'swim' ? `
+      ${(layer.type === 'swim' || (layer.type === 'split' && layer.subEvents?.some(se => se.event?.toLowerCase() === 'swim'))) ? `
       <div class="ms-daw-pop-divider"></div>
       <div class="ms-daw-pop-section">Change Time</div>
       <div class="ms-daw-pop-field">
@@ -2145,8 +2146,9 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       layer.fullGrade = activeGmode.dataset.gmode === 'fullgrade';
     }
 
-    // Change Time: save preChangeMin / postChangeMin for swim
-    if (layer.type === 'swim') {
+    // Change Time: save preChangeMin / postChangeMin for swim (and split tiles with swim)
+    const _hasSplitSwimPop = layer.type === 'split' && layer.subEvents?.some(se => se.event?.toLowerCase() === 'swim');
+    if (layer.type === 'swim' || _hasSplitSwimPop) {
       const preEl  = popover.querySelector('#daw-pop-pre-change');
       const postEl = popover.querySelector('#daw-pop-post-change');
       layer.preChangeMin  = preEl  && preEl.value.trim()  !== '' ? Math.max(0, parseInt(preEl.value)  || 0) : null;
@@ -2851,15 +2853,35 @@ function addDropListeners(selector) {
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am' },
             { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
-          ]
+            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' },
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 10' }
+          ],
+          postRender: (overlay) => {
+            const main1El = overlay.querySelector('[data-field="main1"]');
+            const main2El = overlay.querySelector('[data-field="main2"]');
+            const preField  = overlay.querySelector('[data-field="preChangeMin"]')?.closest('.ms-modal-field');
+            const postField = overlay.querySelector('[data-field="postChangeMin"]')?.closest('.ms-modal-field');
+            const updateSwimFields = () => {
+              const hasSwim = [main1El?.value, main2El?.value].some(v => v?.toLowerCase().trim() === 'swim');
+              if (preField)  preField.style.display  = hasSwim ? '' : 'none';
+              if (postField) postField.style.display = hasSwim ? '' : 'none';
+            };
+            main1El?.addEventListener('input', updateSwimFields);
+            main2El?.addEventListener('input', updateSwimFields);
+            updateSwimFields();
+          }
         });
         if (!result || !result.main1 || !result.main2) return;
-        
+
         // Map through optimizer (same as daily adjustments) to get proper type+event structure
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
-        
+
+        const _splitHasSwim = [result.main1, result.main2].some(v => v?.toLowerCase().trim() === 'swim');
+        const _splitPreChange  = _splitHasSwim ? (parseInt(result.preChangeMin)  || null) : null;
+        const _splitPostChange = _splitHasSwim ? (parseInt(result.postChangeMin) || null) : null;
+
         newEvent = {
           id: Date.now().toString(),
           type: 'split',
@@ -2867,13 +2889,15 @@ function addDropListeners(selector) {
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
+          ...(_splitPreChange  != null ? { preChangeMin:  _splitPreChange  } : {}),
+          ...(_splitPostChange != null ? { postChangeMin: _splitPostChange } : {}),
           // CRITICAL: Ensure .event property is always present in subEvents (matches DA)
           subEvents: [
             { ...event1, event: event1.event || result.main1 },
             { ...event2, event: event2.event || result.main2 }
           ]
         };
-        
+
         console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents);
       }
       // ELECTIVE
