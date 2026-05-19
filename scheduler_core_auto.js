@@ -448,14 +448,26 @@
         // an anchor for them.
         try {
             const _lgByName = window.leaguesByName || {};
+            const _allLeagues = Object.values(_lgByName).filter(l => l && l.enabled);
             for (let i = layers.length - 1; i >= 0; i--) {
                 const ly = layers[i];
                 if ((ly.type || '').toLowerCase() !== 'league') continue;
-                const lgName = ly.leagueName;
+                let lgName = ly.leagueName;
+                // Auto-bind: if layer has no leagueName but the grade matches
+                // exactly one enabled league's divisions, assign it.
                 if (!lgName) {
-                    log('[league-prune] dropping league layer with no leagueName');
-                    layers.splice(i, 1);
-                    continue;
+                    const grade = ly.grade || ly.division;
+                    const matches = _allLeagues.filter(l => (l.divisions || []).includes(grade));
+                    if (matches.length === 1) {
+                        lgName = matches[0].name;
+                        ly.leagueName = lgName;
+                        log('[league-prune] auto-bound layer in "' + grade + '" to league "' + lgName + '"');
+                    } else {
+                        log('[league-prune] dropping league layer in "' + grade +
+                            '" — no leagueName and ' + matches.length + ' candidate leagues');
+                        layers.splice(i, 1);
+                        continue;
+                    }
                 }
                 const lg = _lgByName[lgName];
                 if (!lg || !lg.enabled || !(lg.teams || []).length || !(lg.sports || []).length) {
