@@ -892,8 +892,16 @@
             if (_debugThis) {
                 console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 candidates:', JSON.stringify(scored.map(s => ({sport: s.cand.sport, field: s.cand.field, score: s.score})).sort((a,b) => a.score - b.score).slice(0, 10)));
                 console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 Jumprope rejections:', JSON.stringify(_debugRejects));
-                console.log('[SOLVER-DEBUG] total candidates:', candidates.length, 'all sport names:', JSON.stringify(candidates.map(c => c.sport)));
+                console.log('[SOLVER-DEBUG] total candidates:', candidates.length);
                 console.log('[SOLVER-DEBUG] Jumprope candidate present?', candidates.some(c => c.sport === 'Jumprope'));
+                // Dump field index for jumprope
+                const _jpFn = normName('Jumprope');
+                const _jpEntries = fieldIndex.get(_jpFn) || [];
+                console.log('[SOLVER-DEBUG] fieldIndex[jumprope] entries:', JSON.stringify(_jpEntries));
+                // Also dump field locks
+                const _autoLock = window.AutoFieldLocks?.isFieldLockedByTime?.('Jumprope', 745, 775, 'Duetos');
+                const _globalLock = window.GlobalFieldLocks?.isFieldLockedByTime?.('Jumprope', 745, 775, 'Duetos');
+                console.log('[SOLVER-DEBUG] Jumprope locks: auto=', _autoLock, 'global=', _globalLock);
             }
 
             if (scored.length === 0) {
