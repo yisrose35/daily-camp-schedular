@@ -876,6 +876,11 @@
                 scored.push({ cand, score });
             }
 
+            // ★ TEMP DEBUG: dump Duetos 2 745-775 candidates
+            if (bunk === 'Duetos 2' && startMin === 745 && endMin === 775) {
+                console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 candidates:', JSON.stringify(scored.map(s => ({sport: s.cand.sport, field: s.cand.field, score: s.score})).sort((a,b) => a.score - b.score).slice(0, 10)));
+            }
+
             if (scored.length === 0) {
                 // No valid candidate — Free
                 writeFree(block);
