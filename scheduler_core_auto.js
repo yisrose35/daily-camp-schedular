@@ -15829,6 +15829,17 @@
                 const gameLabel = lb._gameLabel || '';
                 // ★ Day 20 fix #1: enforce block.leagueName hint
                 if (lb.leagueName && leagueName && lb.leagueName !== leagueName) return;
+                // ★ Day 20 fix #8: skip writeback for empty league blocks.
+                // A block with no matchups + no leagueName means no league
+                // matched (e.g., user added a League Game tile to a layer
+                // without specifying which league). Without this skip the
+                // schedule would show a "Matchups not yet assigned" empty
+                // placeholder block — confusing and useless. Just leave
+                // the autoSkeleton slot to be filled with sport/special.
+                if (!leagueName && (!matchups || matchups.length === 0)) {
+                    log('[league writeback] skipping empty league block at ' + lb.divName + '/' + lb.startMin + ' — no leagueName, no matchups');
+                    return;
+                }
 
                 // Write to leagueAssignments (authoritative source for grid renderer)
                 if (!window.leagueAssignments[lb.divName]) window.leagueAssignments[lb.divName] = {};
