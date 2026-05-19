@@ -785,29 +785,17 @@
 
             // Score all candidates for this block
             const scored = [];
-            // ★ DEBUG dump full rejection trace for Duetos 2 @ 745-775
-            const _debugThis = (bunk === 'Duetos 2' && startMin === 745 && endMin === 775);
-            const _debugRejects = [];
             for (const cand of candidates) {
                 // Same-day repeat check (HARD rule)
-                if (doneToday.has(cand.sportNorm)) {
-                    if (_debugThis && cand.sport === 'Jumprope') _debugRejects.push({sport: 'Jumprope', reason: 'doneToday'});
-                    continue;
-                }
+                if (doneToday.has(cand.sportNorm)) continue;
 
                 // ★ Back-to-back consecutive sport skip — prevents placing the same sport
                 //   as the immediately adjacent filled slot in this bunk.
                 if ((prevAdjacentSport && prevAdjacentSport === cand.sportNorm) ||
-                    (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) {
-                    if (_debugThis && cand.sport === 'Jumprope') _debugRejects.push({sport: 'Jumprope', reason: 'adjacent', prev: prevAdjacentSport, next: nextAdjacentSport});
-                    continue;
-                }
+                    (nextAdjacentSport && nextAdjacentSport === cand.sportNorm)) continue;
 
                 // Field availability (time-based)
-                if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) {
-                    if (_debugThis && cand.sport === 'Jumprope') _debugRejects.push({sport: 'Jumprope', reason: 'fieldUnavailable', field: cand.field});
-                    continue;
-                }
+                if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
 
                 // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;
@@ -888,21 +876,6 @@
                 scored.push({ cand, score });
             }
 
-            // ★ TEMP DEBUG: dump Duetos 2 745-775 candidates + rejection trace
-            if (_debugThis) {
-                console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 candidates:', JSON.stringify(scored.map(s => ({sport: s.cand.sport, field: s.cand.field, score: s.score})).sort((a,b) => a.score - b.score).slice(0, 10)));
-                console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 Jumprope rejections:', JSON.stringify(_debugRejects));
-                console.log('[SOLVER-DEBUG] total candidates:', candidates.length);
-                console.log('[SOLVER-DEBUG] Jumprope candidate present?', candidates.some(c => c.sport === 'Jumprope'));
-                // Dump field index for jumprope
-                const _jpFn = normName('Jumprope');
-                const _jpEntries = fieldIndex.get(_jpFn) || [];
-                console.log('[SOLVER-DEBUG] fieldIndex[jumprope] entries:', JSON.stringify(_jpEntries));
-                // Also dump field locks
-                const _autoLock = window.AutoFieldLocks?.isFieldLockedByTime?.('Jumprope', 745, 775, 'Duetos');
-                const _globalLock = window.GlobalFieldLocks?.isFieldLockedByTime?.('Jumprope', 745, 775, 'Duetos');
-                console.log('[SOLVER-DEBUG] Jumprope locks: auto=', _autoLock, 'global=', _globalLock);
-            }
 
             if (scored.length === 0) {
                 // No valid candidate — Free
