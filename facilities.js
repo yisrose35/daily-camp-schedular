@@ -2196,27 +2196,36 @@ function renderSpecialAccess(saData) {
 // -- Time Rules --
 function renderSpecialTimeRules(saData) {
     const container = document.createElement("div");
+    const allDivs = _getOrderedGrades();
 
     if (saData.timeRules?.length > 0) {
         saData.timeRules.forEach((r, i) => {
             const row = document.createElement("div");
             row.style.cssText = "display:flex; justify-content:space-between; align-items:center; background:#F9FAFB; padding:8px; margin-bottom:6px; border-radius:6px; border:1px solid #E5E7EB;";
-            row.innerHTML = `<span><strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}</span>`;
+
+            const gradeTag = (r.divisions && r.divisions.length > 0)
+                ? ` <span style="font-size:0.75rem; background:#e6f4f7; color:#0A4A56; border-radius:4px; padding:1px 5px; margin-left:4px;">${r.divisions.map(d => escapeHtml(d)).join(', ')}</span>`
+                : '';
+            const txt = document.createElement("span");
+            txt.innerHTML = `<strong style="color:${r.type === 'Available' ? '#0F6A7A' : '#DC2626'}">${escapeHtml(r.type)}</strong>: ${escapeHtml(r.start)} to ${escapeHtml(r.end)}${gradeTag}`;
 
             const del = document.createElement("button");
             del.textContent = "\u2715";
             del.style.cssText = "border:none; background:transparent; color:#9CA3AF; cursor:pointer;";
             del.onclick = () => { saData.timeRules.splice(i, 1); saveSpecialData(saData); renderDetailPane(); };
 
-            row.appendChild(del);
+            row.appendChild(txt); row.appendChild(del);
             container.appendChild(row);
         });
     } else {
         container.innerHTML = `<div style="font-size:0.8rem; color:#9CA3AF; margin-bottom:10px;">Available all day.</div>`;
     }
 
+    const addSection = document.createElement("div");
+    addSection.style.cssText = "margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;";
+
     const addRow = document.createElement("div");
-    addRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:12px; padding-top:12px; border-top:1px dashed #E5E7EB;";
+    addRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; align-items:center;";
 
     const typeSel = document.createElement("select");
     typeSel.innerHTML = `<option>Available</option><option>Unavailable</option>`;
@@ -2233,20 +2242,59 @@ function renderSpecialTimeRules(saData) {
     const btn = document.createElement("button");
     btn.textContent = "Add";
     btn.style.cssText = "background:#111; color:white; border:none; border-radius:6px; padding:4px 12px; cursor:pointer;";
-    btn.onclick = () => {
-        if (!startIn.value || !endIn.value) return;
-        const startMinP = parseTimeToMinutes(startIn.value);
-        const endMinP = parseTimeToMinutes(endIn.value);
-        if (startMinP === null || endMinP === null) { alert("Invalid time format."); return; }
-        if (!saData.timeRules) saData.timeRules = [];
-        saData.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP });
-        saveSpecialData(saData); renderDetailPane();
-    };
 
     addRow.appendChild(typeSel); addRow.appendChild(startIn);
     addRow.appendChild(document.createTextNode(" to "));
     addRow.appendChild(endIn); addRow.appendChild(btn);
-    container.appendChild(addRow);
+    addSection.appendChild(addRow);
+
+    // Per-grade chip selector (empty = applies to all grades)
+    const selectedGrades = new Set();
+    if (allDivs.length > 0) {
+        const gradeSection = document.createElement("div");
+        gradeSection.style.cssText = "margin-top:8px;";
+
+        const gradeLabel = document.createElement("div");
+        gradeLabel.style.cssText = "font-size:0.78rem; color:#6B7280; margin-bottom:4px;";
+        gradeLabel.textContent = "Applies to specific grades only (leave all unselected = all grades):";
+        gradeSection.appendChild(gradeLabel);
+
+        const gradeChips = document.createElement("div");
+        gradeChips.style.cssText = "display:flex; flex-wrap:wrap; gap:4px;";
+
+        allDivs.forEach(div => {
+            const chip = document.createElement("button");
+            chip.type = "button";
+            chip.textContent = div;
+            chip.style.cssText = "padding:3px 10px; border-radius:12px; border:1px solid #D1D5DB; background:#fff; font-size:0.78rem; cursor:pointer;";
+            chip.onclick = () => {
+                if (selectedGrades.has(div)) {
+                    selectedGrades.delete(div);
+                    chip.style.background = '#fff'; chip.style.borderColor = '#D1D5DB'; chip.style.color = '';
+                } else {
+                    selectedGrades.add(div);
+                    chip.style.background = '#e6f4f7'; chip.style.borderColor = '#147D91'; chip.style.color = '#0A4A56';
+                }
+            };
+            gradeChips.appendChild(chip);
+        });
+
+        gradeSection.appendChild(gradeChips);
+        addSection.appendChild(gradeSection);
+    }
+
+    btn.onclick = () => {
+        if (!startIn.value || !endIn.value) { alert("Enter both start and end times."); return; }
+        const startMinP = parseTimeToMinutes(startIn.value);
+        const endMinP = parseTimeToMinutes(endIn.value);
+        if (startMinP === null || endMinP === null) { alert("Invalid time format. Use e.g. 9:00am"); return; }
+        if (!saData.timeRules) saData.timeRules = [];
+        const divisions = selectedGrades.size > 0 ? [...selectedGrades] : [];
+        saData.timeRules.push({ type: typeSel.value, start: startIn.value, end: endIn.value, startMin: startMinP, endMin: endMinP, divisions });
+        saveSpecialData(saData); renderDetailPane();
+    };
+
+    container.appendChild(addSection);
     return container;
 }
 
