@@ -439,6 +439,36 @@
         const warnings = [];
 
         // =====================================================================
+        // ★ Day 20 fix #9: Drop empty-league layer blocks BEFORE Phase 0
+        // =====================================================================
+        // If a league layer references a league with 0 teams or 0 sports,
+        // storeLeagueMatchups can't fill the placeholder, leaving an empty
+        // "League Game" anchor in scheduleAssignments ("Matchups not yet
+        // assigned"). Strip those layer blocks here so Phase 0 never places
+        // an anchor for them.
+        try {
+            const _lgByName = window.leaguesByName || {};
+            for (let i = layers.length - 1; i >= 0; i--) {
+                const ly = layers[i];
+                if ((ly.type || '').toLowerCase() !== 'league') continue;
+                const lgName = ly.leagueName;
+                if (!lgName) {
+                    log('[league-prune] dropping league layer with no leagueName');
+                    layers.splice(i, 1);
+                    continue;
+                }
+                const lg = _lgByName[lgName];
+                if (!lg || !lg.enabled || !(lg.teams || []).length || !(lg.sports || []).length) {
+                    log('[league-prune] dropping "' + lgName + '" — empty/disabled league (teams=' +
+                        ((lg && lg.teams) || []).length + ', sports=' + ((lg && lg.sports) || []).length + ')');
+                    layers.splice(i, 1);
+                }
+            }
+        } catch (_e) {
+            warn('[league-prune] error: ' + (_e && _e.message));
+        }
+
+        // =====================================================================
         // ★ Day 20 fix #7 v5: JointLeagueSlot — pre-Phase-0 reservation
         // =====================================================================
         // When a league spans 2+ divisions (e.g., "Duetos/Trios"), all
