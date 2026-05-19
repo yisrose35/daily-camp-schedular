@@ -127,14 +127,18 @@
             //   isFieldAvailable consumes, so the auto solver finally agrees
             //   with the manual one on grade access + grade-scoped time rules.
             // ★ Loosen `enabled` to truthy (configs may persist as 1/"true").
-            const accessRestrictions = (f.accessRestrictions && f.accessRestrictions.enabled)
-                ? {
-                    enabled: true,
-                    divisions: (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
-                        ? f.accessRestrictions.divisions
-                        : {}
+            // ★ Day 21 fix: if enabled=true but divisions is empty, treat as
+            //   open. User misconfig where the toggle is on but no grades were
+            //   picked silently blocks every grade — caught by week 3 audit.
+            let accessRestrictions = null;
+            if (f.accessRestrictions && f.accessRestrictions.enabled) {
+                const _divs = (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
+                    ? f.accessRestrictions.divisions : {};
+                if (Object.keys(_divs).length > 0) {
+                    accessRestrictions = { enabled: true, divisions: _divs };
                 }
-                : null;
+                // else: enabled with empty divisions → treat as no restriction
+            }
             const timeRules = parseRules(f.timeRules);
             // dailyDisabledSports map: { fieldName: ['Hockey', ...] }
             const fieldDisabledSports = new Set(
@@ -1038,7 +1042,10 @@
             const fld = fields.find(f => f && f.name === fieldName);
             if (fld) {
                 // Field-level access restriction
-                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
+                // ★ Skip when enabled=true but divisions is empty (user misconfig)
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled
+                    && fld.accessRestrictions.divisions
+                    && Object.keys(fld.accessRestrictions.divisions).length > 0) {
                     const divs = fld.accessRestrictions.divisions || {};
                     const gradeKey = String(grade);
                     if (!(gradeKey in divs) && !(grade in divs)) {
@@ -1093,7 +1100,9 @@
             if (sport) {
                 const specials = gs.app1?.specialActivities || [];
                 const sp = specials.find(s => s && s.name === sport);
-                if (sp?.accessRestrictions?.enabled) {
+                if (sp?.accessRestrictions?.enabled
+                    && sp.accessRestrictions.divisions
+                    && Object.keys(sp.accessRestrictions.divisions).length > 0) {
                     const sDivs = sp.accessRestrictions.divisions || {};
                     const gKey = String(grade);
                     if (!(gKey in sDivs) && !(grade in sDivs)) {
