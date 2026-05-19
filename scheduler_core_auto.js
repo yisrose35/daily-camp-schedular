@@ -13803,70 +13803,86 @@
                 _crossDivLeagueGroups[lgName].push(b);
             }
             let _alignedCount = 0;
+            const HARD = ['swim','lunch','snacks','dismissal','custom','change','pre-change','post-change'];
             for (const lgName in _crossDivLeagueGroups) {
                 const blocks = _crossDivLeagueGroups[lgName];
                 const divsInLeague = new Set(blocks.map(b => b.division));
                 if (divsInLeague.size < 2) continue;
-                // Per-division: collapse to one representative block (earliest startMin)
-                const perDiv = {};
-                for (const b of blocks) {
-                    if (!perDiv[b.division] || b.startMin < perDiv[b.division].startMin) perDiv[b.division] = b;
-                }
-                const repBlocks = Object.values(perDiv);
-                const startMins = new Set(repBlocks.map(b => b.startMin));
-                if (startMins.size === 1) continue; // already aligned
-                // Pick the EARLIEST as alignment target
-                const targetStart = Math.min(...repBlocks.map(b => b.startMin));
-                const targetEnd = Math.min(...repBlocks.map(b => b.endMin));
-                for (const lb of repBlocks) {
-                    if (lb.startMin === targetStart) continue;
+                const startMins = new Set(blocks.map(b => b.startMin));
+                const endMins = new Set(blocks.map(b => b.endMin));
+                if (startMins.size === 1 && endMins.size === 1) continue; // already aligned
+                // Pick the EARLIEST startMin among all blocks as alignment target.
+                const targetStart = Math.min(...blocks.map(b => b.startMin));
+                // For end time: use the duration the MAJORITY of blocks have at
+                // targetStart (so we don't change the league's intended duration).
+                // Fallback: smallest duration across all blocks (safe — fits).
+                const blocksAtTarget = blocks.filter(b => b.startMin === targetStart);
+                const targetEnd = blocksAtTarget.length > 0
+                    ? blocksAtTarget[0].endMin
+                    : Math.min(...blocks.map(b => b.endMin));
+
+                // PER-BUNK alignment: for every league block not already at
+                // targetStart-targetEnd, swap with whatever non-hard-fixed
+                // block sits at targetStart in that bunk's autoSkeleton.
+                for (const lb of blocks) {
+                    if (lb.startMin === targetStart && lb.endMin === targetEnd) continue;
+                    const bunkOfLb = lb._bunk;
                     const origStart = lb.startMin;
                     const origEnd = lb.endMin;
-                    // Find the block sitting at targetStart in lb's division (per bunk)
-                    // and swap. If multiple bunks have league blocks (grade-wide), swap
-                    // each bunk's slot independently.
-                    const bunkOfLb = lb._bunk;
+                    // Find the bunk's slot at targetStart (could be a sport,
+                    // special, custom — anything non-hard-fixed is OK to swap).
                     const conflict = autoSkeleton.find(x =>
                         x.division === lb.division && x._bunk === bunkOfLb &&
                         x.startMin === targetStart);
                     if (!conflict) {
-                        // No conflict — just retime
+                        // No conflict — just retime the league block
                         lb.startMin = targetStart; lb.endMin = targetEnd;
                         lb.startTime = minutesToTimeLabel(targetStart);
                         lb.endTime = minutesToTimeLabel(targetEnd);
                         _alignedCount++;
                         continue;
                     }
-                    // Swap times: league takes target, conflict takes original.
-                    // Refuse if conflict is hard-fixed (swim/lunch/etc.) — can't displace.
-                    const HARD = ['swim','lunch','snacks','dismissal','custom','change','pre-change','post-change'];
                     if (HARD.includes(conflict.type)) {
                         log('[CrossDivAlign] cannot align ' + lgName + ' for ' + lb.division +
-                            ' — target time ' + targetStart + ' occupied by ' + conflict.type);
+                            ' bunk ' + bunkOfLb + ' — target time ' + targetStart +
+                            ' occupied by ' + conflict.type);
                         continue;
                     }
                     log('[CrossDivAlign] ' + lgName + ' ' + lb.division + ' bunk ' + bunkOfLb +
-                        ': ' + origStart + '-' + origEnd + ' ↔ ' + targetStart + '-' + conflict.endMin +
+                        ': league ' + origStart + '-' + origEnd + ' ↔ target ' +
+                        conflict.startMin + '-' + conflict.endMin +
                         ' (displaced ' + conflict.type + ' "' + conflict.event + '")');
-                    // Move league to target slot's time range
-                    lb.startMin = conflict.startMin;
-                    lb.endMin = conflict.endMin;
-                    lb.startTime = minutesToTimeLabel(conflict.startMin);
-                    lb.endTime = minutesToTimeLabel(conflict.endMin);
-                    // Move conflict to original league slot's time
-                    conflict.startMin = origStart;
-                    conflict.endMin = origEnd;
+                    // Swap: league takes the conflict's slot times, conflict
+                    // takes the league's original times. The slot durations
+                    // are preserved exactly — what was a 40-min slot stays
+                    // 40 minutes; what was a 30-min slot stays 30 minutes.
+                    // The slot at targetStart now has the league at its
+                    // original duration, and after this loop completes we
+                    // verify all bunks land on the same {start, end} pair.
+                    const cs = conflict.startMin, ce = conflict.endMin;
+                    lb.startMin = cs; lb.endMin = ce;
+                    lb.startTime = minutesToTimeLabel(cs);
+                    lb.endTime = minutesToTimeLabel(ce);
+                    conflict.startMin = origStart; conflict.endMin = origEnd;
                     conflict.startTime = minutesToTimeLabel(origStart);
                     conflict.endTime = minutesToTimeLabel(origEnd);
                     _alignedCount++;
                 }
-                // Also align ALL league blocks for this league across all bunks (not just the repBlock)
-                for (const b of blocks) {
-                    if (b.startMin !== targetStart) {
-                        b.startMin = targetStart;
-                        b.endMin = targetEnd;
-                        b.startTime = minutesToTimeLabel(targetStart);
-                        b.endTime = minutesToTimeLabel(targetEnd);
+                // Post-check: if any block still has a different end time, force it
+                // to targetEnd (defensive — keeps display consistent even if a swap
+                // produced a non-matching duration). The user requires identical
+                // start AND end times across all bunks in a cross-division league.
+                const finalStarts = new Set(blocks.map(b => b.startMin));
+                const finalEnds = new Set(blocks.map(b => b.endMin));
+                if (finalStarts.size > 1 || finalEnds.size > 1) {
+                    log('[CrossDivAlign] post-swap normalize ' + lgName + ' to ' + targetStart + '-' + targetEnd);
+                    for (const b of blocks) {
+                        if (b.startMin !== targetStart || b.endMin !== targetEnd) {
+                            b.startMin = targetStart;
+                            b.endMin = targetEnd;
+                            b.startTime = minutesToTimeLabel(targetStart);
+                            b.endTime = minutesToTimeLabel(targetEnd);
+                        }
                     }
                 }
             }
