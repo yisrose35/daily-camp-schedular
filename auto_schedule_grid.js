@@ -932,10 +932,13 @@
         });
 
         // ── LEAGUE OVERLAYS ──
+        // ★ Day 20 fix #12: make league overlay sit inside the same 3px row
+        // inset as activity tiles so it visually belongs to the schedule
+        // instead of looking pasted on top.
         leagueSlots.forEach(function (ls) {
             var leagueDur = ls.endMin - ls.startMin;
-            var topPx = ROW_HEIGHT_TX; // start below header row
-            var heightPx = bunks.length * ROW_HEIGHT_TX;
+            var topPx = ROW_HEIGHT_TX + 3; // header row + 3px inset (matches blocks)
+            var heightPx = bunks.length * ROW_HEIGHT_TX - 6; // 3px top + 3px bottom inset
 
             var overlay = document.createElement('div');
             overlay.className = 'asg-tx-league';
@@ -948,7 +951,7 @@
 
             var lHdr = document.createElement('div');
             lHdr.className = 'asg-tx-league-header';
-            lHdr.innerHTML = '🏆 ' + esc(ls.gameLabel || ls.leagueName || 'League');
+            lHdr.innerHTML = esc(ls.gameLabel || ls.leagueName || 'League');
             overlay.appendChild(lHdr);
 
             var muList = document.createElement('div');
@@ -1020,13 +1023,13 @@
             '.asg-tx-block-sub{font-size:0.62rem;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:0.92;}',
             '.asg-tx-free{position:absolute;top:6px;bottom:6px;border:1px dashed #cbd5e1;border-radius:5px;background:rgba(243,244,246,0.5);display:flex;align-items:center;justify-content:center;font-size:0.65rem;color:#9ca3af;cursor:pointer;}',
             '.asg-tx-free:hover{border-color:#147D91;color:#147D91;background:rgba(20,125,145,0.05);}',
-            '.asg-tx-league{position:absolute;background:linear-gradient(135deg,#e0f2fe 0%,#bae6fd 100%);border:1px solid #0284c7;border-left:3px solid #0284c7;border-radius:6px;z-index:3;display:flex;flex-direction:column;overflow:hidden;}',
-            '.asg-tx-league-header{padding:5px 10px;font-size:0.78rem;font-weight:700;color:#075985;background:rgba(255,255,255,0.55);border-bottom:1px solid #bae6fd;}',
-            '.asg-tx-league-matchups{flex:1;overflow:auto;padding:6px;display:flex;flex-direction:column;gap:4px;}',
-            '.asg-tx-matchup-card{background:#fff;border-radius:5px;padding:5px 8px;box-shadow:0 1px 1px rgba(0,0,0,0.04);}',
-            '.asg-tx-matchup-teams{font-size:0.72rem;font-weight:700;color:#1e3a5f;}',
-            '.asg-tx-matchup-sub{font-size:0.62rem;color:#475569;margin-top:1px;}',
-            '.asg-tx-league-empty{font-size:0.68rem;color:#64748b;font-style:italic;}',
+            '.asg-tx-league{position:absolute;background:#f0f9ff;border:1px solid #93c5fd;border-radius:5px;z-index:2;display:flex;flex-direction:column;overflow:hidden;box-sizing:border-box;}',
+            '.asg-tx-league-header{padding:3px 8px;font-size:12px;font-weight:700;color:#1e3a8a;background:#dbeafe;border-bottom:1px solid #bfdbfe;line-height:1.2;flex-shrink:0;}',
+            '.asg-tx-league-matchups{flex:1;overflow:auto;padding:4px 6px;display:flex;flex-direction:column;gap:3px;}',
+            '.asg-tx-matchup-card{background:#fff;border:1px solid #e0e7ff;border-radius:4px;padding:3px 6px;line-height:1.15;}',
+            '.asg-tx-matchup-teams{font-size:0.7rem;font-weight:700;color:#1e3a5f;}',
+            '.asg-tx-matchup-sub{font-size:0.6rem;color:#64748b;margin-top:1px;}',
+            '.asg-tx-league-empty{font-size:0.66rem;color:#94a3b8;font-style:italic;padding:2px;}',
             '.asg-tx-trip{position:absolute;background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);border:1px solid #6ee7b7;border-left:3px solid #10b981;border-radius:6px;z-index:3;display:flex;flex-direction:column;align-items:center;justify-content:center;}',
             '.asg-tx-trip-label{font-size:0.82rem;font-weight:700;color:#065f46;}',
             '.asg-tx-trip-time{font-size:0.62rem;color:#047857;margin-top:2px;}'
