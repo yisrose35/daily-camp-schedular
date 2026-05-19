@@ -16209,6 +16209,40 @@
                 }
             });
         });
+        // ★ Day 21 fix: also clear sport-fill phantom field claims so the
+        //   solver sees the actual capacity. Phase 3's findBestSport claims
+        //   fields when picking sports for its "hint" blocks, but those
+        //   claims don't translate into scheduleAssignments writes — the
+        //   solver later writes its own picks. The leftover claims saturate
+        //   field capacity (e.g. Jumprope cap=2 reserved by Phase 3 for two
+        //   Trios bunks blocks every other grade from being able to use
+        //   Jumprope at any time). Real claims (specials, leagues, anchors)
+        //   live in scheduleAssignments and survive — only sport-fill claims
+        //   are wiped.
+        try {
+            const _solverCleanupGuard = function(c) {
+                // Keep claims whose target slot/time in scheduleAssignments still
+                // holds a non-sport real placement (special, league, anchor).
+                if (!c || c.startMin == null) return false;
+                const bk = c.bunk;
+                const sa = (window.scheduleAssignments || {})[bk] || [];
+                for (let i = 0; i < sa.length; i++) {
+                    const s = sa[i];
+                    if (!s) continue;
+                    if (s._startMin === c.startMin && s._endMin === c.endMin) {
+                        // Real placement exists — keep the claim
+                        return true;
+                    }
+                }
+                return false;
+            };
+            Object.values(fieldLedger).forEach(ledger => {
+                if (!ledger.claims || ledger.claims.length === 0) return;
+                ledger.claims = ledger.claims.filter(_solverCleanupGuard);
+            });
+        } catch (_e) {
+            warn('[pre-solver claim cleanup] error: ' + (_e && _e.message));
+        }
         window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
         // Build solver input blocks (mark LNS-locked blocks)
