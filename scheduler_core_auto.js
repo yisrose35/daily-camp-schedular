@@ -224,6 +224,27 @@
         return null;
     }
 
+    // Returns true if the given [startMin, endMin) overlaps any Unavailable
+    // time rule on `cfg` that applies to `grade`. A rule applies to `grade` if
+    // its divisions list is empty/missing, or contains `grade`.
+    // Used by the special-placement loop to enforce per-grade Unavailable
+    // windows (Available rules are handled by getSpecialTimeWindowForGrade).
+    function isSpecialUnavailableForGrade(cfg, grade, startMin, endMin) {
+        if (!cfg || !Array.isArray(cfg.timeRules) || cfg.timeRules.length === 0) return false;
+        for (let i = 0; i < cfg.timeRules.length; i++) {
+            const r = cfg.timeRules[i];
+            if (r.type !== 'Unavailable' && r.available !== false) continue;
+            if (grade && r.divisions && r.divisions.length > 0 && r.divisions.indexOf(grade) < 0) continue;
+            const rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.start);
+            const re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.end);
+            if (rs == null || re == null) continue;
+            // Half-open overlap: ranges share at least one minute.
+            if (rs < endMin && re > startMin) return true;
+        }
+        return false;
+    }
+    try { window.isSpecialUnavailableForGrade = isSpecialUnavailableForGrade; } catch (_) {}
+
     // Return all user-configured allowed durations for a special, in ascending
     // order. Empty array = user has not configured any → caller should fall
     // back to the layer's dMin/dMax range. Used by the period-packer integration
@@ -3571,6 +3592,12 @@
             function findTimeAnywhere(fieldName, bunk, grade, dur, freeWindows, specialName, activity) {
                 var periods = _gpPeriodsFor(grade);
                 var sportDMin = _gpSportDMinFor(bunk);
+                // ★ Day 20 fix #15: enforce per-grade timeRules on specials.
+                //   Available rules: candidate must fall inside the union window
+                //   for this grade. Unavailable rules: candidate must not overlap.
+                //   Sports/general activities skip (cfg null) and behave as before.
+                var _specCfg = specialName ? getSpecialConfig(specialName, globalSettings) : null;
+                var _specWindow = _specCfg ? getSpecialTimeWindowForGrade(_specCfg, grade) : null;
                 var best = null, bestScore = -Infinity;
                 for (var i = 0; i < freeWindows.length; i++) {
                     var win = freeWindows[i];
@@ -3579,6 +3606,8 @@
                     for (var t = win.start; t + dur <= win.end; t += 5) {
                         if (fieldName && !isFieldStillAvailableGP(fieldName, t, t + dur, bunk, grade, activity)) continue;
                         if (specialName && !canAssignSpecialToGrade(specialName, grade, t, t + dur)) continue;
+                        if (_specWindow && (t < _specWindow.startMin || (t + dur) > _specWindow.endMin)) continue;
+                        if (_specCfg && isSpecialUnavailableForGrade(_specCfg, grade, t, t + dur)) continue;
                         var s = _gpScorePosition(t, dur, periods, sportDMin) - (t / 100000);
                         if (s > bestScore) { bestScore = s; best = { startMin: t, endMin: t + dur }; }
                     }
