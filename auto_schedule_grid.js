@@ -937,7 +937,10 @@
         // instead of looking pasted on top.
         leagueSlots.forEach(function (ls) {
             var leagueDur = ls.endMin - ls.startMin;
-            var topPx = ROW_HEIGHT_TX + 3; // header row + 3px inset (matches blocks)
+            // ★ Day 20 fix #14: header row is 36px (not ROW_HEIGHT_TX=56).
+            // Previously assumed 56 here, leaving a gap above the overlay
+            // and chopping off the top of the first bunk row.
+            var topPx = 36 + 3; // header row (36px CSS) + 3px inset
 
             var overlay = document.createElement('div');
             overlay.className = 'asg-tx-league';
@@ -976,16 +979,16 @@
         // ── TRIP OVERLAYS ──
         tripSlots.forEach(function (ts) {
             var tripDur = ts.endMin - ts.startMin;
-            var topPx = ROW_HEIGHT_TX;
-            var heightPx = bunks.length * ROW_HEIGHT_TX;
+            // Match league overlay positioning: 36px header + 3px inset, anchored bottom
+            var topPx = 36 + 3;
 
             var tripOverlay = document.createElement('div');
             tripOverlay.className = 'asg-tx-trip';
             tripOverlay.style.cssText = [
                 'left:' + calcLeft(ts.startMin),
                 'top:' + topPx + 'px',
-                'width:' + calcWidth(tripDur),
-                'height:' + heightPx + 'px'
+                'bottom:3px',
+                'width:' + calcWidth(tripDur)
             ].join(';');
             tripOverlay.innerHTML = '<div class="asg-tx-trip-label">🚌 ' + esc(ts.event) + '</div>'
                 + '<div class="asg-tx-trip-time">' + toLabel(ts.startMin) + ' – ' + toLabel(ts.endMin) + '</div>';
