@@ -1550,6 +1550,16 @@
                 const shareType = sharing.type || sharing.shareType || 'not_sharable';
                 const capacity = parseInt(sharing.capacity) || parseInt(field.capacity) || (shareType === 'not_sharable' ? 1 : (shareType === 'all' ? 999 : 2));
 
+               // ★ Normalize accessRestrictions: if enabled=true but divisions
+               //   is empty, treat as disabled. This is almost certainly user
+               //   misconfig (toggled the switch but never picked grades), and
+               //   silently blocking every grade from a field leads to confusing
+               //   "this activity is never scheduled" reports.
+               let _normAccess = props.accessRestrictions || field.accessRestrictions || { enabled: false };
+               if (_normAccess.enabled && (!_normAccess.divisions || Object.keys(_normAccess.divisions).length === 0)) {
+                   warn('[access] field "' + field.name + '" has accessRestrictions.enabled but no divisions selected — treating as open to all (user likely forgot to pick grades).');
+                   _normAccess = { ...(_normAccess || {}), enabled: false };
+               }
                fieldLedger[field.name] = {
                     name: field.name, capacity, shareType,
                     allowedDivisions: props.sharableWith?.divisions || field.sharableWith?.divisions || [],
@@ -1559,9 +1569,9 @@
                     disabledSports: dailyDisabledSports[field.name] || [],
                     activities: field.activities || [],
                     // Access restriction — which grades are allowed + priority order
-                    accessRestrictions: props.accessRestrictions || field.accessRestrictions || { enabled: false },
-                    usePriority: props.accessRestrictions?.usePriority || field.accessRestrictions?.usePriority || false,
-                    priorityList: props.accessRestrictions?.priorityList || field.accessRestrictions?.priorityList || [],
+                    accessRestrictions: _normAccess,
+                    usePriority: _normAccess.usePriority || false,
+                    priorityList: _normAccess.priorityList || [],
                     // Per-grade sharing overrides
                     gradeShareRules: props.gradeShareRules || field.gradeShareRules || {},
                     claims: []
@@ -14922,7 +14932,9 @@
             const _specials = _gs.app1?.specialActivities || [];
             const fld = _fields.find(f => f && f.name === fieldName);
             const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
-            if (fld?.accessRestrictions?.enabled) {
+            if (fld?.accessRestrictions?.enabled
+                && fld.accessRestrictions.divisions
+                && Object.keys(fld.accessRestrictions.divisions).length > 0) {
                 const divs = fld.accessRestrictions.divisions || {};
                 const gradeKey = String(grade);
                 if (!(gradeKey in divs) && !(grade in divs)) return 'field access: grade not allowed';
@@ -14955,7 +14967,12 @@
             }
 
             // Special-level access restriction
-            if (spByName?.accessRestrictions?.enabled) {
+            // ★ Skip when divisions is empty — user misconfig (toggled enabled
+            //   but never picked grades); treat as open instead of silently
+            //   blocking every grade.
+            if (spByName?.accessRestrictions?.enabled
+                && spByName.accessRestrictions.divisions
+                && Object.keys(spByName.accessRestrictions.divisions).length > 0) {
                 const divs = spByName.accessRestrictions.divisions || {};
                 const gradeKey = String(grade);
                 if (!(gradeKey in divs) && !(grade in divs)) return 'special access: grade not allowed';
@@ -16970,7 +16987,11 @@
 
                 // Field-level access restriction
                 // ★ Loosen `enabled` to truthy + dual-key divisions lookup
-                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
+                // ★ Skip when divisions is empty (user misconfig: enabled but
+                //   never picked grades — treat as open).
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled
+                    && fld.accessRestrictions.divisions
+                    && Object.keys(fld.accessRestrictions.divisions).length > 0) {
                     var divs = fld.accessRestrictions.divisions || {};
                     var gradeKey = String(grade);
                     if (!(gradeKey in divs) && !(grade in divs)) return false;
