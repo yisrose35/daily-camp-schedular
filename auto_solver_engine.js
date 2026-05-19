@@ -898,8 +898,15 @@
             });
             const pick = scored[0].cand;
 
-            // Write assignment
-            writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx);
+            // Write assignment — if it's rejected (cooldown, time rule, etc.),
+            // DON'T update tracking/fieldIndex. Otherwise phantom entries
+            // accumulate that block other bunks from using the same field.
+            const _wrote = writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx);
+            if (!_wrote) {
+                writeFree(block);
+                free++;
+                continue;
+            }
 
             // Update tracking
             doneToday.add(pick.sportNorm);
@@ -1179,7 +1186,7 @@
     }
 
     function writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx) {
-        if (!window.scheduleAssignments?.[bunk]) return;
+        if (!window.scheduleAssignments?.[bunk]) return false;
         const entry = {
             field: pick.field,
             sport: pick.sport,
@@ -1192,7 +1199,7 @@
             _division: grade,
             continuation: false
         };
-        if (!commitWriteIfLegal(bunk, slotIdx, pick.field, pick.sport, grade, startMin, endMin, entry)) return;
+        if (!commitWriteIfLegal(bunk, slotIdx, pick.field, pick.sport, grade, startMin, endMin, entry)) return false;
 
         // Register in fieldUsageBySlot for compatibility with fillers/utils/canBlockFit
         const fubs = window.fieldUsageBySlot || {};
@@ -1203,6 +1210,7 @@
         if (grade && !fubs[slotIdx][pick.field].divisions.includes(grade)) {
             fubs[slotIdx][pick.field].divisions.push(grade);
         }
+        return true;
     }
 
     function writeFree(block) {
