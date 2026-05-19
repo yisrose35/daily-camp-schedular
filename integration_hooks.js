@@ -1872,8 +1872,19 @@
                         // realtime feed for the rest of the session — and
                         // remote edits from another device become invisible.
                         _campStateSubscribed = false;
-                        try { if (_campStateChannel) client.removeChannel(_campStateChannel); } catch (_) {}
+
+                        // ★★★ FIX: re-entry guard around removeChannel ★★★
+                        // removeChannel() unsubscribes the channel, which fires
+                        // another CLOSED status event → calls this branch again
+                        // → calls removeChannel() again → infinite recursion
+                        // (RangeError: Maximum call stack size exceeded).
+                        // Capture+null the ref BEFORE removeChannel so the
+                        // re-entry sees null and skips the second call.
+                        var _ch = _campStateChannel;
                         _campStateChannel = null;
+                        if (_ch) {
+                            try { client.removeChannel(_ch); } catch (_) {}
+                        }
                         if (_campStateReconnectTimer) return;
                         const attempt = ++_campStateReconnectAttempts;
                         const delay = Math.min(30000, 2000 * Math.pow(2, attempt - 1));

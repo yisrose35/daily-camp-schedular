@@ -37,6 +37,18 @@ function _mbFirstLeagueForGrade(grade) {
   return matches[0] || null;
 }
 
+// Returns ALL leagues assigned to a given grade.
+function _mbAllLeaguesForGrade(grade) {
+  const _gs = window.loadGlobalSettings?.() || {};
+  const lbn = _gs.leaguesByName || {};
+  return Object.keys(lbn).filter(n =>
+    lbn[n] && lbn[n].enabled !== false &&
+    Array.isArray(lbn[n].divisions) &&
+    lbn[n].divisions.includes(String(grade))
+  );
+}
+try { window._mbAllLeaguesForGrade = _mbAllLeaguesForGrade; } catch (_) {}
+
 // Mutates a copied event so its league reference matches the new grade.
 // No-op for non-league events. If the target grade has no league, clears
 // leagueName + reverts event label so the schedule remains valid.
@@ -2145,7 +2157,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       }
     });
 
-    track.addEventListener('drop', (e) => {
+    track.addEventListener('drop', async (e) => {
       e.preventDefault();
       track.classList.remove('drop-target');
       // Remove any drop-preview rectangles so they don't briefly persist
@@ -2178,6 +2190,34 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           endMin = divEnd;
         }
 
+        // ★ Multi-league picker for auto builder: mirrors manual builder
+        //   logic. 0 → block, 1 → auto-assign, 2+ → prompt user to pick.
+        let _pickedLeague = null;
+        if (type === 'league' || type === 'specialty_league') {
+          const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+          if (_gradeLeagues.length === 0) {
+            await showAlert('No leagues are assigned to ' + grade +
+              '. Add this grade to a league in League Setup before dropping a league layer here.');
+            return;
+          } else if (_gradeLeagues.length === 1) {
+            _pickedLeague = _gradeLeagues[0];
+          } else {
+            const _pickResult = await showModal({
+              title: 'Which League?',
+              fields: [{
+                name: 'leagueName',
+                label: 'Which League? (required)',
+                type: 'select',
+                options: [{ value: '', label: '— Choose a league —' }]
+                  .concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+                default: ''
+              }]
+            });
+            if (!_pickResult || !_pickResult.leagueName) return;
+            _pickedLeague = _pickResult.leagueName;
+          }
+        }
+
         if (!layerSource[grade]) layerSource[grade] = [];
         const _newLayer = {
           id: 'daw_' + Math.random().toString(36).slice(2, 9),
@@ -2191,11 +2231,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
           periodMin: layerDef.anchor ? (endMin - startMin) : 30,
         };
 
-        // Auto-assign league for league layers on first drop
-        if (type === 'league' || type === 'specialty_league') {
-          const _firstLeague = _mbFirstLeagueForGrade(grade);
-          if (_firstLeague) _newLayer.leagueName = _firstLeague;
-        }
+        if (_pickedLeague) _newLayer.leagueName = _pickedLeague;
 
         layerSource[grade].push(_newLayer);
 
@@ -2767,10 +2803,30 @@ async function dawAddLayerDialog(grade) {
     periodMin: layerDef?.anchor ? (endMin - startMin) : 30,
   };
 
-  // Auto-assign league for league layers
+  // ★ Multi-league picker for auto builder Add Layer dialog
   if (result.type === 'league' || result.type === 'specialty_league') {
-    const _firstLeague = _mbFirstLeagueForGrade(grade);
-    if (_firstLeague) _addedLayer.leagueName = _firstLeague;
+    const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+    if (_gradeLeagues.length === 0) {
+      await showAlert('No leagues are assigned to ' + grade +
+        '. Add this grade to a league in League Setup before adding a league layer here.');
+      return;
+    } else if (_gradeLeagues.length === 1) {
+      _addedLayer.leagueName = _gradeLeagues[0];
+    } else {
+      const _pickResult = await showModal({
+        title: 'Which League?',
+        fields: [{
+          name: 'leagueName',
+          label: 'Which League? (required)',
+          type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }]
+            .concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: ''
+        }]
+      });
+      if (!_pickResult || !_pickResult.leagueName) return;
+      _addedLayer.leagueName = _pickResult.leagueName;
+    }
   }
 
   dawLayers[grade].push(_addedLayer);

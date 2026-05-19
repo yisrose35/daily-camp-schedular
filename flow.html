@@ -665,7 +665,15 @@
 <script src="period_packer.js"></script>
 <script src="auto_solver_engine.js"></script>
     <script src="feasibility_oracle.js"></script>
+    <script src="period_tiler.js"></script>
+    <script src="day_packer.js"></script>
     <script src="scheduler_core_auto.js"></script>
+    <!-- v2 SOLVER (un-parked X2f-17): SA local-search optimizer with bucket-grid
+         mutations. Gated by globalSettings.app1.solverVersion = 'v2'. v1 stays
+         live as default + as v2's seed builder. Goal: validate v2 closes sliver
+         gaps via moveAddBucket; if parity holds, flip default and retire v1. -->
+    <script src="scheduler_core_solver_v2.js"></script>
+    <script src="solver_version_switch.js"></script>
 <script src="swim_debug.js"></script>
 
 

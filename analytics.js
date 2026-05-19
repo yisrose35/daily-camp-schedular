@@ -105,9 +105,22 @@
             availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
             allFieldsDat = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
+            // ★ Day 18 fix: respect each item's actual `type` field from
+            // Facilities. specialActivities array can contain items typed
+            // "Special", "General", or "Sport" — previously every item was
+            // hard-coded to 'special', so a General-typed Facilities entry
+            // was misclassified. Normalize to lowercase enum.
+            function _normType(raw, fallback) {
+                if (!raw) return fallback;
+                const k = String(raw).toLowerCase().trim();
+                if (k === 'sport' || k === 'sports') return 'sport';
+                if (k === 'special' || k === 'specials') return 'special';
+                if (k === 'general' || k === 'generals') return 'general';
+                return fallback;
+            }
             allActivities = [
                 ...allFieldsDat.flatMap(f => (f.activities || []).map(a => ({ name: a, type: 'sport', max: 0 }))),
-                ...specials.map(s => ({ name: s.name, type: 'special', max: s.maxUsage || 0 }))
+                ...specials.map(s => ({ name: s.name, type: _normType(s.type, 'special'), max: s.maxUsage || 0 }))
             ];
             const seen = new Set();
             allActivities = allActivities.filter(a => { if (seen.has(a.name)) return false; seen.add(a.name); return true; });
@@ -1115,6 +1128,8 @@
                             <option value="all">All Activities</option>
                             <option value="sport">Sports Only</option>
                             <option value="special">Special Only</option>
+                            <option value="general">General Only</option>
+                            <option value="other">Other Only</option>
                         </select>
                     </div>
                     <div style="flex:1;min-width:140px;">
@@ -1200,6 +1215,10 @@
         let filteredActivities = allActivities;
         if (filter === 'sport') filteredActivities = allActivities.filter(a => a.type === 'sport');
         if (filter === 'special') filteredActivities = allActivities.filter(a => a.type === 'special');
+        if (filter === 'general') filteredActivities = allActivities.filter(a => a.type === 'general');
+        // 'other' is built downstream from schedule items not in any master
+        // list, so start empty and let the extraActivities merge populate it.
+        if (filter === 'other') filteredActivities = [];
 
         const actSearch = (document.getElementById('rotation-activity-filter')?.value || '').trim().toLowerCase();
         if (actSearch) filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1238,19 +1257,45 @@
             ? (cloudData.countsByDate[liveDate] || {})
             : {};
 
+        // ★ Day 18 fix: activity-name canonicalization.
+        // Legacy cloud rotation_counts rows can use slightly different
+        // capitalization / spacing than the current master special list
+        // (e.g. "Minute to Win it" vs "Minute To Win It", "Arts and Crafts 2"
+        // vs "Arts & Crafts 2"), AND anchor activities like "Lunch" can
+        // appear in both cases ("Lunch" / "lunch") because they aren't in
+        // the master specials list at all. Without folding, the counts
+        // split across two rows in the table and the user sees a low
+        // count under one name while the rest hides under the variant.
+        // Strategy: master-list names always win as canonical; for unknown
+        // names (anchors, deleted specials), the FIRST-seen casing wins
+        // and later variants merge into it. _canonByLower is mutated as
+        // we encounter new names so the second variant folds into the first.
+        const _canonByLower = {};
+        masterNames.forEach(n => { _canonByLower[String(n).toLowerCase().trim()] = n; });
+        const _canonName = (raw) => {
+            if (raw == null) return raw;
+            const key = String(raw).toLowerCase().trim();
+            if (_canonByLower[key]) return _canonByLower[key];
+            // First time we see this unknown-to-master name → remember its casing
+            const trimmed = String(raw).trim();
+            _canonByLower[key] = trimmed;
+            return trimmed;
+        };
         if (hasCloud) {
             bunks.forEach(bunk => {
                 const cBunk = cloudData.counts[bunk] || {};
                 const todayBunk = cloudToday[bunk] || {};
                 Object.keys(cBunk).forEach(act => {
                     if (!cBunk[act]) return;
+                    const canon = _canonName(act);
                     // Subtract today's cloud contribution — we add the live schedule below
                     const historical = cBunk[act] - (todayBunk[act] || 0);
                     if (historical > 0) {
                         liveCounts[bunk] = liveCounts[bunk] || {};
-                        liveCounts[bunk][act] = historical;
+                        // Accumulate so multiple legacy variants of the same name merge
+                        liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + historical;
                     }
-                    usedActivityNames.add(act);
+                    usedActivityNames.add(canon);
                 });
                 // Per-bunk fallback: when cloud has zero entries for this bunk
                 // (e.g. cloud sync hasn't caught up yet, or an older bunk that
@@ -1260,9 +1305,10 @@
                     const hBunk = hCounts[bunk] || {};
                     Object.keys(hBunk).forEach(act => {
                         if (!hBunk[act]) return;
+                        const canon = _canonName(act);
                         liveCounts[bunk] = liveCounts[bunk] || {};
-                        liveCounts[bunk][act] = hBunk[act];
-                        usedActivityNames.add(act);
+                        liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + hBunk[act];
+                        usedActivityNames.add(canon);
                     });
                 }
             });
@@ -1271,9 +1317,10 @@
                 bunks.forEach(bunk => {
                     const cLD = cloudData.lastDone[bunk] || {};
                     Object.keys(cLD).forEach(act => {
+                        const canon = _canonName(act);
                         lastDone[bunk] = lastDone[bunk] || {};
-                        if (!lastDone[bunk][act] || cLD[act] > lastDone[bunk][act]) {
-                            lastDone[bunk][act] = cLD[act];
+                        if (!lastDone[bunk][canon] || cLD[act] > lastDone[bunk][canon]) {
+                            lastDone[bunk][canon] = cLD[act];
                         }
                     });
                 });
@@ -1284,9 +1331,10 @@
                 const hBunk = hCounts[bunk] || {};
                 Object.keys(hBunk).forEach(act => {
                     if (!hBunk[act]) return;
+                    const canon = _canonName(act);
                     liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = hBunk[act];
-                    usedActivityNames.add(act);
+                    liveCounts[bunk][canon] = (liveCounts[bunk][canon] || 0) + hBunk[act];
+                    usedActivityNames.add(canon);
                 });
             });
         }
@@ -1297,27 +1345,73 @@
         //   most current data (captures post-save edits).
         //   When falling back to localStorage, we still only add today if it
         //   hasn't been counted into historicalCounts yet.
-        const todaySched = (liveDate && window.scheduleAssignments &&
-            Object.keys(window.scheduleAssignments).length)
-            ? window.scheduleAssignments
-            : (allDaily[liveDate]?.scheduleAssignments || {});
+        //
+        //   ★ Day 21 fix: scheduleAssignments can have null slots after page
+        //   reload (see scheduleSegments-vs-scheduleAssignments off-by-one
+        //   drift). When memory's today is incomplete vs cloud's today, the
+        //   subtract+add produces an undercount. Use scheduleSegments first
+        //   (always complete) and fall back to scheduleAssignments only if
+        //   segments aren't loaded.
+        const memTodaySegs = liveDate && window.scheduleSegments &&
+            Object.keys(window.scheduleSegments).length
+            ? window.scheduleSegments : null;
+        const todaySched = memTodaySegs
+            || ((liveDate && window.scheduleAssignments &&
+                Object.keys(window.scheduleAssignments).length)
+                ? window.scheduleAssignments
+                : (allDaily[liveDate]?.scheduleAssignments || {}));
         const todayCounted = !!(liveDate && countedDates[liveDate]);
         const shouldAddToday = hasCloud ? !!liveDate : (!todayCounted && !!liveDate);
 
         if (shouldAddToday) {
+            // Track today's per-bunk per-activity counts from memory so we can
+            // detect undercount vs cloud and restore cloud values if memory is
+            // partial (e.g., page-reload null-slot drift).
+            const memTodayCounts = {};
             bunks.forEach(bunk => {
-                (todaySched[bunk] || []).forEach(entry => {
+                const slots = todaySched[bunk] || [];
+                // Both scheduleSegments (array of arrays) and scheduleAssignments
+                // (flat array) share the same per-entry shape. For segments, each
+                // outer slot is an array of inner entries; flatten to iterate.
+                const flatEntries = [];
+                slots.forEach(s => {
+                    if (Array.isArray(s)) s.forEach(e => flatEntries.push(e));
+                    else if (s) flatEntries.push(s);
+                });
+                flatEntries.forEach(entry => {
                     if (!entry || entry.continuation || entry._isTransition) return;
-                    let rawAct = entry._activity || entry.sport || '';
+                    let rawAct = entry._activity || entry.activity || entry.sport || '';
                     if (!rawAct) return;
                     if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                         rawAct = entry.sport;
                     }
-                    const act = (typeof rawAct === 'string' ? rawAct : '').trim();
-                    if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                    const trimmed = (typeof rawAct === 'string' ? rawAct : '').trim();
+                    if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
+                    const act = _canonName(trimmed);
                     usedActivityNames.add(act);
-                    liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + 1;
+                    memTodayCounts[bunk] = memTodayCounts[bunk] || {};
+                    memTodayCounts[bunk][act] = (memTodayCounts[bunk][act] || 0) + 1;
+                });
+            });
+            // Add memTodayCounts to liveCounts, but if cloudToday has a higher
+            // value for an activity, restore cloud's value (memory is partial).
+            const cloudTodayCounts = cloudToday || {};
+            bunks.forEach(bunk => {
+                const memBunk = memTodayCounts[bunk] || {};
+                const cloudBunk = cloudTodayCounts[bunk] || {};
+                const allActs = new Set([...Object.keys(memBunk), ...Object.keys(cloudBunk)]);
+                allActs.forEach(rawAct => {
+                    const act = _canonName(rawAct);
+                    const memCount = memBunk[rawAct] || 0;
+                    const cloudCount = cloudBunk[rawAct] || 0;
+                    // Use cloud's count if memory's count is lower (memory is partial).
+                    // Use memory's count otherwise (captures in-session edits).
+                    const finalCount = memCount >= cloudCount ? memCount : cloudCount;
+                    if (finalCount > 0) {
+                        usedActivityNames.add(act);
+                        liveCounts[bunk] = liveCounts[bunk] || {};
+                        liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + finalCount;
+                    }
                 });
             });
         }
@@ -1337,8 +1431,9 @@
                         if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                             rawAct = entry.sport;
                         }
-                        const act = (typeof rawAct === 'string' ? rawAct : '').trim();
-                        if (!act || act === 'Free' || act.toLowerCase().includes('transition')) return;
+                        const trimmed = (typeof rawAct === 'string' ? rawAct : '').trim();
+                        if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
+                        const act = _canonName(trimmed);
                         usedActivityNames.add(act);
                         lastDone[bunk] = lastDone[bunk] || {};
                         if (!lastDone[bunk][act] || dateKey > lastDone[bunk][act]) {
@@ -1350,9 +1445,18 @@
 
         const extraActivities = [];
         usedActivityNames.forEach(name => {
+            // ★ Day 18 (revised): Facilities is the source of truth for type.
+            // Sport/Special/General all come from the loadMasterData call.
+            // "Other" is reserved for activities that appear on the schedule
+            // but aren't in any Facilities master list — i.e. custom layers
+            // or one-off scheduled activities. Anchors like Swim/Lunch/Change
+            // fall here too because they aren't Facilities entries.
             if (!masterNames.has(name)) extraActivities.push({ name, type: 'other', max: 0 });
         });
-        if (extraActivities.length && filter === 'all') {
+        // 'Other' extras are only schedule-derived (custom/scheduled), so
+        // surface them under 'all' or 'other'. 'sport'/'special'/'general'
+        // filters intentionally exclude them.
+        if (extraActivities.length && (filter === 'all' || filter === 'other')) {
             filteredActivities = filteredActivities.concat(extraActivities);
             if (actSearch) {
                 filteredActivities = filteredActivities.filter(a => a.name.toLowerCase().includes(actSearch));
@@ -1373,8 +1477,9 @@
                 if (!ts) return;
                 try {
                     const d = new Date(ts).toISOString().split('T')[0];
+                    const canon = _canonName(act);
                     lastDone[bunk] = lastDone[bunk] || {};
-                    if (!lastDone[bunk][act] || d > lastDone[bunk][act]) lastDone[bunk][act] = d;
+                    if (!lastDone[bunk][canon] || d > lastDone[bunk][canon]) lastDone[bunk][canon] = d;
                 } catch (_) {}
             });
         });
@@ -1416,11 +1521,17 @@
                 if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
                 else if (total === 0) totalStyle += 'color:#d97706;';
 
+                // ★ Day 18: 4 distinct type buckets.
+                //   Sport / Special / General all come from Facilities master list.
+                //   Other = activity on schedule but not in any Facilities master
+                //   (custom layers, one-off scheduled activities, anchors).
                 const typeLabel = act.type === 'special'
-                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Special</span>'
-                    : act.type === 'other'
-                        ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Used in schedule but not in master activity list">Other</span>'
-                        : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;">Sport</span>';
+                    ? '<span style="background:#ddd6fe;color:#7c3aed;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Special activity from Facilities">Special</span>'
+                    : act.type === 'general'
+                        ? '<span style="background:#d1fae5;color:#047857;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="General activity from Facilities">General</span>'
+                        : act.type === 'other'
+                            ? '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Custom layer or scheduled activity (not in Facilities master list)">Other</span>'
+                            : '<span style="background:#dbeafe;color:#2563eb;padding:2px 6px;border-radius:999px;font-size:0.7rem;font-weight:600;" title="Sport from Facilities">Sport</span>';
 
                 html += `
                     <tr style="background:${rowBg};">
@@ -1517,6 +1628,10 @@
         loadMasterData();
         const sel = document.getElementById('report-view-select');
         const val = sel?.value || 'availability';
+        // forceRefresh = caller wants cache bypass (used by auto-refresh
+        // listeners after post-edit / generation events to ensure the rotation
+        // table reads the just-saved cloud data instead of the 30s cache)
+        const force = arguments[0] === true;
         if (val === 'availability') {
             // Re-snap selectedDate to the live date if user hasn't picked one
             // explicitly — keeps "today" tracking after a generate.
@@ -1527,20 +1642,28 @@
             renderAvailabilityShell();
         } else if (val === 'rotation') {
             const div = document.getElementById('rotation-div-select')?.value || '';
-            if (div) renderRotationTable(div);
+            if (div) renderRotationTable(div, force);
             else renderBunkRotationUI();
         }
     }
 
     // Listen for schedule changes so the report stays in sync with manual
     // generations and post-edits without the user needing to leave & come back.
+    //
+    // Two timing concerns:
+    //   1. applyPostEditCounts debounces RotationCloud.save by 500ms, so the
+    //      refresh must wait LONGER than that to read fresh cloud data.
+    //   2. The default renderRotationTable() uses the 30s RotationCloud cache,
+    //      so we must either invalidate the cache or force-refresh.
+    // Force-refresh + 800ms delay covers both.
     let _refreshTimer = null;
-    function scheduleRefresh() {
+    function scheduleRefresh(opts) {
         clearTimeout(_refreshTimer);
-        _refreshTimer = setTimeout(refreshActiveReport, 120);
+        const delay = (opts && opts.delay) || 800;
+        _refreshTimer = setTimeout(() => refreshActiveReport(true), delay);
     }
-    document.addEventListener('campistry-schedule-generated', scheduleRefresh);
-    document.addEventListener('campistry-post-edit-complete',  scheduleRefresh);
+    document.addEventListener('campistry-schedule-generated', () => scheduleRefresh());
+    document.addEventListener('campistry-post-edit-complete',  () => scheduleRefresh());
     // The auto-builder fires `campistry-generation-complete` on `window` (see
     // scheduler_core_auto.js / integration_hooks.js). Without this listener the
     // rotation tab held stale counts after every auto-generation. We also

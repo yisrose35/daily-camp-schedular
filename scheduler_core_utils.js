@@ -31,6 +31,24 @@
     // 1. BASIC HELPERS
     // =================================================================
 
+    // ★ Day 19.5: display-name helper for multiPart activities.
+    // Returns "Baking 1/3" when slot has _partLabel (stamped by the gen
+    // for multiPart specials), otherwise falls back to _activity or field.
+    // Use this anywhere render code needs the visible activity name —
+    // schedule grid, print center, calendar, daily adjustments, etc.
+    Utils.getActivityDisplayName = function (slot) {
+        if (!slot) return '';
+        if (slot._partLabel) return slot._partLabel;
+        if (slot._partNumber && slot._totalParts && slot._activity) {
+            return slot._activity + ' ' + slot._partNumber + '/' + slot._totalParts;
+        }
+        return slot._activity || slot.field || slot.event || '';
+    };
+    // Also expose on window for non-Utils call sites
+    if (typeof window !== 'undefined') {
+        window.getActivityDisplayName = Utils.getActivityDisplayName;
+    }
+
     Utils.parseTimeToMinutes = function (str) {
         if (str == null) return null;
         if (typeof str === "number") return str;
@@ -2180,14 +2198,37 @@
                 var curParts = today.split('-').map(Number);
                 var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
                 if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
-                if (cd.startDate) return cd.startDate;
+                // ★ FIX: if refDate is BEFORE camp startDate (e.g. pre-camp
+                // staging/test runs), returning cd.startDate causes
+                // getPeriodActivityCount to filter out ALL historical dates
+                // (every dateKey < periodStart), so the count is always 0
+                // and maxUsage/exactFrequency caps go unenforced.
+                // Only anchor to campStart when we're actually inside the
+                // camp window. Before camp starts, use a rolling fallback
+                // (return null → no date filter → count entire local
+                // history, which is the conservative, safe behavior).
+                if (cd.startDate) {
+                    var _startD = new Date(cd.startDate + 'T00:00:00');
+                    if (curD >= _startD) return cd.startDate;
+                    // fall through to local settings fallback below
+                }
             }
             var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
             var s = gs.app1 || gs;
             return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
         }
 
-        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        // ★ FIX: accept 'week' as an alias for '1week'. Several specials in
+        // the config use the legacy 'week' string. Without this alias,
+        // nWeeks=0 → return null → getPeriodActivityCount applies no period
+        // filter → counts the ENTIRE local history. That makes a per-week
+        // cap behave like a lifetime cap (overly strict, blocks the special
+        // forever after first use ever).
+        var nWeeks = (period === '1week' || period === 'week') ? 1
+                   : period === '2weeks' ? 2
+                   : period === '3weeks' ? 3
+                   : period === '4weeks' ? 4
+                   : 0;
         if (nWeeks === 0) return null;
 
         if (cd && cd.startDate) {

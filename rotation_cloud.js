@@ -92,22 +92,45 @@
             return Promise.resolve(true);
         }
 
-        // ★ Use upsert with onConflict on the composite PK so concurrent
-        // saves (or a regen-then-save race) don't fail with 409.
-        // The previous delete-then-insert sequence was racing with itself
-        // when two RotationCloud.save calls overlapped during one generation.
+        // ★★★ FIX: delete-then-upsert atomically for this date ★★★
+        // Without the pre-delete, regenerating a date accumulates stale rows
+        // for activities the new schedule doesn't use. UPSERT only replaces
+        // rows for the exact same (camp_id, date_key, bunk, activity) tuple,
+        // so if today's gen 1 had "Soccer" for Bunk A and gen 2 has
+        // "Basketball" instead, both rows persist forever. Real-world impact:
+        // ~2x bloat after the second gen, accelerating with each regen,
+        // poisoning the rotation engine's recency/distribution scoring with
+        // activities that aren't actually scheduled.
+        //
+        // The original comment claimed "deleteDate() before regen" was the
+        // caller's responsibility, but no caller actually does it (verified
+        // via grep). Moving the delete inside save() makes the contract
+        // self-enforcing.
+        //
+        // The race concern (concurrent save calls deleting each other's
+        // rows) is mitigated by sequencing: delete + upsert run in series
+        // for one call, and two concurrent calls just serialize naturally.
         return client
             .from(TABLE)
-            .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' })
+            .delete()
+            .eq('camp_id', campId)
+            .eq('date_key', dateKey)
+            .then(function(delResult) {
+                if (delResult.error) {
+                    console.error('[RotationCloud] Pre-save delete error:', delResult.error.message);
+                    // Continue to upsert anyway — partial cleanup is still
+                    // better than no cleanup
+                }
+                return client
+                    .from(TABLE)
+                    .upsert(rows, { onConflict: 'camp_id,date_key,bunk,activity' });
+            })
             .then(function(result) {
                 if (result.error) {
                     console.error('[RotationCloud] Upsert error:', result.error.message);
                     return false;
                 }
-                // Orphan cleanup is handled by deleteDate() before regen,
-                // not here — async cleanup after upsert races with
-                // concurrent saves and can delete valid rows.
-                console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey);
+                console.log('[RotationCloud] Saved', rows.length, 'rotation rows for', dateKey, '(pre-cleared stale)');
                 _cache = null;
                 _loadGen++;
                 return true;
@@ -138,20 +161,47 @@
         // is in flight, _loadGen will diverge and we'll discard the result.
         var startGen = _loadGen;
 
-        return client
-            .from(TABLE)
-            .select('bunk, activity, count, date_key')
-            .eq('camp_id', campId)
-            .then(function(result) {
-                if (result.error) {
-                    console.error('[RotationCloud] Load error:', result.error.message);
-                    return { counts: {}, lastDone: {}, countsByDate: {} };
-                }
+        // ★★★ FIX: paginate to bypass Supabase's 1000-row default limit ★★★
+        // Without explicit .range(), Supabase returns at most 1000 rows.
+        // For a real camp (35 bunks × ~9 activities × N days), this caps out
+        // fast — a 4-week camp easily exceeds 9000 rows. Truncation meant
+        // every consumer (analytics, scheduler scoring, fairness checks)
+        // saw a 1000-row slice of history. Cohort pooling and Per Half
+        // counts silently undercounted.
+        //
+        // We fetch 1000 rows at a time, ordered by id, and concatenate.
+        var PAGE_SIZE = 1000;
+        function fetchAll(allRows, page) {
+            var from = page * PAGE_SIZE;
+            var to = from + PAGE_SIZE - 1;
+            return client
+                .from(TABLE)
+                .select('bunk, activity, count, date_key')
+                .eq('camp_id', campId)
+                // Order by the composite PK so pagination is deterministic.
+                // rotation_counts has no surrogate `id` column — its PK is
+                // (camp_id, date_key, bunk, activity). camp_id is already
+                // filtered in the .eq() above, so date_key+bunk+activity is
+                // sufficient for a stable cursor.
+                .order('date_key', { ascending: true })
+                .order('bunk', { ascending: true })
+                .order('activity', { ascending: true })
+                .range(from, to)
+                .then(function(result) {
+                    if (result.error) throw result.error;
+                    var rows = result.data || [];
+                    allRows.push.apply(allRows, rows);
+                    if (rows.length < PAGE_SIZE) return allRows;
+                    return fetchAll(allRows, page + 1);
+                });
+        }
 
+        return fetchAll([], 0)
+            .then(function(allData) {
                 var counts = {};
                 var lastDone = {};
                 var countsByDate = {}; // ★ Per-date breakdown for smart merging
-                (result.data || []).forEach(function(row) {
+                allData.forEach(function(row) {
                     counts[row.bunk] = counts[row.bunk] || {};
                     counts[row.bunk][row.activity] = (counts[row.bunk][row.activity] || 0) + row.count;
 
@@ -177,11 +227,11 @@
                 }
                 _cache = fresh;
                 _cacheTime = Date.now();
-                console.log('[RotationCloud] Loaded rotation data:', (result.data || []).length, 'rows');
+                console.log('[RotationCloud] Loaded rotation data:', allData.length, 'rows (paginated)');
                 return _cache;
             })
             .catch(function(e) {
-                console.error('[RotationCloud] Load failed:', e);
+                console.error('[RotationCloud] Load failed:', e.message || e);
                 return { counts: {}, lastDone: {}, countsByDate: {} };
             });
     }
