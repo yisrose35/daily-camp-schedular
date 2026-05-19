@@ -1345,18 +1345,42 @@
         //   most current data (captures post-save edits).
         //   When falling back to localStorage, we still only add today if it
         //   hasn't been counted into historicalCounts yet.
-        const todaySched = (liveDate && window.scheduleAssignments &&
-            Object.keys(window.scheduleAssignments).length)
-            ? window.scheduleAssignments
-            : (allDaily[liveDate]?.scheduleAssignments || {});
+        //
+        //   ★ Day 21 fix: scheduleAssignments can have null slots after page
+        //   reload (see scheduleSegments-vs-scheduleAssignments off-by-one
+        //   drift). When memory's today is incomplete vs cloud's today, the
+        //   subtract+add produces an undercount. Use scheduleSegments first
+        //   (always complete) and fall back to scheduleAssignments only if
+        //   segments aren't loaded.
+        const memTodaySegs = liveDate && window.scheduleSegments &&
+            Object.keys(window.scheduleSegments).length
+            ? window.scheduleSegments : null;
+        const todaySched = memTodaySegs
+            || ((liveDate && window.scheduleAssignments &&
+                Object.keys(window.scheduleAssignments).length)
+                ? window.scheduleAssignments
+                : (allDaily[liveDate]?.scheduleAssignments || {}));
         const todayCounted = !!(liveDate && countedDates[liveDate]);
         const shouldAddToday = hasCloud ? !!liveDate : (!todayCounted && !!liveDate);
 
         if (shouldAddToday) {
+            // Track today's per-bunk per-activity counts from memory so we can
+            // detect undercount vs cloud and restore cloud values if memory is
+            // partial (e.g., page-reload null-slot drift).
+            const memTodayCounts = {};
             bunks.forEach(bunk => {
-                (todaySched[bunk] || []).forEach(entry => {
+                const slots = todaySched[bunk] || [];
+                // Both scheduleSegments (array of arrays) and scheduleAssignments
+                // (flat array) share the same per-entry shape. For segments, each
+                // outer slot is an array of inner entries; flatten to iterate.
+                const flatEntries = [];
+                slots.forEach(s => {
+                    if (Array.isArray(s)) s.forEach(e => flatEntries.push(e));
+                    else if (s) flatEntries.push(s);
+                });
+                flatEntries.forEach(entry => {
                     if (!entry || entry.continuation || entry._isTransition) return;
-                    let rawAct = entry._activity || entry.sport || '';
+                    let rawAct = entry._activity || entry.activity || entry.sport || '';
                     if (!rawAct) return;
                     if (!masterNames.has(rawAct) && entry.sport && masterNames.has(entry.sport)) {
                         rawAct = entry.sport;
@@ -1365,8 +1389,29 @@
                     if (!trimmed || trimmed === 'Free' || trimmed.toLowerCase().includes('transition')) return;
                     const act = _canonName(trimmed);
                     usedActivityNames.add(act);
-                    liveCounts[bunk] = liveCounts[bunk] || {};
-                    liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + 1;
+                    memTodayCounts[bunk] = memTodayCounts[bunk] || {};
+                    memTodayCounts[bunk][act] = (memTodayCounts[bunk][act] || 0) + 1;
+                });
+            });
+            // Add memTodayCounts to liveCounts, but if cloudToday has a higher
+            // value for an activity, restore cloud's value (memory is partial).
+            const cloudTodayCounts = cloudToday || {};
+            bunks.forEach(bunk => {
+                const memBunk = memTodayCounts[bunk] || {};
+                const cloudBunk = cloudTodayCounts[bunk] || {};
+                const allActs = new Set([...Object.keys(memBunk), ...Object.keys(cloudBunk)]);
+                allActs.forEach(rawAct => {
+                    const act = _canonName(rawAct);
+                    const memCount = memBunk[rawAct] || 0;
+                    const cloudCount = cloudBunk[rawAct] || 0;
+                    // Use cloud's count if memory's count is lower (memory is partial).
+                    // Use memory's count otherwise (captures in-session edits).
+                    const finalCount = memCount >= cloudCount ? memCount : cloudCount;
+                    if (finalCount > 0) {
+                        usedActivityNames.add(act);
+                        liveCounts[bunk] = liveCounts[bunk] || {};
+                        liveCounts[bunk][act] = (liveCounts[bunk][act] || 0) + finalCount;
+                    }
                 });
             });
         }
