@@ -13780,11 +13780,25 @@
         // sits at the target (earliest) time in that division.
         // =====================================================================
         try {
+            // autoSkeleton blocks have generic event="League Game" — look up
+            // the layer block's leagueName via dailyAutoLayers to identify
+            // which league each autoSkeleton block belongs to.
+            const _dateLayers = globalSettings?.app1?.dailyAutoLayers?.[currentDate] || {};
+            const _lookupLeagueName = (gradeName, blockType) => {
+                const arr = _dateLayers[gradeName] || [];
+                const layerBlock = arr.find(b => b?.type === blockType && b?.leagueName);
+                return layerBlock?.leagueName || null;
+            };
             const _crossDivLeagueGroups = {}; // leagueName -> [block, ...]
             for (const b of autoSkeleton) {
                 if (b.type !== 'league' && b.type !== 'specialty_league') continue;
-                const lgName = b.event;
-                if (!lgName || /league game|specialty league/i.test(lgName)) continue;
+                // Resolve league name: prefer block.event if specific, else
+                // look up from layer config via division + type.
+                let lgName = b.event;
+                if (!lgName || /^league game$|^specialty league$/i.test(lgName)) {
+                    lgName = _lookupLeagueName(b.division, b.type);
+                }
+                if (!lgName) continue;
                 _crossDivLeagueGroups[lgName] = _crossDivLeagueGroups[lgName] || [];
                 _crossDivLeagueGroups[lgName].push(b);
             }
