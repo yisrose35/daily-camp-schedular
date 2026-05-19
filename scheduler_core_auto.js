@@ -15562,7 +15562,17 @@
                 leagueAssignments: window.leagueAssignments,
                 storeLeagueMatchups: function(divName, slots, matchups, gameLabel, sport, leagueName) {
                     const league = mla.find(l => l.name === leagueName);
-                    const covDivs = (league?.divisions || [leagueName]).filter(d => autoSkeleton.some(b => b.division === d && b.type === 'league'));
+                    // ★ Day 20 fix #1: respect each block's leagueName hint.
+                    // Previously this wrote matchups to EVERY division in the
+                    // league's divisions list (even ones whose block named a
+                    // different league), causing the wrong league to overwrite
+                    // a more-specific Trios block. Now: only cover divisions
+                    // whose block either explicitly names this league OR has
+                    // no league hint (accepts any applicable league).
+                    const covDivs = (league?.divisions || [leagueName]).filter(d =>
+                        autoSkeleton.some(b => b.division === d && b.type === 'league' &&
+                            (!b.leagueName || b.leagueName === leagueName))
+                    );
                     (covDivs.length > 0 ? covDivs : [divName]).forEach(div => {
                         // ★ FIX: Use the slot index to find the CORRECT league block,
                         // not .find() which always returns the first one. When a grade
@@ -15602,18 +15612,36 @@
             if (window.SchedulerCoreLeagues?.processRegularLeagues) { try { lctx.schedulableSlotBlocks = leagueBlocks.filter(b => b.type === 'league'); window.SchedulerCoreLeagues.processRegularLeagues(lctx); } catch (e) { warn('[3] Regular: ' + e.message); } }
 
             // ★ v6.0: Read matchups from processed leagueBlocks → populate leagueAssignments + scheduleAssignments
+            // ★ Day 20 fix: skip blocks where leagueName hint doesn't match the
+            // actual league that wrote matchups. Block specifies which league
+            // it wants (e.g. Trios block says "Day20 Test"); only honor matchups
+            // that came from that league. If block has no hint, accept any.
             let leagueWriteCount = 0;
             leagueBlocks.forEach(lb => {
                 const matchups = lb._allMatchups || [];
                 const sport = lb._sport || lb.sport || '';
                 const leagueName = lb._leagueName || lb._activity || '';
                 const gameLabel = lb._gameLabel || '';
+                // ★ Day 20 fix #1: enforce block.leagueName hint
+                if (lb.leagueName && leagueName && lb.leagueName !== leagueName) return;
 
                 // Write to leagueAssignments (authoritative source for grid renderer)
                 if (!window.leagueAssignments[lb.divName]) window.leagueAssignments[lb.divName] = {};
                 window.leagueAssignments[lb.divName][lb.startMin] = {
                     matchups, gameLabel, sport, leagueName
                 };
+                // ★ Day 20 fix #4: clean up the stale slot-index-keyed duplicate
+                // entry that fillBlock writes at scheduler_core_main.js:370. We
+                // standardize on startMin-keyed entries here; if a slot-index
+                // key (small integer) exists with same data, remove it.
+                const lbStartStr = String(lb.startMin);
+                for (const k of Object.keys(window.leagueAssignments[lb.divName])) {
+                    if (k === lbStartStr) continue;
+                    const n = Number(k);
+                    if (!isNaN(n) && n < 200 && window.leagueAssignments[lb.divName][k]?.leagueName === leagueName) {
+                        delete window.leagueAssignments[lb.divName][k];
+                    }
+                }
 
                 // Write to scheduleAssignments for each bunk (triggers league row detection in grid)
                 const pbs = window.divisionTimes?.[lb.divName]?._perBunkSlots;
@@ -15621,10 +15649,20 @@
                 Object.entries(pbs).forEach(([bk, bs]) => {
                     const fi = bs.findIndex(s => s.startMin === lb.startMin);
                     if (fi === -1 || !window.scheduleAssignments[bk]) return;
+                    const slotMeta = bs[fi];
                     window.scheduleAssignments[bk][fi] = {
-                        field: sport || 'League Game', sport: sport || null,
+                        // ★ Day 20 fix #5: don't put gameLabel in `field`.
+                        // sport here is often the gameLabel (e.g. "Game 1"); use
+                        // the generic "League Game" as the slot field instead.
+                        // The matchups list carries the actual per-game field.
+                        field: 'League Game',
+                        sport: sport || null,
                         _activity: 'League Game', _league: true, _leagueName: leagueName,
                         _gameLabel: gameLabel, matchups: matchups,
+                        // ★ Day 20 fix #3: stamp start/end times on the slot so
+                        // grid + print renderers can show the correct time range.
+                        _startMin: slotMeta?.startMin ?? lb.startMin,
+                        _endMin: slotMeta?.endMin ?? lb.endMin,
                         _fixed: true, continuation: false
                     };
                     leagueWriteCount++;

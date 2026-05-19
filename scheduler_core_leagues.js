@@ -1420,9 +1420,18 @@ window._debugLeagueTimeData = timeData;
         const _gameLbl = playoffRoundNum
             ? (`Playoff R${playoffRoundNum}`)
             : (`Game ${gameNumber}`);
+        // ★ Day 20 fix #2: separate sport from gameLabel. Previously
+        // pick.sport = gameLbl (e.g. "Game 1") which then leaked into the
+        // slot's sport field and field display. Use the first actual
+        // sport from the assignments list (every matchup has its own sport
+        // already in the matchup string), falling back to the league's
+        // primary sport.
+        const _firstSport = (assignments.find(a => a && a.sport) || {}).sport
+            || (league.sports && league.sports[0])
+            || '';
         const pick = {
                             field: `League: ${league.name}`,
-                            sport: _gameLbl,
+                            sport: _firstSport,
                             _activity: `League: ${league.name}`,
                             _leagueName: league.name,
                             _h2h: true,

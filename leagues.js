@@ -1010,7 +1010,14 @@
 
         const divChips = document.createElement('div');
         divChips.className = 'chips';
-        (window.availableDivisions || []).forEach(function (divName) {
+        // ★ Day 20 fix #6: use Me-page (Camp Structure) order, not the
+        // alphabetized window.availableDivisions. window.divisions is an
+        // object keyed by division name in user-defined insertion order;
+        // Object.keys preserves that order. Falls back to availableDivisions
+        // if window.divisions isn't loaded yet.
+        const _meOrder = Object.keys(window.divisions || {});
+        const _divOrder = _meOrder.length > 0 ? _meOrder : (window.availableDivisions || []);
+        _divOrder.forEach(function (divName) {
             const isActive = league.divisions.includes(divName);
             const chip = document.createElement('span');
             chip.className = 'chip' + (isActive ? ' active' : '');
