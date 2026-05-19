@@ -1596,8 +1596,6 @@
                     };
                 }
             });
-            // ★ TEMP DEBUG: expose ledger globally so live probes can verify normalization
-            try { window._fieldLedger = fieldLedger; } catch(_) {}
         }
 
         function isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity) {
