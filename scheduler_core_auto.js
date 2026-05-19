@@ -6926,6 +6926,21 @@
                         // Score: drafted unused > unused > reuse. Low demand > high demand.
                         var demand = fieldDemand[sport.fields[f] + ':' + timeSlot] || 0;
                         var score = 0;
+                        // ★ Day 21 fix: rotation score is the DOMINANT factor.
+                        //   Previously findBestSport computed an entirely new score that
+                        //   ignored sport.rotationScore. The rotation engine's "least-
+                        //   played activities get priority" signal (which informs the
+                        //   sportPriorityList sort) was thrown away once the priority list
+                        //   was iterated here, producing visible imbalance — e.g. Jumprope
+                        //   with rotationScore=-780 (most overdue) NEVER placed while
+                        //   Belts with rotationScore=+51020 (most played) placed every
+                        //   day. Subtracting rotationScore inverts it so overdue sports
+                        //   gain a large bonus and over-played sports take a large hit.
+                        //   The other heuristics below (drafted/used/demand/adjacent/
+                        //   recent-days/field-pressure) still tie-break.
+                        if (typeof sport.rotationScore === 'number') {
+                            score -= sport.rotationScore;
+                        }
                         if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used
                         else if (!isUsed) score += 500;            // good: not used
                         // else: reuse, score stays 0
