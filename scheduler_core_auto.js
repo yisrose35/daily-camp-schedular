@@ -438,6 +438,66 @@
         const startTime = Date.now();
         const warnings = [];
 
+        // =====================================================================
+        // ★ Day 20 fix #7 (architectural): CrossDivLeaguePin
+        // =====================================================================
+        // When a league spans multiple divisions (e.g. "Duetos/Trios"), all
+        // its layer blocks must be PINNED to the same exact start+end before
+        // Phase 0 places anything. Otherwise each division places its block
+        // independently within its window and they end up at different times
+        // — but the teams from both grades physically play each other, so
+        // they MUST share an exact time.
+        //
+        // This pass mutates layer blocks IN PLACE: for each multi-division
+        // league, picks the earliest common startMin among the blocks and
+        // tightens the window (startMin = chosen, endMin = chosen + duration,
+        // op='=', durationMin=durationMax=chosen-duration). Phase 0 then
+        // classifies these as 'pinned' (ratio ≥ 1) and places them as hard
+        // anchors at exactly that time across every bunk.
+        try {
+            const _leagueLayersByName = {};
+            for (const ly of layers) {
+                if ((ly.type || '').toLowerCase() !== 'league') continue;
+                const lgName = ly.leagueName || '';
+                if (!lgName) continue;
+                _leagueLayersByName[lgName] = _leagueLayersByName[lgName] || [];
+                _leagueLayersByName[lgName].push(ly);
+            }
+            for (const lgName in _leagueLayersByName) {
+                const grp = _leagueLayersByName[lgName];
+                const divs = new Set(grp.map(l => l.grade || l.division));
+                if (divs.size < 2) continue; // single-division league — no alignment needed
+                // Pick the EARLIEST startMin among all blocks as the target.
+                // Use the smallest durationMin so all windows can accommodate.
+                const targetStart = Math.min(...grp.map(l => Number(l.startMin) || 0));
+                const dMin = Math.min(...grp.map(l => Number(l.durationMin) || 30));
+                const targetEnd = targetStart + dMin;
+                // Verify each block's original window can hold [targetStart, targetEnd]
+                const allFit = grp.every(l => {
+                    const winStart = Number(l.startMin) || 0;
+                    const winEnd = Number(l.endMin) || 0;
+                    return winStart <= targetStart && winEnd >= targetEnd;
+                });
+                if (!allFit) {
+                    log('[CrossDivLeaguePin] cannot pin "' + lgName + '" — windows do not overlap at ' + targetStart);
+                    continue;
+                }
+                // Mutate every layer block in this group to pin it
+                grp.forEach(l => {
+                    l.startMin = targetStart;
+                    l.endMin = targetEnd;
+                    l.op = '=';
+                    l.qty = 1;
+                    l.durationMin = dMin;
+                    l.durationMax = dMin;
+                });
+                log('[CrossDivLeaguePin] "' + lgName + '" pinned to ' + targetStart + '-' + targetEnd +
+                    ' across ' + grp.length + ' division layer(s) [' + [...divs].join(', ') + ']');
+            }
+        } catch (_e) {
+            warn('[CrossDivLeaguePin] error: ' + (_e && _e.message));
+        }
+
         // ★ Phase 2.5 anti-orphan defer queue. Specials whose only legal positions
         // would create unfillable remainders get pushed here instead of pinned.
         // Phase 3.9 (after sport solver completes) tries to swap them back in by
@@ -13769,8 +13829,15 @@
         window._autoSkeleton = autoSkeleton;
 
         // =====================================================================
-        // ★ Day 20 fix #7: cross-division league time alignment
+        // ★ Day 20 fix #7 REVERTED: post-pass alignment caused cascades.
+        // Replaced by a pre-Phase-0 layer pin (search for "CrossDivLeaguePin"
+        // near the top of the gen) that pins cross-division league layer
+        // blocks to a common exact time BEFORE placement runs. That way
+        // Phase 0 treats them as hard anchors and no downstream phase needs
+        // to reshuffle. The block below is left commented for context.
         // =====================================================================
+        if (false) {
+        // === ORIGINAL POST-PASS (reverted) ===
         // When a league spans multiple divisions (e.g., "Duetos/Trios"), all
         // its blocks across those divisions MUST share the same start/end
         // time — the teams from both grades physically play each other.
@@ -13890,6 +13957,7 @@
         } catch (_e) {
             warn('[CrossDivAlign] error during alignment: ' + (_e && _e.message));
         }
+        } // end if (false) — original post-pass disabled, see CrossDivLeaguePin pre-pass above
 
         // Build divisionTimes
         if (window.DivisionTimesSystem) {
