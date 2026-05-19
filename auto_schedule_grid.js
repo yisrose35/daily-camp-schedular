@@ -274,6 +274,16 @@
                 if (a && a._league && !seen[slot.startMin]) {
                     seen[slot.startMin] = true;
 
+                    // ★ Day 20 fix #11: use the ASSIGNMENT's start/end, not the
+                    // bunk's slot-grid row, because the grid row indexes can be
+                    // off-by-one from the actual assignment times (e.g. when a
+                    // 10-min Change slot exists ahead of the swim block, the
+                    // league assignment sits at idx 1 with slot 650-690 but the
+                    // real league time is 690-730 — the overlay drew on top of
+                    // the swim block at the wrong column).
+                    var renderStart = (typeof a._startMin === 'number') ? a._startMin : slot.startMin;
+                    var renderEnd   = (typeof a._endMin   === 'number') ? a._endMin   : slot.endMin;
+
                     // Pull full matchup data from leagueAssignments (authoritative)
                     var matchups = a.matchups || [];
                     var gameLabel = a._gameLabel || '';
@@ -301,8 +311,8 @@
                     }
 
                     result.push({
-                        startMin:  slot.startMin,
-                        endMin:    slot.endMin,
+                        startMin:  renderStart,
+                        endMin:    renderEnd,
                         matchups:  matchups,
                         gameLabel: gameLabel,
                         leagueName: leagueName,
