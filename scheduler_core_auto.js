@@ -13768,6 +13768,99 @@
         window.manualSkeleton = autoSkeleton;
         window._autoSkeleton = autoSkeleton;
 
+        // =====================================================================
+        // ★ Day 20 fix #7: cross-division league time alignment
+        // =====================================================================
+        // When a league spans multiple divisions (e.g., "Duetos/Trios"), all
+        // its blocks across those divisions MUST share the same start/end
+        // time — the teams from both grades physically play each other.
+        // Phase 0 places each division's blocks independently, so blocks can
+        // land at different times. This pass detects misaligned cross-division
+        // league blocks and swaps the late one with whatever non-fixed block
+        // sits at the target (earliest) time in that division.
+        // =====================================================================
+        try {
+            const _crossDivLeagueGroups = {}; // leagueName -> [block, ...]
+            for (const b of autoSkeleton) {
+                if (b.type !== 'league' && b.type !== 'specialty_league') continue;
+                const lgName = b.event;
+                if (!lgName || /league game|specialty league/i.test(lgName)) continue;
+                _crossDivLeagueGroups[lgName] = _crossDivLeagueGroups[lgName] || [];
+                _crossDivLeagueGroups[lgName].push(b);
+            }
+            let _alignedCount = 0;
+            for (const lgName in _crossDivLeagueGroups) {
+                const blocks = _crossDivLeagueGroups[lgName];
+                const divsInLeague = new Set(blocks.map(b => b.division));
+                if (divsInLeague.size < 2) continue;
+                // Per-division: collapse to one representative block (earliest startMin)
+                const perDiv = {};
+                for (const b of blocks) {
+                    if (!perDiv[b.division] || b.startMin < perDiv[b.division].startMin) perDiv[b.division] = b;
+                }
+                const repBlocks = Object.values(perDiv);
+                const startMins = new Set(repBlocks.map(b => b.startMin));
+                if (startMins.size === 1) continue; // already aligned
+                // Pick the EARLIEST as alignment target
+                const targetStart = Math.min(...repBlocks.map(b => b.startMin));
+                const targetEnd = Math.min(...repBlocks.map(b => b.endMin));
+                for (const lb of repBlocks) {
+                    if (lb.startMin === targetStart) continue;
+                    const origStart = lb.startMin;
+                    const origEnd = lb.endMin;
+                    // Find the block sitting at targetStart in lb's division (per bunk)
+                    // and swap. If multiple bunks have league blocks (grade-wide), swap
+                    // each bunk's slot independently.
+                    const bunkOfLb = lb._bunk;
+                    const conflict = autoSkeleton.find(x =>
+                        x.division === lb.division && x._bunk === bunkOfLb &&
+                        x.startMin === targetStart);
+                    if (!conflict) {
+                        // No conflict — just retime
+                        lb.startMin = targetStart; lb.endMin = targetEnd;
+                        lb.startTime = minutesToTimeLabel(targetStart);
+                        lb.endTime = minutesToTimeLabel(targetEnd);
+                        _alignedCount++;
+                        continue;
+                    }
+                    // Swap times: league takes target, conflict takes original.
+                    // Refuse if conflict is hard-fixed (swim/lunch/etc.) — can't displace.
+                    const HARD = ['swim','lunch','snacks','dismissal','custom','change','pre-change','post-change'];
+                    if (HARD.includes(conflict.type)) {
+                        log('[CrossDivAlign] cannot align ' + lgName + ' for ' + lb.division +
+                            ' — target time ' + targetStart + ' occupied by ' + conflict.type);
+                        continue;
+                    }
+                    log('[CrossDivAlign] ' + lgName + ' ' + lb.division + ' bunk ' + bunkOfLb +
+                        ': ' + origStart + '-' + origEnd + ' ↔ ' + targetStart + '-' + conflict.endMin +
+                        ' (displaced ' + conflict.type + ' "' + conflict.event + '")');
+                    // Move league to target slot's time range
+                    lb.startMin = conflict.startMin;
+                    lb.endMin = conflict.endMin;
+                    lb.startTime = minutesToTimeLabel(conflict.startMin);
+                    lb.endTime = minutesToTimeLabel(conflict.endMin);
+                    // Move conflict to original league slot's time
+                    conflict.startMin = origStart;
+                    conflict.endMin = origEnd;
+                    conflict.startTime = minutesToTimeLabel(origStart);
+                    conflict.endTime = minutesToTimeLabel(origEnd);
+                    _alignedCount++;
+                }
+                // Also align ALL league blocks for this league across all bunks (not just the repBlock)
+                for (const b of blocks) {
+                    if (b.startMin !== targetStart) {
+                        b.startMin = targetStart;
+                        b.endMin = targetEnd;
+                        b.startTime = minutesToTimeLabel(targetStart);
+                        b.endTime = minutesToTimeLabel(targetEnd);
+                    }
+                }
+            }
+            if (_alignedCount > 0) log('[CrossDivAlign] aligned ' + _alignedCount + ' league block(s) across divisions');
+        } catch (_e) {
+            warn('[CrossDivAlign] error during alignment: ' + (_e && _e.message));
+        }
+
         // Build divisionTimes
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(autoSkeleton, divisions);
@@ -15531,6 +15624,11 @@
                 event: b.type === 'league' ? 'League Game' : 'Specialty League',
                 type: b.type, startTime: b.startTime, endTime: b.endTime,
                 startMin: b.startMin, endMin: b.endMin,
+                // ★ Day 20 fix #1: carry the block's leagueName hint forward
+                // so the writeback at line ~15614 can refuse mismatched
+                // matchups (the user wants Trios block → Day20 Test only,
+                // never Duetos/Trios even if both leagues cover Trios).
+                leagueName: b.leagueName || null,
                slots: (() => {
                     const dt = window.divisionTimes?.[b.division];
                     // ★ FIX: Use per-bunk slots in auto mode — division-level slots don't cover all times

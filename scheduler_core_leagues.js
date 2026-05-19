@@ -1401,11 +1401,19 @@ if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedAc
                     recordMatchup(league.name, a.team1, a.team2, history);
                 });
 window._debugLeagueTimeData = timeData;
-                leagueDivisions.forEach(divName => {
+                // ★ Day 20 fix #1: iterate filteredLeagueDivisions, not
+                // leagueDivisions. The filter at line ~1071 already determined
+                // which divisions' blocks named THIS league (or had no hint).
+                // Iterating leagueDivisions wrote matchups to divisions whose
+                // block named a DIFFERENT league, overwriting that league's
+                // intended placement.
+                filteredLeagueDivisions.forEach(divName => {
                     const blocksForDiv = timeData.byDivision[divName];
                     if (!blocksForDiv) return;
-
-                    blocksForDiv.forEach(block => {
+                    // Within the division, only fill blocks that named THIS
+                    // league or had no hint (extra safety if a division has
+                    // multiple league blocks).
+                    blocksForDiv.filter(b => !b.leagueName || b.leagueName === league.name).forEach(block => {
         // ★ FIX: Manual-mode blocks have only `startTime`; auto-mode blocks have both
         // `startTime` (string) and `startMin` (number). Normalize from `startTime` so
         // the check works in both modes. Previously checked `block.startMin`, which is
