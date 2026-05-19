@@ -13868,22 +13868,24 @@
                     conflict.endTime = minutesToTimeLabel(origEnd);
                     _alignedCount++;
                 }
-                // Post-check: if any block still has a different end time, force it
-                // to targetEnd (defensive — keeps display consistent even if a swap
-                // produced a non-matching duration). The user requires identical
-                // start AND end times across all bunks in a cross-division league.
+                // ★ Post-normalize REMOVED: previously force-stamped every block
+                // to (targetStart, targetEnd) but that could stretch a 30-min
+                // slot to 40 min, colliding with anchors at the stretched edge
+                // (e.g., a Change anchor right after the natural slot end).
+                // Each bunk now keeps its natural slot duration. If a bunk's
+                // slot at targetStart is shorter than others, its league shows
+                // shorter — visible mismatch, but no overlap. To achieve TRUE
+                // uniform start+end across all bunks, the underlying slot grids
+                // must already have matching durations at the target time, which
+                // requires symmetric anchor positioning (swim, change, lunch)
+                // across all participating divisions — a user-level config.
                 const finalStarts = new Set(blocks.map(b => b.startMin));
                 const finalEnds = new Set(blocks.map(b => b.endMin));
-                if (finalStarts.size > 1 || finalEnds.size > 1) {
-                    log('[CrossDivAlign] post-swap normalize ' + lgName + ' to ' + targetStart + '-' + targetEnd);
-                    for (const b of blocks) {
-                        if (b.startMin !== targetStart || b.endMin !== targetEnd) {
-                            b.startMin = targetStart;
-                            b.endMin = targetEnd;
-                            b.startTime = minutesToTimeLabel(targetStart);
-                            b.endTime = minutesToTimeLabel(targetEnd);
-                        }
-                    }
+                if (finalStarts.size > 1) {
+                    warn('[CrossDivAlign] ' + lgName + ' could not fully align starts: ' + [...finalStarts].join(','));
+                }
+                if (finalEnds.size > 1) {
+                    log('[CrossDivAlign] ' + lgName + ' end-time mismatch (bunk slot durations differ): ' + [...finalEnds].join(','));
                 }
             }
             if (_alignedCount > 0) log('[CrossDivAlign] aligned ' + _alignedCount + ' league block(s) across divisions');
