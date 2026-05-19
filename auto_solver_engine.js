@@ -892,7 +892,8 @@
             if (_debugThis) {
                 console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 candidates:', JSON.stringify(scored.map(s => ({sport: s.cand.sport, field: s.cand.field, score: s.score})).sort((a,b) => a.score - b.score).slice(0, 10)));
                 console.log('[SOLVER-DEBUG] Duetos 2 @ 745-775 Jumprope rejections:', JSON.stringify(_debugRejects));
-                console.log('[SOLVER-DEBUG] total candidates iterated:', candidates.length, 'doneToday:', [...doneToday]);
+                console.log('[SOLVER-DEBUG] total candidates:', candidates.length, 'all sport names:', JSON.stringify(candidates.map(c => c.sport)));
+                console.log('[SOLVER-DEBUG] Jumprope candidate present?', candidates.some(c => c.sport === 'Jumprope'));
             }
 
             if (scored.length === 0) {
