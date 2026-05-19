@@ -1628,6 +1628,10 @@
         loadMasterData();
         const sel = document.getElementById('report-view-select');
         const val = sel?.value || 'availability';
+        // forceRefresh = caller wants cache bypass (used by auto-refresh
+        // listeners after post-edit / generation events to ensure the rotation
+        // table reads the just-saved cloud data instead of the 30s cache)
+        const force = arguments[0] === true;
         if (val === 'availability') {
             // Re-snap selectedDate to the live date if user hasn't picked one
             // explicitly — keeps "today" tracking after a generate.
@@ -1638,20 +1642,28 @@
             renderAvailabilityShell();
         } else if (val === 'rotation') {
             const div = document.getElementById('rotation-div-select')?.value || '';
-            if (div) renderRotationTable(div);
+            if (div) renderRotationTable(div, force);
             else renderBunkRotationUI();
         }
     }
 
     // Listen for schedule changes so the report stays in sync with manual
     // generations and post-edits without the user needing to leave & come back.
+    //
+    // Two timing concerns:
+    //   1. applyPostEditCounts debounces RotationCloud.save by 500ms, so the
+    //      refresh must wait LONGER than that to read fresh cloud data.
+    //   2. The default renderRotationTable() uses the 30s RotationCloud cache,
+    //      so we must either invalidate the cache or force-refresh.
+    // Force-refresh + 800ms delay covers both.
     let _refreshTimer = null;
-    function scheduleRefresh() {
+    function scheduleRefresh(opts) {
         clearTimeout(_refreshTimer);
-        _refreshTimer = setTimeout(refreshActiveReport, 120);
+        const delay = (opts && opts.delay) || 800;
+        _refreshTimer = setTimeout(() => refreshActiveReport(true), delay);
     }
-    document.addEventListener('campistry-schedule-generated', scheduleRefresh);
-    document.addEventListener('campistry-post-edit-complete',  scheduleRefresh);
+    document.addEventListener('campistry-schedule-generated', () => scheduleRefresh());
+    document.addEventListener('campistry-post-edit-complete',  () => scheduleRefresh());
     // The auto-builder fires `campistry-generation-complete` on `window` (see
     // scheduler_core_auto.js / integration_hooks.js). Without this listener the
     // rotation tab held stale counts after every auto-generation. We also
