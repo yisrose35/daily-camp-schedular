@@ -15820,6 +15820,55 @@
             });
             log('[3] Wrote ' + leagueWriteCount + ' league slots');
 
+            // ★ Day 20 fix #7 cleanup: remove phantom "League Game" labels.
+            // The CrossDivAlign post-pass swaps autoSkeleton block positions
+            // (league ↔ a sport at the target time) so different downstream
+            // phases may have written "League Game" at BOTH the new and old
+            // positions before the swap took effect. Walk scheduleAssignments
+            // and clear any slot still labeled "League Game" at a position
+            // where autoSkeleton no longer has a league block for that bunk's
+            // division. Replace with the activity from the autoSkeleton block
+            // that now occupies that slot (the displaced sport / special).
+            let _phantomCleared = 0;
+            const _validLeaguePosByDiv = {};
+            for (const ab of autoSkeleton) {
+                if (ab.type !== 'league' && ab.type !== 'specialty_league') continue;
+                _validLeaguePosByDiv[ab.division] = _validLeaguePosByDiv[ab.division] || new Set();
+                _validLeaguePosByDiv[ab.division].add(ab.startMin);
+            }
+            for (const bk in window.scheduleAssignments) {
+                const arr = window.scheduleAssignments[bk] || [];
+                const divForBunk = (bk.match(/^(\w+)/) || [])[1];
+                const validSet = _validLeaguePosByDiv[divForBunk];
+                for (let i = 0; i < arr.length; i++) {
+                    const s = arr[i];
+                    if (!s || s._league) continue;
+                    if (s._activity !== 'League Game') continue;
+                    if (validSet && validSet.has(s._startMin)) continue;
+                    // Phantom: look up what autoSkeleton actually has at this position
+                    const real = autoSkeleton.find(ab =>
+                        ab.division === divForBunk && ab._bunk === bk &&
+                        ab.startMin === s._startMin);
+                    if (real) {
+                        arr[i] = {
+                            field: real.event || real._draftField || real._specialLocation || 'Free',
+                            sport: real._assignedSport || null,
+                            _activity: real.event || real._suggestedActivity || 'Free',
+                            _autoMode: true, continuation: false,
+                            _startMin: real.startMin, _endMin: real.endMin
+                        };
+                    } else {
+                        arr[i] = {
+                            field: 'Free', sport: null, _activity: 'Free',
+                            _autoMode: true, continuation: false,
+                            _startMin: s._startMin, _endMin: s._endMin
+                        };
+                    }
+                    _phantomCleared++;
+                }
+            }
+            if (_phantomCleared > 0) log('[CrossDivAlign cleanup] cleared ' + _phantomCleared + ' phantom League Game label(s)');
+
             // ★ v6.0: Write matchup info back to bunkTimelines league blocks
             // Source 1: processed leagueBlocks (have _allMatchups after processRegularLeagues)
             // ★ v6.0: Write ALL matchups to every bunk's league block (leagues are grade-wide, not bunk-based)
