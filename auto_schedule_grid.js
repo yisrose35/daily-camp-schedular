@@ -938,15 +938,16 @@
         leagueSlots.forEach(function (ls) {
             var leagueDur = ls.endMin - ls.startMin;
             var topPx = ROW_HEIGHT_TX + 3; // header row + 3px inset (matches blocks)
-            var heightPx = bunks.length * ROW_HEIGHT_TX - 6; // 3px top + 3px bottom inset
 
             var overlay = document.createElement('div');
             overlay.className = 'asg-tx-league';
+            // Anchor with bottom:3px so the overlay always stretches to fill
+            // the actual rendered bunk area regardless of row height variance.
             overlay.style.cssText = [
                 'left:' + calcLeft(ls.startMin),
                 'top:' + topPx + 'px',
-                'width:' + calcWidth(leagueDur),
-                'height:' + heightPx + 'px'
+                'bottom:3px',
+                'width:' + calcWidth(leagueDur)
             ].join(';');
 
             var lHdr = document.createElement('div');
