@@ -438,6 +438,67 @@
         const startTime = Date.now();
         const warnings = [];
 
+        // =====================================================================
+        // ★ Day 20 fix #7 v5: JointLeagueSlot — pre-Phase-0 reservation
+        // =====================================================================
+        // When a league spans 2+ divisions (e.g., "Duetos/Trios"), all
+        // participating bunks must have the league at the EXACT same start
+        // and end time — campers physically come from multiple grades to
+        // play each other. The user must not have to manually align swim/
+        // lunch/Change anchors across grades; the scheduler decides.
+        //
+        // Strategy: BEFORE Phase 0 classifies and places anything, scan the
+        // cross-division league layer blocks. Mutate them in place to have
+        // identical pinned windows: tight startMin/endMin (window = duration),
+        // op='=', tag _jointAnchor=true. Phase 0 classifier sees ratio>=1
+        // and pins them, and the new _jointAnchor tag causes Phase 0 to
+        // place them FIRST (before swim/lunch/specials) so swim/lunch and
+        // all other anchors must flow around the reserved league slot.
+        // This eliminates the swim-vs-league competition for the 650 slot
+        // that caused our previous attempts to fail.
+        try {
+            const _leagueLayersByName = {};
+            for (const ly of layers) {
+                if ((ly.type || '').toLowerCase() !== 'league') continue;
+                const lgName = ly.leagueName;
+                if (!lgName) continue;
+                _leagueLayersByName[lgName] = _leagueLayersByName[lgName] || [];
+                _leagueLayersByName[lgName].push(ly);
+            }
+            for (const lgName in _leagueLayersByName) {
+                const grp = _leagueLayersByName[lgName];
+                const divs = new Set(grp.map(l => l.grade || l.division));
+                if (divs.size < 2) continue; // single-division — no joint reservation
+                // Pick the EARLIEST common startMin across all blocks (where every
+                // block's window can fit) and the smallest duration.
+                const minWindowStart = Math.max(...grp.map(l => Number(l.startMin) || 0));
+                const maxWindowEnd = Math.min(...grp.map(l => Number(l.endMin) || 9999));
+                const dMin = Math.min(...grp.map(l => Number(l.durationMin) || 30));
+                // If the intersection of windows doesn't accommodate the duration, skip
+                if (maxWindowEnd - minWindowStart < dMin) {
+                    log('[JointLeagueSlot] "' + lgName + '" windows do not overlap enough — skipping');
+                    continue;
+                }
+                const targetStart = minWindowStart;
+                const targetEnd = targetStart + dMin;
+                // Mutate every layer block in this group
+                grp.forEach(l => {
+                    l.startMin = targetStart;
+                    l.endMin = targetEnd;
+                    l.op = '=';
+                    l.qty = 1;
+                    l.durationMin = dMin;
+                    l.durationMax = dMin;
+                    l._jointAnchor = true;
+                    l._jointLeagueName = lgName;
+                });
+                log('[JointLeagueSlot] "' + lgName + '" pinned to ' + targetStart + '-' + targetEnd +
+                    ' across ' + grp.length + ' layer(s) in ' + [...divs].join(', '));
+            }
+        } catch (_e) {
+            warn('[JointLeagueSlot] error: ' + (_e && _e.message));
+        }
+
         // ★ Phase 2.5 anti-orphan defer queue. Specials whose only legal positions
         // would create unfillable remainders get pushed here instead of pinned.
         // Phase 3.9 (after sport solver completes) tries to swap them back in by
@@ -2057,6 +2118,13 @@
             const orderedPinned = pinnedLayers.slice().sort((a, b) => {
                 const aType = (a.type || '').toLowerCase();
                 const bType = (b.type || '').toLowerCase();
+                // ★ Day 20 fix #7 v5: joint cross-division league anchors run
+                // BEFORE everything else. They reserve identical time across
+                // multiple divisions, and swim/lunch/etc. must flow around them.
+                const aJoint = a._jointAnchor ? 1 : 0;
+                const bJoint = b._jointAnchor ? 1 : 0;
+                if (aJoint !== bJoint) return bJoint - aJoint; // joints first (higher first)
+
                 const aSwim = aType === 'swim' ? 1 : 0;
                 const bSwim = bType === 'swim' ? 1 : 0;
                 if (aSwim !== bSwim) return aSwim - bSwim; // non-swim before swim
@@ -13769,8 +13837,14 @@
         window._autoSkeleton = autoSkeleton;
 
         // =====================================================================
-        // ★ Day 20 fix #7: cross-division league time alignment
+        // ★ Day 20 fix #7 v3 DISABLED: post-pass swap was wrong approach.
+        // Real fix is in pre-Phase-0 joint-slot reservation that picks a time
+        // where every participating bunk has a movable slot of matching
+        // duration. See "JointLeagueSlot" pass near the top of runAutoScheduler.
         // =====================================================================
+        if (false) {
+        // === ORIGINAL POST-PASS BELOW ===
+        // ★ Day 20 fix #7: cross-division league time alignment
         // When a league spans multiple divisions (e.g., "Duetos/Trios"), all
         // its blocks across those divisions MUST share the same start/end
         // time — the teams from both grades physically play each other.
@@ -13892,6 +13966,7 @@
         } catch (_e) {
             warn('[CrossDivAlign] error during alignment: ' + (_e && _e.message));
         }
+        } // end if (false) — post-pass disabled; see JointLeagueSlot pre-pass
 
         // Build divisionTimes
         if (window.DivisionTimesSystem) {
