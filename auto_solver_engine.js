@@ -1185,6 +1185,54 @@
             }
         } catch (e) { /* never let a rule lookup error block legal writes */ }
 
+        // ★ Day 23 fix: STAGGER REJECTION (centralized hard gate).
+        //   If a same-grade bunk is already doing this same activity on this
+        //   same field with PARTIAL time overlap (overlap exists but not
+        //   identical start/end), reject the write. The two bunks can't
+        //   actually share the activity at misaligned times — one arrives
+        //   late or leaves early. They must EITHER share the exact same
+        //   time window OR have NO time overlap at all.
+        //   Centralized here so all placement paths benefit (main solve,
+        //   fallbackSweep, LNS, ejection chain, BFS, capacity-relax).
+        if (sport && fieldName && fieldName !== 'Free' && sMin != null && eMin != null) {
+            try {
+                const _sportLower = String(sport).toLowerCase().trim();
+                const _fieldLower = String(fieldName).toLowerCase().trim();
+                const _saAll = window.scheduleAssignments || {};
+                for (const _otherBunk in _saAll) {
+                    if (_otherBunk === bunk) continue;
+                    // Same grade?
+                    let _otherGrade = '';
+                    const _divs = window.divisions || {};
+                    for (const _g in _divs) {
+                        if ((_divs[_g].bunks || []).map(String).includes(String(_otherBunk))) {
+                            _otherGrade = _g; break;
+                        }
+                    }
+                    if (_otherGrade !== grade) continue;
+                    const _otherSlots = _saAll[_otherBunk] || [];
+                    for (let _oi = 0; _oi < _otherSlots.length; _oi++) {
+                        const _w = _otherSlots[_oi];
+                        if (!_w || _w.continuation) continue;
+                        const _wField = String(_w.field || '').toLowerCase().trim();
+                        if (_wField !== _fieldLower) continue;
+                        const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
+                        if (_wAct !== _sportLower) continue;
+                        const _ws = _w._startMin, _we = _w._endMin;
+                        if (_ws == null || _we == null) continue;
+                        // Overlap? (half-open)
+                        if (_ws < eMin && _we > sMin) {
+                            // Identical times = OK (true sharing)
+                            if (_ws === sMin && _we === eMin) continue;
+                            // Partial overlap = REJECT
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — would partial-overlap ' + _otherBunk + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
+                            return false;
+                        }
+                    }
+                }
+            } catch (_se) { /* never block on stagger-check error */ }
+        }
+
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
         window.scheduleAssignments[bunk][slotIdx] = entry;
         // Invalidate rotation caches for this bunk so any later score
@@ -1401,6 +1449,16 @@
                     }
 
                     if (blocked) continue;
+
+                    // ★ Day 23 fix: STAGGER REJECTION (same as main solve loop).
+                    //   Same-grade bunk doing same activity on same field with
+                    //   PARTIAL overlap must be rejected — see solver main loop.
+                    const _staggerHit = overlapping.some(e =>
+                        e.grade === grade &&
+                        e.activity === cand.sportNorm &&
+                        !(e.startMin === startMin && e.endMin === endMin)
+                    );
+                    if (_staggerHit) continue;
 
                     // ★ Route through hard guard so accessRestrictions /
                     //   timeRules / Unavailable windows reject illegal fills.
