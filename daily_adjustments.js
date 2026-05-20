@@ -4984,74 +4984,86 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
   };
 
-  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+  // Each bunk column shows the SAME band layout as the master scheduler grade column:
+  // N narrow vertical bands (BAND_WIDTH px each), one per layer, positioned by time.
+  const BAND_WIDTH = (typeof window.DAW_BAND_WIDTH === 'number') ? window.DAW_BAND_WIDTH : 40;
+  const BAND_GAP   = 4;
+  const BAND_PAD   = 4;
+  const layerCount = Math.max(1, layers.length);
+  const colWidth   = layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2;
 
-  // Header row
-  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  let html = `<div class="bo-auto-grid" style="display:flex;gap:6px;margin-top:12px;overflow-x:auto;padding-bottom:8px;">`;
+
+  // Time ruler column (fixed left)
+  html += `<div style="flex:0 0 70px;">`;
+  html += `<div style="height:34px;"></div>`; // header spacer
+  html += `<div style="position:relative;height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += incMins) {
+    const top = (m - earliestMin) * PX;
+    html += `<div style="position:absolute;top:${top}px;font-size:10px;color:#64748b;padding-left:4px;">${minutesToTime(m)}</div>`;
+  }
+  html += `</div></div>`;
+
+  // Bunk columns — each rendered exactly like a grade column in renderDAWGrid
   bunks.forEach(bunk => {
     const bunkOverrides = overrides.filter(o => o.bunk === bunk);
-    const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
-  });
+    const badge = bunkOverrides.length > 0
+      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>`
+      : '';
 
-  // Time column
-  html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
-  for (let m = earliestMin; m < latestMin; m += incMins) {
-    html += `<div class="da-time-marker" style="top:${(m - earliestMin) * PX}px;">${minutesToTime(m)}</div>`;
-  }
-  html += '</div>';
+    html += `<div class="bo-auto-bunk-col" data-bunk="${_escHtml(bunk)}" style="flex:0 0 ${colWidth}px;">`;
+    // Bunk header
+    html += `<div style="height:34px;background:${color};color:#fff;font-size:11px;font-weight:600;padding:8px 6px;text-align:center;border-radius:6px 6px 0 0;">${_escHtml(bunk)}${badge}</div>`;
+    // Bunk track
+    html += `<div class="bo-auto-track" style="position:relative;height:${totalHeight}px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 6px 6px;">`;
 
-  // Bunk columns
-  bunks.forEach(bunk => {
-    html += `<div class="da-grid-cell bo-bunk-col" data-bunk="${_escHtml(bunk)}" style="height:${totalHeight}px;position:relative;">`;
+    // Horizontal gridlines (every 30 min)
+    for (let m = earliestMin; m < latestMin; m += incMins) {
+      const top = (m - earliestMin) * PX;
+      html += `<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px dashed #e2e8f0;"></div>`;
+    }
 
-    layers.forEach(layer => {
+    // Narrow vertical bands — one per layer
+    layers.forEach((layer, idx) => {
       const sm = layer.startMin, em = layer.endMin;
       if (sm == null || em == null || em <= sm) return;
-      const override = overrides.find(o => o.bunk === bunk && o.startMin === sm && o.endMin === em);
       const top = (sm - earliestMin) * PX;
       const height = Math.max((em - sm) * PX - 2, 24);
-      let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
+
+      const override = overrides.find(o =>
+        o.bunk === bunk && o.startMin === sm && o.endMin === em
+        && (o.layerType == null || o.layerType === (layer.type || 'custom'))
+      );
+
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+      const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+      const durLabel = _dMin && _dMax && _dMin !== _dMax
+        ? `${_dMin}-${_dMax}m`
+        : `${_dMin || layer.periodMin || (em - sm)}m`;
 
       if (override) {
         const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
-        let content;
-        if (height < 35) {
-          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
-        } else {
-          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
-          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
-        }
-        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-ov-id="${_escHtml(override.id)}"
-          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, right-click to revert"
-          style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
-          ${content}
-          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+        html += `<div class="bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(layer.type || 'custom')}" data-ov-id="${_escHtml(override.id)}"
+          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit"
+          style="${oStyle}position:absolute;top:${top}px;left:${left}px;width:${BAND_WIDTH}px;height:${height}px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;font-size:9px;line-height:1.1;overflow:hidden;padding:2px;">
+          <div style="font-weight:700;">${_escHtml(override.activity)}</div>
+          <div style="position:absolute;top:2px;right:3px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert">✕</div>
         </div>`;
       } else {
         const bg = TYPE_BG[String(layer.type || 'custom').toLowerCase()] || '#e2e8f0';
         const evName = _typeLabel(layer);
-        const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
-        const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
-        const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
-        const durLabel = _dMin && _dMax && _dMin !== _dMax ? `${_dMin}-${_dMax}m` : `${_dMin || layer.periodMin || (em - sm)}m`;
-        let content;
-        if (height < 35) {
-          content = `<span style="font-weight:600;font-size:${fontSize};">${_escHtml(evName)}</span>`;
-        } else {
-          content = `<strong style="font-size:${fontSize};">${_escHtml(evName)}</strong>`;
-          content += `<div style="font-size:9px;opacity:0.7;">${opSymbol}${layer.qty || 1} · ${durLabel}</div>`;
-        }
-        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-ev-type="${layer.type || 'slot'}"
+        html += `<div class="bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(layer.type || 'custom')}"
           title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
-          style="background:${bg};color:#1e293b;border:1px solid rgba(0,0,0,0.1);top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
-          ${content}
+          style="background:${bg};color:#1e293b;border:1px solid rgba(0,0,0,0.12);position:absolute;top:${top}px;left:${left}px;width:${BAND_WIDTH}px;height:${height}px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;font-size:9px;line-height:1.15;overflow:hidden;padding:2px;">
+          <div style="font-weight:600;">${_escHtml(evName)}</div>
+          <div style="font-size:8px;opacity:0.7;">${opSymbol}${layer.qty || 1} · ${durLabel}</div>
         </div>`;
       }
     });
 
-    html += '</div>';
+    html += `</div></div>`; // /track /col
   });
 
   html += '</div>';
