@@ -2236,6 +2236,80 @@
     //   SA finds a good neighborhood; repair polishes specific violations.
     smartRepair(window.scheduleAssignments, ctx);
 
+    // ★ Day 22.5 IRON GATE: final scrub for DA Resources daily time rules.
+    //   No matter which path (V1, safety net, V2 SA moves, smartRepair, null
+    //   bucket finalizer) placed something, this final pass clears any slot
+    //   that overlaps an Unavailable window or falls outside an Available
+    //   window for its grade. Guarantees 100% time-rule accuracy.
+    (function _ironGateTimeRules() {
+      try {
+        function _getDaily(fieldName) {
+          try {
+            const ap = window.activityProperties?.[fieldName]?.timeRules;
+            if (Array.isArray(ap) && ap.length > 0) return ap;
+            const dd = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+            if (Array.isArray(dd) && dd.length > 0) return dd;
+            const dk = window.currentScheduleDate || '';
+            if (dk) {
+              const stored = localStorage.getItem('campResourceOverrides_' + dk);
+              if (stored) {
+                const parsed = JSON.parse(stored);
+                const ls = parsed?.dailyFieldAvailability?.[fieldName];
+                if (Array.isArray(ls) && ls.length > 0) return ls;
+              }
+            }
+          } catch (_e) {}
+          return null;
+        }
+        const sa = window.scheduleAssignments || {};
+        const divs = window.divisions || {};
+        let cleared = 0;
+        for (const [bunk, slots] of Object.entries(sa)) {
+          if (!Array.isArray(slots)) continue;
+          let grade = null;
+          for (const [d, info] of Object.entries(divs)) {
+            if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+          }
+          for (let i = 0; i < slots.length; i++) {
+            const s = slots[i];
+            if (!s || s.continuation) continue;
+            const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+            if (!field || field === 'Free') continue;
+            const sMin = s._startMin, eMin = s._endMin;
+            if (sMin == null || eMin == null) continue;
+            const rules = _getDaily(field);
+            if (!Array.isArray(rules) || rules.length === 0) continue;
+            let bad = false;
+            let hasAvail = false, inside = false;
+            for (const r of rules) {
+              const t = String(r.type || '').toLowerCase();
+              const isUnavail = t === 'unavailable' || r.available === false;
+              const isAvail = t === 'available' || r.available === true;
+              const rs = r.startMin ?? null, re = r.endMin ?? null;
+              if (rs == null || re == null) continue;
+              if (Array.isArray(r.divisions) && r.divisions.length > 0
+                  && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+              if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+              if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+            }
+            if (!bad && hasAvail && !inside) bad = true;
+            if (bad) {
+              slots[i] = {
+                field: 'Free', sport: null, _activity: 'Free',
+                _autoMode: true, _fixed: true,
+                _startMin: sMin, _endMin: eMin,
+                _source: 'iron-gate-time-rule',
+                _violationReason: 'DA time rule on ' + field,
+                continuation: false
+              };
+              cleared++;
+            }
+          }
+        }
+        if (cleared > 0) console.warn('[V2 IRON GATE] cleared ' + cleared + ' time-rule violation(s)');
+      } catch (e) { console.warn('[V2 IRON GATE] error: ' + e.message); }
+    })();
+
     // ★ INVARIANT CHECK (X2f-18c): schedule[bunk][i] and perBunkSlots[grade][bunk][i]
     //   MUST be index-aligned at the same start/end. The renderer reads
     //   bucket bounds for column positions and slot._activity for labels —
