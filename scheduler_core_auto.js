@@ -15136,38 +15136,35 @@
             }
 
             // Field-level grade-scoped time rules
-            // ★ Day 22.5 fix: ALSO read DA Resources daily rules.
-            // The DA Resources tab writes daily time rules into
-            //   - dailyData.dailyFieldAvailability[fieldName]
-            //   - window.activityProperties[fieldName].timeRules (merged at gen start)
-            //   - localStorage 'campResourceOverrides_<date>'
-            // The previous version only read fld.timeRules (camp-setup global
-            // rules), so daily-only Unavailable windows added in DA Resources
-            // were silently ignored by every write site and the safety net.
+            // ★ Day 22.5 fix: ALSO read DA Resources daily rules from THREE
+            //   sources, because window.activityProperties may be wiped between
+            //   gen entry and downstream writes:
+            //     1. window.activityProperties[fieldName].timeRules (gen-entry merge)
+            //     2. dailyData.dailyFieldAvailability[fieldName]
+            //     3. localStorage 'campResourceOverrides_<date>'
+            //   Daily overrides REPLACE setup-level rules (matches gen-entry merge).
             let _writeRules = (fld && Array.isArray(fld.timeRules)) ? fld.timeRules.slice() : [];
             try {
                 const _apRules = window.activityProperties?.[fieldName]?.timeRules;
                 if (Array.isArray(_apRules) && _apRules.length > 0) {
-                    // Daily overrides REPLACE setup-level rules for this field
-                    // (matches the merge semantics at solver entry around line 800).
                     _writeRules = _apRules.slice();
-                }
-            } catch (_e) {}
-            if (_writeRules.length === 0) {
-                // Last-ditch fallback: read directly from localStorage so the
-                // safety net works even before activityProperties is populated.
-                try {
-                    const _dk = window.currentScheduleDate || '';
-                    if (_dk) {
-                        const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
-                        if (_stored) {
-                            const _parsed = JSON.parse(_stored);
-                            const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
-                            if (Array.isArray(_lsRules) && _lsRules.length > 0) _writeRules = _lsRules.slice();
+                } else {
+                    const _ddRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                    if (Array.isArray(_ddRules) && _ddRules.length > 0) {
+                        _writeRules = _ddRules.slice();
+                    } else {
+                        const _dk = window.currentScheduleDate || '';
+                        if (_dk) {
+                            const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                            if (_stored) {
+                                const _parsed = JSON.parse(_stored);
+                                const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                                if (Array.isArray(_lsRules) && _lsRules.length > 0) _writeRules = _lsRules.slice();
+                            }
                         }
                     }
-                } catch (_e) {}
-            }
+                }
+            } catch (_e) {}
             if (_writeRules.length > 0 && startMin != null && endMin != null) {
                 const myG = grade != null ? String(grade) : null;
                 let hasGradeAvail = false, insideAvail = false;
