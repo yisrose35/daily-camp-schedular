@@ -2780,11 +2780,16 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   };
 }
 
-// ★ Day 24: Auto-builder bunk overrides — per-grade panel that mirrors
-//   Daily Adjustments' bunk-override UI but reads from `dawLayers[grade]`
-//   instead of the manual skeleton. Saves to `bunkActivityOverrides`
-//   (same array DA writes to). The auto-gen pipeline already honours
-//   that array via Phase 0 override injection.
+// ★ Day 24: Auto-builder bunk overrides.
+//   Concept mirrors the Manual Builder bunk override flow (pick a grade,
+//   then see the same grade view but expanded to one column per BUNK
+//   instead of one column per grade), but the visual is the auto-builder
+//   timeline style: vertical time-rail on the left, each bunk gets its own
+//   column with the SAME layer bands the grade has. Click any band to
+//   override that bunk's activity for that time slot.
+//   Storage = same `bunkActivityOverrides` array Daily Adjustments uses,
+//   so the auto-gen pipeline already honours it (Phase 0 override
+//   injection in scheduler_core_auto.js).
 function openAutoBunkOverridesPanel(grade) {
     const divisions = window.divisions || {};
     const div = divisions[grade];
@@ -2800,7 +2805,21 @@ function openAutoBunkOverridesPanel(grade) {
         window.showAlert?.('No layers in this grade yet. Add a layer first.');
         return;
     }
-    // Read current overrides
+
+    // Grade time bounds for the time-rail
+    const gradeStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
+    const gradeEnd   = parseTimeToMinutes(div.endTime)   || Math.max(...layers.map(l => l.endMin));
+    // Expand to layer bounds if layers stretch beyond grade times
+    const railStart = Math.min(gradeStart, ...layers.map(l => l.startMin));
+    const railEnd   = Math.max(gradeEnd,   ...layers.map(l => l.endMin));
+    const PX = DAW_PIXELS_PER_MINUTE;
+    const totalHeight = (railEnd - railStart) * PX;
+    const BAND_W = DAW_BAND_WIDTH;
+    const BAND_G = DAW_BAND_GAP;
+    const BAND_P = 6;
+    const colWidth = Math.max(140, layers.length * (BAND_W + BAND_G) + BAND_P * 2);
+
+    // Read / save overrides
     const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     const getOverrides = () => {
         if (typeof window._boGetCurrentOverrides === 'function') return window._boGetCurrentOverrides();
@@ -2809,72 +2828,101 @@ function openAutoBunkOverridesPanel(grade) {
     };
     const saveOverrides = (list) => {
         if (typeof window._boSaveOverrides === 'function') return window._boSaveOverrides(list);
-        // Fallback: write directly
         if (window.saveCurrentDailyData) window.saveCurrentDailyData('bunkActivityOverrides', list);
         try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(list)); } catch(_) {}
     };
 
     // Build overlay
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:9000;display:flex;align-items:center;justify-content:center;padding:24px;';
     overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
     const panel = document.createElement('div');
-    panel.style.cssText = 'background:#fff;border-radius:12px;width:100%;max-width:1200px;max-height:90vh;overflow:auto;padding:20px;box-shadow:0 12px 32px rgba(0,0,0,0.25);';
+    panel.style.cssText = 'background:#fff;border-radius:14px;width:100%;max-width:1500px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 16px 40px rgba(0,0,0,0.3);overflow:hidden;';
     overlay.appendChild(panel);
 
     const renderInner = () => {
         const overrides = getOverrides();
         const gradeOverrides = overrides.filter(o => bunks.map(String).includes(String(o.bunk)));
 
-        let html = '';
-        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
-        html += '<div><h2 style="margin:0;font-size:18px;color:#1e293b;">Bunk Overrides — ' + grade + '</h2>';
-        html += '<p style="margin:4px 0 0;font-size:12px;color:#64748b;">Click any layer slot to override that bunk\'s activity. Auto-gen will honour the override on its next run.</p></div>';
-        html += '<div style="display:flex;gap:8px;align-items:center;">';
+        // Header
+        let header = '<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e5e7eb;background:#f9fafb;flex-shrink:0;">';
+        header += '<div><h2 style="margin:0;font-size:17px;color:#1e293b;font-weight:700;">🎯 Bunk Overrides — ' + grade + '</h2>';
+        header += '<p style="margin:3px 0 0;font-size:11px;color:#64748b;">Click any layer band to override that bunk\'s activity for that slot. Saved automatically.</p></div>';
+        header += '<div style="display:flex;gap:8px;align-items:center;">';
         if (gradeOverrides.length > 0) {
-            html += '<span style="font-size:12px;color:#64748b;">' + gradeOverrides.length + ' override(s) for ' + grade + '</span>';
-            html += '<button id="abo-clear-grade" style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:600;">Clear ' + grade + '</button>';
+            header += '<span style="font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:99px;padding:3px 10px;font-weight:600;">' + gradeOverrides.length + ' override' + (gradeOverrides.length === 1 ? '' : 's') + '</span>';
+            header += '<button id="abo-clear-grade" style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:600;">Clear All</button>';
         }
-        html += '<button id="abo-close" style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:600;">Close</button>';
-        html += '</div></div>';
+        header += '<button id="abo-close" style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 14px;font-size:13px;cursor:pointer;font-weight:600;">Close</button>';
+        header += '</div></div>';
 
-        // Table: rows = layers, cols = bunks
-        html += '<div style="overflow:auto;border:1px solid #e5e7eb;border-radius:8px;">';
-        html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
-        html += '<thead><tr style="background:#f9fafb;">';
-        html += '<th style="padding:8px 10px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e5e7eb;position:sticky;left:0;background:#f9fafb;z-index:1;min-width:160px;">Layer · Time</th>';
-        bunks.forEach(b => {
-            html += '<th style="padding:8px 6px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e5e7eb;min-width:110px;">' + b + '</th>';
-        });
-        html += '</tr></thead><tbody>';
+        // Build per-bunk DAW-style grid (matches the auto builder visual)
+        let grid = '<div style="display:flex;overflow:auto;flex:1;padding:14px;background:#fafafa;">';
 
-        layers.forEach(layer => {
-            const sm = layer.startMin, em = layer.endMin;
-            const layerLabel = (DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type)
-                + ' · ' + minutesToTime(sm) + '–' + minutesToTime(em);
-            html += '<tr style="border-top:1px solid #f1f5f9;">';
-            html += '<td style="padding:8px 10px;font-weight:600;color:#334155;background:#fafafa;position:sticky;left:0;z-index:1;">' + layerLabel + '</td>';
-            bunks.forEach(b => {
-                const ov = overrides.find(o => String(o.bunk) === String(b) && o.startMin === sm && o.endMin === em);
+        // Time ruler (left)
+        const RAIL_W = 60;
+        grid += '<div style="width:' + RAIL_W + 'px;flex-shrink:0;position:sticky;left:0;background:#fafafa;z-index:2;">';
+        grid += '<div style="height:36px;border-bottom:1px solid #e5e7eb;"></div>'; // header spacer
+        grid += '<div style="position:relative;height:' + totalHeight + 'px;">';
+        // 30-min tick marks
+        for (let m = railStart; m <= railEnd; m += 30) {
+            const top = (m - railStart) * PX;
+            const major = m % 60 === 0;
+            grid += '<div style="position:absolute;top:' + top + 'px;left:0;right:0;font-size:10px;color:#94a3b8;padding-left:4px;border-top:1px ' + (major ? 'solid #cbd5e1' : 'dashed #e5e7eb') + ';">' + minutesToTime(m) + '</div>';
+        }
+        grid += '</div></div>';
+
+        // Per-bunk columns
+        bunks.forEach(bunk => {
+            const bOvs = overrides.filter(o => String(o.bunk) === String(bunk));
+            grid += '<div style="width:' + colWidth + 'px;flex-shrink:0;margin-left:6px;">';
+            // Bunk header
+            const badge = bOvs.length > 0 ? '<span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + bOvs.length + '</span>' : '';
+            grid += '<div style="height:36px;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0f766e 0%,#0d9488 100%);color:#fff;border-radius:8px 8px 0 0;font-weight:700;font-size:13px;border-bottom:2px solid #0d9488;">' + bunk + badge + '</div>';
+            // Track
+            grid += '<div style="position:relative;height:' + totalHeight + 'px;background:#fff;border:1px solid #e5e7eb;border-top:none;border-radius:0 0 8px 8px;">';
+            // Horizontal gridlines
+            for (let m = railStart + 30; m < railEnd; m += 30) {
+                const top = (m - railStart) * PX;
+                const major = m % 60 === 0;
+                grid += '<div style="position:absolute;top:' + top + 'px;left:0;right:0;border-top:1px ' + (major ? 'solid #f1f5f9' : 'dashed #f8fafc') + ';"></div>';
+            }
+            // Layer bands (one per layer)
+            layers.forEach((layer, idx) => {
+                const top = (layer.startMin - railStart) * PX;
+                const height = Math.max(24, (layer.endMin - layer.startMin) * PX);
+                const left = BAND_P + idx * (BAND_W + BAND_G);
+                const ov = bOvs.find(o => o.startMin === layer.startMin && o.endMin === layer.endMin);
+                const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
+                const defaultLabel = layer.leagueName || typeDef?.name || layer.type;
+
                 if (ov) {
-                    html += '<td style="padding:4px 6px;">';
-                    html += '<div class="abo-cell abo-ov" data-bunk="' + b + '" data-sm="' + sm + '" data-em="' + em + '" data-ov-id="' + (ov.id || '') + '" '
-                        + 'style="background:#fef3c7;color:#92400e;border:2px solid #f59e0b;border-radius:6px;padding:5px 8px;cursor:pointer;font-weight:600;text-align:center;position:relative;">'
-                        + ov.activity
-                        + '<span class="abo-revert" data-ov-id="' + (ov.id || '') + '" style="position:absolute;top:1px;right:4px;font-size:10px;color:#dc2626;font-weight:bold;cursor:pointer;" title="Revert">×</span>'
-                        + '</div></td>';
+                    // Override band — yellow highlight
+                    grid += '<div class="abo-band abo-ov" data-bunk="' + bunk + '" data-sm="' + layer.startMin + '" data-em="' + layer.endMin + '" data-ov-id="' + (ov.id || '') + '" '
+                        + 'style="position:absolute;top:' + top + 'px;height:' + height + 'px;left:' + left + 'px;width:' + BAND_W + 'px;'
+                        + 'background:linear-gradient(180deg,#fef3c7 0%,#fde68a 100%);border:2px solid #f59e0b;border-radius:6px;cursor:pointer;'
+                        + 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px 2px;overflow:hidden;font-size:10px;color:#78350f;font-weight:700;text-align:center;line-height:1.1;" '
+                        + 'title="Override: ' + ov.activity + ' (' + minutesToTime(layer.startMin) + '–' + minutesToTime(layer.endMin) + ')">'
+                        + '<span style="word-break:break-word;">' + ov.activity + '</span>'
+                        + '<span class="abo-revert" data-ov-id="' + (ov.id || '') + '" style="position:absolute;top:1px;right:3px;font-size:11px;color:#dc2626;font-weight:bold;cursor:pointer;" title="Revert">×</span>'
+                        + '</div>';
                 } else {
-                    html += '<td style="padding:4px 6px;">';
-                    html += '<div class="abo-cell abo-default" data-bunk="' + b + '" data-sm="' + sm + '" data-em="' + em + '" '
-                        + 'style="background:#f8fafc;color:#64748b;border:1px dashed #cbd5e1;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:center;font-style:italic;">'
-                        + '(use grade default)</div></td>';
+                    // Default band — pale, hint to override
+                    const bgColor = typeDef?.style ? typeDef.style.split('background:')[1]?.split(';')[0] || '#e2e8f0' : '#e2e8f0';
+                    grid += '<div class="abo-band abo-default" data-bunk="' + bunk + '" data-sm="' + layer.startMin + '" data-em="' + layer.endMin + '" '
+                        + 'style="position:absolute;top:' + top + 'px;height:' + height + 'px;left:' + left + 'px;width:' + BAND_W + 'px;'
+                        + 'background:' + bgColor + ';opacity:0.55;border:1px dashed #94a3b8;border-radius:6px;cursor:pointer;'
+                        + 'display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4px 2px;overflow:hidden;font-size:10px;color:#334155;font-weight:600;text-align:center;line-height:1.1;" '
+                        + 'title="' + defaultLabel + ' (default for ' + grade + ') — click to override for ' + bunk + '">'
+                        + '<span style="word-break:break-word;">' + defaultLabel + '</span>'
+                        + '</div>';
                 }
             });
-            html += '</tr>';
+            grid += '</div></div>';
         });
-        html += '</tbody></table></div>';
 
-        panel.innerHTML = html;
+        grid += '</div>';
+        panel.innerHTML = header + grid;
 
         // Wire up clicks
         panel.querySelector('#abo-close').onclick = () => overlay.remove();
@@ -2898,21 +2946,17 @@ function openAutoBunkOverridesPanel(grade) {
                 renderInner();
             };
         });
-        // Cell click → activity picker
-        panel.querySelectorAll('.abo-cell').forEach(cell => {
-            cell.onclick = (e) => {
-                if (e.target.classList.contains('abo-revert')) return; // handled separately
-                const bunk = cell.dataset.bunk;
-                const sm = parseInt(cell.dataset.sm);
-                const em = parseInt(cell.dataset.em);
+        // Band click → activity picker
+        panel.querySelectorAll('.abo-band').forEach(band => {
+            band.onclick = (e) => {
+                if (e.target.classList.contains('abo-revert')) return;
+                const bunk = band.dataset.bunk;
+                const sm = parseInt(band.dataset.sm);
+                const em = parseInt(band.dataset.em);
                 if (typeof window._boShowPicker === 'function') {
-                    // Reuse DA's picker. It calls _boApplyOverride which writes to
-                    // currentOverrides.bunkActivityOverrides; we re-render after a
-                    // short delay so the new state is reflected.
-                    window._boShowPicker(cell, bunk, sm, em);
+                    window._boShowPicker(band, bunk, sm, em);
                     setTimeout(renderInner, 350);
                 } else {
-                    // Fallback: simple prompt
                     const act = prompt('Activity name for ' + bunk + ' at ' + minutesToTime(sm) + '-' + minutesToTime(em) + ':');
                     if (!act) return;
                     const list = getOverrides();
