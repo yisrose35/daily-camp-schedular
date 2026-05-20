@@ -5061,13 +5061,32 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const evName = _typeLabel(layer);
 
       if (override) {
-        // Override bands get a distinct amber treatment but keep the band shape
-        html += `<div class="ms-daw-band bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}"
-          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit"
-          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;">
-          <span class="band-label">${_escHtml(override.activity)}</span>
-          <span class="band-qty">override</span>
-          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;color:#7c2d12;font-weight:700;">✕</div>
+        // Three override modes get different visual treatments:
+        //   • sportPool → green "pool of N sports" band
+        //   • delete   → grey hatched "deleted" band
+        //   • force / default → amber single-activity band
+        const mode = override.overrideMode || 'force';
+        let bandStyle, mainLabel, subLabel;
+        if (mode === 'sportPool') {
+          const poolCount = (override.sportPool || []).length;
+          bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+          mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+          subLabel  = (override.sportPool || []).join(' / ').slice(0, 28);
+        } else if (mode === 'delete') {
+          bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+          mainLabel = '— deleted —';
+          subLabel  = 'skipped for this bunk';
+        } else {
+          bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+          mainLabel = override.activity;
+          subLabel  = 'override';
+        }
+        html += `<div class="ms-daw-band bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          <span class="band-label">${_escHtml(mainLabel)}</span>
+          <span class="band-qty">${_escHtml(subLabel)}</span>
+          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
         </div>`;
       } else {
         html += `<div class="ms-daw-band bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
@@ -5085,14 +5104,15 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   html += '</div></div>'; // /columns-wrap /scroll
   wrap.innerHTML = html;
 
-  // Attach click handlers on blocks
+  // Auto-mode bands → rich popover. Manual mode keeps the simple picker.
   wrap.querySelectorAll('.bo-block').forEach(block => {
     block.onclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
       const bunk = block.dataset.bunk;
       const startMin = parseInt(block.dataset.start);
       const endMin = parseInt(block.dataset.end);
-      _boShowPicker(block, bunk, startMin, endMin);
+      const layerType = block.dataset.layerType;
+      _boShowAutoLayerPopover(block, bunk, startMin, endMin, layerType);
     };
   });
 
@@ -5108,6 +5128,222 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       renderBunkOverridesUI();
     };
   });
+}
+
+// ★ Day 24+: rich popover for auto-mode bunk override bands.
+//   Features:
+//     • Sport layer → multi-select sport pool (restrict bunk to those sports)
+//     • Non-sport layer → single-pick replacement activity
+//     • Time editor (start / end minutes, snapped to 5)
+//     • Delete-layer-for-this-bunk button
+//     • Save / Cancel
+function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
+  document.getElementById('bo-auto-popover')?.remove();
+  document.getElementById('bo-activity-picker')?.remove();
+
+  const groups = _boGetActivityGroups();
+  const isSport = (layerType || '').toLowerCase() === 'sport';
+
+  // Find existing override for this band (if any)
+  const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
+    o.bunk === bunk && o.startMin === startMin && o.endMin === endMin
+    && o.layerType === (layerType || 'custom')
+  );
+
+  const initSportPool = (existing?.sportPool && Array.isArray(existing.sportPool))
+    ? existing.sportPool.slice() : [];
+  let selectedSports = new Set(initSportPool);
+  let curStart = existing?.startMin ?? startMin;
+  let curEnd   = existing?.endMin   ?? endMin;
+  let pickedActivity = existing && !isSport ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+
+  const pop = document.createElement('div');
+  pop.id = 'bo-auto-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.18);width:360px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;';
+
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top  = Math.min(rect.bottom + 6, window.innerHeight - 540) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 370) + 'px';
+
+  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
+  const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
+
+  function render() {
+    pop.innerHTML = `
+      <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:linear-gradient(180deg,#f8fafc,#fff);">
+        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(layerLabel)} Layer</div>
+        <div style="font-size:12px;color:#475569;margin-top:2px;">${minutesToTime(curStart)} – ${minutesToTime(curEnd)}</div>
+      </div>
+      <div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:11px;color:#64748b;font-weight:600;min-width:36px;">Time</span>
+        <input type="time" id="bo-pop-start" value="${_minutesToInputTime(curStart)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+        <span style="font-size:11px;color:#64748b;">to</span>
+        <input type="time" id="bo-pop-end" value="${_minutesToInputTime(curEnd)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+      </div>
+      <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
+      <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:8px;align-items:center;">
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;">🗑 Delete for ${_escHtml(bunk)}</button>
+        <div style="flex:1;"></div>
+        <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
+        <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
+      </div>
+    `;
+
+    const body = pop.querySelector('#bo-pop-body');
+    if (isSport) {
+      // Multi-select sport pool
+      const sportItems = groups.sports || [];
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          🏈 Allowed sports for this bunk (the program will only schedule from this pool):
+        </div>
+        <div id="bo-sport-chips" style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${sportItems.map(s => {
+            const on = selectedSports.has(s.name);
+            return `<button type="button" class="bo-sport-chip" data-sport="${_escHtml(s.name)}"
+              style="padding:4px 10px;font-size:12px;border-radius:99px;cursor:pointer;
+              background:${on ? '#10b981' : '#fff'};color:${on ? '#fff' : '#475569'};
+              border:1.5px solid ${on ? '#10b981' : '#cbd5e1'};font-weight:600;">
+              ${on ? '✓ ' : ''}${_escHtml(s.name)}
+            </button>`;
+          }).join('')}
+        </div>
+        <div id="bo-sport-counter" style="margin-top:8px;font-size:11px;color:#64748b;">
+          ${selectedSports.size} sport${selectedSports.size === 1 ? '' : 's'} selected
+        </div>
+        <div style="margin-top:10px;font-size:11px;color:#94a3b8;font-style:italic;">
+          ${selectedSports.size === 0 ? 'No restriction — bunk follows normal rotation.' : 'During this layer, this bunk will only receive the selected sports.'}
+        </div>`;
+      body.querySelectorAll('.bo-sport-chip').forEach(chip => {
+        chip.onclick = () => {
+          const name = chip.dataset.sport;
+          if (selectedSports.has(name)) selectedSports.delete(name); else selectedSports.add(name);
+          render();
+        };
+      });
+    } else {
+      // Single-pick replacement for non-sport layers
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          Replace this ${_escHtml(layerLabel)} for ${_escHtml(bunk)} with:
+        </div>
+        <div id="bo-pop-options"></div>`;
+      const opts = body.querySelector('#bo-pop-options');
+      const cats = [
+        { label: '📌 Pinned Activities', items: groups.pinned },
+        { label: '🏢 Facilities', items: groups.facilities },
+        { label: '🏟️ Fields', items: groups.fields },
+        { label: '🎨 Special Activities', items: groups.specials },
+        { label: '⚽ Sports', items: groups.sports }
+      ];
+      cats.forEach(cat => {
+        if (!cat.items.length) return;
+        const grp = document.createElement('div');
+        grp.style.cssText = 'margin-bottom:8px;';
+        grp.innerHTML = `<div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">${cat.label}</div>`;
+        cat.items.forEach(it => {
+          const row = document.createElement('div');
+          const isPicked = pickedActivity?.name === it.name;
+          row.style.cssText = 'padding:4px 8px;font-size:12px;border-radius:4px;cursor:pointer;color:#374151;' + (isPicked ? 'background:#fef3c7;font-weight:600;color:#92400e;' : '');
+          row.textContent = it.label;
+          row.onclick = () => { pickedActivity = it; render(); };
+          row.onmouseenter = () => { if (!isPicked) row.style.background = '#f1f5f9'; };
+          row.onmouseleave = () => { if (!isPicked) row.style.background = ''; };
+          grp.appendChild(row);
+        });
+        opts.appendChild(grp);
+      });
+    }
+
+    // Time inputs
+    pop.querySelector('#bo-pop-start').oninput = (e) => { curStart = _inputTimeToMinutes(e.target.value); };
+    pop.querySelector('#bo-pop-end').oninput   = (e) => { curEnd   = _inputTimeToMinutes(e.target.value); };
+
+    pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
+    pop.querySelector('#bo-pop-delete').onclick = () => {
+      // Delete-layer override for this bunk
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+      list.push({
+        id: uid(), bunk, startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType: layerType || 'custom',
+        overrideMode: 'delete',
+        activity: '— deleted —', location: null, type: 'delete'
+      });
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    pop.querySelector('#bo-pop-save').onclick = () => {
+      if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
+      // Remove any existing override matching original time + layer
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+
+      if (isSport) {
+        if (selectedSports.size === 0) {
+          // Empty pool = revert (no override needed)
+          _boSaveOverrides(list);
+          pop.remove();
+          renderBunkOverridesUI();
+          return;
+        }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: 'sport',
+          overrideMode: 'sportPool',
+          sportPool: [...selectedSports],
+          activity: [...selectedSports].join(' / '),
+          location: null, type: 'sportPool'
+        });
+      } else {
+        if (!pickedActivity) { alert('Pick an activity or click Cancel.'); return; }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: layerType || 'custom',
+          overrideMode: 'force',
+          activity: pickedActivity.name,
+          location: pickedActivity.location || null,
+          type: pickedActivity.type
+        });
+      }
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+  }
+
+  document.body.appendChild(pop);
+  render();
+
+  // Close on outside click (skip clicks on the anchor itself)
+  setTimeout(() => {
+    const closeHandler = (e) => {
+      if (!pop.contains(e.target) && e.target !== anchorEl) {
+        pop.remove();
+        document.removeEventListener('mousedown', closeHandler);
+      }
+    };
+    document.addEventListener('mousedown', closeHandler);
+  }, 0);
+}
+
+// Helpers for <input type="time"> value <-> minutes-since-midnight
+function _minutesToInputTime(m) {
+  const h = Math.floor(m / 60), mm = m % 60;
+  return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+}
+function _inputTimeToMinutes(s) {
+  const [h, m] = (s || '0:0').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
 }
 
 function _boRenderBunkGrid(wrap, divName) {
