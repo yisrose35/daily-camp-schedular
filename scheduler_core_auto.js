@@ -148,7 +148,16 @@
     }
 
     function getFields(gs) { return (gs.app1 && gs.app1.fields) || gs.fields || []; }
-    function getBunksForGrade(grade, divisions) { return (divisions[grade] && divisions[grade].bunks) ? [...divisions[grade].bunks] : []; }
+    function getBunksForGrade(grade, divisions) {
+        const all = (divisions[grade] && divisions[grade].bunks) ? [...divisions[grade].bunks] : [];
+        // ★ Day 22.5: optional per-bunk scope. When the user selects specific bunks
+        //   in the generation-scope picker, daily_adjustments sets window.__allowedBunkSet
+        //   for the duration of the run. Solver bunk iteration goes through this helper,
+        //   so filtering here naturally restricts generation to those bunks.
+        const bunkSet = window.__allowedBunkSet;
+        if (!bunkSet) return all;
+        return all.filter(b => bunkSet.has(String(b)));
+    }
 
     function getDivisionTimes(grade, divisions) {
         const div = divisions[grade];
@@ -909,7 +918,23 @@
 
         const allSpecials = getSpecialActivitiesList(globalSettings);
         // ★ v7.0: Filter out daily-disabled specials from resource overrides
-        const dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
+        // ★ Day 22.5: localStorage fallback to match the disabledFields path
+        //   (defends against momentarily-stale dailyData right after a date switch).
+        let dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
+        if (dailyDisabledSpecials.length === 0) {
+            try {
+                const _dk = window.currentScheduleDate || '';
+                if (_dk) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (Array.isArray(_parsed?.overrides?.disabledSpecials) && _parsed.overrides.disabledSpecials.length) {
+                            dailyDisabledSpecials = _parsed.overrides.disabledSpecials;
+                        }
+                    }
+                }
+            } catch (_e) { /* ignore */ }
+        }
         const todaysSpecials = allSpecials.filter(s => {
             if (s.available === false) return false;
             if (!isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings)) return false;
@@ -11419,8 +11444,26 @@
             buildResourceCalendar(_iterSeed);
 
             // ★ v7.0: Load disabled leagues from daily overrides
-            const dailyDisabledLeagues = dailyData?.overrides?.leagues || [];
-            const dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
+            // ★ Day 22.5: localStorage fallback for stale-dailyData defense
+            let dailyDisabledLeagues = dailyData?.overrides?.leagues || [];
+            let dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
+            if (dailyDisabledLeagues.length === 0 || dailyDisabledSpecialtyLeagues.length === 0) {
+                try {
+                    const _dk = window.currentScheduleDate || '';
+                    if (_dk) {
+                        const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_stored) {
+                            const _parsed = JSON.parse(_stored);
+                            if (dailyDisabledLeagues.length === 0 && Array.isArray(_parsed?.overrides?.leagues)) {
+                                dailyDisabledLeagues = _parsed.overrides.leagues;
+                            }
+                            if (dailyDisabledSpecialtyLeagues.length === 0 && Array.isArray(_parsed?.disabledSpecialtyLeagues)) {
+                                dailyDisabledSpecialtyLeagues = _parsed.disabledSpecialtyLeagues;
+                            }
+                        }
+                    }
+                } catch (_e) { /* ignore */ }
+            }
             window.disabledLeagues = dailyDisabledLeagues; // Expose for league engine
 
             // Leagues in stagger order (filter out disabled)

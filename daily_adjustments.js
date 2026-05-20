@@ -50,6 +50,11 @@ let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }]
 // ★★★ v3.13: Generation Scope — which divisions to generate ★★★
 // null = all divisions, otherwise Set of division names
 let _generationScope = null;
+// ★ Day 22.5: Per-bunk scope companion to _generationScope.
+//   - null     = no per-bunk constraint (all bunks in scoped divisions)
+//   - Set<bunk>= only these specific bunks (subset of scoped divisions)
+// Only populated when the user partially selects within a division.
+let _generationBunkScope = null;
 
 function _daIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
@@ -3890,6 +3895,10 @@ function uid() {
 // =========================================================================
 
 function _getGenScopeBtnLabel() {
+  // ★ Day 22.5: Reflect per-bunk scope when partial.
+  if (_generationBunkScope && _generationBunkScope.size > 0) {
+    return '⚙ ' + _generationBunkScope.size + ' Bunks';
+  }
   if (!_generationScope) return '⚙ All Divisions';
   const count = _generationScope.size;
   const total = Object.keys(window.divisions || {}).length;
@@ -3927,12 +3936,21 @@ function _showGenScopePopover(anchorBtn) {
   divNames.forEach(divName => {
     const div = divisions[divName];
     const bunks = div.bunks || [];
-    const isChecked = !_generationScope || _generationScope.has(divName);
+    const divInScope = !_generationScope || _generationScope.has(divName);
+    // ★ Day 22.5: per-bunk preselection — if a bunk scope exists, only the
+    //   checked bunks are pre-checked. Otherwise division checkbox drives all.
+    const bunksInDiv = _generationBunkScope
+      ? bunks.filter(b => _generationBunkScope.has(b)).length
+      : (divInScope ? bunks.length : 0);
+    const divChecked = bunksInDiv === bunks.length && bunks.length > 0;
+    const divPartial = bunksInDiv > 0 && bunksInDiv < bunks.length;
     const divColor = div.color || '#6366f1';
 
     html += '<div class="da-gen-scope-div" data-division="' + divName + '" style="margin-bottom:10px;">';
     html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 0;">';
-    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" ' + (isChecked ? 'checked' : '') + ' style="width:16px;height:16px;accent-color:' + divColor + ';">';
+    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" '
+         + (divChecked ? 'checked ' : '')
+         + 'style="width:16px;height:16px;accent-color:' + divColor + ';">';
     html += '<span style="font-weight:600;font-size:13px;color:#1e293b;">' + divName + '</span>';
     html += '<span style="font-size:11px;color:#94a3b8;">(' + bunks.length + ' bunks)</span>';
     html += '</label>';
@@ -3941,7 +3959,9 @@ function _showGenScopePopover(anchorBtn) {
     if (bunks.length > 0) {
       html += '<div class="da-gen-scope-bunks" style="margin-left:28px;display:flex;flex-wrap:wrap;gap:4px;">';
       bunks.forEach(bunk => {
-        const bunkChecked = isChecked;
+        const bunkChecked = _generationBunkScope
+          ? _generationBunkScope.has(bunk)
+          : divInScope;
         html += '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:2px 6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;color:#475569;">';
         html += '<input type="checkbox" class="da-gen-scope-bunk-cb" data-div="' + divName + '" data-bunk="' + bunk + '" ' + (bunkChecked ? 'checked' : '') + ' style="width:12px;height:12px;accent-color:' + divColor + ';">';
         html += bunk;
@@ -3969,6 +3989,17 @@ function _showGenScopePopover(anchorBtn) {
   popover.style.position = 'fixed';
 
   document.body.appendChild(popover);
+
+  // ★ Day 22.5: set indeterminate on division checkboxes that are partial on init
+  popover.querySelectorAll('.da-gen-scope-div-cb').forEach(divCb => {
+    const divName = divCb.dataset.div;
+    const bunkCbs = popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]');
+    if (bunkCbs.length === 0) return;
+    const checkedCount = [...bunkCbs].filter(b => b.checked).length;
+    if (checkedCount > 0 && checkedCount < bunkCbs.length) {
+      divCb.indeterminate = true;
+    }
+  });
 
   // Close button
   document.getElementById('da-gen-scope-close').onclick = () => popover.remove();
@@ -4016,9 +4047,43 @@ function _showGenScopePopover(anchorBtn) {
 
     const allDivs = Object.keys(window.divisions || {});
     if (checkedDivs.size === 0 || checkedDivs.size === allDivs.length) {
-      _generationScope = null;
+      // ★ Day 22.5: Even when ALL divisions are checked, check for partial-bunk
+      //   selection within any of them. If every bunk is also checked, no constraint.
+      //   Otherwise, build a bunk-level scope.
+      const divisions = window.divisions || {};
+      const allBunks = [];
+      Object.keys(divisions).forEach(d => (divisions[d]?.bunks || []).forEach(b => allBunks.push(b)));
+      const checkedBunks = new Set();
+      popover.querySelectorAll('.da-gen-scope-bunk-cb:checked').forEach(cb => checkedBunks.add(cb.dataset.bunk));
+      if (checkedBunks.size === 0 || checkedBunks.size === allBunks.length) {
+        _generationScope = null;
+        _generationBunkScope = null;
+      } else {
+        // Partial bunks across (potentially) all divisions
+        _generationScope = new Set();
+        checkedBunks.forEach(b => {
+          const ownerDiv = Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(b));
+          if (ownerDiv) _generationScope.add(ownerDiv);
+        });
+        _generationBunkScope = checkedBunks;
+      }
     } else {
       _generationScope = checkedDivs;
+      // ★ Day 22.5: Build per-bunk scope when any included division is partial.
+      //   If every bunk in every checked div is checked, no per-bunk constraint.
+      const divisions = window.divisions || {};
+      const bunkScope = new Set();
+      let anyPartial = false;
+      let totalAvailable = 0;
+      checkedDivs.forEach(divName => {
+        const divBunks = divisions[divName]?.bunks || [];
+        totalAvailable += divBunks.length;
+        const checkedInDiv = [...popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]:checked')]
+          .map(cb => cb.dataset.bunk);
+        if (checkedInDiv.length < divBunks.length) anyPartial = true;
+        checkedInDiv.forEach(b => bunkScope.add(b));
+      });
+      _generationBunkScope = (anyPartial && bunkScope.size > 0) ? bunkScope : null;
     }
 
     popover.remove();
@@ -4297,7 +4362,15 @@ async function runOptimizer() {
         try {
             window.invalidateSmartLogicSpecialsCache?.();
             const scopeDivisions = _generationScope ? [..._generationScope] : null;
-            const success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions });
+            const scopeBunks = _generationBunkScope ? [..._generationBunkScope] : null;
+            // ★ Day 22.5: install per-bunk gate read by getBunksForGrade inside solver
+            if (scopeBunks) window.__allowedBunkSet = new Set(scopeBunks.map(String));
+            let success = false;
+            try {
+                success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions, allowedBunks: scopeBunks });
+            } finally {
+                delete window.__allowedBunkSet;
+            }
             delete window.selectedDivisionsForGeneration;
             if (success) {
                 // Match the manual builder's completion flow: confirm popup,
@@ -4340,10 +4413,11 @@ async function runOptimizer() {
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
+  const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
   const allDivKeys = Object.keys(window.divisions || {});
-  const isPartialWipe = scopeDivsForWipe &&
-      scopeDivsForWipe.length > 0 &&
-      scopeDivsForWipe.length < allDivKeys.length;
+  const isPartialWipe = (scopeBunksForWipe && scopeBunksForWipe.length > 0)
+      || (scopeDivsForWipe && scopeDivsForWipe.length > 0 && scopeDivsForWipe.length < allDivKeys.length);
 
   console.log('[Optimizer] ★ PRE-GENERATION WIPE for', dateKey, '(partial:', isPartialWipe, ')');
 
@@ -4361,13 +4435,19 @@ async function runOptimizer() {
   };
 
   if (isPartialWipe) {
-    // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+    // ═══ PARTIAL: Only wipe selected bunks (or selected-division bunks) ═══
     const divisions = window.divisions || {};
     const myBunks = new Set();
-    scopeDivsForWipe.forEach(divName => {
-      (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
-    });
-    console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + scopeDivsForWipe.join(', ') + ']');
+    if (scopeBunksForWipe && scopeBunksForWipe.length > 0) {
+      // Per-bunk scope: wipe only the explicitly-selected bunks
+      scopeBunksForWipe.forEach(b => myBunks.add(b));
+      console.log('[Optimizer] Partial wipe (per-bunk): clearing', myBunks.size, 'bunks');
+    } else {
+      (scopeDivsForWipe || []).forEach(divName => {
+        (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+      });
+      console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + (scopeDivsForWipe || []).join(', ') + ']');
+    }
     myBunks.forEach(bunk => {
       delete window.scheduleAssignments?.[bunk];
       delete window.leagueAssignments?.[bunk];
@@ -4458,12 +4538,16 @@ async function runOptimizer() {
   let success = false;
   try {
     const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
+    // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
+    if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
     success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides, scopeDivsManual);
   } finally {
     // ★★★ POST-GENERATION CLEANUP — always clear even if generation throws ★★★
     window._preGenClearActive = false;
     window._generationInProgress = false;
     delete window.selectedDivisionsForGeneration;
+    delete window.__allowedBunkSet;
   }
 
 if (success) {
