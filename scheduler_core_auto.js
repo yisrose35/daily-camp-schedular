@@ -7407,6 +7407,18 @@
                             }
 
                             if (shareable.length >= 2) {
+                                // ★ Day 24: drop bunks whose sportPool excludes this sport at this time
+                                shareable = shareable.filter(function(sh2) {
+                                    var _pl = (window._bunkSportPools || {})[String(sh2.bunk)] || [];
+                                    for (var _i = 0; _i < _pl.length; _i++) {
+                                        if (startMin >= _pl[_i].startMin && endMin <= _pl[_i].endMin) {
+                                            var _set = new Set(_pl[_i].sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                                            if (!_set.has(String(sport.name).toLowerCase().trim())) return false;
+                                        }
+                                    }
+                                    return true;
+                                });
+                                if (shareable.length < 2) continue;
                                 // Assign ALL shareable bunks to this field at the same time
                                 for (var sh = 0; sh < shareable.length; sh++) {
                                     if (!claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name)) continue;
@@ -17717,6 +17729,55 @@
             }
             log('[STEP 5] Restored ' + restored + ' non-scoped bunks from pre-solver snapshot');
         }
+
+        // ★ Day 24: SPORT POOL ENFORCEMENT (final pass).
+        //   Earlier filters cover most paths but some sport-assignment sites
+        //   slip through. Walk every assignment one last time and clear any
+        //   sport that violates a bunk's pool — replaced by 'Free' so the
+        //   downstream Free-fill step can put something in-pool if possible.
+        try {
+            const _pools = window._bunkSportPools || {};
+            const _deleted = window._bunkDeletedLayers || {};
+            let _poolEvictions = 0, _delEvictions = 0;
+            Object.entries(window.scheduleAssignments || {}).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const bPools = _pools[bunk] || [];
+                const bDels  = _deleted[bunk] || [];
+                slots.forEach((entry, i) => {
+                    if (!entry || entry._bunkOverride) return; // skip pinned overrides themselves
+                    const sMin = entry._startMin, eMin = entry._endMin;
+                    if (sMin == null || eMin == null) return;
+                    const act  = String(entry._activity || entry.sport || '').toLowerCase().trim();
+                    if (!act) return;
+                    // Pool check: only for sport blocks
+                    if (entry._isSport || entry._type === 'sport' || entry.sport) {
+                        for (const p of bPools) {
+                            if (sMin >= p.startMin && eMin <= p.endMin) {
+                                const allowed = new Set(p.sports.map(s => String(s).toLowerCase().trim()));
+                                if (!allowed.has(act)) {
+                                    slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _poolEvicted: true };
+                                    _poolEvictions++;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // Delete check: any activity inside a deleted layer window
+                    if (slots[i] === entry) {
+                        for (const d of bDels) {
+                            if (sMin >= d.startMin && eMin <= d.endMin) {
+                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
+                                _delEvictions++;
+                                break;
+                            }
+                        }
+                    }
+                });
+            });
+            if (_poolEvictions > 0 || _delEvictions > 0) {
+                log('[POOL_ENFORCE] Evicted ' + _poolEvictions + ' pool violations, ' + _delEvictions + ' deleted-layer violations');
+            }
+        } catch (_pe) { /* non-fatal */ }
 
         if (window.saveCurrentDailyData) {
             try {
