@@ -18608,8 +18608,16 @@
                     if (!act) return;
                     // Skip OUR own delete pins (already correct).
                     if (entry._layerDeleted) return;
-                    // Skip force-mode override pins (user explicitly forced these).
-                    if (entry._bunkOverride && !bD.some(d => sMin >= d.startMin && eMin <= d.endMin)) return;
+                    // Delete check ALWAYS runs first — kills system-pinned anchors
+                    // that fall inside a deleted window. Don't gate by _bunkOverride.
+                    for (const d of bD) {
+                        if (sMin >= d.startMin && eMin <= d.endMin) {
+                            slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
+                            _dE++; return; // entry replaced, done with this slot
+                        }
+                    }
+                    // Skip force-mode override pins for the pool check (user explicitly forced these).
+                    if (entry._bunkOverride) return;
                     if (entry._isSport || entry._type === 'sport' || entry.sport) {
                         for (const p of bP) {
                             if (sMin >= p.startMin && eMin <= p.endMin) {
@@ -18618,14 +18626,6 @@
                                     slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _poolEvicted: true };
                                     _pE++; break;
                                 }
-                            }
-                        }
-                    }
-                    if (slots[i] === entry) {
-                        for (const d of bD) {
-                            if (sMin >= d.startMin && eMin <= d.endMin) {
-                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
-                                _dE++; break;
                             }
                         }
                     }
