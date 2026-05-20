@@ -660,8 +660,48 @@
       if (newAct === oldAct) continue;
       const newField = _findFieldForActivity(newAct, ctx);
       if (!newField) continue;
-      const next = _cloneSchedule(schedule);
       const bucket = ctx.perBunkSlots[grade]?.[bunk]?.[idx];
+      // ★ Day 22.5 fix: block moves that would land in a daily-Unavailable window.
+      //   detectHardViolations now flags these in the cost function, but the SA
+      //   loop sometimes can't escape them once the seed sits at a violation.
+      //   Reject candidate fields outright at move-construction time.
+      try {
+        const _sM = bucket?.startMin ?? slots[idx]?._startMin;
+        const _eM = bucket?.endMin ?? slots[idx]?._endMin;
+        if (_sM != null && _eM != null) {
+          let _da = null;
+          const _ap = (typeof window !== 'undefined') ? window.activityProperties?.[newField.name]?.timeRules : null;
+          if (Array.isArray(_ap) && _ap.length > 0) _da = _ap;
+          if (!_da) {
+            const _dd = (typeof window !== 'undefined') ? (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[newField.name] : null;
+            if (Array.isArray(_dd) && _dd.length > 0) _da = _dd;
+          }
+          if (!_da) {
+            const _dk = (typeof window !== 'undefined') ? (window.currentScheduleDate || '') : '';
+            if (_dk) {
+              const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+              if (_stored) {
+                const _parsed = JSON.parse(_stored);
+                const _ls = _parsed?.dailyFieldAvailability?.[newField.name];
+                if (Array.isArray(_ls) && _ls.length > 0) _da = _ls;
+              }
+            }
+          }
+          if (_da) {
+            let _bad = false;
+            for (const r of _da) {
+              const _t = String(r.type || '').toLowerCase();
+              if (!(_t === 'unavailable' || r.available === false)) continue;
+              const _rs = r.startMin ?? null;
+              const _re = r.endMin ?? null;
+              if (_rs == null || _re == null) continue;
+              if (_rs < _eM && _re > _sM) { _bad = true; break; }
+            }
+            if (_bad) continue; // pick a different field/activity
+          }
+        }
+      } catch (_e) {}
+      const next = _cloneSchedule(schedule);
       next[bunk] = next[bunk].slice();
       next[bunk][idx] = {
         field: newField.name, sport: newAct, _activity: newAct,
