@@ -868,8 +868,20 @@
      */
     async function doCloudSaveWithVerification(dateKey, data, options = {}, attempt = 1) {
         if (_isSaving && !options.force) {
-            log('Save already in progress');
-            return { success: false, error: 'Save in progress' };
+            // ★ Day 24 fix: instead of dropping the save on the floor, WAIT for
+            //   the in-flight save to complete then proceed. The previous behavior
+            //   silently lost critical post-gen saves (cloud kept the intermediate
+            //   state; switching dates and coming back returned the older version).
+            log('Save already in progress — waiting for it to finish before proceeding');
+            const _waitStart = Date.now();
+            const _maxWait = 8000; // 8s ceiling
+            while (_isSaving && (Date.now() - _waitStart) < _maxWait) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+            if (_isSaving) {
+                logWarn('Save in progress flag stuck for ' + _maxWait + 'ms — proceeding with force to avoid data loss');
+                // Fall through and proceed anyway — better to risk a race than lose the user's schedule.
+            }
         }
 
         // ★ v1.6: Check permission flag before attempting
