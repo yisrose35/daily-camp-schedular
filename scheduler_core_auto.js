@@ -1659,6 +1659,41 @@
                 });
                 if (unavail) return false;
             }
+            // ★ Day 22.5 fix: defensive fallback. The ledger is built from
+            //   activityProperties at gen entry, but window.activityProperties
+            //   can be wiped by downstream systems (scheduler_core_main,
+            //   unified_schedule_system, special_activities snapshot restores).
+            //   When that happens, the ledger has no unavailableRules even
+            //   though the DA Resources Unavailable rule exists. Re-read from
+            //   the canonical sources every time, so daily Unavailable windows
+            //   are always enforced.
+            try {
+                let _daRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                if (!Array.isArray(_daRules) || _daRules.length === 0) {
+                    const _dk = window.currentScheduleDate || '';
+                    if (_dk) {
+                        const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_stored) {
+                            const _parsed = JSON.parse(_stored);
+                            const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                            if (Array.isArray(_lsRules) && _lsRules.length > 0) _daRules = _lsRules;
+                        }
+                    }
+                }
+                if (Array.isArray(_daRules) && _daRules.length > 0) {
+                    for (const r of _daRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        if (!isUnavail) continue;
+                        const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                        const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                        if (rs == null || re == null) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : null;
+                        if (rDivs && rDivs.length > 0 && grade != null && !rDivs.includes(String(grade))) continue;
+                        if (rs < endMin && re > startMin) return false;
+                    }
+                }
+            } catch (_e) { /* ignore */ }
 
             // Time rules
             const timeOk = ledger.timeRules.some(rule => {
