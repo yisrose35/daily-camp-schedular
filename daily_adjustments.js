@@ -7024,6 +7024,105 @@ function init() {
     renderTripsForm();
     renderToolbar();
   });
+
+  // ★ Day 22.5 IRON GATE event listener — final time-rule scrub.
+  //   Fires on every generation-complete event. Runs AFTER all solver paths
+  //   have written to window.scheduleAssignments. Clears any slot that
+  //   overlaps an Unavailable window or falls outside an Available window.
+  //   This is the user-facing guarantee: no DA time rule is ever violated
+  //   in the rendered/saved schedule.
+  const _runIronGate = function _ironGateGuard() {
+    try {
+      const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      // Build rules cache from the dedicated key first (solver paths never touch it).
+      let rulesByField = null;
+      try {
+        const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+        if (enf) {
+          const parsed = JSON.parse(enf);
+          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            rulesByField = parsed;
+          }
+        }
+      } catch (_e) {}
+      if (!rulesByField) {
+        // Secondary: dailyData / legacy LS
+        const dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+        if (dd && Object.keys(dd).length > 0) rulesByField = dd;
+        else {
+          try {
+            const stored = localStorage.getItem('campResourceOverrides_' + dk);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (parsed?.dailyFieldAvailability && Object.keys(parsed.dailyFieldAvailability).length > 0) {
+                rulesByField = parsed.dailyFieldAvailability;
+              }
+            }
+          } catch (_e) {}
+        }
+      }
+      if (!rulesByField) return; // no DA time rules → nothing to enforce
+      const sa = window.scheduleAssignments || {};
+      const divs = window.divisions || {};
+      let cleared = 0;
+      const clearedDetails = [];
+      for (const [bunk, slots] of Object.entries(sa)) {
+        if (!Array.isArray(slots)) continue;
+        let grade = null;
+        for (const [d, info] of Object.entries(divs)) {
+          if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+        }
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (!s || s.continuation) continue;
+          const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+          if (!field || field === 'Free') continue;
+          const sMin = s._startMin, eMin = s._endMin;
+          if (sMin == null || eMin == null) continue;
+          const rules = rulesByField[field];
+          if (!Array.isArray(rules) || rules.length === 0) continue;
+          let bad = false, hasAvail = false, inside = false;
+          for (const r of rules) {
+            const t = String(r.type || '').toLowerCase();
+            const isUnavail = t === 'unavailable' || r.available === false;
+            const isAvail = t === 'available' || r.available === true;
+            const rs = r.startMin ?? null, re = r.endMin ?? null;
+            if (rs == null || re == null) continue;
+            if (Array.isArray(r.divisions) && r.divisions.length > 0
+                && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+            if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+            if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+          }
+          if (!bad && hasAvail && !inside) bad = true;
+          if (bad) {
+            slots[i] = {
+              field: 'Free', sport: null, _activity: 'Free',
+              _autoMode: true, _fixed: true,
+              _startMin: sMin, _endMin: eMin,
+              _source: 'iron-gate-listener',
+              _violationReason: 'DA time rule on ' + field,
+              continuation: false
+            };
+            cleared++;
+            clearedDetails.push({bunk, idx: i, field, sMin, eMin});
+          }
+        }
+      }
+      if (cleared > 0) {
+        console.warn('[IRON GATE LISTENER] cleared ' + cleared + ' time-rule violation(s)', clearedDetails);
+        // Re-render so the user sees the cleared state immediately
+        try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
+        // Re-save so the cleared state persists
+        try {
+          if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk);
+          else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+        } catch (_e) {}
+      }
+    } catch (e) { console.warn('[IRON GATE LISTENER] error: ' + e.message); }
+  };
+  window.addEventListener('campistry-generation-complete', _runIronGate);
+  document.addEventListener('campistry-schedule-generated', _runIronGate);
+  window.addEventListener('campistry-schedule-saved', _runIronGate);
 }
     
 function cleanup() {
