@@ -5308,7 +5308,11 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   document.getElementById('bo-activity-picker')?.remove();
 
   const groups = _boGetActivityGroups();
-  const isSport = (layerType || '').toLowerCase() === 'sport';
+  const _lt = String(layerType || 'custom').toLowerCase();
+  // Layer types that use a multi-select POOL pattern (pick which items from
+  // the pool the bunk can rotate through). Single-pick types use a different UI.
+  const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
+  const isPoolType = !!POOL_TYPES[_lt];
 
   // Find existing override for this band (if any)
   const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
@@ -5316,12 +5320,12 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     && o.layerType === (layerType || 'custom')
   );
 
-  const initSportPool = (existing?.sportPool && Array.isArray(existing.sportPool))
+  const initPool = (existing?.sportPool && Array.isArray(existing.sportPool))
     ? existing.sportPool.slice() : [];
-  let selectedSports = new Set(initSportPool);
+  let selectedSports = new Set(initPool); // reused for any pool-type override
   let curStart = existing?.startMin ?? startMin;
   let curEnd   = existing?.endMin   ?? endMin;
-  let pickedActivity = existing && !isSport ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+  let pickedActivity = existing && !isPoolType ? { name: existing.activity, location: existing.location, type: existing.type } : null;
 
   const pop = document.createElement('div');
   pop.id = 'bo-auto-popover';
@@ -5357,54 +5361,58 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     `;
 
     const body = pop.querySelector('#bo-pop-body');
-    if (isSport) {
-      // Multi-select sport pool
-      const sportItems = groups.sports || [];
+
+    // Helper: render a multi-select chip pool (used for sport / special / activity)
+    function renderPool(opts) {
+      const items = opts.items || [];
+      const icon  = opts.icon  || '✨';
+      const label = opts.label || layerLabel;
+      const desc  = opts.desc  || ('Allowed ' + label.toLowerCase() + ' for this bunk');
       body.innerHTML = `
         <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
-          🏈 Allowed sports for this bunk (the program will only schedule from this pool):
+          ${icon} ${_escHtml(desc)}:
         </div>
-        <div id="bo-sport-chips" style="display:flex;flex-wrap:wrap;gap:6px;">
-          ${sportItems.map(s => {
-            const on = selectedSports.has(s.name);
-            return `<button type="button" class="bo-sport-chip" data-sport="${_escHtml(s.name)}"
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${items.map(it => {
+            const on = selectedSports.has(it.name);
+            return `<button type="button" class="bo-pool-chip" data-name="${_escHtml(it.name)}"
               style="padding:4px 10px;font-size:12px;border-radius:99px;cursor:pointer;
               background:${on ? '#10b981' : '#fff'};color:${on ? '#fff' : '#475569'};
               border:1.5px solid ${on ? '#10b981' : '#cbd5e1'};font-weight:600;">
-              ${on ? '✓ ' : ''}${_escHtml(s.name)}
+              ${on ? '✓ ' : ''}${_escHtml(it.name)}
             </button>`;
           }).join('')}
         </div>
-        <div id="bo-sport-counter" style="margin-top:8px;font-size:11px;color:#64748b;">
-          ${selectedSports.size} sport${selectedSports.size === 1 ? '' : 's'} selected
+        <div style="margin-top:8px;font-size:11px;color:#64748b;">
+          ${selectedSports.size} selected
         </div>
-        <div style="margin-top:10px;font-size:11px;color:#94a3b8;font-style:italic;">
-          ${selectedSports.size === 0 ? 'No restriction — bunk follows normal rotation.' : 'During this layer, this bunk will only receive the selected sports.'}
+        <div style="margin-top:6px;font-size:11px;color:#94a3b8;font-style:italic;">
+          ${selectedSports.size === 0
+            ? 'No restriction — bunk follows the normal rotation.'
+            : 'During this layer, ' + bunk + ' will only receive the selected ' + label.toLowerCase() + '.'}
         </div>`;
-      body.querySelectorAll('.bo-sport-chip').forEach(chip => {
+      body.querySelectorAll('.bo-pool-chip').forEach(chip => {
         chip.onclick = () => {
-          const name = chip.dataset.sport;
+          const name = chip.dataset.name;
           if (selectedSports.has(name)) selectedSports.delete(name); else selectedSports.add(name);
           render();
         };
       });
-    } else {
-      // Single-pick replacement for non-sport layers
+    }
+
+    // Helper: render a single-pick option list (for swim/lunch/snacks/dismissal location pickers)
+    function renderSinglePick(opts) {
+      const cats = opts.cats || [];
+      const desc = opts.desc || ('Replace ' + layerLabel + ' for ' + bunk + ' with');
+      const icon = opts.icon || '🎯';
       body.innerHTML = `
         <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
-          Replace this ${_escHtml(layerLabel)} for ${_escHtml(bunk)} with:
+          ${icon} ${_escHtml(desc)}:
         </div>
         <div id="bo-pop-options"></div>`;
-      const opts = body.querySelector('#bo-pop-options');
-      const cats = [
-        { label: '📌 Pinned Activities', items: groups.pinned },
-        { label: '🏢 Facilities', items: groups.facilities },
-        { label: '🏟️ Fields', items: groups.fields },
-        { label: '🎨 Special Activities', items: groups.specials },
-        { label: '⚽ Sports', items: groups.sports }
-      ];
+      const root = body.querySelector('#bo-pop-options');
       cats.forEach(cat => {
-        if (!cat.items.length) return;
+        if (!cat.items?.length) return;
         const grp = document.createElement('div');
         grp.style.cssText = 'margin-bottom:8px;';
         grp.innerHTML = `<div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">${cat.label}</div>`;
@@ -5412,14 +5420,87 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           const row = document.createElement('div');
           const isPicked = pickedActivity?.name === it.name;
           row.style.cssText = 'padding:4px 8px;font-size:12px;border-radius:4px;cursor:pointer;color:#374151;' + (isPicked ? 'background:#fef3c7;font-weight:600;color:#92400e;' : '');
-          row.textContent = it.label;
+          row.textContent = it.label || it.name;
           row.onclick = () => { pickedActivity = it; render(); };
           row.onmouseenter = () => { if (!isPicked) row.style.background = '#f1f5f9'; };
           row.onmouseleave = () => { if (!isPicked) row.style.background = ''; };
           grp.appendChild(row);
         });
-        opts.appendChild(grp);
+        root.appendChild(grp);
       });
+    }
+
+    // Per-layer-type body
+    switch (_lt) {
+      case 'sport':
+        renderPool({ items: groups.sports, icon: '🏈', label: 'Sports', desc: 'Allowed sports for this bunk (program rotates only through these)' });
+        break;
+      case 'special':
+        renderPool({ items: groups.specials, icon: '🎨', label: 'Special Activities', desc: 'Allowed special activities for this bunk' });
+        break;
+      case 'activity':
+        renderPool({ items: groups.fields, icon: '🎯', label: 'Activities', desc: 'Allowed activity locations for this bunk' });
+        break;
+      case 'swim':
+        renderSinglePick({
+          icon: '🏊',
+          desc: 'Pick a custom Swim location for ' + bunk + ' (default: Pool)',
+          cats: [
+            { label: '📌 Pinned', items: (groups.pinned || []).filter(p => /pool|swim/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'lunch':
+        renderSinglePick({
+          icon: '🥪',
+          desc: 'Pick a custom Lunch location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /lunch|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'snacks':
+        renderSinglePick({
+          icon: '🍪',
+          desc: 'Pick a custom Snacks location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /snack|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'dismissal':
+        renderSinglePick({
+          icon: '🚌',
+          desc: 'Pick a custom Dismissal location for ' + bunk,
+          cats: [
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'league':
+      case 'specialty_league':
+        renderPool({ items: groups.sports, icon: '🏆', label: 'League Sports', desc: 'Allowed league sports for ' + bunk });
+        break;
+      case 'elective':
+        renderPool({ items: groups.specials, icon: '✨', label: 'Electives', desc: 'Allowed electives for ' + bunk });
+        break;
+      case 'custom':
+      default:
+        renderSinglePick({
+          icon: '📌',
+          desc: 'Replace this ' + layerLabel + ' for ' + bunk + ' with',
+          cats: [
+            { label: '📌 Pinned Activities', items: groups.pinned },
+            { label: '🏢 Facilities', items: groups.facilities },
+            { label: '🏟️ Fields', items: groups.fields },
+            { label: '🎨 Special Activities', items: groups.specials },
+            { label: '⚽ Sports', items: groups.sports }
+          ]
+        });
+        break;
     }
 
     // Time inputs
@@ -5479,7 +5560,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
       );
 
-      if (isSport) {
+      if (isPoolType) {
         if (selectedSports.size === 0) {
           // Empty pool = revert (no override needed)
           _boSaveOverrides(list);
@@ -5491,19 +5572,19 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
           startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
-          layerType: 'sport',
-          overrideMode: 'sportPool',
+          layerType: _lt,
+          overrideMode: 'sportPool', // unified pool semantic — solver filters candidates
           sportPool: [...selectedSports],
           activity: [...selectedSports].join(' / '),
           location: null, type: 'sportPool'
         });
       } else {
-        if (!pickedActivity) { alert('Pick an activity or click Cancel.'); return; }
+        if (!pickedActivity) { alert('Pick an option or click Cancel.'); return; }
         list.push({
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
           startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
-          layerType: layerType || 'custom',
+          layerType: _lt,
           overrideMode: 'force',
           activity: pickedActivity.name,
           location: pickedActivity.location || null,
