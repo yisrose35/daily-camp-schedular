@@ -7090,10 +7090,21 @@
                         if (typeof sport.rotationScore === 'number') {
                             score -= sport.rotationScore;
                         }
-                        // ★ Day 22.5: time-aligned draft wins decisively.
-                        if (draftMatchAtTime && !isUsed) score += 10000;
-                        else if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used (different time)
-                        else if (!isUsed) score += 500;                 // good: not used
+                        // ★ Day 22.5: Honor planner's cross-bunk coordination.
+                        //   Planner (runGlobalPlanner) does scarce-first allocation:
+                        //   it picks who plays scarce sports (Gaga, etc.) based on
+                        //   cross-bunk awareness. If we only give +1000 here, the
+                        //   per-bunk rotation engine (scores ±10000) overrides the
+                        //   planner — drafted-but-not-placed in 5 of 6 cases for
+                        //   Gaga in live test. Time-alignment is too strict because
+                        //   Phase 3's gap structure rarely matches planner's exact
+                        //   drafted times.
+                        //   Solution: give STRONG any-time bonus to drafted sports.
+                        //   The planner already ensured the draft is feasible
+                        //   (capacity, access, sharing). Trust it.
+                        if (draftMatchAtTime && !isUsed) score += 15000;       // perfect alignment
+                        else if (isDrafted && !isUsed) score += 12000;         // drafted-any-time wins vs rotation
+                        else if (!isUsed) score += 500;                         // good: not used
                         // else: reuse, score stays 0
                         score -= demand * 10;                      // prefer LOW demand fields
                         // ★ Back-to-back prevention: heavy penalty for repeating an adjacent sport
