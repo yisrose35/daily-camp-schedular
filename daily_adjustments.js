@@ -4170,13 +4170,21 @@ function renderToolbar() {
     };
   }
 
-  // Bunk View toggle
+  // Bunk View toggle — single click; avoid renderToolbar() which would rebuild
+  // the toolbar DOM and trigger a second-click-needed bug when reopening.
   const bunkViewBtn = document.getElementById('da-bunk-view-btn');
   if (bunkViewBtn) {
     bunkViewBtn.onclick = () => {
       _boBunkViewActive = !_boBunkViewActive;
       _boToggleView();
-      renderToolbar();
+      // Manually update button visual state without re-rendering the whole toolbar
+      if (_boBunkViewActive) {
+        bunkViewBtn.classList.add('active');
+        bunkViewBtn.style.cssText = 'background:#f59e0b;color:#fff;border-color:#f59e0b;';
+      } else {
+        bunkViewBtn.classList.remove('active');
+        bunkViewBtn.style.cssText = '';
+      }
     };
   }
 
