@@ -18601,11 +18601,15 @@
                 const bP = _pools[bunk] || [];
                 const bD = _deleted[bunk] || [];
                 slots.forEach((entry, i) => {
-                    if (!entry || entry._bunkOverride) return;
+                    if (!entry) return;
                     const sMin = entry._startMin, eMin = entry._endMin;
                     if (sMin == null || eMin == null) return;
                     const act = String(entry._activity || entry.sport || '').toLowerCase().trim();
                     if (!act) return;
+                    // Skip OUR own delete pins (already correct).
+                    if (entry._layerDeleted) return;
+                    // Skip force-mode override pins (user explicitly forced these).
+                    if (entry._bunkOverride && !bD.some(d => sMin >= d.startMin && eMin <= d.endMin)) return;
                     if (entry._isSport || entry._type === 'sport' || entry.sport) {
                         for (const p of bP) {
                             if (sMin >= p.startMin && eMin <= p.endMin) {
