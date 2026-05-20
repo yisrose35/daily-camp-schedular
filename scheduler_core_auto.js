@@ -7055,6 +7055,21 @@
                     var sport = pList[p];
                     var isUsed = used.has(sport.name);
                     var isDrafted = (meta.draftSports || []).some(function(ds) { return ds.name === sport.name; });
+                    // ★ Day 22.5 / Phase A-B coordination fix: check if the planner
+                    //   drafted this sport AT THIS EXACT time slot for this bunk.
+                    //   When yes, give a very large bonus (10000) that overpowers
+                    //   typical rotation-score differences. This preserves the
+                    //   planner's cross-bunk coordination (scarce-first allocation
+                    //   for sports like Gaga that have limited capacity).
+                    //   Previously the draft bonus was only +1000 vs +500 — too
+                    //   small to overcome per-bunk rotation pulls (rotation scores
+                    //   span ±10000+), so the planner's plan got silently ignored.
+                    //   Result: drafted Gaga across 6 bunks → only 1 actually placed.
+                    var draftMatchAtTime = (meta.draftSports || []).find(function(ds) {
+                        return ds.name === sport.name && ds.claimedTime
+                            && ds.claimedTime.startMin === startMin
+                            && ds.claimedTime.endMin === endMin;
+                    });
                     for (var f = 0; f < (sport.fields || []).length; f++) {
                         if (!isFieldAvailable(sport.fields[f], startMin, endMin, bunk, grade, sport.name)) continue;
                         // Score: drafted unused > unused > reuse. Low demand > high demand.
@@ -7075,8 +7090,10 @@
                         if (typeof sport.rotationScore === 'number') {
                             score -= sport.rotationScore;
                         }
-                        if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used
-                        else if (!isUsed) score += 500;            // good: not used
+                        // ★ Day 22.5: time-aligned draft wins decisively.
+                        if (draftMatchAtTime && !isUsed) score += 10000;
+                        else if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used (different time)
+                        else if (!isUsed) score += 500;                 // good: not used
                         // else: reuse, score stays 0
                         score -= demand * 10;                      // prefer LOW demand fields
                         // ★ Back-to-back prevention: heavy penalty for repeating an adjacent sport
