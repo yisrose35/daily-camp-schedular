@@ -11343,27 +11343,19 @@
                     return;
                 }
 
-                // ── delete: skip this layer for this bunk by pinning the window as inactive ──
+                // ── delete: record the deletion for the final-pass enforcer.
+                //   Don't pin a block in Phase 0 — floater layers span the full
+                //   grade window, so pinning a block here would block ALL other
+                //   layers' placements inside that window. The final-pass at
+                //   end-of-gen will type-match-and-evict only activities that
+                //   match the deleted layer's type (swim-delete → only Swim).
                 if (mode === 'delete') {
                     if (!window._bunkDeletedLayers[bunk]) window._bunkDeletedLayers[bunk] = [];
                     window._bunkDeletedLayers[bunk].push({
                         startMin: tStart, endMin: tEnd,
                         layerType: ov.layerType || 'custom'
                     });
-                    // Use type:'custom' (not 'free') so other layer/anchor
-                    // placement code treats the window as a real concrete block
-                    // and doesn't try to fit anything else inside it.
-                    bunkTimelines[bunk].push({
-                        startMin: tStart, endMin: tEnd,
-                        type: 'custom', event: '— layer skipped —',
-                        field: null, layer: null,
-                        _classification: 'pinned', _committed: true, _fixed: true,
-                        _bunkOverride: true, _layerDeleted: true, _activityLocked: true,
-                        _noBacktrack: true, _pinned: true,
-                        _source: 'bunk_layer_deleted'
-                    });
-                    overrideBlockCount++;
-                    if (totalIters < 1) log('[P0] Layer delete override for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
+                    if (totalIters < 1) log('[P0] Layer delete override recorded for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
                     return;
                 }
 
@@ -18592,7 +18584,7 @@
                     _pools[ov.bunk].push({ startMin: sMin, endMin: eMin, sports: ov.sportPool.slice() });
                 } else if (ov.overrideMode === 'delete') {
                     if (!_deleted[ov.bunk]) _deleted[ov.bunk] = [];
-                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin });
+                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin, layerType: String(ov.layerType || 'custom').toLowerCase() });
                 }
             });
             let _pE = 0, _dE = 0;
@@ -18608,12 +18600,31 @@
                     if (!act) return;
                     // Skip OUR own delete pins (already correct).
                     if (entry._layerDeleted) return;
-                    // Delete check ALWAYS runs first — kills system-pinned anchors
-                    // that fall inside a deleted window. Don't gate by _bunkOverride.
+                    // Delete check: only kills entries whose TYPE matches the
+                    // deleted layer type. Swim-layer delete only removes Swim;
+                    // Sport-layer delete only removes sports; etc.
+                    const _entryType = String(entry._type || '').toLowerCase()
+                        || (entry.sport ? 'sport' : '')
+                        || (act === 'swim' || act === 'change' ? 'swim' : '')
+                        || (act === 'lunch' ? 'lunch' : '')
+                        || (act === 'snacks' ? 'snacks' : '')
+                        || (act === 'league game' ? 'league' : '');
                     for (const d of bD) {
                         if (sMin >= d.startMin && eMin <= d.endMin) {
-                            slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
-                            _dE++; return; // entry replaced, done with this slot
+                            // Only match if the entry's type aligns with the deleted layer type
+                            // (sport / swim / special / lunch / snacks / league / activity / custom)
+                            const matches = (
+                                _entryType === d.layerType ||
+                                (d.layerType === 'swim' && (act === 'swim' || act === 'change')) ||
+                                (d.layerType === 'sport' && !!entry.sport) ||
+                                (d.layerType === 'lunch' && act === 'lunch') ||
+                                (d.layerType === 'snacks' && act === 'snacks') ||
+                                (d.layerType === 'league' && /league/i.test(act))
+                            );
+                            if (matches) {
+                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
+                                _dE++; return;
+                            }
                         }
                     }
                     // Skip force-mode override pins for the pool check (user explicitly forced these).
