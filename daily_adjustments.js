@@ -4994,7 +4994,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
   // Outer wrap with horizontal scroll
-  let html = `<div class="bo-auto-scroll" style="overflow-x:auto;overflow-y:visible;max-width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
   html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
 
   // Time ruler column (sticky left)
