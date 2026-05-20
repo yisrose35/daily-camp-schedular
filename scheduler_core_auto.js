@@ -18538,26 +18538,25 @@
                     if (!act) return;
                     // Skip OUR own delete pins (already correct).
                     if (entry._layerDeleted) return;
-                    // Delete check: only kills entries whose TYPE matches the
-                    // deleted layer type. Swim-layer delete only removes Swim;
-                    // Sport-layer delete only removes sports; etc.
-                    const _entryType = String(entry._type || '').toLowerCase()
-                        || (entry.sport ? 'sport' : '')
-                        || (act === 'swim' || act === 'change' ? 'swim' : '')
-                        || (act === 'lunch' ? 'lunch' : '')
-                        || (act === 'snacks' ? 'snacks' : '')
-                        || (act === 'league game' ? 'league' : '');
+                    // Delete check: type-match only by ACTIVITY NAME (not entry._type,
+                    // which the solver tags by layer-window rather than actual activity).
+                    //
+                    //   swim-layer delete   → match 'swim' or 'change' activities
+                    //   sport-layer delete  → match entries with a non-empty entry.sport
+                    //                         AND activity matching that sport (not anchors)
+                    //   special-layer       → match _autoSpecial entries
+                    //   lunch / snacks      → match the matching activity name
+                    //   league              → match 'league game' activity
                     for (const d of bD) {
                         if (sMin >= d.startMin && eMin <= d.endMin) {
-                            // Only match if the entry's type aligns with the deleted layer type
-                            // (sport / swim / special / lunch / snacks / league / activity / custom)
                             const matches = (
-                                _entryType === d.layerType ||
                                 (d.layerType === 'swim' && (act === 'swim' || act === 'change')) ||
-                                (d.layerType === 'sport' && !!entry.sport) ||
+                                (d.layerType === 'sport' && !!entry.sport && act === String(entry.sport || '').toLowerCase().trim()) ||
+                                (d.layerType === 'special' && !!entry._autoSpecial) ||
                                 (d.layerType === 'lunch' && act === 'lunch') ||
                                 (d.layerType === 'snacks' && act === 'snacks') ||
-                                (d.layerType === 'league' && /league/i.test(act))
+                                (d.layerType === 'league' && /league/i.test(act)) ||
+                                (d.layerType === 'dismissal' && act === 'dismissal')
                             );
                             if (matches) {
                                 slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
