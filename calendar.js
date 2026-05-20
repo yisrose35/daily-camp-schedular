@@ -134,13 +134,19 @@
     if (!newDate) return;
     
     const oldDate = window.currentScheduleDate;
-    window.currentScheduleDate = newDate;
-    
+    // ★★★ FIX (date round-trip drift): DO NOT update window.currentScheduleDate
+    // here. integration_hooks's input-change handler will set it AFTER the
+    // old date is saved and the new date is loaded. Setting it eagerly
+    // caused stale-memory saves to overwrite the new date's cloud row.
+    // We expose the pending date via a transition flag so any code that
+    // needs the upcoming date can read it explicitly.
+    window._pendingDateTransition = { from: oldDate, to: newDate, startedAt: Date.now() };
+
     console.log('🗓️ Date changed:', oldDate, '→', newDate);
-    
+
     // ★★★ CRITICAL: Dispatch event so orchestrator loads from cloud ★★★
     window.dispatchEvent(new CustomEvent('campistry-date-changed', {
-        detail: { 
+        detail: {
             dateKey: newDate,
             oldDateKey: oldDate
         }

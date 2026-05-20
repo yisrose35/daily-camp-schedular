@@ -622,45 +622,101 @@ function shouldHighlightBunk(bunkName) {
         }
         
         // *** v4.1.0: LOAD DIVISION TIMES (PRIMARY) ***
+        // ★ Date-switch fix: ALWAYS overwrite _perBunkSlots with the date's saved
+        //   data. Previously the reattach gates were "only if empty", which meant
+        //   switching dates kept the prior date's _perBunkSlots stale in memory
+        //   and the new date's grid rendered whatever was left over.
         const cloudLoaded = window._divisionTimesFromCloud === true;
+        const _reattachAll = () => {
+            if (!dateData._perBunkSlotsData || !window.divisionTimes) return;
+            // First, clear any stale _perBunkSlots from grades NOT in this date's data
+            Object.keys(window.divisionTimes).forEach(grade => {
+                if (!dateData._perBunkSlotsData[grade]) {
+                    delete window.divisionTimes[grade]._perBunkSlots;
+                    delete window.divisionTimes[grade]._isPerBunk;
+                }
+            });
+            // Then apply this date's _perBunkSlots, overwriting whatever was there
+            Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                if (window.divisionTimes[grade]) {
+                    window.divisionTimes[grade]._isPerBunk = true;
+                    window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                }
+            });
+        };
+
+        // ★ Date-switch fix #2: realign scheduleAssignments[bunk][i] so that
+        //   each entry's index matches the _perBunkSlots[bunk][i] time-window.
+        //   Bug observed: after date round-trip, _perBunkSlots could have an
+        //   extra leading 'pre-Swim' slot while scheduleAssignments was saved
+        //   at the OLDER (1-shorter) shape — so assignments[0]=Swim landed at
+        //   the new index-0 pre-slot, shifting every activity one position off.
+        const _realignAssignmentsToSlots = () => {
+            const dt = window.divisionTimes || {};
+            const sa = window.scheduleAssignments || {};
+            Object.keys(dt).forEach(grade => {
+                const pbs = dt[grade]?._perBunkSlots;
+                if (!pbs) return;
+                Object.keys(pbs).forEach(bunk => {
+                    const slots = pbs[bunk] || [];
+                    const assigns = sa[bunk] || [];
+                    if (!Array.isArray(slots) || !Array.isArray(assigns)) return;
+                    if (assigns.length === 0) return;
+                    // Build slot start-times array. Then walk assigns and place
+                    // each at the matching-time index in a new array.
+                    const realigned = new Array(slots.length).fill(null);
+                    for (let i = 0; i < assigns.length; i++) {
+                        const a = assigns[i];
+                        if (!a) continue;
+                        const t = a._startMin;
+                        if (t == null) {
+                            // No time info — keep at original index if it exists
+                            if (i < realigned.length) realigned[i] = a;
+                            continue;
+                        }
+                        // Find slot whose [startMin, endMin) contains t
+                        let placed = false;
+                        for (let j = 0; j < slots.length; j++) {
+                            const s = slots[j];
+                            if (s && s.startMin === t) {
+                                realigned[j] = a;
+                                placed = true;
+                                break;
+                            }
+                        }
+                        if (!placed) {
+                            // Fall back: any slot containing this start time
+                            for (let j = 0; j < slots.length; j++) {
+                                const s = slots[j];
+                                if (s && s.startMin <= t && t < s.endMin && !realigned[j]) {
+                                    realigned[j] = a;
+                                    placed = true;
+                                    break;
+                                }
+                            }
+                        }
+                        // If still not placed, keep at original index (last resort)
+                        if (!placed && i < realigned.length && !realigned[i]) realigned[i] = a;
+                    }
+                    sa[bunk] = realigned;
+                });
+            });
+            try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e) {}
+        };
         if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
-            // Keep cloud data
             debugLog('Using divisionTimes from cloud');
-            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
-            if (dateData._perBunkSlotsData && window.divisionTimes) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-            }
+            _reattachAll();
+            _realignAssignmentsToSlots();
         } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
-            // Keep existing
             debugLog('Using existing divisionTimes');
-            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
-            if (dateData._perBunkSlotsData && window.divisionTimes) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-            }
+            _reattachAll();
+            _realignAssignmentsToSlots();
         } else if (dateData.divisionTimes && Object.keys(dateData.divisionTimes).length > 0) {
             // Deserialize from storage
            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
             debugLog('Loaded divisionTimes from storage');
-            // *** AUTO MODE: Reattach _perBunkSlots from saved data ***
-            if (dateData._perBunkSlotsData) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade]) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-                debugLog('Reattached _perBunkSlots for', Object.keys(dateData._perBunkSlotsData).length, 'grades');
-            }
+            _reattachAll();
+            _realignAssignmentsToSlots();
         } else {
             // Build from skeleton
             const skeleton = getSkeleton(dateKey);

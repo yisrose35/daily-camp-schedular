@@ -1212,12 +1212,20 @@
     });
 
     // After date change, ensure proper hydration
+    // ★ Day 24 fix: REMOVED the 100ms-delayed forceHydrateFromLocalStorage call
+    //   that was racing with integration_hooks' cloud load. integration_hooks
+    //   already awaits the cloud load and writes to scheduleAssignments AND
+    //   localStorage. This redundant hydrate was reading localStorage BEFORE
+    //   the cloud load finished and replacing the in-flight fresh data with
+    //   whatever stale snapshot localStorage still held — observed as
+    //   "schedule disappears after switching dates and coming back". We only
+    //   keep the unscheduled-divisions reset + multi-scheduler view refresh,
+    //   which are non-destructive.
     window.addEventListener('campistry-date-changed', (e) => {
         const dateKey = e.detail?.dateKey || getCurrentDateKey();
         console.log('[Sync] Date changed to:', dateKey);
-        
+
         setTimeout(() => {
-            forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();
             refreshMultiSchedulerView(dateKey, true);
         }, 100);

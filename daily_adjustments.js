@@ -4068,11 +4068,14 @@ function renderToolbar() {
 
     <div class="da-toolbar-group">
       ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
-      ${!isAutoMode ? (() => {
+      ${(() => {
+        // ★ Day 24: show Bunk Overrides button in BOTH manual and auto modes.
+        //   Auto-mode reuses the same toggle + storage; the rendered grid
+        //   picks dawLayers vs dailyOverrideSkeleton based on the active mode.
         const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
         const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
         return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
-      })() : ''}
+      })()}
       <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
       <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
@@ -4167,13 +4170,21 @@ function renderToolbar() {
     };
   }
 
-  // Bunk View toggle
+  // Bunk View toggle — single click; avoid renderToolbar() which would rebuild
+  // the toolbar DOM and trigger a second-click-needed bug when reopening.
   const bunkViewBtn = document.getElementById('da-bunk-view-btn');
   if (bunkViewBtn) {
     bunkViewBtn.onclick = () => {
       _boBunkViewActive = !_boBunkViewActive;
       _boToggleView();
-      renderToolbar();
+      // Manually update button visual state without re-rendering the whole toolbar
+      if (_boBunkViewActive) {
+        bunkViewBtn.classList.add('active');
+        bunkViewBtn.style.cssText = 'background:#f59e0b;color:#fff;border-color:#f59e0b;';
+      } else {
+        bunkViewBtn.classList.remove('active');
+        bunkViewBtn.style.cssText = '';
+      }
     };
   }
 
@@ -4848,7 +4859,12 @@ function renderBunkOverridesUI() {
   if (!container) return;
 
   const divisions = masterSettings.app1?.divisions || {};
-  const availableDivisions = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // Order by the user's Campistry Me drag order via getUserDivisionOrder.
+  // Falls back to the raw list if the helper isn't loaded yet.
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
 
   if (availableDivisions.length === 0) {
     container.innerHTML = '<div class="da-empty-state">No divisions found.</div>';
@@ -4910,8 +4926,705 @@ function renderBunkOverridesUI() {
 
   // Render the bunk grid if a division is selected
   if (_boSelectedDiv) {
-    _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    // ★ Day 24: branch based on builder mode — auto uses dawLayers, manual uses dailyOverrideSkeleton
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+      _boRenderAutoBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    } else {
+      _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    }
   }
+}
+
+// ★ Day 24: Auto-mode per-bunk grid — mirrors _boRenderBunkGrid layout (time
+//   column + per-bunk columns with full-width tiles, in-page) but reads from
+//   `dawLayers[grade]` instead of `dailyOverrideSkeleton`. Each layer becomes
+//   a full-width tile in each bunk's column. Click a tile to override.
+function _boRenderAutoBunkGrid(wrap, divName) {
+  if (!wrap) return;
+  const divisions = masterSettings.app1?.divisions || {};
+  const div = divisions[divName];
+  if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
+
+  const bunks = (div.bunks || []).slice().sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
+    return na - nb || a.localeCompare(b);
+  });
+  if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
+
+  // Pull the active auto layers for this grade for the current date.
+  // Storage: globalSettings.app1.dailyAutoLayers[YYYY-MM-DD][gradeName] = layers[]
+  const _gs = window.loadGlobalSettings?.() || {};
+  const _dal = _gs.app1?.dailyAutoLayers || {};
+  const _date = (window.currentScheduleDate || window.currentDate
+    || document.querySelector('input[type=date]')?.value || '').trim();
+  const _byGrade = (_dal[_date] || {});
+  const layers = ((_byGrade[divName] || []).slice()).sort((a, b) => a.startMin - b.startMin);
+  if (layers.length === 0) {
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
+    return;
+  }
+
+  // Compute time range from layers + grade window
+  const divStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
+  const divEnd   = parseTimeToMinutes(div.endTime)   || Math.max(...layers.map(l => l.endMin));
+  let earliestMin = divStart, latestMin = divEnd;
+  layers.forEach(l => {
+    if (l.startMin < earliestMin) earliestMin = l.startMin;
+    if (l.endMin > latestMin) latestMin = l.endMin;
+  });
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+
+  const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+  const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+  const totalHeight = (latestMin - earliestMin) * PX;
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const color = div.color || '#64748b';
+
+  // Layer-type → tile background colour (matches the auto builder palette)
+  const TYPE_BG = {
+    sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
+    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7',
+    dismissal: '#fbcfe8', custom: '#e5e7eb',
+    league: '#fee2e2', specialty_league: '#fce7f3', elective: '#f5d0fe'
+  };
+  const _typeLabel = (l) => {
+    const t = String(l.type || 'custom').toLowerCase();
+    const map = { sport: 'Sport', special: 'Special Activity', activity: 'Activity',
+                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
+                  custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
+                  elective: 'Elective' };
+    return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
+  };
+
+  // Each bunk column mirrors the master scheduler grade column EXACTLY —
+  // reuse the ms-daw-* CSS classes so the bands look pixel-identical.
+  const BAND_WIDTH = (typeof window.DAW_BAND_WIDTH === 'number') ? window.DAW_BAND_WIDTH : 40;
+  const BAND_GAP   = 4;
+  const BAND_PAD   = 4;
+  const GRADE_COL_MIN = 120;
+  const layerCount = Math.max(1, layers.length);
+  const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
+
+  // Outer wrap with horizontal scroll
+  let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
+
+  // Time ruler column (sticky left)
+  html += `<div class="ms-daw-ruler-col">`;
+  html += `<div class="ms-daw-ruler-header-spacer"></div>`;
+  html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += incMins) {
+    const top = (m - earliestMin) * PX;
+    const major = (m - earliestMin) % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${major ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
+  }
+  html += `</div></div>`;
+
+  // Bunk columns — one per bunk, styled like a grade column
+  bunks.forEach(bunk => {
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0
+      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;">${bunkOverrides.length}</span>`
+      : '';
+
+    html += `<div class="ms-daw-grade-col" data-bunk="${_escHtml(bunk)}" style="width:${colWidth}px;">`;
+    // Bunk header (re-uses .ms-daw-grade-header look but coloured by division)
+    html += `<div class="ms-daw-grade-header">
+      <span class="ms-daw-grade-tag" style="background:${color};">${_escHtml(bunk)}${badge}</span>
+    </div>`;
+    // Bunk track — earliest min stored on dataset for drag-drop time math
+    html += `<div class="ms-daw-track" data-earliest="${earliestMin}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+
+    // Horizontal gridlines (30-min increments)
+    for (let m = earliestMin; m < latestMin; m += incMins) {
+      const top = (m - earliestMin) * PX;
+      const cls = (m - earliestMin) % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
+    }
+
+    // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
+    layers.forEach((layer, idx) => {
+      const sm = layer.startMin, em = layer.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
+
+      const _ltKey = (layer.type || 'custom');
+      const override = overrides.find(o =>
+        o.bunk === bunk && o.startMin === sm && o.endMin === em
+        && o.layerType === _ltKey
+      );
+
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+      const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+      const durLabel = _dMin && _dMax && _dMin !== _dMax
+        ? `${_dMin}-${_dMax}m`
+        : `${_dMin || layer.periodMin || (em - sm)}m`;
+      const evName = _typeLabel(layer);
+
+      if (override) {
+        // Three override modes get different visual treatments:
+        //   • sportPool → green "pool of N sports" band
+        //   • delete   → grey hatched "deleted" band
+        //   • force / default → amber single-activity band
+        const mode = override.overrideMode || 'force';
+        let bandStyle, mainLabel, subLabel;
+        if (mode === 'sportPool') {
+          const poolCount = (override.sportPool || []).length;
+          bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+          mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+          subLabel  = (override.sportPool || []).join(' / ').slice(0, 28);
+        } else if (mode === 'delete') {
+          bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+          mainLabel = '— deleted —';
+          subLabel  = 'skipped for this bunk';
+        } else if (mode === 'resize') {
+          bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+          mainLabel = '⇕ resized';
+          subLabel  = minutesToTime(override.startMin) + '–' + minutesToTime(override.endMin);
+        } else {
+          bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+          mainLabel = override.activity;
+          subLabel  = 'override';
+        }
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click body to edit, drag edges to resize"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          <span class="band-label">${_escHtml(mainLabel)}</span>
+          <span class="band-qty">${_escHtml(subLabel)}</span>
+          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        </div>`;
+      } else {
+        html += `<div class="ms-daw-band bo-block bo-skeleton bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          <span class="band-label">${_escHtml(evName)}</span>
+          <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        </div>`;
+      }
+    });
+
+    // ★ Day 24: render added-layer overrides as extra bands after the grade
+    //   layers (positioned to the right of the last grade band).
+    const addedForBunk = overrides.filter(o => o.bunk === bunk && o.overrideMode === 'addLayer');
+    addedForBunk.forEach((ov, addIdx) => {
+      const sm = ov.startMin, em = ov.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
+      const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+      const evName = _typeLabel({ type: ov.layerType });
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="addLayer"
+        title="Added layer: ${_escHtml(evName)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, drag edges to resize"
+        style="background:${bg};color:#1e293b;box-shadow:0 0 0 2px #6366f1;top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+        <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        <span class="band-label">+ ${_escHtml(evName)}</span>
+        <span class="band-qty">added</span>
+        <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+        <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+      </div>`;
+    });
+
+    html += `</div></div>`; // /track /col
+  });
+
+  html += '</div></div>'; // /columns-wrap /scroll
+  wrap.innerHTML = html;
+
+  // Auto-mode bands → rich popover. Manual mode keeps the simple picker.
+  // Edge handles trigger drag-to-resize; clicking the body opens the popover.
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.onclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (e.target.classList.contains('band-resize')) return; // resize handles
+      const bunk = block.dataset.bunk;
+      const startMin = parseInt(block.dataset.start);
+      const endMin = parseInt(block.dataset.end);
+      const layerType = block.dataset.layerType;
+      _boShowAutoLayerPopover(block, bunk, startMin, endMin, layerType);
+    };
+  });
+
+  // ★ Day 24: drag-to-resize edge handles with ghost preview.
+  wrap.querySelectorAll('.bo-resizable .band-resize').forEach(handle => {
+    handle.onmousedown = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const block = handle.parentElement;
+      if (!block) return;
+      const edge = handle.dataset.edge;
+      const track = block.parentElement; // .ms-daw-track
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+      const SNAP = 5; // snap to 5 minutes
+      const trackRect = track.getBoundingClientRect();
+      const trackEarliestMin = parseInt(track.dataset.earliest || '0') || (() => {
+        // Fallback: derive from first time-tick or fall back to band's startMin
+        return parseInt(block.dataset.start) - (parseInt(block.style.top || '0') / PX);
+      })();
+      const originalStart = parseInt(block.dataset.start);
+      const originalEnd   = parseInt(block.dataset.end);
+      const originalTop   = parseFloat(block.style.top || '0');
+      const originalHeight = parseFloat(block.style.height || '0');
+
+      // Ghost element
+      const ghost = document.createElement('div');
+      ghost.className = 'bo-resize-ghost';
+      ghost.style.cssText = `position:absolute;left:${block.style.left};width:${block.style.width};
+        background:rgba(245,158,11,0.18);border:2px dashed #f59e0b;border-radius:6px;
+        pointer-events:none;z-index:50;display:flex;align-items:center;justify-content:center;
+        font-size:10px;font-weight:700;color:#7c2d12;`;
+      ghost.style.top = block.style.top;
+      ghost.style.height = block.style.height;
+      ghost.textContent = `${minutesToTime(originalStart)}–${minutesToTime(originalEnd)}`;
+      track.appendChild(ghost);
+
+      let newStart = originalStart, newEnd = originalEnd;
+      const onMove = (ev) => {
+        const dyMin = (ev.clientY - e.clientY) / PX;
+        const dyMinSnapped = Math.round(dyMin / SNAP) * SNAP;
+        if (edge === 'top') {
+          newStart = Math.min(originalEnd - SNAP, Math.max(0, originalStart + dyMinSnapped));
+          newEnd = originalEnd;
+        } else {
+          newStart = originalStart;
+          newEnd = Math.max(originalStart + SNAP, originalEnd + dyMinSnapped);
+        }
+        const newTop = originalTop + (newStart - originalStart) * PX;
+        const newH = (newEnd - newStart) * PX;
+        ghost.style.top = newTop + 'px';
+        ghost.style.height = newH + 'px';
+        ghost.textContent = `${minutesToTime(newStart)}–${minutesToTime(newEnd)}`;
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        ghost.remove();
+        if (newStart === originalStart && newEnd === originalEnd) return;
+        // Save the resized override (creating one if this band was a skeleton)
+        const bunk = block.dataset.bunk;
+        const layerType = block.dataset.layerType;
+        const ovId = block.dataset.ovId;
+        let list = currentOverrides.bunkActivityOverrides || [];
+        if (ovId) {
+          // Update existing override's time range
+          list = list.map(o => o.id === ovId ? {
+            ...o,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd)
+          } : o);
+        } else {
+          // Skeleton band — create a new resize-only override with no activity.
+          // Storing the resize as overrideMode:'resize' so the solver knows
+          // this layer runs on a custom window for this bunk.
+          list = list.filter(o => !(o.bunk === bunk && o.startMin === originalStart && o.endMin === originalEnd && o.layerType === layerType));
+          list.push({
+            id: uid(), bunk,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd),
+            originalStartMin: originalStart, originalEndMin: originalEnd,
+            layerType, overrideMode: 'resize',
+            activity: '⇕ resized', location: null, type: 'resize'
+          });
+        }
+        _boSaveOverrides(list);
+        renderBunkOverridesUI();
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  });
+
+  // ★ Day 24: palette drag → drop a new bunk-only layer onto a bunk column.
+  //   Reads `text/daw-layer` (set by the DA palette tiles in `tile.dragstart`)
+  //   and writes an overrideMode:'addLayer' override at the drop time slot.
+  wrap.querySelectorAll('.ms-daw-grade-col[data-bunk]').forEach(col => {
+    col.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types?.includes('text/daw-layer')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      col.style.outline = '2px dashed #f59e0b';
+    });
+    col.addEventListener('dragleave', () => { col.style.outline = ''; });
+    col.addEventListener('drop', (e) => {
+      col.style.outline = '';
+      const layerType = e.dataTransfer.getData('text/daw-layer');
+      if (!layerType) return;
+      e.preventDefault();
+      // Find the track within this column and convert clientY → minutes
+      const track = col.querySelector('.ms-daw-track');
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const rect = track.getBoundingClientRect();
+      const yOffset = e.clientY - rect.top;
+      const dropMin = (yOffset / PX) + (parseInt(track.dataset.earliest || '0') || 0);
+      // Default new layer to 40-min window starting at drop point, snapped to 5
+      const SNAP = 5;
+      const startMin = Math.max(0, Math.round(dropMin / SNAP) * SNAP);
+      const endMin = startMin + 40;
+      const bunk = col.dataset.bunk;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list.push({
+        id: uid(), bunk,
+        startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType, overrideMode: 'addLayer',
+        activity: '+ added layer', location: null, type: 'addLayer'
+      });
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    });
+  });
+
+  // Revert buttons on overrides
+  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const ovId = btn.parentElement?.dataset?.ovId;
+      if (!ovId) return;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    };
+  });
+}
+
+// ★ Day 24+: rich popover for auto-mode bunk override bands.
+//   Features:
+//     • Sport layer → multi-select sport pool (restrict bunk to those sports)
+//     • Non-sport layer → single-pick replacement activity
+//     • Time editor (start / end minutes, snapped to 5)
+//     • Delete-layer-for-this-bunk button
+//     • Save / Cancel
+function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
+  document.getElementById('bo-auto-popover')?.remove();
+  document.getElementById('bo-activity-picker')?.remove();
+
+  const groups = _boGetActivityGroups();
+  const _lt = String(layerType || 'custom').toLowerCase();
+  // Layer types that use a multi-select POOL pattern (pick which items from
+  // the pool the bunk can rotate through). Single-pick types use a different UI.
+  const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
+  const isPoolType = !!POOL_TYPES[_lt];
+
+  // Find existing override for this band (if any)
+  const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
+    o.bunk === bunk && o.startMin === startMin && o.endMin === endMin
+    && o.layerType === (layerType || 'custom')
+  );
+
+  const initPool = (existing?.sportPool && Array.isArray(existing.sportPool))
+    ? existing.sportPool.slice() : [];
+  let selectedSports = new Set(initPool); // reused for any pool-type override
+  let curStart = existing?.startMin ?? startMin;
+  let curEnd   = existing?.endMin   ?? endMin;
+  let pickedActivity = existing && !isPoolType ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+
+  const pop = document.createElement('div');
+  pop.id = 'bo-auto-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.18);width:360px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;';
+
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top  = Math.min(rect.bottom + 6, window.innerHeight - 540) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 370) + 'px';
+
+  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
+  const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
+
+  function render() {
+    pop.innerHTML = `
+      <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:linear-gradient(180deg,#f8fafc,#fff);">
+        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(layerLabel)} Layer</div>
+        <div style="font-size:12px;color:#475569;margin-top:2px;">${minutesToTime(curStart)} – ${minutesToTime(curEnd)}</div>
+      </div>
+      <div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:11px;color:#64748b;font-weight:600;min-width:36px;">Time</span>
+        <input type="time" id="bo-pop-start" value="${_minutesToInputTime(curStart)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+        <span style="font-size:11px;color:#64748b;">to</span>
+        <input type="time" id="bo-pop-end" value="${_minutesToInputTime(curEnd)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+      </div>
+      <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
+      <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="Skip this layer for ${_escHtml(bunk)} only — other bunks keep it">🗑 For ${_escHtml(bunk)}</button>
+        <button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>
+        <div style="flex:1;"></div>
+        <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
+        <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
+      </div>
+    `;
+
+    const body = pop.querySelector('#bo-pop-body');
+
+    // Helper: render a multi-select chip pool (used for sport / special / activity)
+    function renderPool(opts) {
+      const items = opts.items || [];
+      const icon  = opts.icon  || '✨';
+      const label = opts.label || layerLabel;
+      const desc  = opts.desc  || ('Allowed ' + label.toLowerCase() + ' for this bunk');
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          ${icon} ${_escHtml(desc)}:
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${items.map(it => {
+            const on = selectedSports.has(it.name);
+            return `<button type="button" class="bo-pool-chip" data-name="${_escHtml(it.name)}"
+              style="padding:4px 10px;font-size:12px;border-radius:99px;cursor:pointer;
+              background:${on ? '#10b981' : '#fff'};color:${on ? '#fff' : '#475569'};
+              border:1.5px solid ${on ? '#10b981' : '#cbd5e1'};font-weight:600;">
+              ${on ? '✓ ' : ''}${_escHtml(it.name)}
+            </button>`;
+          }).join('')}
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#64748b;">
+          ${selectedSports.size} selected
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:#94a3b8;font-style:italic;">
+          ${selectedSports.size === 0
+            ? 'No restriction — bunk follows the normal rotation.'
+            : 'During this layer, ' + bunk + ' will only receive the selected ' + label.toLowerCase() + '.'}
+        </div>`;
+      body.querySelectorAll('.bo-pool-chip').forEach(chip => {
+        chip.onclick = () => {
+          const name = chip.dataset.name;
+          if (selectedSports.has(name)) selectedSports.delete(name); else selectedSports.add(name);
+          render();
+        };
+      });
+    }
+
+    // Helper: render a single-pick option list (for swim/lunch/snacks/dismissal location pickers)
+    function renderSinglePick(opts) {
+      const cats = opts.cats || [];
+      const desc = opts.desc || ('Replace ' + layerLabel + ' for ' + bunk + ' with');
+      const icon = opts.icon || '🎯';
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          ${icon} ${_escHtml(desc)}:
+        </div>
+        <div id="bo-pop-options"></div>`;
+      const root = body.querySelector('#bo-pop-options');
+      cats.forEach(cat => {
+        if (!cat.items?.length) return;
+        const grp = document.createElement('div');
+        grp.style.cssText = 'margin-bottom:8px;';
+        grp.innerHTML = `<div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">${cat.label}</div>`;
+        cat.items.forEach(it => {
+          const row = document.createElement('div');
+          const isPicked = pickedActivity?.name === it.name;
+          row.style.cssText = 'padding:4px 8px;font-size:12px;border-radius:4px;cursor:pointer;color:#374151;' + (isPicked ? 'background:#fef3c7;font-weight:600;color:#92400e;' : '');
+          row.textContent = it.label || it.name;
+          row.onclick = () => { pickedActivity = it; render(); };
+          row.onmouseenter = () => { if (!isPicked) row.style.background = '#f1f5f9'; };
+          row.onmouseleave = () => { if (!isPicked) row.style.background = ''; };
+          grp.appendChild(row);
+        });
+        root.appendChild(grp);
+      });
+    }
+
+    // Per-layer-type body
+    switch (_lt) {
+      case 'sport':
+        renderPool({ items: groups.sports, icon: '🏈', label: 'Sports', desc: 'Allowed sports for this bunk (program rotates only through these)' });
+        break;
+      case 'special':
+        renderPool({ items: groups.specials, icon: '🎨', label: 'Special Activities', desc: 'Allowed special activities for this bunk' });
+        break;
+      case 'activity':
+        renderPool({ items: groups.fields, icon: '🎯', label: 'Activities', desc: 'Allowed activity locations for this bunk' });
+        break;
+      case 'swim':
+        renderSinglePick({
+          icon: '🏊',
+          desc: 'Pick a custom Swim location for ' + bunk + ' (default: Pool)',
+          cats: [
+            { label: '📌 Pinned', items: (groups.pinned || []).filter(p => /pool|swim/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'lunch':
+        renderSinglePick({
+          icon: '🥪',
+          desc: 'Pick a custom Lunch location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /lunch|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'snacks':
+        renderSinglePick({
+          icon: '🍪',
+          desc: 'Pick a custom Snacks location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /snack|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'dismissal':
+        renderSinglePick({
+          icon: '🚌',
+          desc: 'Pick a custom Dismissal location for ' + bunk,
+          cats: [
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'league':
+      case 'specialty_league':
+        renderPool({ items: groups.sports, icon: '🏆', label: 'League Sports', desc: 'Allowed league sports for ' + bunk });
+        break;
+      case 'elective':
+        renderPool({ items: groups.specials, icon: '✨', label: 'Electives', desc: 'Allowed electives for ' + bunk });
+        break;
+      case 'custom':
+      default:
+        renderSinglePick({
+          icon: '📌',
+          desc: 'Replace this ' + layerLabel + ' for ' + bunk + ' with',
+          cats: [
+            { label: '📌 Pinned Activities', items: groups.pinned },
+            { label: '🏢 Facilities', items: groups.facilities },
+            { label: '🏟️ Fields', items: groups.fields },
+            { label: '🎨 Special Activities', items: groups.specials },
+            { label: '⚽ Sports', items: groups.sports }
+          ]
+        });
+        break;
+    }
+
+    // Time inputs
+    pop.querySelector('#bo-pop-start').oninput = (e) => { curStart = _inputTimeToMinutes(e.target.value); };
+    pop.querySelector('#bo-pop-end').oninput   = (e) => { curEnd   = _inputTimeToMinutes(e.target.value); };
+
+    pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
+    pop.querySelector('#bo-pop-delete').onclick = () => {
+      // Delete-layer override for this bunk
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+      list.push({
+        id: uid(), bunk, startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType: layerType || 'custom',
+        overrideMode: 'delete',
+        activity: '— deleted —', location: null, type: 'delete'
+      });
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    // ★ Day 24: Delete the layer ENTIRELY from the grade (affects every bunk).
+    //   Modifies globalSettings.app1.dailyAutoLayers[date][grade] in place,
+    //   strips out the layer whose type+window matches, then persists via
+    //   saveGlobalSettings + cloud sync.
+    pop.querySelector('#bo-pop-delete-layer').onclick = () => {
+      if (!confirm('Delete the ' + layerLabel + ' layer entirely from ' + _boSelectedDiv + '? This affects every bunk in this grade.')) return;
+      try {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        gs.app1 = gs.app1 || {};
+        gs.app1.dailyAutoLayers = gs.app1.dailyAutoLayers || {};
+        const date = (window.currentScheduleDate || document.querySelector('input[type=date]')?.value || '').trim();
+        const day = gs.app1.dailyAutoLayers[date] = (gs.app1.dailyAutoLayers[date] || {});
+        const list = (day[_boSelectedDiv] || []).slice();
+        const _ltK = String(layerType || 'custom').toLowerCase();
+        const filtered = list.filter(l => !(String(l.type || '').toLowerCase() === _ltK && l.startMin === startMin && l.endMin === endMin));
+        day[_boSelectedDiv] = filtered;
+        if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(gs);
+        if (typeof window.forceSyncToCloud === 'function') window.forceSyncToCloud();
+        // Also drop any bunk overrides that targeted this exact layer (they no longer make sense)
+        let ovs = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+          !(o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        );
+        _boSaveOverrides(ovs);
+      } catch (e) { console.error('[bo] delete-layer failed', e); }
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    pop.querySelector('#bo-pop-save').onclick = () => {
+      if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
+      // Remove any existing override matching original time + layer
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+
+      if (isPoolType) {
+        if (selectedSports.size === 0) {
+          // Empty pool = revert (no override needed)
+          _boSaveOverrides(list);
+          pop.remove();
+          renderBunkOverridesUI();
+          return;
+        }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: _lt,
+          overrideMode: 'sportPool', // unified pool semantic — solver filters candidates
+          sportPool: [...selectedSports],
+          activity: [...selectedSports].join(' / '),
+          location: null, type: 'sportPool'
+        });
+      } else {
+        if (!pickedActivity) { alert('Pick an option or click Cancel.'); return; }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: _lt,
+          overrideMode: 'force',
+          activity: pickedActivity.name,
+          location: pickedActivity.location || null,
+          type: pickedActivity.type
+        });
+      }
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+  }
+
+  document.body.appendChild(pop);
+  render();
+
+  // Close on outside click (skip clicks on the anchor itself)
+  setTimeout(() => {
+    const closeHandler = (e) => {
+      if (!pop.contains(e.target) && e.target !== anchorEl) {
+        pop.remove();
+        document.removeEventListener('mousedown', closeHandler);
+      }
+    };
+    document.addEventListener('mousedown', closeHandler);
+  }, 0);
+}
+
+// Helpers for <input type="time"> value <-> minutes-since-midnight
+function _minutesToInputTime(m) {
+  const h = Math.floor(m / 60), mm = m % 60;
+  return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+}
+function _inputTimeToMinutes(s) {
+  const [h, m] = (s || '0:0').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
 }
 
 function _boRenderBunkGrid(wrap, divName) {
@@ -5055,10 +5768,13 @@ function _boRenderBunkGrid(wrap, divName) {
   });
 }
 
-function _boShowPicker(anchorEl, bunk, startMin, endMin) {
+function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   // Remove any existing picker
   const existing = document.getElementById('bo-activity-picker');
   if (existing) existing.remove();
+  // layerType is optional — set only in auto-mode where multiple layers share
+  // the same time window and we need to disambiguate which one is overridden.
+  layerType = layerType || anchorEl?.dataset?.layerType || null;
 
   const groups = _boGetActivityGroups();
 
@@ -5117,7 +5833,7 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin) {
       row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
       row.onmouseleave = () => { row.style.background = ''; };
       row.onclick = () => {
-        _boApplyOverride(bunk, startMin, endMin, item);
+        _boApplyOverride(bunk, startMin, endMin, item, layerType);
         picker.remove();
       };
       picker.appendChild(row);
@@ -5136,10 +5852,17 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
-function _boApplyOverride(bunk, startMin, endMin, item) {
+function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
   let overrides = currentOverrides.bunkActivityOverrides || [];
-  // Remove any existing override for this bunk at this exact time
-  overrides = overrides.filter(o => !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin));
+  // Remove any existing override for this bunk + same time + same layer (or no
+  // layerType for legacy manual-mode overrides). Different layers at the same
+  // time (auto-mode floaters) coexist.
+  overrides = overrides.filter(o => !(
+    o.bunk === bunk
+    && o.startMin === startMin
+    && o.endMin === endMin
+    && (o.layerType || null) === (layerType || null)
+  ));
   overrides.push({
     id: uid(),
     bunk: bunk,
@@ -5149,7 +5872,8 @@ function _boApplyOverride(bunk, startMin, endMin, item) {
     endTime: minutesToTime(endMin),
     startMin: startMin,
     endMin: endMin,
-    type: item.type
+    type: item.type,
+    layerType: layerType || null
   });
   _boSaveOverrides(overrides);
   renderBunkOverridesUI();
@@ -6231,6 +6955,13 @@ window.addEventListener('campistry-periods-changed', function() {
 window.initDailyAdjustments = init;
 window.cleanupDailyAdjustments = cleanup;
 window.refreshDailyAdjustmentsFromCloud = refreshFromCloud;
+// ★ Day 24: expose bunk-override helpers so the AUTO builder can reuse the
+//   same picker + storage + apply pipeline as Daily Adjustments.
+window._boShowPicker = _boShowPicker;
+window._boApplyOverride = _boApplyOverride;
+window._boGetActivityGroups = _boGetActivityGroups;
+window._boSaveOverrides = _boSaveOverrides;
+window._boGetCurrentOverrides = function() { return (currentOverrides.bunkActivityOverrides || []).slice(); };
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
 window.isRainyDayActive = isRainyDayActive;

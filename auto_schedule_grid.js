@@ -196,6 +196,46 @@
             : allDivSlots;
         if (!divSlots.length) return [];
 
+        // ★ Day 24 fix (date-switch drift):
+        //   `divSlots` and `assignments` are supposed to be index-aligned, but
+        //   the generation can inject a leading empty slot into _perBunkSlots
+        //   without adding a matching null at scheduleAssignments[0], shifting
+        //   every activity by one position.
+        //   Detect that and rebuild the assignments array re-indexed by the
+        //   slot whose startMin matches each entry's _startMin. Empty slots
+        //   stay null. Falls back to original index if entries lack times.
+        try {
+            var needsRealign = false;
+            for (var _k = 0; _k < Math.min(assignments.length, divSlots.length); _k++) {
+                var _a = assignments[_k]; var _ds = divSlots[_k];
+                if (_a && _ds && _a._startMin != null && _ds.startMin != null && _a._startMin !== _ds.startMin) {
+                    needsRealign = true; break;
+                }
+            }
+            if (needsRealign) {
+                var realigned = new Array(divSlots.length).fill(null);
+                for (var _i = 0; _i < assignments.length; _i++) {
+                    var _e = assignments[_i];
+                    if (!_e) continue;
+                    var _t = _e._startMin;
+                    var placed = false;
+                    if (_t != null) {
+                        for (var _j = 0; _j < divSlots.length; _j++) {
+                            if (divSlots[_j] && divSlots[_j].startMin === _t && !realigned[_j]) {
+                                realigned[_j] = _e; placed = true; break;
+                            }
+                        }
+                    }
+                    if (!placed && _i < realigned.length && !realigned[_i]) realigned[_i] = _e;
+                }
+                assignments = realigned;
+                // Persist the realignment so subsequent renders + downstream
+                // consumers (segments, leagues, print) all see the corrected map.
+                window.scheduleAssignments[bunk] = realigned;
+                try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch (_e2) {}
+            }
+        } catch (_re) { /* non-fatal */ }
+
         var segmentsByBunk = (window.scheduleSegments || {})[bunk];
         var toRenderEntry = window.AutoSegmentModel?.toRenderEntry || (function (s) { return s?._source || s || null; });
 

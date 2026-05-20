@@ -1596,8 +1596,6 @@
                     };
                 }
             });
-            // ★ TEMP DEBUG: expose ledger globally so live probes can verify normalization
-            try { window._fieldLedger = fieldLedger; } catch(_) {}
         }
 
         function isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity) {
@@ -4088,6 +4086,20 @@
 
                     var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
                     if (typeof sportList._rerank === 'function') sportList._rerank();
+                    // ★ Day 24: bunk sportPool filter — restrict sportList to
+                    //   pool when this bunk has a pool override over the slot.
+                    var _b1Pools = (window._bunkSportPools || {})[String(bunk)] || [];
+                    var _b1Active = null;
+                    for (var _b1i = 0; _b1i < _b1Pools.length; _b1i++) {
+                        var _b1p = _b1Pools[_b1i];
+                        if (slotStart >= _b1p.startMin && slotEnd <= _b1p.endMin) {
+                            _b1Active = new Set(_b1p.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                            break;
+                        }
+                    }
+                    if (_b1Active) {
+                        sportList = sportList.filter(function(sp) { return _b1Active.has(String(sp.name).toLowerCase().trim()); });
+                    }
                     for (var spi = 0; spi < sportList.length; spi++) {
                         var sport = sportList[spi];
                         if (result.usedActivities.has(sport.name)) continue;
@@ -4125,6 +4137,9 @@
                 if (result.sports.length >= cap) return;
 
                 var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
+                // ★ Day 24: B3 fallback — apply pool filter; gate per-sport
+                //   because we don't know the time slot yet (filter inside loop).
+                var _b3Pools = (window._bunkSportPools || {})[String(bunk)] || [];
                 for (var i = 0; i < sportList.length; i++) {
                     if (result.sports.length >= cap) break;
                     var sport = sportList[i];
@@ -4134,6 +4149,16 @@
                     for (var j = 0; j < fields.length; j++) {
                         var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
+                            // Check pool restriction at this specific time
+                            var _b3OK = true;
+                            for (var _b3i = 0; _b3i < _b3Pools.length; _b3i++) {
+                                var _b3p = _b3Pools[_b3i];
+                                if (time.startMin >= _b3p.startMin && time.endMin <= _b3p.endMin) {
+                                    var _b3Set = new Set(_b3p.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                                    if (!_b3Set.has(String(sport.name).toLowerCase().trim())) { _b3OK = false; break; }
+                                }
+                            }
+                            if (!_b3OK) continue;
                             if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
@@ -4305,6 +4330,8 @@
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (list.sports.required <= 0) continue;
                 if (typeof list.sports.priorityList?._rerank === 'function') list.sports.priorityList._rerank();
+                // ★ Day 24: pool filter (applied per-time inside the field loop)
+                const _r3Pools = (window._bunkSportPools || {})[String(bunk)] || [];
                 for (const sport of list.sports.priorityList) {
                     if (result.sports.length >= list.sports.required) break;
                     if (result.usedActivities.has(sport.name)) continue;
@@ -4314,6 +4341,14 @@
                     for (const field of sport.fields) {
                         const time = findTimeForField(field, bunk, grade, sport.dIdeal, fw);
                         if (time) {
+                            let _r3OK = true;
+                            for (const _p of _r3Pools) {
+                                if (time.startMin >= _p.startMin && time.endMin <= _p.endMin) {
+                                    const _set = new Set(_p.sports.map(s => String(s).toLowerCase().trim()));
+                                    if (!_set.has(String(sport.name).toLowerCase().trim())) { _r3OK = false; break; }
+                                }
+                            }
+                            if (!_r3OK) continue;
                             if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
@@ -6916,6 +6951,24 @@
                 var timeSlot = Math.floor(startMin / 30) * 30;
                 var candidates = [];
 
+                // ★ Day 24: bunk sportPool override — if this bunk has a pool
+                //   restriction covering [startMin, endMin), filter pList down
+                //   to that pool only.
+                var _pools = (window._bunkSportPools || {})[String(bunk)] || [];
+                var _activePool = null;
+                for (var _pi = 0; _pi < _pools.length; _pi++) {
+                    var _po = _pools[_pi];
+                    if (startMin >= _po.startMin && endMin <= _po.endMin) {
+                        _activePool = new Set(_po.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                        break;
+                    }
+                }
+                if (_activePool) {
+                    pList = pList.filter(function(sp) {
+                        return _activePool.has(String(sp.name).toLowerCase().trim());
+                    });
+                }
+
                 // Collect ALL available sport+field combos
                 for (var p = 0; p < pList.length; p++) {
                     var sport = pList[p];
@@ -6926,6 +6979,21 @@
                         // Score: drafted unused > unused > reuse. Low demand > high demand.
                         var demand = fieldDemand[sport.fields[f] + ':' + timeSlot] || 0;
                         var score = 0;
+                        // ★ Day 21 fix: rotation score is the DOMINANT factor.
+                        //   Previously findBestSport computed an entirely new score that
+                        //   ignored sport.rotationScore. The rotation engine's "least-
+                        //   played activities get priority" signal (which informs the
+                        //   sportPriorityList sort) was thrown away once the priority list
+                        //   was iterated here, producing visible imbalance — e.g. Jumprope
+                        //   with rotationScore=-780 (most overdue) NEVER placed while
+                        //   Belts with rotationScore=+51020 (most played) placed every
+                        //   day. Subtracting rotationScore inverts it so overdue sports
+                        //   gain a large bonus and over-played sports take a large hit.
+                        //   The other heuristics below (drafted/used/demand/adjacent/
+                        //   recent-days/field-pressure) still tie-break.
+                        if (typeof sport.rotationScore === 'number') {
+                            score -= sport.rotationScore;
+                        }
                         if (isDrafted && !isUsed) score += 1000;  // best: drafted, not used
                         else if (!isUsed) score += 500;            // good: not used
                         // else: reuse, score stays 0
@@ -7339,6 +7407,18 @@
                             }
 
                             if (shareable.length >= 2) {
+                                // ★ Day 24: drop bunks whose sportPool excludes this sport at this time
+                                shareable = shareable.filter(function(sh2) {
+                                    var _pl = (window._bunkSportPools || {})[String(sh2.bunk)] || [];
+                                    for (var _i = 0; _i < _pl.length; _i++) {
+                                        if (startMin >= _pl[_i].startMin && endMin <= _pl[_i].endMin) {
+                                            var _set = new Set(_pl[_i].sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                                            if (!_set.has(String(sport.name).toLowerCase().trim())) return false;
+                                        }
+                                    }
+                                    return true;
+                                });
+                                if (shareable.length < 2) continue;
                                 // Assign ALL shareable bunks to this field at the same time
                                 for (var sh = 0; sh < shareable.length; sh++) {
                                     if (!claimField(fieldName, startMin, endMin, shareable[sh].bunk, gradeKey, sport.name)) continue;
@@ -11226,19 +11306,61 @@
                 } catch(e) {}
             }
             if (totalIters < 1) log('[P0] Bunk overrides found: ' + bunkOverrides.length + ' | bunkTimelines keys: ' + Object.keys(bunkTimelines).length);
+
+            // ★ Day 24: separate new override modes (sportPool / delete) from
+            //   the legacy single-activity force pin. These don't get pinned as
+            //   blocks — they store constraints consulted by findBestSport /
+            //   layer iteration.
+            window._bunkSportPools = {};      // bunk -> [{startMin, endMin, sports:[]}]
+            window._bunkDeletedLayers = {};   // bunk -> [{startMin, endMin, layerType}]
+
             bunkOverrides.forEach(ov => {
-                if (!ov.bunk || !ov.activity) return;
+                if (!ov.bunk) return;
                 const tStart = ov.startMin ?? parseTimeToMinutes(ov.startTime);
                 const tEnd = ov.endMin ?? parseTimeToMinutes(ov.endTime);
                 if (tStart == null || tEnd == null) {
-                    if (totalIters < 1) warn('[P0] Override skipped — bad times: ' + ov.activity + ' start=' + ov.startTime + ' end=' + ov.endTime);
+                    if (totalIters < 1) warn('[P0] Override skipped — bad times: start=' + ov.startTime + ' end=' + ov.endTime);
                     return;
                 }
                 const bunk = String(ov.bunk);
                 if (!bunkTimelines[bunk]) {
-                    if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '" (available: ' + Object.keys(bunkTimelines).slice(0, 5).join(', ') + '...)');
+                    if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '"');
                     return;
                 }
+
+                const mode = ov.overrideMode || 'force';
+
+                // ── sportPool: restrict sport candidates for this bunk during the window ──
+                if (mode === 'sportPool') {
+                    if (!Array.isArray(ov.sportPool) || ov.sportPool.length === 0) return;
+                    if (!window._bunkSportPools[bunk]) window._bunkSportPools[bunk] = [];
+                    window._bunkSportPools[bunk].push({
+                        startMin: tStart, endMin: tEnd,
+                        sports: ov.sportPool.slice(),
+                        layerType: ov.layerType || 'sport'
+                    });
+                    if (totalIters < 1) log('[P0] Sport pool override for ' + bunk + ' (' + tStart + '-' + tEnd + '): ' + ov.sportPool.join(', '));
+                    return;
+                }
+
+                // ── delete: record the deletion for the final-pass enforcer.
+                //   Don't pin a block in Phase 0 — floater layers span the full
+                //   grade window, so pinning a block here would block ALL other
+                //   layers' placements inside that window. The final-pass at
+                //   end-of-gen will type-match-and-evict only activities that
+                //   match the deleted layer's type (swim-delete → only Swim).
+                if (mode === 'delete') {
+                    if (!window._bunkDeletedLayers[bunk]) window._bunkDeletedLayers[bunk] = [];
+                    window._bunkDeletedLayers[bunk].push({
+                        startMin: tStart, endMin: tEnd,
+                        layerType: ov.layerType || 'custom'
+                    });
+                    if (totalIters < 1) log('[P0] Layer delete override recorded for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
+                    return;
+                }
+
+                // ── force (legacy / default): pin as a single activity block ──
+                if (!ov.activity) return;
                 // ★ v7.0: Auto-detect type from field ledger — don't rely on UI type tag
                 const bunkGrade = Object.keys(divisions).find(g =>
                     getBunksForGrade(g, divisions).map(String).includes(bunk)
@@ -16194,6 +16316,40 @@
                 }
             });
         });
+        // ★ Day 21 fix: also clear sport-fill phantom field claims so the
+        //   solver sees the actual capacity. Phase 3's findBestSport claims
+        //   fields when picking sports for its "hint" blocks, but those
+        //   claims don't translate into scheduleAssignments writes — the
+        //   solver later writes its own picks. The leftover claims saturate
+        //   field capacity (e.g. Jumprope cap=2 reserved by Phase 3 for two
+        //   Trios bunks blocks every other grade from being able to use
+        //   Jumprope at any time). Real claims (specials, leagues, anchors)
+        //   live in scheduleAssignments and survive — only sport-fill claims
+        //   are wiped.
+        try {
+            const _solverCleanupGuard = function(c) {
+                // Keep claims whose target slot/time in scheduleAssignments still
+                // holds a non-sport real placement (special, league, anchor).
+                if (!c || c.startMin == null) return false;
+                const bk = c.bunk;
+                const sa = (window.scheduleAssignments || {})[bk] || [];
+                for (let i = 0; i < sa.length; i++) {
+                    const s = sa[i];
+                    if (!s) continue;
+                    if (s._startMin === c.startMin && s._endMin === c.endMin) {
+                        // Real placement exists — keep the claim
+                        return true;
+                    }
+                }
+                return false;
+            };
+            Object.values(fieldLedger).forEach(ledger => {
+                if (!ledger.claims || ledger.claims.length === 0) return;
+                ledger.claims = ledger.claims.filter(_solverCleanupGuard);
+            });
+        } catch (_e) {
+            warn('[pre-solver claim cleanup] error: ' + (_e && _e.message));
+        }
         window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
         // Build solver input blocks (mark LNS-locked blocks)
@@ -17566,6 +17722,8 @@
             log('[STEP 5] Restored ' + restored + ' non-scoped bunks from pre-solver snapshot');
         }
 
+        // (Day 24 enforcement runs AFTER STEP 6.5 — see end of generation.)
+
         if (window.saveCurrentDailyData) {
             try {
                 // ★ v4.0: Strip Free entries and internal flags to reduce size
@@ -18346,6 +18504,89 @@
                 warn('[STEP 6.5] Final null sweep error: ' + eS.message);
             }
         })();
+
+        // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
+        //   the final null sweep can't refill our cleared slots with violations.
+        //   Re-derives the pool/delete map from saved overrides to avoid
+        //   stale-globals issues.
+        try {
+            const _fdd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+            const _allOvs = _fdd?.bunkActivityOverrides || [];
+            const _pools = {}, _deleted = {};
+            _allOvs.forEach(ov => {
+                if (!ov || !ov.bunk) return;
+                const sMin = ov.startMin, eMin = ov.endMin;
+                if (sMin == null || eMin == null) return;
+                if (ov.overrideMode === 'sportPool' && Array.isArray(ov.sportPool)) {
+                    if (!_pools[ov.bunk]) _pools[ov.bunk] = [];
+                    _pools[ov.bunk].push({ startMin: sMin, endMin: eMin, sports: ov.sportPool.slice() });
+                } else if (ov.overrideMode === 'delete') {
+                    if (!_deleted[ov.bunk]) _deleted[ov.bunk] = [];
+                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin, layerType: String(ov.layerType || 'custom').toLowerCase() });
+                }
+            });
+            let _pE = 0, _dE = 0;
+            Object.entries(window.scheduleAssignments || {}).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const bP = _pools[bunk] || [];
+                const bD = _deleted[bunk] || [];
+                slots.forEach((entry, i) => {
+                    if (!entry) return;
+                    const sMin = entry._startMin, eMin = entry._endMin;
+                    const act = String(entry._activity || entry.sport || '').toLowerCase().trim();
+                    if (!act) return;
+                    // Skip OUR own delete pins (already correct).
+                    if (entry._layerDeleted) return;
+                    // If time fields missing (stripped-down entry), only activity-name
+                    // matching applies — any matching activity in any delete window evicts.
+                    const noTime = (sMin == null || eMin == null);
+                    // Delete check: type-match only by ACTIVITY NAME (not entry._type,
+                    // which the solver tags by layer-window rather than actual activity).
+                    //
+                    //   swim-layer delete   → match 'swim' or 'change' activities
+                    //   sport-layer delete  → match entries with a non-empty entry.sport
+                    //                         AND activity matching that sport (not anchors)
+                    //   special-layer       → match _autoSpecial entries
+                    //   lunch / snacks      → match the matching activity name
+                    //   league              → match 'league game' activity
+                    for (const d of bD) {
+                        const inWindow = noTime || (sMin >= d.startMin && eMin <= d.endMin);
+                        if (inWindow) {
+                            const matches = (
+                                (d.layerType === 'swim' && (act === 'swim' || act === 'change')) ||
+                                (d.layerType === 'sport' && !!entry.sport && act === String(entry.sport || '').toLowerCase().trim()) ||
+                                (d.layerType === 'special' && !!entry._autoSpecial) ||
+                                (d.layerType === 'lunch' && act === 'lunch') ||
+                                (d.layerType === 'snacks' && act === 'snacks') ||
+                                (d.layerType === 'league' && /league/i.test(act)) ||
+                                (d.layerType === 'dismissal' && act === 'dismissal')
+                            );
+                            if (matches) {
+                                slots[i] = { _startMin: sMin ?? d.startMin, _endMin: eMin ?? d.endMin, field: 'Free', _activity: null, _layerDeleted: true };
+                                _dE++; return;
+                            }
+                        }
+                    }
+                    // Skip force-mode override pins for the pool check (user explicitly forced these).
+                    if (entry._bunkOverride) return;
+                    if (entry._isSport || entry._type === 'sport' || entry.sport) {
+                        for (const p of bP) {
+                            if (sMin >= p.startMin && eMin <= p.endMin) {
+                                const allowed = new Set(p.sports.map(s => String(s).toLowerCase().trim()));
+                                if (!allowed.has(act)) {
+                                    slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _poolEvicted: true };
+                                    _pE++; break;
+                                }
+                            }
+                        }
+                    }
+                });
+            });
+            if (_pE || _dE) {
+                log('[POOL_ENFORCE_FINAL] pool=' + _pE + ' delete=' + _dE);
+                try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch(_e) {}
+            }
+        } catch (_pe2) { /* non-fatal */ }
 
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;

@@ -127,14 +127,18 @@
             //   isFieldAvailable consumes, so the auto solver finally agrees
             //   with the manual one on grade access + grade-scoped time rules.
             // ★ Loosen `enabled` to truthy (configs may persist as 1/"true").
-            const accessRestrictions = (f.accessRestrictions && f.accessRestrictions.enabled)
-                ? {
-                    enabled: true,
-                    divisions: (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
-                        ? f.accessRestrictions.divisions
-                        : {}
+            // ★ Day 21 fix: if enabled=true but divisions is empty, treat as
+            //   open. User misconfig where the toggle is on but no grades were
+            //   picked silently blocks every grade — caught by week 3 audit.
+            let accessRestrictions = null;
+            if (f.accessRestrictions && f.accessRestrictions.enabled) {
+                const _divs = (f.accessRestrictions.divisions && typeof f.accessRestrictions.divisions === 'object')
+                    ? f.accessRestrictions.divisions : {};
+                if (Object.keys(_divs).length > 0) {
+                    accessRestrictions = { enabled: true, divisions: _divs };
                 }
-                : null;
+                // else: enabled with empty divisions → treat as no restriction
+            }
             const timeRules = parseRules(f.timeRules);
             // dailyDisabledSports map: { fieldName: ['Hockey', ...] }
             const fieldDisabledSports = new Set(
@@ -796,13 +800,32 @@
                 // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;
 
+                // ★ Day 23 fix: STAGGER REJECTION — if a same-grade bunk is already
+                //   doing this same activity on this same field with PARTIAL time
+                //   overlap (not exact match, not fully separate), REJECT this
+                //   candidate. Two bunks playing the same sport on the same field
+                //   at misaligned times can't actually play together — one would
+                //   arrive late or leave early. They must either share the EXACT
+                //   same window or be at fully separate windows.
+                const fn = cand.fieldNorm;
+                const fieldEntries = fieldIndex.get(fn) || [];
+                const sameGradeSameActStagger = fieldEntries.some(e =>
+                    e.bunk !== bunk &&
+                    e.grade === grade &&
+                    e.activity === cand.sportNorm &&
+                    // Overlap exists?
+                    e.startMin < endMin && e.endMin > startMin &&
+                    // But NOT exact match? → partial overlap = bad
+                    !(e.startMin === startMin && e.endMin === endMin)
+                );
+                if (sameGradeSameActStagger) continue;
+
                 // Score: rotation + draft hint
                 let score = getCachedRotation(bunk, cand.sport, grade);
                 score += getDraftBonus(block, cand);
 
                 // Prefer filling fields to capacity (same activity co-location)
-                const fn = cand.fieldNorm;
-                const existing = (fieldIndex.get(fn) || []).filter(e =>
+                const existing = fieldEntries.filter(e =>
                     e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk
                 );
                 if (existing.length > 0) {
@@ -872,6 +895,7 @@
                 scored.push({ cand, score });
             }
 
+
             if (scored.length === 0) {
                 // No valid candidate — Free
                 writeFree(block);
@@ -893,8 +917,15 @@
             });
             const pick = scored[0].cand;
 
-            // Write assignment
-            writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx);
+            // Write assignment — if it's rejected (cooldown, time rule, etc.),
+            // DON'T update tracking/fieldIndex. Otherwise phantom entries
+            // accumulate that block other bunks from using the same field.
+            const _wrote = writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx);
+            if (!_wrote) {
+                writeFree(block);
+                free++;
+                continue;
+            }
 
             // Update tracking
             doneToday.add(pick.sportNorm);
@@ -1038,7 +1069,10 @@
             const fld = fields.find(f => f && f.name === fieldName);
             if (fld) {
                 // Field-level access restriction
-                if (fld.accessRestrictions && fld.accessRestrictions.enabled) {
+                // ★ Skip when enabled=true but divisions is empty (user misconfig)
+                if (fld.accessRestrictions && fld.accessRestrictions.enabled
+                    && fld.accessRestrictions.divisions
+                    && Object.keys(fld.accessRestrictions.divisions).length > 0) {
                     const divs = fld.accessRestrictions.divisions || {};
                     const gradeKey = String(grade);
                     if (!(gradeKey in divs) && !(grade in divs)) {
@@ -1093,7 +1127,9 @@
             if (sport) {
                 const specials = gs.app1?.specialActivities || [];
                 const sp = specials.find(s => s && s.name === sport);
-                if (sp?.accessRestrictions?.enabled) {
+                if (sp?.accessRestrictions?.enabled
+                    && sp.accessRestrictions.divisions
+                    && Object.keys(sp.accessRestrictions.divisions).length > 0) {
                     const sDivs = sp.accessRestrictions.divisions || {};
                     const gKey = String(grade);
                     if (!(gKey in sDivs) && !(grade in sDivs)) {
@@ -1149,6 +1185,54 @@
             }
         } catch (e) { /* never let a rule lookup error block legal writes */ }
 
+        // ★ Day 23 fix: STAGGER REJECTION (centralized hard gate).
+        //   If a same-grade bunk is already doing this same activity on this
+        //   same field with PARTIAL time overlap (overlap exists but not
+        //   identical start/end), reject the write. The two bunks can't
+        //   actually share the activity at misaligned times — one arrives
+        //   late or leaves early. They must EITHER share the exact same
+        //   time window OR have NO time overlap at all.
+        //   Centralized here so all placement paths benefit (main solve,
+        //   fallbackSweep, LNS, ejection chain, BFS, capacity-relax).
+        if (sport && fieldName && fieldName !== 'Free' && sMin != null && eMin != null) {
+            try {
+                const _sportLower = String(sport).toLowerCase().trim();
+                const _fieldLower = String(fieldName).toLowerCase().trim();
+                const _saAll = window.scheduleAssignments || {};
+                for (const _otherBunk in _saAll) {
+                    if (_otherBunk === bunk) continue;
+                    // Same grade?
+                    let _otherGrade = '';
+                    const _divs = window.divisions || {};
+                    for (const _g in _divs) {
+                        if ((_divs[_g].bunks || []).map(String).includes(String(_otherBunk))) {
+                            _otherGrade = _g; break;
+                        }
+                    }
+                    if (_otherGrade !== grade) continue;
+                    const _otherSlots = _saAll[_otherBunk] || [];
+                    for (let _oi = 0; _oi < _otherSlots.length; _oi++) {
+                        const _w = _otherSlots[_oi];
+                        if (!_w || _w.continuation) continue;
+                        const _wField = String(_w.field || '').toLowerCase().trim();
+                        if (_wField !== _fieldLower) continue;
+                        const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
+                        if (_wAct !== _sportLower) continue;
+                        const _ws = _w._startMin, _we = _w._endMin;
+                        if (_ws == null || _we == null) continue;
+                        // Overlap? (half-open)
+                        if (_ws < eMin && _we > sMin) {
+                            // Identical times = OK (true sharing)
+                            if (_ws === sMin && _we === eMin) continue;
+                            // Partial overlap = REJECT
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — would partial-overlap ' + _otherBunk + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
+                            return false;
+                        }
+                    }
+                }
+            } catch (_se) { /* never block on stagger-check error */ }
+        }
+
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
         window.scheduleAssignments[bunk][slotIdx] = entry;
         // Invalidate rotation caches for this bunk so any later score
@@ -1169,7 +1253,7 @@
     }
 
     function writeAssignment(block, pick, startMin, endMin, bunk, grade, slotIdx) {
-        if (!window.scheduleAssignments?.[bunk]) return;
+        if (!window.scheduleAssignments?.[bunk]) return false;
         const entry = {
             field: pick.field,
             sport: pick.sport,
@@ -1182,7 +1266,7 @@
             _division: grade,
             continuation: false
         };
-        if (!commitWriteIfLegal(bunk, slotIdx, pick.field, pick.sport, grade, startMin, endMin, entry)) return;
+        if (!commitWriteIfLegal(bunk, slotIdx, pick.field, pick.sport, grade, startMin, endMin, entry)) return false;
 
         // Register in fieldUsageBySlot for compatibility with fillers/utils/canBlockFit
         const fubs = window.fieldUsageBySlot || {};
@@ -1193,6 +1277,7 @@
         if (grade && !fubs[slotIdx][pick.field].divisions.includes(grade)) {
             fubs[slotIdx][pick.field].divisions.push(grade);
         }
+        return true;
     }
 
     function writeFree(block) {
@@ -1364,6 +1449,16 @@
                     }
 
                     if (blocked) continue;
+
+                    // ★ Day 23 fix: STAGGER REJECTION (same as main solve loop).
+                    //   Same-grade bunk doing same activity on same field with
+                    //   PARTIAL overlap must be rejected — see solver main loop.
+                    const _staggerHit = overlapping.some(e =>
+                        e.grade === grade &&
+                        e.activity === cand.sportNorm &&
+                        !(e.startMin === startMin && e.endMin === endMin)
+                    );
+                    if (_staggerHit) continue;
 
                     // ★ Route through hard guard so accessRestrictions /
                     //   timeRules / Unavailable windows reject illegal fills.
