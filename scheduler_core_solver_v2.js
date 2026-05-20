@@ -260,11 +260,40 @@
     });
 
     // === 2. Field time rules (Available/Unavailable, per-division) ===
+    // ★ Day 22.5 fix: DA Resources daily rules live in:
+    //   - window.activityProperties[name].timeRules (gen-entry merge)
+    //   - dailyData.dailyFieldAvailability[name]
+    //   - localStorage 'campResourceOverrides_<date>'
+    // V2 previously read ONLY cfg.timeRules (setup-level), so daily-only
+    // Unavailable rules were invisible — the SA optimizer could happily
+    // make replace/swap moves into a daily-unavailable window.
+    function _getDailyRulesForField(fieldName) {
+      try {
+        const ap = (typeof window !== 'undefined') ? window.activityProperties?.[fieldName]?.timeRules : null;
+        if (Array.isArray(ap) && ap.length > 0) return ap;
+        const dd = (typeof window !== 'undefined') ? (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName] : null;
+        if (Array.isArray(dd) && dd.length > 0) return dd;
+        const dk = (typeof window !== 'undefined') ? (window.currentScheduleDate || '') : '';
+        if (dk) {
+          const _stored = localStorage.getItem('campResourceOverrides_' + dk);
+          if (_stored) {
+            const _parsed = JSON.parse(_stored);
+            const ls = _parsed?.dailyFieldAvailability?.[fieldName];
+            if (Array.isArray(ls) && ls.length > 0) return ls;
+          }
+        }
+      } catch (_e) {}
+      return null;
+    }
     flat.forEach(c => {
       const cfg = fieldByName[c.field];
-      if (!cfg?.timeRules || cfg.timeRules.length === 0) return;
-      const avail = cfg.timeRules.filter(r => r.type === 'Available' || !r.type || r.available === true);
-      const unavail = cfg.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+      // Effective rules: daily rules REPLACE setup-level rules (matches the
+      // gen-entry merge semantics for activityProperties[name].timeRules).
+      const _dailyRules = _getDailyRulesForField(c.field);
+      const effRules = _dailyRules || cfg?.timeRules || [];
+      if (effRules.length === 0) return;
+      const avail = effRules.filter(r => r.type === 'Available' || !r.type || r.available === true);
+      const unavail = effRules.filter(r => r.type === 'Unavailable' || r.available === false);
       // Available: must lie within at least one applicable rule
       if (avail.length > 0) {
         const ok = avail.some(r => {
