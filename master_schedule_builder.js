@@ -1847,8 +1847,20 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
     // ── Thin grade header (outside the scrolling track) ──
+    // Count bunk overrides for any bunk in this grade so the user knows from
+    // the master view that this grade has per-bunk overrides applied.
+    let _gradeOvCount = 0;
+    try {
+      const _dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+      const _ovs = _dd?.bunkActivityOverrides || [];
+      const _gradeBunks = new Set((div?.bunks || []).map(String));
+      _gradeOvCount = _ovs.filter(o => _gradeBunks.has(String(o.bunk))).length;
+    } catch(e) {}
+    const _ovBadge = _gradeOvCount > 0
+      ? ` <span class="ms-daw-grade-ov-badge" title="${_gradeOvCount} bunk override${_gradeOvCount === 1 ? '' : 's'} applied — open Daily Adjustments → Bunk Overrides" style="background:#f59e0b;color:#fff;font-size:9px;font-weight:700;border-radius:99px;padding:1px 5px;margin-left:3px;letter-spacing:0;">⚙ ${_gradeOvCount}</span>`
+      : '';
     html += `<div class="ms-daw-grade-header">
-      <span class="ms-daw-grade-tag">${gradeKey}</span>
+      <span class="ms-daw-grade-tag">${gradeKey}</span>${_ovBadge}
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
       <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
       <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
