@@ -17534,10 +17534,30 @@
                                     //   setup-level rules (same semantics as the gen-entry merge).
                                     //   Previously this detector only saw fld.timeRules, so any
                                     //   daily-only Unavailable window was invisible to the safety net.
+                                    //   v2: read from MULTIPLE sources because window.activityProperties
+                                    //   may get rewritten by other systems between gen entry and here.
                                     let _safetyRules = fld.timeRules;
                                     const _apTimeRules = window.activityProperties?.[fieldName]?.timeRules;
                                     if (Array.isArray(_apTimeRules) && _apTimeRules.length > 0) {
                                         _safetyRules = _apTimeRules;
+                                    } else {
+                                        // dailyData → localStorage fallback chain
+                                        try {
+                                            const _ddRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                                            if (Array.isArray(_ddRules) && _ddRules.length > 0) {
+                                                _safetyRules = _ddRules;
+                                            } else {
+                                                const _dk = window.currentScheduleDate || '';
+                                                if (_dk) {
+                                                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                                                    if (_stored) {
+                                                        const _parsed = JSON.parse(_stored);
+                                                        const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                                                        if (Array.isArray(_lsRules) && _lsRules.length > 0) _safetyRules = _lsRules;
+                                                    }
+                                                }
+                                            }
+                                        } catch (_e) { /* ignore */ }
                                     }
                                     const r2 = checkTimeRules(_safetyRules, grade, sMin, eMin);
                                     if (r2) {
