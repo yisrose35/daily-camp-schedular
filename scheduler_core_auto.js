@@ -588,10 +588,14 @@
         window._divisionTimesLocked = false;
 
         const _step0AllowedDivs = options.allowedDivisions || null;
+        // ★ Day 22.5: per-bunk scope (subset of allowedDivisions' bunks). When set,
+        //   treat as partial gen even if ALL divisions remain in scope.
+        const _step0AllowedBunks = options.allowedBunks || null;
         const _allDivKeys = Object.keys(window.divisions || {});
-        const _isPartialGen = _step0AllowedDivs &&
-            _step0AllowedDivs.length > 0 &&
-            _step0AllowedDivs.length < _allDivKeys.length;
+        const _isPartialGen = (_step0AllowedBunks && _step0AllowedBunks.length > 0)
+            || (_step0AllowedDivs &&
+                _step0AllowedDivs.length > 0 &&
+                _step0AllowedDivs.length < _allDivKeys.length);
 
         // ★ Track which bunks belong to the partial-gen scope (used in Step 0 & Step 5)
         let _partialGenBunks = null;
@@ -605,11 +609,17 @@
         if (_isPartialGen) {
             const divisions = window.divisions || {};
             const myBunks = new Set();
-            _step0AllowedDivs.forEach(divName => {
-                (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
-            });
+            if (_step0AllowedBunks && _step0AllowedBunks.length > 0) {
+                // Per-bunk scope: clear ONLY the explicitly-selected bunks.
+                _step0AllowedBunks.forEach(b => myBunks.add(String(b)));
+                log('[STEP 0] Partial wipe (per-bunk): clearing ' + myBunks.size + ' bunks');
+            } else {
+                (_step0AllowedDivs || []).forEach(divName => {
+                    (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+                });
+                log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + (_step0AllowedDivs || []).join(', ') + ']');
+            }
             _partialGenBunks = myBunks;
-            log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + _step0AllowedDivs.join(', ') + ']');
             myBunks.forEach(bunk => {
                 delete window.scheduleAssignments?.[bunk];
                 delete window.leagueAssignments?.[bunk];
@@ -630,9 +640,20 @@
 
             // ★ v4.3: Also snapshot _perBunkSlots for non-scoped grades so the
             // grid renderer can display them after partial gen completes.
+            // ★ Day 22.5: With per-bunk scope, EVERY grade may contain both scoped
+            //   and non-scoped bunks. Snapshot all grades that have at least one
+            //   bunk outside _partialGenBunks.
             window._preservedPerBunkSlots = {};
+            const _hasPerBunkScope = !!(_step0AllowedBunks && _step0AllowedBunks.length > 0);
             Object.keys(window.divisionTimes || {}).forEach(grade => {
-                if (!myBunks.size || !_step0AllowedDivs.includes(grade)) {
+                let _shouldSnapshot;
+                if (_hasPerBunkScope) {
+                    const gBunks = (window.divisions?.[grade]?.bunks) || [];
+                    _shouldSnapshot = gBunks.some(b => !myBunks.has(String(b)));
+                } else {
+                    _shouldSnapshot = !myBunks.size || !(_step0AllowedDivs || []).includes(grade);
+                }
+                if (_shouldSnapshot) {
                     const dt = window.divisionTimes[grade];
                     if (dt?._perBunkSlots) {
                         window._preservedPerBunkSlots[grade] = structuredClone(dt._perBunkSlots);
