@@ -1847,10 +1847,16 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
     // ── Thin grade header (outside the scrolling track) ──
+    // ★ Day 24: "Bunk Overrides" button opens a per-bunk view of the auto
+    //   layers, letting the user override the activity for a specific bunk
+    //   at any time slot. Storage is the same `bunkActivityOverrides` array
+    //   that Daily Adjustments writes to, so the auto-gen pipeline (Phase 0
+    //   override injection at scheduler_core_auto.js:11242) already honours it.
     html += `<div class="ms-daw-grade-header">
       <span class="ms-daw-grade-tag">${gradeKey}</span>
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
       <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
+      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${gradeKey}" title="Override a specific bunk's activity at any layer slot">🎯</button>
       <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
     </div>`;
 
@@ -2279,7 +2285,15 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       dawAddLayerDialog(grade);
     };
   });
-  
+
+  // ★ Day 24: Bunk Overrides per grade
+  gridEl.querySelectorAll('[data-action="bunk-overrides"]').forEach(btn => {
+    btn.onclick = () => {
+      const grade = btn.dataset.grade;
+      openAutoBunkOverridesPanel(grade);
+    };
+  });
+
   gridEl.querySelectorAll('[data-action="clear-grade"]').forEach(btn => {
     btn.onclick = async () => {
       const grade = btn.dataset.grade;
@@ -2764,6 +2778,160 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     dawSelectedBand = null;
     document.querySelectorAll('.ms-daw-band').forEach(b => b.classList.remove('selected'));
   };
+}
+
+// ★ Day 24: Auto-builder bunk overrides — per-grade panel that mirrors
+//   Daily Adjustments' bunk-override UI but reads from `dawLayers[grade]`
+//   instead of the manual skeleton. Saves to `bunkActivityOverrides`
+//   (same array DA writes to). The auto-gen pipeline already honours
+//   that array via Phase 0 override injection.
+function openAutoBunkOverridesPanel(grade) {
+    const divisions = window.divisions || {};
+    const div = divisions[grade];
+    if (!div) { window.showAlert?.('Division not found.'); return; }
+    const bunks = (div.bunks || []).slice().sort((a, b) => {
+        const na = parseInt(String(a).match(/\d+/)?.[0] || 0);
+        const nb = parseInt(String(b).match(/\d+/)?.[0] || 0);
+        return na - nb || String(a).localeCompare(String(b));
+    });
+    if (bunks.length === 0) { window.showAlert?.('No bunks in this division.'); return; }
+    const layers = (dawLayers[grade] || []).slice().sort((a, b) => a.startMin - b.startMin);
+    if (layers.length === 0) {
+        window.showAlert?.('No layers in this grade yet. Add a layer first.');
+        return;
+    }
+    // Read current overrides
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    const getOverrides = () => {
+        if (typeof window._boGetCurrentOverrides === 'function') return window._boGetCurrentOverrides();
+        const dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+        return dd.bunkActivityOverrides || [];
+    };
+    const saveOverrides = (list) => {
+        if (typeof window._boSaveOverrides === 'function') return window._boSaveOverrides(list);
+        // Fallback: write directly
+        if (window.saveCurrentDailyData) window.saveCurrentDailyData('bunkActivityOverrides', list);
+        try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(list)); } catch(_) {}
+    };
+
+    // Build overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    const panel = document.createElement('div');
+    panel.style.cssText = 'background:#fff;border-radius:12px;width:100%;max-width:1200px;max-height:90vh;overflow:auto;padding:20px;box-shadow:0 12px 32px rgba(0,0,0,0.25);';
+    overlay.appendChild(panel);
+
+    const renderInner = () => {
+        const overrides = getOverrides();
+        const gradeOverrides = overrides.filter(o => bunks.map(String).includes(String(o.bunk)));
+
+        let html = '';
+        html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+        html += '<div><h2 style="margin:0;font-size:18px;color:#1e293b;">Bunk Overrides — ' + grade + '</h2>';
+        html += '<p style="margin:4px 0 0;font-size:12px;color:#64748b;">Click any layer slot to override that bunk\'s activity. Auto-gen will honour the override on its next run.</p></div>';
+        html += '<div style="display:flex;gap:8px;align-items:center;">';
+        if (gradeOverrides.length > 0) {
+            html += '<span style="font-size:12px;color:#64748b;">' + gradeOverrides.length + ' override(s) for ' + grade + '</span>';
+            html += '<button id="abo-clear-grade" style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:600;">Clear ' + grade + '</button>';
+        }
+        html += '<button id="abo-close" style="background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 12px;font-size:12px;cursor:pointer;font-weight:600;">Close</button>';
+        html += '</div></div>';
+
+        // Table: rows = layers, cols = bunks
+        html += '<div style="overflow:auto;border:1px solid #e5e7eb;border-radius:8px;">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:12px;">';
+        html += '<thead><tr style="background:#f9fafb;">';
+        html += '<th style="padding:8px 10px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e5e7eb;position:sticky;left:0;background:#f9fafb;z-index:1;min-width:160px;">Layer · Time</th>';
+        bunks.forEach(b => {
+            html += '<th style="padding:8px 6px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e5e7eb;min-width:110px;">' + b + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+
+        layers.forEach(layer => {
+            const sm = layer.startMin, em = layer.endMin;
+            const layerLabel = (DAW_LAYER_TYPES.find(t => t.type === layer.type)?.name || layer.type)
+                + ' · ' + minutesToTime(sm) + '–' + minutesToTime(em);
+            html += '<tr style="border-top:1px solid #f1f5f9;">';
+            html += '<td style="padding:8px 10px;font-weight:600;color:#334155;background:#fafafa;position:sticky;left:0;z-index:1;">' + layerLabel + '</td>';
+            bunks.forEach(b => {
+                const ov = overrides.find(o => String(o.bunk) === String(b) && o.startMin === sm && o.endMin === em);
+                if (ov) {
+                    html += '<td style="padding:4px 6px;">';
+                    html += '<div class="abo-cell abo-ov" data-bunk="' + b + '" data-sm="' + sm + '" data-em="' + em + '" data-ov-id="' + (ov.id || '') + '" '
+                        + 'style="background:#fef3c7;color:#92400e;border:2px solid #f59e0b;border-radius:6px;padding:5px 8px;cursor:pointer;font-weight:600;text-align:center;position:relative;">'
+                        + ov.activity
+                        + '<span class="abo-revert" data-ov-id="' + (ov.id || '') + '" style="position:absolute;top:1px;right:4px;font-size:10px;color:#dc2626;font-weight:bold;cursor:pointer;" title="Revert">×</span>'
+                        + '</div></td>';
+                } else {
+                    html += '<td style="padding:4px 6px;">';
+                    html += '<div class="abo-cell abo-default" data-bunk="' + b + '" data-sm="' + sm + '" data-em="' + em + '" '
+                        + 'style="background:#f8fafc;color:#64748b;border:1px dashed #cbd5e1;border-radius:6px;padding:5px 8px;cursor:pointer;text-align:center;font-style:italic;">'
+                        + '(use grade default)</div></td>';
+                }
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+
+        panel.innerHTML = html;
+
+        // Wire up clicks
+        panel.querySelector('#abo-close').onclick = () => overlay.remove();
+        const clearBtn = panel.querySelector('#abo-clear-grade');
+        if (clearBtn) {
+            clearBtn.onclick = async () => {
+                const ok = window.showConfirm ? await window.showConfirm('Remove all bunk overrides for ' + grade + '?') : window.confirm('Remove all bunk overrides for ' + grade + '?');
+                if (!ok) return;
+                const remaining = getOverrides().filter(o => !bunks.map(String).includes(String(o.bunk)));
+                saveOverrides(remaining);
+                renderInner();
+            };
+        }
+        // Revert buttons
+        panel.querySelectorAll('.abo-revert').forEach(btn => {
+            btn.onclick = (e) => {
+                e.stopPropagation();
+                const ovId = btn.dataset.ovId;
+                const remaining = getOverrides().filter(o => String(o.id) !== String(ovId));
+                saveOverrides(remaining);
+                renderInner();
+            };
+        });
+        // Cell click → activity picker
+        panel.querySelectorAll('.abo-cell').forEach(cell => {
+            cell.onclick = (e) => {
+                if (e.target.classList.contains('abo-revert')) return; // handled separately
+                const bunk = cell.dataset.bunk;
+                const sm = parseInt(cell.dataset.sm);
+                const em = parseInt(cell.dataset.em);
+                if (typeof window._boShowPicker === 'function') {
+                    // Reuse DA's picker. It calls _boApplyOverride which writes to
+                    // currentOverrides.bunkActivityOverrides; we re-render after a
+                    // short delay so the new state is reflected.
+                    window._boShowPicker(cell, bunk, sm, em);
+                    setTimeout(renderInner, 350);
+                } else {
+                    // Fallback: simple prompt
+                    const act = prompt('Activity name for ' + bunk + ' at ' + minutesToTime(sm) + '-' + minutesToTime(em) + ':');
+                    if (!act) return;
+                    const list = getOverrides();
+                    const filtered = list.filter(o => !(String(o.bunk) === String(bunk) && o.startMin === sm && o.endMin === em));
+                    filtered.push({
+                        id: 'abo_' + Date.now() + '_' + Math.random().toString(36).slice(2,7),
+                        bunk, activity: act, location: null,
+                        startTime: minutesToTime(sm), endTime: minutesToTime(em),
+                        startMin: sm, endMin: em, type: 'sport'
+                    });
+                    saveOverrides(filtered);
+                    renderInner();
+                }
+            };
+        });
+    };
+
+    renderInner();
+    document.body.appendChild(overlay);
 }
 
 async function dawAddLayerDialog(grade) {

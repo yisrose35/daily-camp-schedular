@@ -6231,6 +6231,13 @@ window.addEventListener('campistry-periods-changed', function() {
 window.initDailyAdjustments = init;
 window.cleanupDailyAdjustments = cleanup;
 window.refreshDailyAdjustmentsFromCloud = refreshFromCloud;
+// ★ Day 24: expose bunk-override helpers so the AUTO builder can reuse the
+//   same picker + storage + apply pipeline as Daily Adjustments.
+window._boShowPicker = _boShowPicker;
+window._boApplyOverride = _boApplyOverride;
+window._boGetActivityGroups = _boGetActivityGroups;
+window._boSaveOverrides = _boSaveOverrides;
+window._boGetCurrentOverrides = function() { return (currentOverrides.bunkActivityOverrides || []).slice(); };
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
 window.isRainyDayActive = isRainyDayActive;
