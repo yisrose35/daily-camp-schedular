@@ -4859,7 +4859,12 @@ function renderBunkOverridesUI() {
   if (!container) return;
 
   const divisions = masterSettings.app1?.divisions || {};
-  const availableDivisions = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // Order by the user's Campistry Me drag order via getUserDivisionOrder.
+  // Falls back to the raw list if the helper isn't loaded yet.
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
 
   if (availableDivisions.length === 0) {
     container.innerHTML = '<div class="da-empty-state">No divisions found.</div>';
