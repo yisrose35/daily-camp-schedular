@@ -800,13 +800,32 @@
                 // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;
 
+                // ★ Day 23 fix: STAGGER REJECTION — if a same-grade bunk is already
+                //   doing this same activity on this same field with PARTIAL time
+                //   overlap (not exact match, not fully separate), REJECT this
+                //   candidate. Two bunks playing the same sport on the same field
+                //   at misaligned times can't actually play together — one would
+                //   arrive late or leave early. They must either share the EXACT
+                //   same window or be at fully separate windows.
+                const fn = cand.fieldNorm;
+                const fieldEntries = fieldIndex.get(fn) || [];
+                const sameGradeSameActStagger = fieldEntries.some(e =>
+                    e.bunk !== bunk &&
+                    e.grade === grade &&
+                    e.activity === cand.sportNorm &&
+                    // Overlap exists?
+                    e.startMin < endMin && e.endMin > startMin &&
+                    // But NOT exact match? → partial overlap = bad
+                    !(e.startMin === startMin && e.endMin === endMin)
+                );
+                if (sameGradeSameActStagger) continue;
+
                 // Score: rotation + draft hint
                 let score = getCachedRotation(bunk, cand.sport, grade);
                 score += getDraftBonus(block, cand);
 
                 // Prefer filling fields to capacity (same activity co-location)
-                const fn = cand.fieldNorm;
-                const existing = (fieldIndex.get(fn) || []).filter(e =>
+                const existing = fieldEntries.filter(e =>
                     e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk
                 );
                 if (existing.length > 0) {
