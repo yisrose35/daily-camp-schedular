@@ -6268,6 +6268,11 @@ function renderOverrideDetailPane() {
           dailyRules.splice(idx, 1);
           currentOverrides.dailyFieldAvailability[name] = dailyRules;
           window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+          // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+          try {
+            const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+            localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+          } catch (_e) {}
           renderOverrideDetailPane();
         };
       });
@@ -6288,6 +6293,11 @@ function renderOverrideDetailPane() {
       dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
       window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+      // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+      try {
+        const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+        localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+      } catch (_e) {}
       renderOverrideDetailPane();
       renderResourceOverridesUI();
     };
@@ -6895,6 +6905,13 @@ function loadCurrentOverrides() {
   }
 
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  // ★ Day 22.5: seed the dedicated iron-gate key from whatever rules we have so they
+  //   survive even after dailyData gets wiped by solver/save paths during generation.
+  try {
+    if (Object.keys(currentOverrides.dailyFieldAvailability).length > 0) {
+      localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability));
+    }
+  } catch (_e) {}
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};

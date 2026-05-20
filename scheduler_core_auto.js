@@ -17850,11 +17850,21 @@
           try {
             function _getDaily(fieldName) {
               try {
+                // ★ Day 22.5: PRIMARY source — dedicated iron-gate key (no solver path touches it).
+                const dk = window.currentScheduleDate || '';
+                if (dk) {
+                  const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+                  if (enf) {
+                    const parsed = JSON.parse(enf);
+                    const r = parsed?.[fieldName];
+                    if (Array.isArray(r) && r.length > 0) return r;
+                  }
+                }
+                // Secondary sources (may be wiped by solver paths)
                 const ap = window.activityProperties?.[fieldName]?.timeRules;
                 if (Array.isArray(ap) && ap.length > 0) return ap;
                 const dd = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
                 if (Array.isArray(dd) && dd.length > 0) return dd;
-                const dk = window.currentScheduleDate || '';
                 if (dk) {
                   const stored = localStorage.getItem('campResourceOverrides_' + dk);
                   if (stored) {
