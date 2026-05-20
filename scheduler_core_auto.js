@@ -18533,11 +18533,13 @@
                 slots.forEach((entry, i) => {
                     if (!entry) return;
                     const sMin = entry._startMin, eMin = entry._endMin;
-                    if (sMin == null || eMin == null) return;
                     const act = String(entry._activity || entry.sport || '').toLowerCase().trim();
                     if (!act) return;
                     // Skip OUR own delete pins (already correct).
                     if (entry._layerDeleted) return;
+                    // If time fields missing (stripped-down entry), only activity-name
+                    // matching applies — any matching activity in any delete window evicts.
+                    const noTime = (sMin == null || eMin == null);
                     // Delete check: type-match only by ACTIVITY NAME (not entry._type,
                     // which the solver tags by layer-window rather than actual activity).
                     //
@@ -18548,7 +18550,8 @@
                     //   lunch / snacks      → match the matching activity name
                     //   league              → match 'league game' activity
                     for (const d of bD) {
-                        if (sMin >= d.startMin && eMin <= d.endMin) {
+                        const inWindow = noTime || (sMin >= d.startMin && eMin <= d.endMin);
+                        if (inWindow) {
                             const matches = (
                                 (d.layerType === 'swim' && (act === 'swim' || act === 'change')) ||
                                 (d.layerType === 'sport' && !!entry.sport && act === String(entry.sport || '').toLowerCase().trim()) ||
@@ -18559,7 +18562,7 @@
                                 (d.layerType === 'dismissal' && act === 'dismissal')
                             );
                             if (matches) {
-                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
+                                slots[i] = { _startMin: sMin ?? d.startMin, _endMin: eMin ?? d.endMin, field: 'Free', _activity: null, _layerDeleted: true };
                                 _dE++; return;
                             }
                         }
