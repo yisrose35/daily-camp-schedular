@@ -622,45 +622,39 @@ function shouldHighlightBunk(bunkName) {
         }
         
         // *** v4.1.0: LOAD DIVISION TIMES (PRIMARY) ***
+        // ★ Date-switch fix: ALWAYS overwrite _perBunkSlots with the date's saved
+        //   data. Previously the reattach gates were "only if empty", which meant
+        //   switching dates kept the prior date's _perBunkSlots stale in memory
+        //   and the new date's grid rendered whatever was left over.
         const cloudLoaded = window._divisionTimesFromCloud === true;
+        const _reattachAll = () => {
+            if (!dateData._perBunkSlotsData || !window.divisionTimes) return;
+            // First, clear any stale _perBunkSlots from grades NOT in this date's data
+            Object.keys(window.divisionTimes).forEach(grade => {
+                if (!dateData._perBunkSlotsData[grade]) {
+                    delete window.divisionTimes[grade]._perBunkSlots;
+                    delete window.divisionTimes[grade]._isPerBunk;
+                }
+            });
+            // Then apply this date's _perBunkSlots, overwriting whatever was there
+            Object.keys(dateData._perBunkSlotsData).forEach(grade => {
+                if (window.divisionTimes[grade]) {
+                    window.divisionTimes[grade]._isPerBunk = true;
+                    window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                }
+            });
+        };
         if (cloudLoaded && window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
-            // Keep cloud data
             debugLog('Using divisionTimes from cloud');
-            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
-            if (dateData._perBunkSlotsData && window.divisionTimes) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-            }
+            _reattachAll();
         } else if (window.divisionTimes && Object.keys(window.divisionTimes).length > 0) {
-            // Keep existing
             debugLog('Using existing divisionTimes');
-            // *** AUTO MODE: Reattach _perBunkSlots if lost during serialization ***
-            if (dateData._perBunkSlotsData && window.divisionTimes) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade] && !window.divisionTimes[grade]._perBunkSlots) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-            }
+            _reattachAll();
         } else if (dateData.divisionTimes && Object.keys(dateData.divisionTimes).length > 0) {
             // Deserialize from storage
            window.divisionTimes = window.DivisionTimesSystem?.deserialize?.(dateData.divisionTimes) || dateData.divisionTimes;
             debugLog('Loaded divisionTimes from storage');
-            // *** AUTO MODE: Reattach _perBunkSlots from saved data ***
-            if (dateData._perBunkSlotsData) {
-                Object.keys(dateData._perBunkSlotsData).forEach(grade => {
-                    if (window.divisionTimes[grade]) {
-                        window.divisionTimes[grade]._isPerBunk = true;
-                        window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
-                    }
-                });
-                debugLog('Reattached _perBunkSlots for', Object.keys(dateData._perBunkSlotsData).length, 'grades');
-            }
+            _reattachAll();
         } else {
             // Build from skeleton
             const skeleton = getSkeleton(dateKey);
