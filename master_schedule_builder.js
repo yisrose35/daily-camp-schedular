@@ -1847,16 +1847,10 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
 
     // ── Thin grade header (outside the scrolling track) ──
-    // ★ Day 24: "Bunk Overrides" button opens a per-bunk view of the auto
-    //   layers, letting the user override the activity for a specific bunk
-    //   at any time slot. Storage is the same `bunkActivityOverrides` array
-    //   that Daily Adjustments writes to, so the auto-gen pipeline (Phase 0
-    //   override injection at scheduler_core_auto.js:11242) already honours it.
     html += `<div class="ms-daw-grade-header">
       <span class="ms-daw-grade-tag">${gradeKey}</span>
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
       <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
-      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${gradeKey}" title="Override a specific bunk's activity at any layer slot">🎯</button>
       <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
     </div>`;
 
@@ -2283,14 +2277,6 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
     btn.onclick = () => {
       const grade = btn.dataset.grade;
       dawAddLayerDialog(grade);
-    };
-  });
-
-  // ★ Day 24: Bunk Overrides per grade
-  gridEl.querySelectorAll('[data-action="bunk-overrides"]').forEach(btn => {
-    btn.onclick = () => {
-      const grade = btn.dataset.grade;
-      openAutoBunkOverridesPanel(grade);
     };
   });
 

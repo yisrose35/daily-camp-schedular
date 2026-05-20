@@ -4068,11 +4068,14 @@ function renderToolbar() {
 
     <div class="da-toolbar-group">
       ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
-      ${!isAutoMode ? (() => {
+      ${(() => {
+        // ★ Day 24: show Bunk Overrides button in BOTH manual and auto modes.
+        //   Auto-mode reuses the same toggle + storage; the rendered grid
+        //   picks dawLayers vs dailyOverrideSkeleton based on the active mode.
         const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
         const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
         return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
-      })() : ''}
+      })()}
       <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
       <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
@@ -4910,8 +4913,170 @@ function renderBunkOverridesUI() {
 
   // Render the bunk grid if a division is selected
   if (_boSelectedDiv) {
-    _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    // ★ Day 24: branch based on builder mode — auto uses dawLayers, manual uses dailyOverrideSkeleton
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+      _boRenderAutoBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    } else {
+      _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    }
   }
+}
+
+// ★ Day 24: Auto-mode per-bunk grid — mirrors _boRenderBunkGrid layout (time
+//   column + per-bunk columns with full-width tiles, in-page) but reads from
+//   `dawLayers[grade]` instead of `dailyOverrideSkeleton`. Each layer becomes
+//   a full-width tile in each bunk's column. Click a tile to override.
+function _boRenderAutoBunkGrid(wrap, divName) {
+  if (!wrap) return;
+  const divisions = masterSettings.app1?.divisions || {};
+  const div = divisions[divName];
+  if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
+
+  const bunks = (div.bunks || []).slice().sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
+    return na - nb || a.localeCompare(b);
+  });
+  if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
+
+  // Pull the active auto layers for this grade
+  const dawLayers = (window.loadGlobalSettings?.() || {}).app1?.autoLayers
+    || window.dawLayers
+    || {};
+  const layers = (dawLayers[divName] || []).slice().sort((a, b) => a.startMin - b.startMin);
+  if (layers.length === 0) {
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
+    return;
+  }
+
+  // Compute time range from layers + grade window
+  const divStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
+  const divEnd   = parseTimeToMinutes(div.endTime)   || Math.max(...layers.map(l => l.endMin));
+  let earliestMin = divStart, latestMin = divEnd;
+  layers.forEach(l => {
+    if (l.startMin < earliestMin) earliestMin = l.startMin;
+    if (l.endMin > latestMin) latestMin = l.endMin;
+  });
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+
+  const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+  const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+  const totalHeight = (latestMin - earliestMin) * PX;
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const color = div.color || '#64748b';
+
+  // Layer-type → tile background colour (matches the auto builder palette)
+  const TYPE_BG = {
+    sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
+    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7',
+    dismissal: '#fbcfe8', custom: '#e5e7eb',
+    league: '#fee2e2', specialty_league: '#fce7f3', elective: '#f5d0fe'
+  };
+  const _typeLabel = (l) => {
+    const t = String(l.type || 'custom').toLowerCase();
+    const map = { sport: 'Sport', special: 'Special Activity', activity: 'Activity',
+                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
+                  custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
+                  elective: 'Elective' };
+    return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
+  };
+
+  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+
+  // Header row
+  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  bunks.forEach(bunk => {
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
+    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
+  });
+
+  // Time column
+  html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += incMins) {
+    html += `<div class="da-time-marker" style="top:${(m - earliestMin) * PX}px;">${minutesToTime(m)}</div>`;
+  }
+  html += '</div>';
+
+  // Bunk columns
+  bunks.forEach(bunk => {
+    html += `<div class="da-grid-cell bo-bunk-col" data-bunk="${_escHtml(bunk)}" style="height:${totalHeight}px;position:relative;">`;
+
+    layers.forEach(layer => {
+      const sm = layer.startMin, em = layer.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const override = overrides.find(o => o.bunk === bunk && o.startMin === sm && o.endMin === em);
+      const top = (sm - earliestMin) * PX;
+      const height = Math.max((em - sm) * PX - 2, 24);
+      let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+
+      if (override) {
+        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
+          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-ov-id="${_escHtml(override.id)}"
+          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, right-click to revert"
+          style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+        </div>`;
+      } else {
+        const bg = TYPE_BG[String(layer.type || 'custom').toLowerCase()] || '#e2e8f0';
+        const evName = _typeLabel(layer);
+        const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+        const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+        const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+        const durLabel = _dMin && _dMax && _dMin !== _dMax ? `${_dMin}-${_dMax}m` : `${_dMin || layer.periodMin || (em - sm)}m`;
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${_escHtml(evName)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${_escHtml(evName)}</strong>`;
+          content += `<div style="font-size:9px;opacity:0.7;">${opSymbol}${layer.qty || 1} · ${durLabel}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-ev-type="${layer.type || 'slot'}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
+          style="background:${bg};color:#1e293b;border:1px solid rgba(0,0,0,0.1);top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+        </div>`;
+      }
+    });
+
+    html += '</div>';
+  });
+
+  html += '</div>';
+  wrap.innerHTML = html;
+
+  // Attach click handlers on blocks
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.onclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      const bunk = block.dataset.bunk;
+      const startMin = parseInt(block.dataset.start);
+      const endMin = parseInt(block.dataset.end);
+      _boShowPicker(block, bunk, startMin, endMin);
+    };
+  });
+
+  // Revert buttons on overrides
+  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const ovId = btn.parentElement?.dataset?.ovId;
+      if (!ovId) return;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    };
+  });
 }
 
 function _boRenderBunkGrid(wrap, divName) {
