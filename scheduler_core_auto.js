@@ -6914,6 +6914,24 @@
                 var timeSlot = Math.floor(startMin / 30) * 30;
                 var candidates = [];
 
+                // ★ Day 24: bunk sportPool override — if this bunk has a pool
+                //   restriction covering [startMin, endMin), filter pList down
+                //   to that pool only.
+                var _pools = (window._bunkSportPools || {})[String(bunk)] || [];
+                var _activePool = null;
+                for (var _pi = 0; _pi < _pools.length; _pi++) {
+                    var _po = _pools[_pi];
+                    if (startMin >= _po.startMin && endMin <= _po.endMin) {
+                        _activePool = new Set(_po.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                        break;
+                    }
+                }
+                if (_activePool) {
+                    pList = pList.filter(function(sp) {
+                        return _activePool.has(String(sp.name).toLowerCase().trim());
+                    });
+                }
+
                 // Collect ALL available sport+field combos
                 for (var p = 0; p < pList.length; p++) {
                     var sport = pList[p];
@@ -11239,19 +11257,65 @@
                 } catch(e) {}
             }
             if (totalIters < 1) log('[P0] Bunk overrides found: ' + bunkOverrides.length + ' | bunkTimelines keys: ' + Object.keys(bunkTimelines).length);
+
+            // ★ Day 24: separate new override modes (sportPool / delete) from
+            //   the legacy single-activity force pin. These don't get pinned as
+            //   blocks — they store constraints consulted by findBestSport /
+            //   layer iteration.
+            window._bunkSportPools = {};      // bunk -> [{startMin, endMin, sports:[]}]
+            window._bunkDeletedLayers = {};   // bunk -> [{startMin, endMin, layerType}]
+
             bunkOverrides.forEach(ov => {
-                if (!ov.bunk || !ov.activity) return;
+                if (!ov.bunk) return;
                 const tStart = ov.startMin ?? parseTimeToMinutes(ov.startTime);
                 const tEnd = ov.endMin ?? parseTimeToMinutes(ov.endTime);
                 if (tStart == null || tEnd == null) {
-                    if (totalIters < 1) warn('[P0] Override skipped — bad times: ' + ov.activity + ' start=' + ov.startTime + ' end=' + ov.endTime);
+                    if (totalIters < 1) warn('[P0] Override skipped — bad times: start=' + ov.startTime + ' end=' + ov.endTime);
                     return;
                 }
                 const bunk = String(ov.bunk);
                 if (!bunkTimelines[bunk]) {
-                    if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '" (available: ' + Object.keys(bunkTimelines).slice(0, 5).join(', ') + '...)');
+                    if (totalIters < 1) warn('[P0] Override skipped — bunk not found: "' + bunk + '"');
                     return;
                 }
+
+                const mode = ov.overrideMode || 'force';
+
+                // ── sportPool: restrict sport candidates for this bunk during the window ──
+                if (mode === 'sportPool') {
+                    if (!Array.isArray(ov.sportPool) || ov.sportPool.length === 0) return;
+                    if (!window._bunkSportPools[bunk]) window._bunkSportPools[bunk] = [];
+                    window._bunkSportPools[bunk].push({
+                        startMin: tStart, endMin: tEnd,
+                        sports: ov.sportPool.slice(),
+                        layerType: ov.layerType || 'sport'
+                    });
+                    if (totalIters < 1) log('[P0] Sport pool override for ' + bunk + ' (' + tStart + '-' + tEnd + '): ' + ov.sportPool.join(', '));
+                    return;
+                }
+
+                // ── delete: skip this layer for this bunk by pinning the window as inactive ──
+                if (mode === 'delete') {
+                    if (!window._bunkDeletedLayers[bunk]) window._bunkDeletedLayers[bunk] = [];
+                    window._bunkDeletedLayers[bunk].push({
+                        startMin: tStart, endMin: tEnd,
+                        layerType: ov.layerType || 'custom'
+                    });
+                    bunkTimelines[bunk].push({
+                        startMin: tStart, endMin: tEnd,
+                        type: 'free', event: '— layer skipped —',
+                        field: null, layer: null,
+                        _classification: 'pinned', _committed: true, _fixed: true,
+                        _bunkOverride: true, _layerDeleted: true, _activityLocked: true, _noBacktrack: true,
+                        _source: 'bunk_layer_deleted'
+                    });
+                    overrideBlockCount++;
+                    if (totalIters < 1) log('[P0] Layer delete override for ' + bunk + ' (' + tStart + '-' + tEnd + ', layer=' + (ov.layerType || 'custom') + ')');
+                    return;
+                }
+
+                // ── force (legacy / default): pin as a single activity block ──
+                if (!ov.activity) return;
                 // ★ v7.0: Auto-detect type from field ledger — don't rely on UI type tag
                 const bunkGrade = Object.keys(divisions).find(g =>
                     getBunksForGrade(g, divisions).map(String).includes(bunk)
