@@ -5347,8 +5347,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         <input type="time" id="bo-pop-end" value="${_minutesToInputTime(curEnd)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
       </div>
       <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
-      <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:8px;align-items:center;">
-        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:12px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;">🗑 Delete for ${_escHtml(bunk)}</button>
+      <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="Skip this layer for ${_escHtml(bunk)} only — other bunks keep it">🗑 For ${_escHtml(bunk)}</button>
+        <button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>
         <div style="flex:1;"></div>
         <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
         <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
@@ -5439,6 +5440,34 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
         activity: '— deleted —', location: null, type: 'delete'
       });
       _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    // ★ Day 24: Delete the layer ENTIRELY from the grade (affects every bunk).
+    //   Modifies globalSettings.app1.dailyAutoLayers[date][grade] in place,
+    //   strips out the layer whose type+window matches, then persists via
+    //   saveGlobalSettings + cloud sync.
+    pop.querySelector('#bo-pop-delete-layer').onclick = () => {
+      if (!confirm('Delete the ' + layerLabel + ' layer entirely from ' + _boSelectedDiv + '? This affects every bunk in this grade.')) return;
+      try {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        gs.app1 = gs.app1 || {};
+        gs.app1.dailyAutoLayers = gs.app1.dailyAutoLayers || {};
+        const date = (window.currentScheduleDate || document.querySelector('input[type=date]')?.value || '').trim();
+        const day = gs.app1.dailyAutoLayers[date] = (gs.app1.dailyAutoLayers[date] || {});
+        const list = (day[_boSelectedDiv] || []).slice();
+        const _ltK = String(layerType || 'custom').toLowerCase();
+        const filtered = list.filter(l => !(String(l.type || '').toLowerCase() === _ltK && l.startMin === startMin && l.endMin === endMin));
+        day[_boSelectedDiv] = filtered;
+        if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(gs);
+        if (typeof window.forceSyncToCloud === 'function') window.forceSyncToCloud();
+        // Also drop any bunk overrides that targeted this exact layer (they no longer make sense)
+        let ovs = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+          !(o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        );
+        _boSaveOverrides(ovs);
+      } catch (e) { console.error('[bo] delete-layer failed', e); }
       pop.remove();
       renderBunkOverridesUI();
     };
