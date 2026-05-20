@@ -18559,8 +18559,6 @@
                                 (d.layerType === 'dismissal' && act === 'dismissal')
                             );
                             if (matches) {
-                                if (!window._dbgDeleteLog) window._dbgDeleteLog = [];
-                                window._dbgDeleteLog.push({bunk, sMin, eMin, act, sport: entry.sport, _type: entry._type, layerType: d.layerType, fixed: entry._fixed, bunkOv: entry._bunkOverride});
                                 slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
                                 _dE++; return;
                             }
