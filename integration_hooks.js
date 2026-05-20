@@ -907,11 +907,23 @@
         }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
-        
+
         // ★★★ v6.4: Deduplication check - skip if same save within threshold ★★★
+        // ★ Day 24 fix: dedup must key on CONTENT, not just bunk count. A
+        //   post-gen recapture or post-edit can produce a different schedule
+        //   with the same bunk count, and the original (now stale) version
+        //   would be all that ever reached cloud. Use a fast content hash so
+        //   only truly identical payloads dedup.
         const now = Date.now();
-        const saveKey = `${dateKey}:${bunkCount}`;
-        
+        let _saveHash = 0;
+        try {
+            const _s = JSON.stringify(data.scheduleAssignments || {}) + '|' + JSON.stringify(data.leagueAssignments || {});
+            for (let _i = 0; _i < _s.length; _i++) {
+                _saveHash = ((_saveHash << 5) - _saveHash + _s.charCodeAt(_i)) | 0;
+            }
+        } catch (_) { _saveHash = now; }
+        const saveKey = `${dateKey}:${bunkCount}:${_saveHash}`;
+
         if (attempt === 1) {  // Only check dedup on first attempt, not retries
             if (_saveInProgress) {
                 log('[VERIFIED SAVE] Save already in progress, skipping duplicate');
@@ -919,7 +931,7 @@
             }
 
             if (_lastSaveKey === saveKey && (now - _lastSaveTime) < SAVE_DEDUP_MS) {
-                log('[VERIFIED SAVE] Duplicate save detected, skipping (within', SAVE_DEDUP_MS, 'ms)');
+                log('[VERIFIED SAVE] Duplicate save detected (identical content), skipping');
                 return { success: true, target: 'deduplicated', reason: 'recent-duplicate' };
             }
 
