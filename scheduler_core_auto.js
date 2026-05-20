@@ -17736,8 +17736,23 @@
         //   sport that violates a bunk's pool — replaced by 'Free' so the
         //   downstream Free-fill step can put something in-pool if possible.
         try {
-            const _pools = window._bunkSportPools || {};
-            const _deleted = window._bunkDeletedLayers || {};
+            // Re-derive from the source overrides — the window globals may
+            // have been wiped between Phase 0 and STEP 5.
+            const _fdd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+            const _allOvs = _fdd?.bunkActivityOverrides || [];
+            const _pools = {}, _deleted = {};
+            _allOvs.forEach(ov => {
+                if (!ov || !ov.bunk) return;
+                const sMin = ov.startMin, eMin = ov.endMin;
+                if (sMin == null || eMin == null) return;
+                if (ov.overrideMode === 'sportPool' && Array.isArray(ov.sportPool)) {
+                    if (!_pools[ov.bunk]) _pools[ov.bunk] = [];
+                    _pools[ov.bunk].push({ startMin: sMin, endMin: eMin, sports: ov.sportPool.slice() });
+                } else if (ov.overrideMode === 'delete') {
+                    if (!_deleted[ov.bunk]) _deleted[ov.bunk] = [];
+                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin, layerType: ov.layerType });
+                }
+            });
             let _poolEvictions = 0, _delEvictions = 0;
             Object.entries(window.scheduleAssignments || {}).forEach(([bunk, slots]) => {
                 if (!Array.isArray(slots)) return;
