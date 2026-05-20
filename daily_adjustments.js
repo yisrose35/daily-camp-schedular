@@ -5031,9 +5031,12 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const height = Math.max((em - sm) * PX - 2, 24);
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
+      // Auto-mode: multiple layers share the same time window, so require a
+      // strict layerType match so each band shows its own override state.
+      const _ltKey = (layer.type || 'custom');
       const override = overrides.find(o =>
         o.bunk === bunk && o.startMin === sm && o.endMin === em
-        && (o.layerType == null || o.layerType === (layer.type || 'custom'))
+        && o.layerType === _ltKey
       );
 
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
@@ -5235,10 +5238,13 @@ function _boRenderBunkGrid(wrap, divName) {
   });
 }
 
-function _boShowPicker(anchorEl, bunk, startMin, endMin) {
+function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   // Remove any existing picker
   const existing = document.getElementById('bo-activity-picker');
   if (existing) existing.remove();
+  // layerType is optional — set only in auto-mode where multiple layers share
+  // the same time window and we need to disambiguate which one is overridden.
+  layerType = layerType || anchorEl?.dataset?.layerType || null;
 
   const groups = _boGetActivityGroups();
 
@@ -5297,7 +5303,7 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin) {
       row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
       row.onmouseleave = () => { row.style.background = ''; };
       row.onclick = () => {
-        _boApplyOverride(bunk, startMin, endMin, item);
+        _boApplyOverride(bunk, startMin, endMin, item, layerType);
         picker.remove();
       };
       picker.appendChild(row);
@@ -5316,10 +5322,17 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
-function _boApplyOverride(bunk, startMin, endMin, item) {
+function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
   let overrides = currentOverrides.bunkActivityOverrides || [];
-  // Remove any existing override for this bunk at this exact time
-  overrides = overrides.filter(o => !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin));
+  // Remove any existing override for this bunk + same time + same layer (or no
+  // layerType for legacy manual-mode overrides). Different layers at the same
+  // time (auto-mode floaters) coexist.
+  overrides = overrides.filter(o => !(
+    o.bunk === bunk
+    && o.startMin === startMin
+    && o.endMin === endMin
+    && (o.layerType || null) === (layerType || null)
+  ));
   overrides.push({
     id: uid(),
     bunk: bunk,
@@ -5329,7 +5342,8 @@ function _boApplyOverride(bunk, startMin, endMin, item) {
     endTime: minutesToTime(endMin),
     startMin: startMin,
     endMin: endMin,
-    type: item.type
+    type: item.type,
+    layerType: layerType || null
   });
   _boSaveOverrides(overrides);
   renderBunkOverridesUI();
