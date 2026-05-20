@@ -18575,6 +18575,64 @@
             }
         })();
 
+        // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
+        //   the final null sweep can't refill our cleared slots with violations.
+        //   Re-derives the pool/delete map from saved overrides to avoid
+        //   stale-globals issues.
+        try {
+            const _fdd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+            const _allOvs = _fdd?.bunkActivityOverrides || [];
+            const _pools = {}, _deleted = {};
+            _allOvs.forEach(ov => {
+                if (!ov || !ov.bunk) return;
+                const sMin = ov.startMin, eMin = ov.endMin;
+                if (sMin == null || eMin == null) return;
+                if (ov.overrideMode === 'sportPool' && Array.isArray(ov.sportPool)) {
+                    if (!_pools[ov.bunk]) _pools[ov.bunk] = [];
+                    _pools[ov.bunk].push({ startMin: sMin, endMin: eMin, sports: ov.sportPool.slice() });
+                } else if (ov.overrideMode === 'delete') {
+                    if (!_deleted[ov.bunk]) _deleted[ov.bunk] = [];
+                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin });
+                }
+            });
+            let _pE = 0, _dE = 0;
+            Object.entries(window.scheduleAssignments || {}).forEach(([bunk, slots]) => {
+                if (!Array.isArray(slots)) return;
+                const bP = _pools[bunk] || [];
+                const bD = _deleted[bunk] || [];
+                slots.forEach((entry, i) => {
+                    if (!entry || entry._bunkOverride) return;
+                    const sMin = entry._startMin, eMin = entry._endMin;
+                    if (sMin == null || eMin == null) return;
+                    const act = String(entry._activity || entry.sport || '').toLowerCase().trim();
+                    if (!act) return;
+                    if (entry._isSport || entry._type === 'sport' || entry.sport) {
+                        for (const p of bP) {
+                            if (sMin >= p.startMin && eMin <= p.endMin) {
+                                const allowed = new Set(p.sports.map(s => String(s).toLowerCase().trim()));
+                                if (!allowed.has(act)) {
+                                    slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _poolEvicted: true };
+                                    _pE++; break;
+                                }
+                            }
+                        }
+                    }
+                    if (slots[i] === entry) {
+                        for (const d of bD) {
+                            if (sMin >= d.startMin && eMin <= d.endMin) {
+                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
+                                _dE++; break;
+                            }
+                        }
+                    }
+                });
+            });
+            if (_pE || _dE) {
+                log('[POOL_ENFORCE_FINAL] pool=' + _pE + ' delete=' + _dE);
+                try { window.AutoSegmentModel?.rebuildFromAssignments?.(); } catch(_e) {}
+            }
+        } catch (_pe2) { /* non-fatal */ }
+
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;
         window._dbgDivisions = divisions;
