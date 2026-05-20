@@ -1987,13 +1987,30 @@
 
         datePicker.addEventListener('change', async (e) => {
             const newDateKey = e.target.value;
-            if (!newDateKey) return;
+            if (!newDateKey) { window._pendingDateTransition = null; return; }
 
-            const oldDateKey = window.currentScheduleDate;
+            // Safety net: even if anything below throws, the transition flag
+            // must eventually clear so save hooks don't stay blocked forever.
+            const _txnSafety = setTimeout(() => {
+                if (window._pendingDateTransition && window._pendingDateTransition.to === newDateKey) {
+                    console.warn('🔗 Date transition safety clear (10s elapsed)');
+                    window._pendingDateTransition = null;
+                }
+            }, 10000);
+            try {
+
+            // ★★★ FIX (date round-trip drift): calendar.js no longer eagerly
+            // updates window.currentScheduleDate. Prefer the transition flag's
+            // `from` value (the truly-old date) over window.currentScheduleDate
+            // in case any other code raced ahead.
+            const oldDateKey = window._pendingDateTransition?.from || window.currentScheduleDate;
             console.log('🔗 Date changed:', oldDateKey, '→', newDateKey);
 
             // ═══════════════════════════════════════════════════════════════
             // ★★★ AUTO-SAVE BEFORE DATE CHANGE ★★★
+            // At this point window.scheduleAssignments still holds the OLD
+            // date's data (load hasn't fired yet), so saving with oldDateKey
+            // is correct.
             // ═══════════════════════════════════════════════════════════════
             if (oldDateKey && oldDateKey !== newDateKey) {
                 const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
@@ -2057,6 +2074,16 @@
                     });
                 }
             }
+
+            // ★★★ FIX (date round-trip drift): Memory and dateKey are now
+            // coherent — clear the transition flag so save hooks resume.
+            window._pendingDateTransition = null;
+            } finally {
+                clearTimeout(_txnSafety);
+                if (window._pendingDateTransition && window._pendingDateTransition.to === newDateKey) {
+                    window._pendingDateTransition = null;
+                }
+            }
         });
 
         console.log('🔗 Date picker hook installed');
@@ -2075,6 +2102,17 @@
 
                 const dateKey = window.currentScheduleDate;
                 if (!dateKey) return;
+
+                // ★★★ FIX (date round-trip drift): During a date transition,
+                // window.currentScheduleDate may have already advanced (or, with
+                // the calendar.js fix, may still be the old date) while memory
+                // is mid-swap. Any save fired in this window writes mismatched
+                // (dateKey, scheduleAssignments) to cloud. Bail out — the
+                // post-load save hook will fire correctly once memory and
+                // dateKey are coherent.
+                if (window._pendingDateTransition) {
+                    return;
+                }
 
                 // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
                 const data = {
