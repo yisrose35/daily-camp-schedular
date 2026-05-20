@@ -11276,19 +11276,23 @@
             try { const stored = localStorage.getItem('campDailyTrips_' + (window.currentScheduleDate || '')); if (stored) dailyTrips = JSON.parse(stored); } catch(e) {}
             if (!dailyTrips.length) dailyTrips = dailyData?.dailyTrips || [];
             dailyTrips.forEach(trip => {
-                const grade = trip.division;
-                if (!grade || !divisions[grade]) return;
-                if (allowedSet && !allowedSet.has(String(grade))) return;
+                // ★ Day 22.5 fix: trip.division may be a string (add path) OR an
+                //   array (edit path consolidates multi-division trips). Normalize.
+                const grades = Array.isArray(trip.division) ? trip.division : [trip.division];
                 const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
                 const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
                 if (tStart == null || tEnd == null) return;
-                getBunksForGrade(grade, divisions).forEach(bunk => {
-                    bunkTimelines[bunk].push({
-                        startMin: tStart, endMin: tEnd, type: 'trip', event: trip.event || 'Trip',
-                        layer: null, _classification: 'pinned', _committed: true, _fixed: true,
-                        _isTrip: true, _activityLocked: true, _noBacktrack: true
+                grades.forEach(grade => {
+                    if (!grade || !divisions[grade]) return;
+                    if (allowedSet && !allowedSet.has(String(grade))) return;
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        bunkTimelines[bunk].push({
+                            startMin: tStart, endMin: tEnd, type: 'trip', event: trip.event || 'Trip',
+                            layer: null, _classification: 'pinned', _committed: true, _fixed: true,
+                            _isTrip: true, _activityLocked: true, _noBacktrack: true
+                        });
+                        tripBlockCount++;
                     });
-                    tripBlockCount++;
                 });
             });
             if (tripBlockCount > 0) allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => ensureTimelineIntegrity(bunk)));
