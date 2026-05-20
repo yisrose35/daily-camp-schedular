@@ -1915,6 +1915,25 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       }
     });
 
+    // ★ Day 24: pre-compute per-layer override counts so we can mark each
+    //   band with a small icon showing pool/delete/force overrides exist.
+    const _gradeOverridesForBand = (() => {
+      try {
+        const _dd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+        const _ovs = _dd?.bunkActivityOverrides || [];
+        const _bunks = new Set((div?.bunks || []).map(String));
+        const byLayer = {};
+        _ovs.forEach(o => {
+          if (!_bunks.has(String(o.bunk))) return;
+          const lt = (o.layerType || 'custom').toLowerCase();
+          if (!byLayer[lt]) byLayer[lt] = { pool: 0, delete: 0, force: 0 };
+          const m = o.overrideMode || 'force';
+          byLayer[lt][m === 'sportPool' ? 'pool' : (m === 'delete' ? 'delete' : 'force')]++;
+        });
+        return byLayer;
+      } catch(e) { return {}; }
+    })();
+
     // Render ALL bands with >< notch clip-paths at period boundaries
     layers.forEach((layer, idx) => {
       const top = (layer.startMin - globalStart) * DAW_PIXELS_PER_MINUTE;
@@ -1934,6 +1953,26 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       }
       const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
       const clipStyle = buildNotchClipPath(top, height, uniqueBoundaries, BAND_WIDTH);
+
+      // ★ Day 24: per-band override icons (pool / delete / force) so the user
+      //   knows AT THE LAYER which bunks have been overridden. Tiny dots in
+      //   the top-right corner, stacked.
+      const _lt = String(layer.type || '').toLowerCase();
+      const _ovInfo = _gradeOverridesForBand[_lt];
+      let _ovDots = '';
+      if (_ovInfo) {
+        const _tip = [];
+        if (_ovInfo.pool > 0)   _tip.push(_ovInfo.pool + ' sport pool');
+        if (_ovInfo.delete > 0) _tip.push(_ovInfo.delete + ' deleted');
+        if (_ovInfo.force > 0)  _tip.push(_ovInfo.force + ' forced');
+        const _tipStr = _tip.join(' · ') + ' for this layer (click to open Bunk Overrides)';
+        _ovDots = `<div class="ms-daw-band-ov-dots" title="${_tipStr}" style="position:absolute;top:2px;right:2px;display:flex;flex-direction:column;gap:1px;z-index:4;pointer-events:none;">`;
+        if (_ovInfo.pool > 0)   _ovDots += `<span style="width:14px;height:14px;border-radius:50%;background:#10b981;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #fff;">${_ovInfo.pool}</span>`;
+        if (_ovInfo.force > 0)  _ovDots += `<span style="width:14px;height:14px;border-radius:50%;background:#f59e0b;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #fff;">${_ovInfo.force}</span>`;
+        if (_ovInfo.delete > 0) _ovDots += `<span style="width:14px;height:14px;border-radius:50%;background:#64748b;color:#fff;font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 1.5px #fff;">${_ovInfo.delete}</span>`;
+        _ovDots += `</div>`;
+      }
+
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
         data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
         style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
@@ -1941,6 +1980,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         <div class="band-resize band-resize-top"></div>
         <span class="band-label">${layer.leagueName || typeDef?.name || layer.type}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
+        ${_ovDots}
         <div class="band-resize band-resize-bottom"></div>
       </div>`;
     });

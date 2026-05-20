@@ -4086,6 +4086,20 @@
 
                     var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
                     if (typeof sportList._rerank === 'function') sportList._rerank();
+                    // ★ Day 24: bunk sportPool filter — restrict sportList to
+                    //   pool when this bunk has a pool override over the slot.
+                    var _b1Pools = (window._bunkSportPools || {})[String(bunk)] || [];
+                    var _b1Active = null;
+                    for (var _b1i = 0; _b1i < _b1Pools.length; _b1i++) {
+                        var _b1p = _b1Pools[_b1i];
+                        if (slotStart >= _b1p.startMin && slotEnd <= _b1p.endMin) {
+                            _b1Active = new Set(_b1p.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                            break;
+                        }
+                    }
+                    if (_b1Active) {
+                        sportList = sportList.filter(function(sp) { return _b1Active.has(String(sp.name).toLowerCase().trim()); });
+                    }
                     for (var spi = 0; spi < sportList.length; spi++) {
                         var sport = sportList[spi];
                         if (result.usedActivities.has(sport.name)) continue;
@@ -4123,6 +4137,9 @@
                 if (result.sports.length >= cap) return;
 
                 var sportList = sl.sports && sl.sports.priorityList ? sl.sports.priorityList : [];
+                // ★ Day 24: B3 fallback — apply pool filter; gate per-sport
+                //   because we don't know the time slot yet (filter inside loop).
+                var _b3Pools = (window._bunkSportPools || {})[String(bunk)] || [];
                 for (var i = 0; i < sportList.length; i++) {
                     if (result.sports.length >= cap) break;
                     var sport = sportList[i];
@@ -4132,6 +4149,16 @@
                     for (var j = 0; j < fields.length; j++) {
                         var time = findTimeForFieldGP(fields[j], bunk, grade, sport.dIdeal, fw, sport.name);
                         if (time) {
+                            // Check pool restriction at this specific time
+                            var _b3OK = true;
+                            for (var _b3i = 0; _b3i < _b3Pools.length; _b3i++) {
+                                var _b3p = _b3Pools[_b3i];
+                                if (time.startMin >= _b3p.startMin && time.endMin <= _b3p.endMin) {
+                                    var _b3Set = new Set(_b3p.sports.map(function(s) { return String(s).toLowerCase().trim(); }));
+                                    if (!_b3Set.has(String(sport.name).toLowerCase().trim())) { _b3OK = false; break; }
+                                }
+                            }
+                            if (!_b3OK) continue;
                             if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
@@ -4303,6 +4330,8 @@
                 const bunk = list.bunk, grade = list.grade, result = draftResults[bunk];
                 if (list.sports.required <= 0) continue;
                 if (typeof list.sports.priorityList?._rerank === 'function') list.sports.priorityList._rerank();
+                // ★ Day 24: pool filter (applied per-time inside the field loop)
+                const _r3Pools = (window._bunkSportPools || {})[String(bunk)] || [];
                 for (const sport of list.sports.priorityList) {
                     if (result.sports.length >= list.sports.required) break;
                     if (result.usedActivities.has(sport.name)) continue;
@@ -4312,6 +4341,14 @@
                     for (const field of sport.fields) {
                         const time = findTimeForField(field, bunk, grade, sport.dIdeal, fw);
                         if (time) {
+                            let _r3OK = true;
+                            for (const _p of _r3Pools) {
+                                if (time.startMin >= _p.startMin && time.endMin <= _p.endMin) {
+                                    const _set = new Set(_p.sports.map(s => String(s).toLowerCase().trim()));
+                                    if (!_set.has(String(sport.name).toLowerCase().trim())) { _r3OK = false; break; }
+                                }
+                            }
+                            if (!_r3OK) continue;
                             if (!claimField(field, time.startMin, time.endMin, bunk, grade, sport.name)) continue;
                             result.sports.push({ ...sport, claimedTime: time, claimedField: field });
                             result.usedActivities.add(sport.name);
@@ -11301,12 +11338,16 @@
                         startMin: tStart, endMin: tEnd,
                         layerType: ov.layerType || 'custom'
                     });
+                    // Use type:'custom' (not 'free') so other layer/anchor
+                    // placement code treats the window as a real concrete block
+                    // and doesn't try to fit anything else inside it.
                     bunkTimelines[bunk].push({
                         startMin: tStart, endMin: tEnd,
-                        type: 'free', event: '— layer skipped —',
+                        type: 'custom', event: '— layer skipped —',
                         field: null, layer: null,
                         _classification: 'pinned', _committed: true, _fixed: true,
-                        _bunkOverride: true, _layerDeleted: true, _activityLocked: true, _noBacktrack: true,
+                        _bunkOverride: true, _layerDeleted: true, _activityLocked: true,
+                        _noBacktrack: true, _pinned: true,
                         _source: 'bunk_layer_deleted'
                     });
                     overrideBlockCount++;
