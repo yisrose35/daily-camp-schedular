@@ -1812,9 +1812,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             
             // ★★★ KEY FIX: Skip initialization for divisions NOT being generated ★★★
             const isBeingGenerated = !allowedDivisionsSet || allowedDivisionsSet.has(String(divName));
-            
+            // ★ Day 22.5: per-bunk gen scope. When window.__allowedBunkSet is set,
+            //   only the explicitly-selected bunks are regenerated; others preserve.
+            const _allowedBunkSet = window.__allowedBunkSet || null;
+
             (divisions[divName].bunks || []).forEach(bunk => {
-                if (isBeingGenerated) {
+                const bunkInScope = !_allowedBunkSet || _allowedBunkSet.has(String(bunk));
+                if (isBeingGenerated && bunkInScope) {
                     // Always create fresh empty arrays. For mid-day rain,
                     // Step 1.1 re-places morning entries by TIME after
                     // divisionTimes is rebuilt (index-based copy is wrong

@@ -50,6 +50,11 @@ let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }]
 // ★★★ v3.13: Generation Scope — which divisions to generate ★★★
 // null = all divisions, otherwise Set of division names
 let _generationScope = null;
+// ★ Day 22.5: Per-bunk scope companion to _generationScope.
+//   - null     = no per-bunk constraint (all bunks in scoped divisions)
+//   - Set<bunk>= only these specific bunks (subset of scoped divisions)
+// Only populated when the user partially selects within a division.
+let _generationBunkScope = null;
 
 function _daIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
@@ -3890,6 +3895,10 @@ function uid() {
 // =========================================================================
 
 function _getGenScopeBtnLabel() {
+  // ★ Day 22.5: Reflect per-bunk scope when partial.
+  if (_generationBunkScope && _generationBunkScope.size > 0) {
+    return '⚙ ' + _generationBunkScope.size + ' Bunks';
+  }
   if (!_generationScope) return '⚙ All Divisions';
   const count = _generationScope.size;
   const total = Object.keys(window.divisions || {}).length;
@@ -3927,12 +3936,21 @@ function _showGenScopePopover(anchorBtn) {
   divNames.forEach(divName => {
     const div = divisions[divName];
     const bunks = div.bunks || [];
-    const isChecked = !_generationScope || _generationScope.has(divName);
+    const divInScope = !_generationScope || _generationScope.has(divName);
+    // ★ Day 22.5: per-bunk preselection — if a bunk scope exists, only the
+    //   checked bunks are pre-checked. Otherwise division checkbox drives all.
+    const bunksInDiv = _generationBunkScope
+      ? bunks.filter(b => _generationBunkScope.has(b)).length
+      : (divInScope ? bunks.length : 0);
+    const divChecked = bunksInDiv === bunks.length && bunks.length > 0;
+    const divPartial = bunksInDiv > 0 && bunksInDiv < bunks.length;
     const divColor = div.color || '#6366f1';
 
     html += '<div class="da-gen-scope-div" data-division="' + divName + '" style="margin-bottom:10px;">';
     html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 0;">';
-    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" ' + (isChecked ? 'checked' : '') + ' style="width:16px;height:16px;accent-color:' + divColor + ';">';
+    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" '
+         + (divChecked ? 'checked ' : '')
+         + 'style="width:16px;height:16px;accent-color:' + divColor + ';">';
     html += '<span style="font-weight:600;font-size:13px;color:#1e293b;">' + divName + '</span>';
     html += '<span style="font-size:11px;color:#94a3b8;">(' + bunks.length + ' bunks)</span>';
     html += '</label>';
@@ -3941,7 +3959,9 @@ function _showGenScopePopover(anchorBtn) {
     if (bunks.length > 0) {
       html += '<div class="da-gen-scope-bunks" style="margin-left:28px;display:flex;flex-wrap:wrap;gap:4px;">';
       bunks.forEach(bunk => {
-        const bunkChecked = isChecked;
+        const bunkChecked = _generationBunkScope
+          ? _generationBunkScope.has(bunk)
+          : divInScope;
         html += '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:2px 6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;color:#475569;">';
         html += '<input type="checkbox" class="da-gen-scope-bunk-cb" data-div="' + divName + '" data-bunk="' + bunk + '" ' + (bunkChecked ? 'checked' : '') + ' style="width:12px;height:12px;accent-color:' + divColor + ';">';
         html += bunk;
@@ -3969,6 +3989,17 @@ function _showGenScopePopover(anchorBtn) {
   popover.style.position = 'fixed';
 
   document.body.appendChild(popover);
+
+  // ★ Day 22.5: set indeterminate on division checkboxes that are partial on init
+  popover.querySelectorAll('.da-gen-scope-div-cb').forEach(divCb => {
+    const divName = divCb.dataset.div;
+    const bunkCbs = popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]');
+    if (bunkCbs.length === 0) return;
+    const checkedCount = [...bunkCbs].filter(b => b.checked).length;
+    if (checkedCount > 0 && checkedCount < bunkCbs.length) {
+      divCb.indeterminate = true;
+    }
+  });
 
   // Close button
   document.getElementById('da-gen-scope-close').onclick = () => popover.remove();
@@ -4016,9 +4047,43 @@ function _showGenScopePopover(anchorBtn) {
 
     const allDivs = Object.keys(window.divisions || {});
     if (checkedDivs.size === 0 || checkedDivs.size === allDivs.length) {
-      _generationScope = null;
+      // ★ Day 22.5: Even when ALL divisions are checked, check for partial-bunk
+      //   selection within any of them. If every bunk is also checked, no constraint.
+      //   Otherwise, build a bunk-level scope.
+      const divisions = window.divisions || {};
+      const allBunks = [];
+      Object.keys(divisions).forEach(d => (divisions[d]?.bunks || []).forEach(b => allBunks.push(b)));
+      const checkedBunks = new Set();
+      popover.querySelectorAll('.da-gen-scope-bunk-cb:checked').forEach(cb => checkedBunks.add(cb.dataset.bunk));
+      if (checkedBunks.size === 0 || checkedBunks.size === allBunks.length) {
+        _generationScope = null;
+        _generationBunkScope = null;
+      } else {
+        // Partial bunks across (potentially) all divisions
+        _generationScope = new Set();
+        checkedBunks.forEach(b => {
+          const ownerDiv = Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(b));
+          if (ownerDiv) _generationScope.add(ownerDiv);
+        });
+        _generationBunkScope = checkedBunks;
+      }
     } else {
       _generationScope = checkedDivs;
+      // ★ Day 22.5: Build per-bunk scope when any included division is partial.
+      //   If every bunk in every checked div is checked, no per-bunk constraint.
+      const divisions = window.divisions || {};
+      const bunkScope = new Set();
+      let anyPartial = false;
+      let totalAvailable = 0;
+      checkedDivs.forEach(divName => {
+        const divBunks = divisions[divName]?.bunks || [];
+        totalAvailable += divBunks.length;
+        const checkedInDiv = [...popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]:checked')]
+          .map(cb => cb.dataset.bunk);
+        if (checkedInDiv.length < divBunks.length) anyPartial = true;
+        checkedInDiv.forEach(b => bunkScope.add(b));
+      });
+      _generationBunkScope = (anyPartial && bunkScope.size > 0) ? bunkScope : null;
     }
 
     popover.remove();
@@ -4297,7 +4362,77 @@ async function runOptimizer() {
         try {
             window.invalidateSmartLogicSpecialsCache?.();
             const scopeDivisions = _generationScope ? [..._generationScope] : null;
-            const success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions });
+            const scopeBunks = _generationBunkScope ? [..._generationBunkScope] : null;
+            // ★ Day 22.5: install per-bunk gate read by getBunksForGrade inside solver
+            if (scopeBunks) window.__allowedBunkSet = new Set(scopeBunks.map(String));
+            let success = false;
+            try {
+                success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions, allowedBunks: scopeBunks });
+            } finally {
+                delete window.__allowedBunkSet;
+            }
+            // ★ Day 22.5 IRON GATE: inline post-gen time-rule scrub.
+            //   Runs SYNCHRONOUSLY after runAutoScheduler returns, BEFORE the
+            //   schedule-generated event dispatches / save / UI re-render.
+            //   Reads from dedicated key (primary) + dailyData + LS fallback.
+            try {
+                const _dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                let _rules = null;
+                try {
+                    const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
+                    if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
+                } catch (_e) {}
+                if (!_rules) {
+                    const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+                    if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
+                }
+                if (!_rules) {
+                    try {
+                        const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
+                    } catch (_e) {}
+                }
+                if (_rules) {
+                    const _sa = window.scheduleAssignments || {};
+                    const _divs = window.divisions || {};
+                    let _cleared = 0;
+                    for (const [_bunk, _slots] of Object.entries(_sa)) {
+                        if (!Array.isArray(_slots)) continue;
+                        let _grade = null;
+                        for (const [_d, _info] of Object.entries(_divs)) {
+                            if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
+                        }
+                        for (let _i = 0; _i < _slots.length; _i++) {
+                            const _s = _slots[_i];
+                            if (!_s || _s.continuation) continue;
+                            const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
+                            if (!_field || _field === 'Free') continue;
+                            const _sM = _s._startMin, _eM = _s._endMin;
+                            if (_sM == null || _eM == null) continue;
+                            const _rs = _rules[_field];
+                            if (!Array.isArray(_rs) || _rs.length === 0) continue;
+                            let _bad = false, _hasAvail = false, _inside = false;
+                            for (const _r of _rs) {
+                                const _t = String(_r.type || '').toLowerCase();
+                                const _iU = _t === 'unavailable' || _r.available === false;
+                                const _iA = _t === 'available' || _r.available === true;
+                                const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
+                                if (_rsM == null || _reM == null) continue;
+                                if (Array.isArray(_r.divisions) && _r.divisions.length > 0
+                                    && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
+                                if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
+                                if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
+                            }
+                            if (!_bad && _hasAvail && !_inside) _bad = true;
+                            if (_bad) {
+                                _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
+                                _cleared++;
+                            }
+                        }
+                    }
+                    if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
+                }
+            } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
             delete window.selectedDivisionsForGeneration;
             if (success) {
                 // Match the manual builder's completion flow: confirm popup,
@@ -4340,10 +4475,11 @@ async function runOptimizer() {
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
+  const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
   const allDivKeys = Object.keys(window.divisions || {});
-  const isPartialWipe = scopeDivsForWipe &&
-      scopeDivsForWipe.length > 0 &&
-      scopeDivsForWipe.length < allDivKeys.length;
+  const isPartialWipe = (scopeBunksForWipe && scopeBunksForWipe.length > 0)
+      || (scopeDivsForWipe && scopeDivsForWipe.length > 0 && scopeDivsForWipe.length < allDivKeys.length);
 
   console.log('[Optimizer] ★ PRE-GENERATION WIPE for', dateKey, '(partial:', isPartialWipe, ')');
 
@@ -4361,13 +4497,19 @@ async function runOptimizer() {
   };
 
   if (isPartialWipe) {
-    // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+    // ═══ PARTIAL: Only wipe selected bunks (or selected-division bunks) ═══
     const divisions = window.divisions || {};
     const myBunks = new Set();
-    scopeDivsForWipe.forEach(divName => {
-      (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
-    });
-    console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + scopeDivsForWipe.join(', ') + ']');
+    if (scopeBunksForWipe && scopeBunksForWipe.length > 0) {
+      // Per-bunk scope: wipe only the explicitly-selected bunks
+      scopeBunksForWipe.forEach(b => myBunks.add(b));
+      console.log('[Optimizer] Partial wipe (per-bunk): clearing', myBunks.size, 'bunks');
+    } else {
+      (scopeDivsForWipe || []).forEach(divName => {
+        (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+      });
+      console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + (scopeDivsForWipe || []).join(', ') + ']');
+    }
     myBunks.forEach(bunk => {
       delete window.scheduleAssignments?.[bunk];
       delete window.leagueAssignments?.[bunk];
@@ -4458,12 +4600,16 @@ async function runOptimizer() {
   let success = false;
   try {
     const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
+    // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
+    if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
     success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides, scopeDivsManual);
   } finally {
     // ★★★ POST-GENERATION CLEANUP — always clear even if generation throws ★★★
     window._preGenClearActive = false;
     window._generationInProgress = false;
     delete window.selectedDivisionsForGeneration;
+    delete window.__allowedBunkSet;
   }
 
 if (success) {
@@ -6184,6 +6330,11 @@ function renderOverrideDetailPane() {
           dailyRules.splice(idx, 1);
           currentOverrides.dailyFieldAvailability[name] = dailyRules;
           window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+          // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+          try {
+            const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+            localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+          } catch (_e) {}
           renderOverrideDetailPane();
         };
       });
@@ -6204,6 +6355,11 @@ function renderOverrideDetailPane() {
       dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
       window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+      // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+      try {
+        const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+        localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+      } catch (_e) {}
       renderOverrideDetailPane();
       renderResourceOverridesUI();
     };
@@ -6811,6 +6967,13 @@ function loadCurrentOverrides() {
   }
 
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  // ★ Day 22.5: seed the dedicated iron-gate key from whatever rules we have so they
+  //   survive even after dailyData gets wiped by solver/save paths during generation.
+  try {
+    if (Object.keys(currentOverrides.dailyFieldAvailability).length > 0) {
+      localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability));
+    }
+  } catch (_e) {}
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
@@ -6923,6 +7086,105 @@ function init() {
     renderTripsForm();
     renderToolbar();
   });
+
+  // ★ Day 22.5 IRON GATE event listener — final time-rule scrub.
+  //   Fires on every generation-complete event. Runs AFTER all solver paths
+  //   have written to window.scheduleAssignments. Clears any slot that
+  //   overlaps an Unavailable window or falls outside an Available window.
+  //   This is the user-facing guarantee: no DA time rule is ever violated
+  //   in the rendered/saved schedule.
+  const _runIronGate = function _ironGateGuard() {
+    try {
+      const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      // Build rules cache from the dedicated key first (solver paths never touch it).
+      let rulesByField = null;
+      try {
+        const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+        if (enf) {
+          const parsed = JSON.parse(enf);
+          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            rulesByField = parsed;
+          }
+        }
+      } catch (_e) {}
+      if (!rulesByField) {
+        // Secondary: dailyData / legacy LS
+        const dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+        if (dd && Object.keys(dd).length > 0) rulesByField = dd;
+        else {
+          try {
+            const stored = localStorage.getItem('campResourceOverrides_' + dk);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (parsed?.dailyFieldAvailability && Object.keys(parsed.dailyFieldAvailability).length > 0) {
+                rulesByField = parsed.dailyFieldAvailability;
+              }
+            }
+          } catch (_e) {}
+        }
+      }
+      if (!rulesByField) return; // no DA time rules → nothing to enforce
+      const sa = window.scheduleAssignments || {};
+      const divs = window.divisions || {};
+      let cleared = 0;
+      const clearedDetails = [];
+      for (const [bunk, slots] of Object.entries(sa)) {
+        if (!Array.isArray(slots)) continue;
+        let grade = null;
+        for (const [d, info] of Object.entries(divs)) {
+          if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+        }
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (!s || s.continuation) continue;
+          const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+          if (!field || field === 'Free') continue;
+          const sMin = s._startMin, eMin = s._endMin;
+          if (sMin == null || eMin == null) continue;
+          const rules = rulesByField[field];
+          if (!Array.isArray(rules) || rules.length === 0) continue;
+          let bad = false, hasAvail = false, inside = false;
+          for (const r of rules) {
+            const t = String(r.type || '').toLowerCase();
+            const isUnavail = t === 'unavailable' || r.available === false;
+            const isAvail = t === 'available' || r.available === true;
+            const rs = r.startMin ?? null, re = r.endMin ?? null;
+            if (rs == null || re == null) continue;
+            if (Array.isArray(r.divisions) && r.divisions.length > 0
+                && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+            if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+            if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+          }
+          if (!bad && hasAvail && !inside) bad = true;
+          if (bad) {
+            slots[i] = {
+              field: 'Free', sport: null, _activity: 'Free',
+              _autoMode: true, _fixed: true,
+              _startMin: sMin, _endMin: eMin,
+              _source: 'iron-gate-listener',
+              _violationReason: 'DA time rule on ' + field,
+              continuation: false
+            };
+            cleared++;
+            clearedDetails.push({bunk, idx: i, field, sMin, eMin});
+          }
+        }
+      }
+      if (cleared > 0) {
+        console.warn('[IRON GATE LISTENER] cleared ' + cleared + ' time-rule violation(s)', clearedDetails);
+        // Re-render so the user sees the cleared state immediately
+        try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
+        // Re-save so the cleared state persists
+        try {
+          if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk);
+          else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+        } catch (_e) {}
+      }
+    } catch (e) { console.warn('[IRON GATE LISTENER] error: ' + e.message); }
+  };
+  window.addEventListener('campistry-generation-complete', _runIronGate);
+  document.addEventListener('campistry-schedule-generated', _runIronGate);
+  window.addEventListener('campistry-schedule-saved', _runIronGate);
 }
     
 function cleanup() {

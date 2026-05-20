@@ -260,11 +260,40 @@
     });
 
     // === 2. Field time rules (Available/Unavailable, per-division) ===
+    // ★ Day 22.5 fix: DA Resources daily rules live in:
+    //   - window.activityProperties[name].timeRules (gen-entry merge)
+    //   - dailyData.dailyFieldAvailability[name]
+    //   - localStorage 'campResourceOverrides_<date>'
+    // V2 previously read ONLY cfg.timeRules (setup-level), so daily-only
+    // Unavailable rules were invisible — the SA optimizer could happily
+    // make replace/swap moves into a daily-unavailable window.
+    function _getDailyRulesForField(fieldName) {
+      try {
+        const ap = (typeof window !== 'undefined') ? window.activityProperties?.[fieldName]?.timeRules : null;
+        if (Array.isArray(ap) && ap.length > 0) return ap;
+        const dd = (typeof window !== 'undefined') ? (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName] : null;
+        if (Array.isArray(dd) && dd.length > 0) return dd;
+        const dk = (typeof window !== 'undefined') ? (window.currentScheduleDate || '') : '';
+        if (dk) {
+          const _stored = localStorage.getItem('campResourceOverrides_' + dk);
+          if (_stored) {
+            const _parsed = JSON.parse(_stored);
+            const ls = _parsed?.dailyFieldAvailability?.[fieldName];
+            if (Array.isArray(ls) && ls.length > 0) return ls;
+          }
+        }
+      } catch (_e) {}
+      return null;
+    }
     flat.forEach(c => {
       const cfg = fieldByName[c.field];
-      if (!cfg?.timeRules || cfg.timeRules.length === 0) return;
-      const avail = cfg.timeRules.filter(r => r.type === 'Available' || !r.type || r.available === true);
-      const unavail = cfg.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+      // Effective rules: daily rules REPLACE setup-level rules (matches the
+      // gen-entry merge semantics for activityProperties[name].timeRules).
+      const _dailyRules = _getDailyRulesForField(c.field);
+      const effRules = _dailyRules || cfg?.timeRules || [];
+      if (effRules.length === 0) return;
+      const avail = effRules.filter(r => r.type === 'Available' || !r.type || r.available === true);
+      const unavail = effRules.filter(r => r.type === 'Unavailable' || r.available === false);
       // Available: must lie within at least one applicable rule
       if (avail.length > 0) {
         const ok = avail.some(r => {
@@ -631,8 +660,48 @@
       if (newAct === oldAct) continue;
       const newField = _findFieldForActivity(newAct, ctx);
       if (!newField) continue;
-      const next = _cloneSchedule(schedule);
       const bucket = ctx.perBunkSlots[grade]?.[bunk]?.[idx];
+      // ★ Day 22.5 fix: block moves that would land in a daily-Unavailable window.
+      //   detectHardViolations now flags these in the cost function, but the SA
+      //   loop sometimes can't escape them once the seed sits at a violation.
+      //   Reject candidate fields outright at move-construction time.
+      try {
+        const _sM = bucket?.startMin ?? slots[idx]?._startMin;
+        const _eM = bucket?.endMin ?? slots[idx]?._endMin;
+        if (_sM != null && _eM != null) {
+          let _da = null;
+          const _ap = (typeof window !== 'undefined') ? window.activityProperties?.[newField.name]?.timeRules : null;
+          if (Array.isArray(_ap) && _ap.length > 0) _da = _ap;
+          if (!_da) {
+            const _dd = (typeof window !== 'undefined') ? (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[newField.name] : null;
+            if (Array.isArray(_dd) && _dd.length > 0) _da = _dd;
+          }
+          if (!_da) {
+            const _dk = (typeof window !== 'undefined') ? (window.currentScheduleDate || '') : '';
+            if (_dk) {
+              const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+              if (_stored) {
+                const _parsed = JSON.parse(_stored);
+                const _ls = _parsed?.dailyFieldAvailability?.[newField.name];
+                if (Array.isArray(_ls) && _ls.length > 0) _da = _ls;
+              }
+            }
+          }
+          if (_da) {
+            let _bad = false;
+            for (const r of _da) {
+              const _t = String(r.type || '').toLowerCase();
+              if (!(_t === 'unavailable' || r.available === false)) continue;
+              const _rs = r.startMin ?? null;
+              const _re = r.endMin ?? null;
+              if (_rs == null || _re == null) continue;
+              if (_rs < _eM && _re > _sM) { _bad = true; break; }
+            }
+            if (_bad) continue; // pick a different field/activity
+          }
+        }
+      } catch (_e) {}
+      const next = _cloneSchedule(schedule);
       next[bunk] = next[bunk].slice();
       next[bunk][idx] = {
         field: newField.name, sport: newAct, _activity: newAct,
@@ -2166,6 +2235,90 @@
     // ★ SMART REPAIR — directed, deterministic fixes for residual issues.
     //   SA finds a good neighborhood; repair polishes specific violations.
     smartRepair(window.scheduleAssignments, ctx);
+
+    // ★ Day 22.5 IRON GATE: final scrub for DA Resources daily time rules.
+    //   No matter which path (V1, safety net, V2 SA moves, smartRepair, null
+    //   bucket finalizer) placed something, this final pass clears any slot
+    //   that overlaps an Unavailable window or falls outside an Available
+    //   window for its grade. Guarantees 100% time-rule accuracy.
+    (function _ironGateTimeRules() {
+      try {
+        function _getDaily(fieldName) {
+          try {
+            // ★ Day 22.5: PRIMARY source — dedicated iron-gate key (no solver path touches it).
+            const dk = window.currentScheduleDate || '';
+            if (dk) {
+              const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+              if (enf) {
+                const parsed = JSON.parse(enf);
+                const r = parsed?.[fieldName];
+                if (Array.isArray(r) && r.length > 0) return r;
+              }
+            }
+            // Secondary sources (may be wiped by solver paths)
+            const ap = window.activityProperties?.[fieldName]?.timeRules;
+            if (Array.isArray(ap) && ap.length > 0) return ap;
+            const dd = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+            if (Array.isArray(dd) && dd.length > 0) return dd;
+            if (dk) {
+              const stored = localStorage.getItem('campResourceOverrides_' + dk);
+              if (stored) {
+                const parsed = JSON.parse(stored);
+                const ls = parsed?.dailyFieldAvailability?.[fieldName];
+                if (Array.isArray(ls) && ls.length > 0) return ls;
+              }
+            }
+          } catch (_e) {}
+          return null;
+        }
+        const sa = window.scheduleAssignments || {};
+        const divs = window.divisions || {};
+        let cleared = 0;
+        for (const [bunk, slots] of Object.entries(sa)) {
+          if (!Array.isArray(slots)) continue;
+          let grade = null;
+          for (const [d, info] of Object.entries(divs)) {
+            if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+          }
+          for (let i = 0; i < slots.length; i++) {
+            const s = slots[i];
+            if (!s || s.continuation) continue;
+            const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+            if (!field || field === 'Free') continue;
+            const sMin = s._startMin, eMin = s._endMin;
+            if (sMin == null || eMin == null) continue;
+            const rules = _getDaily(field);
+            if (!Array.isArray(rules) || rules.length === 0) continue;
+            let bad = false;
+            let hasAvail = false, inside = false;
+            for (const r of rules) {
+              const t = String(r.type || '').toLowerCase();
+              const isUnavail = t === 'unavailable' || r.available === false;
+              const isAvail = t === 'available' || r.available === true;
+              const rs = r.startMin ?? null, re = r.endMin ?? null;
+              if (rs == null || re == null) continue;
+              if (Array.isArray(r.divisions) && r.divisions.length > 0
+                  && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+              if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+              if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+            }
+            if (!bad && hasAvail && !inside) bad = true;
+            if (bad) {
+              slots[i] = {
+                field: 'Free', sport: null, _activity: 'Free',
+                _autoMode: true, _fixed: true,
+                _startMin: sMin, _endMin: eMin,
+                _source: 'iron-gate-time-rule',
+                _violationReason: 'DA time rule on ' + field,
+                continuation: false
+              };
+              cleared++;
+            }
+          }
+        }
+        if (cleared > 0) console.warn('[V2 IRON GATE] cleared ' + cleared + ' time-rule violation(s)');
+      } catch (e) { console.warn('[V2 IRON GATE] error: ' + e.message); }
+    })();
 
     // ★ INVARIANT CHECK (X2f-18c): schedule[bunk][i] and perBunkSlots[grade][bunk][i]
     //   MUST be index-aligned at the same start/end. The renderer reads

@@ -148,7 +148,16 @@
     }
 
     function getFields(gs) { return (gs.app1 && gs.app1.fields) || gs.fields || []; }
-    function getBunksForGrade(grade, divisions) { return (divisions[grade] && divisions[grade].bunks) ? [...divisions[grade].bunks] : []; }
+    function getBunksForGrade(grade, divisions) {
+        const all = (divisions[grade] && divisions[grade].bunks) ? [...divisions[grade].bunks] : [];
+        // ★ Day 22.5: optional per-bunk scope. When the user selects specific bunks
+        //   in the generation-scope picker, daily_adjustments sets window.__allowedBunkSet
+        //   for the duration of the run. Solver bunk iteration goes through this helper,
+        //   so filtering here naturally restricts generation to those bunks.
+        const bunkSet = window.__allowedBunkSet;
+        if (!bunkSet) return all;
+        return all.filter(b => bunkSet.has(String(b)));
+    }
 
     function getDivisionTimes(grade, divisions) {
         const div = divisions[grade];
@@ -579,10 +588,14 @@
         window._divisionTimesLocked = false;
 
         const _step0AllowedDivs = options.allowedDivisions || null;
+        // ★ Day 22.5: per-bunk scope (subset of allowedDivisions' bunks). When set,
+        //   treat as partial gen even if ALL divisions remain in scope.
+        const _step0AllowedBunks = options.allowedBunks || null;
         const _allDivKeys = Object.keys(window.divisions || {});
-        const _isPartialGen = _step0AllowedDivs &&
-            _step0AllowedDivs.length > 0 &&
-            _step0AllowedDivs.length < _allDivKeys.length;
+        const _isPartialGen = (_step0AllowedBunks && _step0AllowedBunks.length > 0)
+            || (_step0AllowedDivs &&
+                _step0AllowedDivs.length > 0 &&
+                _step0AllowedDivs.length < _allDivKeys.length);
 
         // ★ Track which bunks belong to the partial-gen scope (used in Step 0 & Step 5)
         let _partialGenBunks = null;
@@ -596,11 +609,17 @@
         if (_isPartialGen) {
             const divisions = window.divisions || {};
             const myBunks = new Set();
-            _step0AllowedDivs.forEach(divName => {
-                (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
-            });
+            if (_step0AllowedBunks && _step0AllowedBunks.length > 0) {
+                // Per-bunk scope: clear ONLY the explicitly-selected bunks.
+                _step0AllowedBunks.forEach(b => myBunks.add(String(b)));
+                log('[STEP 0] Partial wipe (per-bunk): clearing ' + myBunks.size + ' bunks');
+            } else {
+                (_step0AllowedDivs || []).forEach(divName => {
+                    (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+                });
+                log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + (_step0AllowedDivs || []).join(', ') + ']');
+            }
             _partialGenBunks = myBunks;
-            log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + _step0AllowedDivs.join(', ') + ']');
             myBunks.forEach(bunk => {
                 delete window.scheduleAssignments?.[bunk];
                 delete window.leagueAssignments?.[bunk];
@@ -621,9 +640,20 @@
 
             // ★ v4.3: Also snapshot _perBunkSlots for non-scoped grades so the
             // grid renderer can display them after partial gen completes.
+            // ★ Day 22.5: With per-bunk scope, EVERY grade may contain both scoped
+            //   and non-scoped bunks. Snapshot all grades that have at least one
+            //   bunk outside _partialGenBunks.
             window._preservedPerBunkSlots = {};
+            const _hasPerBunkScope = !!(_step0AllowedBunks && _step0AllowedBunks.length > 0);
             Object.keys(window.divisionTimes || {}).forEach(grade => {
-                if (!myBunks.size || !_step0AllowedDivs.includes(grade)) {
+                let _shouldSnapshot;
+                if (_hasPerBunkScope) {
+                    const gBunks = (window.divisions?.[grade]?.bunks) || [];
+                    _shouldSnapshot = gBunks.some(b => !myBunks.has(String(b)));
+                } else {
+                    _shouldSnapshot = !myBunks.size || !(_step0AllowedDivs || []).includes(grade);
+                }
+                if (_shouldSnapshot) {
                     const dt = window.divisionTimes[grade];
                     if (dt?._perBunkSlots) {
                         window._preservedPerBunkSlots[grade] = structuredClone(dt._perBunkSlots);
@@ -909,7 +939,23 @@
 
         const allSpecials = getSpecialActivitiesList(globalSettings);
         // ★ v7.0: Filter out daily-disabled specials from resource overrides
-        const dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
+        // ★ Day 22.5: localStorage fallback to match the disabledFields path
+        //   (defends against momentarily-stale dailyData right after a date switch).
+        let dailyDisabledSpecials = (dailyData?.overrides?.disabledSpecials) || [];
+        if (dailyDisabledSpecials.length === 0) {
+            try {
+                const _dk = window.currentScheduleDate || '';
+                if (_dk) {
+                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                    if (_stored) {
+                        const _parsed = JSON.parse(_stored);
+                        if (Array.isArray(_parsed?.overrides?.disabledSpecials) && _parsed.overrides.disabledSpecials.length) {
+                            dailyDisabledSpecials = _parsed.overrides.disabledSpecials;
+                        }
+                    }
+                }
+            } catch (_e) { /* ignore */ }
+        }
         const todaysSpecials = allSpecials.filter(s => {
             if (s.available === false) return false;
             if (!isSpecialAvailableOnDay(s.name, dayName, isRainy, globalSettings)) return false;
@@ -1613,6 +1659,41 @@
                 });
                 if (unavail) return false;
             }
+            // ★ Day 22.5 fix: defensive fallback. The ledger is built from
+            //   activityProperties at gen entry, but window.activityProperties
+            //   can be wiped by downstream systems (scheduler_core_main,
+            //   unified_schedule_system, special_activities snapshot restores).
+            //   When that happens, the ledger has no unavailableRules even
+            //   though the DA Resources Unavailable rule exists. Re-read from
+            //   the canonical sources every time, so daily Unavailable windows
+            //   are always enforced.
+            try {
+                let _daRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                if (!Array.isArray(_daRules) || _daRules.length === 0) {
+                    const _dk = window.currentScheduleDate || '';
+                    if (_dk) {
+                        const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_stored) {
+                            const _parsed = JSON.parse(_stored);
+                            const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                            if (Array.isArray(_lsRules) && _lsRules.length > 0) _daRules = _lsRules;
+                        }
+                    }
+                }
+                if (Array.isArray(_daRules) && _daRules.length > 0) {
+                    for (const r of _daRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        if (!isUnavail) continue;
+                        const rs = r.startMin ?? parseTimeToMinutes(r.start || r.startTime);
+                        const re = r.endMin ?? parseTimeToMinutes(r.end || r.endTime);
+                        if (rs == null || re == null) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : null;
+                        if (rDivs && rDivs.length > 0 && grade != null && !rDivs.includes(String(grade))) continue;
+                        if (rs < endMin && re > startMin) return false;
+                    }
+                }
+            } catch (_e) { /* ignore */ }
 
             // Time rules
             const timeOk = ledger.timeRules.some(rule => {
@@ -11419,8 +11500,26 @@
             buildResourceCalendar(_iterSeed);
 
             // ★ v7.0: Load disabled leagues from daily overrides
-            const dailyDisabledLeagues = dailyData?.overrides?.leagues || [];
-            const dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
+            // ★ Day 22.5: localStorage fallback for stale-dailyData defense
+            let dailyDisabledLeagues = dailyData?.overrides?.leagues || [];
+            let dailyDisabledSpecialtyLeagues = dailyData?.disabledSpecialtyLeagues || [];
+            if (dailyDisabledLeagues.length === 0 || dailyDisabledSpecialtyLeagues.length === 0) {
+                try {
+                    const _dk = window.currentScheduleDate || '';
+                    if (_dk) {
+                        const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_stored) {
+                            const _parsed = JSON.parse(_stored);
+                            if (dailyDisabledLeagues.length === 0 && Array.isArray(_parsed?.overrides?.leagues)) {
+                                dailyDisabledLeagues = _parsed.overrides.leagues;
+                            }
+                            if (dailyDisabledSpecialtyLeagues.length === 0 && Array.isArray(_parsed?.disabledSpecialtyLeagues)) {
+                                dailyDisabledSpecialtyLeagues = _parsed.disabledSpecialtyLeagues;
+                            }
+                        }
+                    }
+                } catch (_e) { /* ignore */ }
+            }
             window.disabledLeagues = dailyDisabledLeagues; // Expose for league engine
 
             // Leagues in stagger order (filter out disabled)
@@ -15072,11 +15171,39 @@
             }
 
             // Field-level grade-scoped time rules
-            if (fld && Array.isArray(fld.timeRules) && fld.timeRules.length > 0
-                && startMin != null && endMin != null) {
+            // ★ Day 22.5 fix: ALSO read DA Resources daily rules from THREE
+            //   sources, because window.activityProperties may be wiped between
+            //   gen entry and downstream writes:
+            //     1. window.activityProperties[fieldName].timeRules (gen-entry merge)
+            //     2. dailyData.dailyFieldAvailability[fieldName]
+            //     3. localStorage 'campResourceOverrides_<date>'
+            //   Daily overrides REPLACE setup-level rules (matches gen-entry merge).
+            let _writeRules = (fld && Array.isArray(fld.timeRules)) ? fld.timeRules.slice() : [];
+            try {
+                const _apRules = window.activityProperties?.[fieldName]?.timeRules;
+                if (Array.isArray(_apRules) && _apRules.length > 0) {
+                    _writeRules = _apRules.slice();
+                } else {
+                    const _ddRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                    if (Array.isArray(_ddRules) && _ddRules.length > 0) {
+                        _writeRules = _ddRules.slice();
+                    } else {
+                        const _dk = window.currentScheduleDate || '';
+                        if (_dk) {
+                            const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                            if (_stored) {
+                                const _parsed = JSON.parse(_stored);
+                                const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                                if (Array.isArray(_lsRules) && _lsRules.length > 0) _writeRules = _lsRules.slice();
+                            }
+                        }
+                    }
+                }
+            } catch (_e) {}
+            if (_writeRules.length > 0 && startMin != null && endMin != null) {
                 const myG = grade != null ? String(grade) : null;
                 let hasGradeAvail = false, insideAvail = false;
-                for (const r of fld.timeRules) {
+                for (const r of _writeRules) {
                     const t = String(r.type || '').toLowerCase();
                     const isUnavail = t === 'unavailable' || r.available === false;
                     const isAvail = t === 'available' || r.available === true;
@@ -17435,7 +17562,36 @@
                                     return;
                                 }
                                 if (sMin != null && eMin != null) {
-                                    const r2 = checkTimeRules(fld.timeRules, grade, sMin, eMin);
+                                    // ★ Day 22.5 fix: prefer DA Resources daily rules over
+                                    //   setup-level rules (same semantics as the gen-entry merge).
+                                    //   Previously this detector only saw fld.timeRules, so any
+                                    //   daily-only Unavailable window was invisible to the safety net.
+                                    //   v2: read from MULTIPLE sources because window.activityProperties
+                                    //   may get rewritten by other systems between gen entry and here.
+                                    let _safetyRules = fld.timeRules;
+                                    const _apTimeRules = window.activityProperties?.[fieldName]?.timeRules;
+                                    if (Array.isArray(_apTimeRules) && _apTimeRules.length > 0) {
+                                        _safetyRules = _apTimeRules;
+                                    } else {
+                                        // dailyData → localStorage fallback chain
+                                        try {
+                                            const _ddRules = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                                            if (Array.isArray(_ddRules) && _ddRules.length > 0) {
+                                                _safetyRules = _ddRules;
+                                            } else {
+                                                const _dk = window.currentScheduleDate || '';
+                                                if (_dk) {
+                                                    const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                                                    if (_stored) {
+                                                        const _parsed = JSON.parse(_stored);
+                                                        const _lsRules = _parsed?.dailyFieldAvailability?.[fieldName];
+                                                        if (Array.isArray(_lsRules) && _lsRules.length > 0) _safetyRules = _lsRules;
+                                                    }
+                                                }
+                                            }
+                                        } catch (_e) { /* ignore */ }
+                                    }
+                                    const r2 = checkTimeRules(_safetyRules, grade, sMin, eMin);
                                     if (r2) {
                                         violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field timeRules: ' + r2 });
                                         return;
@@ -17684,6 +17840,90 @@
             }
         })();
         log('[STEP 4.97] Null-bucket finalizer ended.');
+
+        // ★ STEP 4.98 — IRON GATE: final scrub for DA Resources daily time rules.
+        //   No matter which path placed an activity, this pass clears any slot
+        //   that overlaps an Unavailable window or falls outside an Available
+        //   window for its grade. Guarantees 100% time-rule accuracy regardless
+        //   of solver version or rescue path.
+        (function _ironGateTimeRulesV1() {
+          try {
+            function _getDaily(fieldName) {
+              try {
+                // ★ Day 22.5: PRIMARY source — dedicated iron-gate key (no solver path touches it).
+                const dk = window.currentScheduleDate || '';
+                if (dk) {
+                  const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+                  if (enf) {
+                    const parsed = JSON.parse(enf);
+                    const r = parsed?.[fieldName];
+                    if (Array.isArray(r) && r.length > 0) return r;
+                  }
+                }
+                // Secondary sources (may be wiped by solver paths)
+                const ap = window.activityProperties?.[fieldName]?.timeRules;
+                if (Array.isArray(ap) && ap.length > 0) return ap;
+                const dd = (window.loadCurrentDailyData?.()?.dailyFieldAvailability || {})[fieldName];
+                if (Array.isArray(dd) && dd.length > 0) return dd;
+                if (dk) {
+                  const stored = localStorage.getItem('campResourceOverrides_' + dk);
+                  if (stored) {
+                    const parsed = JSON.parse(stored);
+                    const ls = parsed?.dailyFieldAvailability?.[fieldName];
+                    if (Array.isArray(ls) && ls.length > 0) return ls;
+                  }
+                }
+              } catch (_e) {}
+              return null;
+            }
+            const sa = window.scheduleAssignments || {};
+            let cleared = 0;
+            for (const [bunk, slots] of Object.entries(sa)) {
+              if (!Array.isArray(slots)) continue;
+              let grade = null;
+              for (const [d, info] of Object.entries(divisions || {})) {
+                if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+              }
+              for (let i = 0; i < slots.length; i++) {
+                const s = slots[i];
+                if (!s || s.continuation) continue;
+                const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+                if (!field || field === 'Free') continue;
+                const sMin = s._startMin, eMin = s._endMin;
+                if (sMin == null || eMin == null) continue;
+                const rules = _getDaily(field);
+                if (!Array.isArray(rules) || rules.length === 0) continue;
+                let bad = false;
+                let hasAvail = false, inside = false;
+                for (const r of rules) {
+                  const t = String(r.type || '').toLowerCase();
+                  const isUnavail = t === 'unavailable' || r.available === false;
+                  const isAvail = t === 'available' || r.available === true;
+                  const rs = r.startMin ?? null, re = r.endMin ?? null;
+                  if (rs == null || re == null) continue;
+                  if (Array.isArray(r.divisions) && r.divisions.length > 0
+                      && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+                  if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+                  if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+                }
+                if (!bad && hasAvail && !inside) bad = true;
+                if (bad) {
+                  slots[i] = {
+                    field: 'Free', sport: null, _activity: 'Free',
+                    _autoMode: true, _fixed: true,
+                    _startMin: sMin, _endMin: eMin,
+                    _source: 'iron-gate-time-rule',
+                    _violationReason: 'DA time rule on ' + field,
+                    continuation: false
+                  };
+                  cleared++;
+                }
+              }
+            }
+            if (cleared > 0) warn('[STEP 4.98 IRON GATE] cleared ' + cleared + ' time-rule violation(s)');
+            else log('[STEP 4.98 IRON GATE] no time-rule violations to clear');
+          } catch (e) { warn('[STEP 4.98 IRON GATE] error: ' + e.message); }
+        })();
 
         // STEP 5 — SAVE
         // =====================================================================
