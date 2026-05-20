@@ -4939,11 +4939,14 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   });
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
-  // Pull the active auto layers for this grade
-  const dawLayers = (window.loadGlobalSettings?.() || {}).app1?.autoLayers
-    || window.dawLayers
-    || {};
-  const layers = (dawLayers[divName] || []).slice().sort((a, b) => a.startMin - b.startMin);
+  // Pull the active auto layers for this grade for the current date.
+  // Storage: globalSettings.app1.dailyAutoLayers[YYYY-MM-DD][gradeName] = layers[]
+  const _gs = window.loadGlobalSettings?.() || {};
+  const _dal = _gs.app1?.dailyAutoLayers || {};
+  const _date = (window.currentScheduleDate || window.currentDate
+    || document.querySelector('input[type=date]')?.value || '').trim();
+  const _byGrade = (_dal[_date] || {});
+  const layers = ((_byGrade[divName] || []).slice()).sort((a, b) => a.startMin - b.startMin);
   if (layers.length === 0) {
     wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
     return;
