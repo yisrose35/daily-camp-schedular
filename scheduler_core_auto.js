@@ -17722,69 +17722,7 @@
             log('[STEP 5] Restored ' + restored + ' non-scoped bunks from pre-solver snapshot');
         }
 
-        // ★ Day 24: SPORT POOL ENFORCEMENT (final pass).
-        //   Earlier filters cover most paths but some sport-assignment sites
-        //   slip through. Walk every assignment one last time and clear any
-        //   sport that violates a bunk's pool — replaced by 'Free' so the
-        //   downstream Free-fill step can put something in-pool if possible.
-        try {
-            // Re-derive from the source overrides — the window globals may
-            // have been wiped between Phase 0 and STEP 5.
-            const _fdd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
-            const _allOvs = _fdd?.bunkActivityOverrides || [];
-            const _pools = {}, _deleted = {};
-            _allOvs.forEach(ov => {
-                if (!ov || !ov.bunk) return;
-                const sMin = ov.startMin, eMin = ov.endMin;
-                if (sMin == null || eMin == null) return;
-                if (ov.overrideMode === 'sportPool' && Array.isArray(ov.sportPool)) {
-                    if (!_pools[ov.bunk]) _pools[ov.bunk] = [];
-                    _pools[ov.bunk].push({ startMin: sMin, endMin: eMin, sports: ov.sportPool.slice() });
-                } else if (ov.overrideMode === 'delete') {
-                    if (!_deleted[ov.bunk]) _deleted[ov.bunk] = [];
-                    _deleted[ov.bunk].push({ startMin: sMin, endMin: eMin, layerType: ov.layerType });
-                }
-            });
-            let _poolEvictions = 0, _delEvictions = 0;
-            Object.entries(window.scheduleAssignments || {}).forEach(([bunk, slots]) => {
-                if (!Array.isArray(slots)) return;
-                const bPools = _pools[bunk] || [];
-                const bDels  = _deleted[bunk] || [];
-                slots.forEach((entry, i) => {
-                    if (!entry || entry._bunkOverride) return; // skip pinned overrides themselves
-                    const sMin = entry._startMin, eMin = entry._endMin;
-                    if (sMin == null || eMin == null) return;
-                    const act  = String(entry._activity || entry.sport || '').toLowerCase().trim();
-                    if (!act) return;
-                    // Pool check: only for sport blocks
-                    if (entry._isSport || entry._type === 'sport' || entry.sport) {
-                        for (const p of bPools) {
-                            if (sMin >= p.startMin && eMin <= p.endMin) {
-                                const allowed = new Set(p.sports.map(s => String(s).toLowerCase().trim()));
-                                if (!allowed.has(act)) {
-                                    slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _poolEvicted: true };
-                                    _poolEvictions++;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    // Delete check: any activity inside a deleted layer window
-                    if (slots[i] === entry) {
-                        for (const d of bDels) {
-                            if (sMin >= d.startMin && eMin <= d.endMin) {
-                                slots[i] = { _startMin: sMin, _endMin: eMin, field: 'Free', _activity: null, _layerDeleted: true };
-                                _delEvictions++;
-                                break;
-                            }
-                        }
-                    }
-                });
-            });
-            if (_poolEvictions > 0 || _delEvictions > 0) {
-                log('[POOL_ENFORCE] Evicted ' + _poolEvictions + ' pool violations, ' + _delEvictions + ' deleted-layer violations');
-            }
-        } catch (_pe) { /* non-fatal */ }
+        // (Day 24 enforcement runs AFTER STEP 6.5 — see end of generation.)
 
         if (window.saveCurrentDailyData) {
             try {
