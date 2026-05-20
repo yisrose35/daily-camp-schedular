@@ -17530,7 +17530,16 @@
                                     return;
                                 }
                                 if (sMin != null && eMin != null) {
-                                    const r2 = checkTimeRules(fld.timeRules, grade, sMin, eMin);
+                                    // ★ Day 22.5 fix: prefer DA Resources daily rules over
+                                    //   setup-level rules (same semantics as the gen-entry merge).
+                                    //   Previously this detector only saw fld.timeRules, so any
+                                    //   daily-only Unavailable window was invisible to the safety net.
+                                    let _safetyRules = fld.timeRules;
+                                    const _apTimeRules = window.activityProperties?.[fieldName]?.timeRules;
+                                    if (Array.isArray(_apTimeRules) && _apTimeRules.length > 0) {
+                                        _safetyRules = _apTimeRules;
+                                    }
+                                    const r2 = checkTimeRules(_safetyRules, grade, sMin, eMin);
                                     if (r2) {
                                         violations.push({ bunk, grade, idx, fieldName, activity: entry._activity, reason: 'field timeRules: ' + r2 });
                                         return;
