@@ -5028,8 +5028,8 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     html += `<div class="ms-daw-grade-header">
       <span class="ms-daw-grade-tag" style="background:${color};">${_escHtml(bunk)}${badge}</span>
     </div>`;
-    // Bunk track
-    html += `<div class="ms-daw-track" style="height:${totalHeight}px;width:100%;position:relative;">`;
+    // Bunk track — earliest min stored on dataset for drag-drop time math
+    html += `<div class="ms-daw-track" data-earliest="${earliestMin}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Horizontal gridlines (30-min increments)
     for (let m = earliestMin; m < latestMin; m += incMins) {
@@ -5076,26 +5076,56 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
           mainLabel = '— deleted —';
           subLabel  = 'skipped for this bunk';
+        } else if (mode === 'resize') {
+          bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+          mainLabel = '⇕ resized';
+          subLabel  = minutesToTime(override.startMin) + '–' + minutesToTime(override.endMin);
         } else {
           bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
           mainLabel = override.activity;
           subLabel  = 'override';
         }
-        html += `<div class="ms-daw-band bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
-          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit"
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click body to edit, drag edges to resize"
           style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
           <span class="band-label">${_escHtml(mainLabel)}</span>
           <span class="band-qty">${_escHtml(subLabel)}</span>
           <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
         </div>`;
       } else {
-        html += `<div class="ms-daw-band bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+        html += `<div class="ms-daw-band bo-block bo-skeleton bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
           title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
           style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
           <span class="band-label">${_escHtml(evName)}</span>
           <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
         </div>`;
       }
+    });
+
+    // ★ Day 24: render added-layer overrides as extra bands after the grade
+    //   layers (positioned to the right of the last grade band).
+    const addedForBunk = overrides.filter(o => o.bunk === bunk && o.overrideMode === 'addLayer');
+    addedForBunk.forEach((ov, addIdx) => {
+      const sm = ov.startMin, em = ov.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
+      const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+      const evName = _typeLabel({ type: ov.layerType });
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="addLayer"
+        title="Added layer: ${_escHtml(evName)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, drag edges to resize"
+        style="background:${bg};color:#1e293b;box-shadow:0 0 0 2px #6366f1;top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+        <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        <span class="band-label">+ ${_escHtml(evName)}</span>
+        <span class="band-qty">added</span>
+        <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+        <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+      </div>`;
     });
 
     html += `</div></div>`; // /track /col
@@ -5105,15 +5135,151 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   wrap.innerHTML = html;
 
   // Auto-mode bands → rich popover. Manual mode keeps the simple picker.
+  // Edge handles trigger drag-to-resize; clicking the body opens the popover.
   wrap.querySelectorAll('.bo-block').forEach(block => {
     block.onclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
+      if (e.target.classList.contains('band-resize')) return; // resize handles
       const bunk = block.dataset.bunk;
       const startMin = parseInt(block.dataset.start);
       const endMin = parseInt(block.dataset.end);
       const layerType = block.dataset.layerType;
       _boShowAutoLayerPopover(block, bunk, startMin, endMin, layerType);
     };
+  });
+
+  // ★ Day 24: drag-to-resize edge handles with ghost preview.
+  wrap.querySelectorAll('.bo-resizable .band-resize').forEach(handle => {
+    handle.onmousedown = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const block = handle.parentElement;
+      if (!block) return;
+      const edge = handle.dataset.edge;
+      const track = block.parentElement; // .ms-daw-track
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+      const SNAP = 5; // snap to 5 minutes
+      const trackRect = track.getBoundingClientRect();
+      const trackEarliestMin = parseInt(track.dataset.earliest || '0') || (() => {
+        // Fallback: derive from first time-tick or fall back to band's startMin
+        return parseInt(block.dataset.start) - (parseInt(block.style.top || '0') / PX);
+      })();
+      const originalStart = parseInt(block.dataset.start);
+      const originalEnd   = parseInt(block.dataset.end);
+      const originalTop   = parseFloat(block.style.top || '0');
+      const originalHeight = parseFloat(block.style.height || '0');
+
+      // Ghost element
+      const ghost = document.createElement('div');
+      ghost.className = 'bo-resize-ghost';
+      ghost.style.cssText = `position:absolute;left:${block.style.left};width:${block.style.width};
+        background:rgba(245,158,11,0.18);border:2px dashed #f59e0b;border-radius:6px;
+        pointer-events:none;z-index:50;display:flex;align-items:center;justify-content:center;
+        font-size:10px;font-weight:700;color:#7c2d12;`;
+      ghost.style.top = block.style.top;
+      ghost.style.height = block.style.height;
+      ghost.textContent = `${minutesToTime(originalStart)}–${minutesToTime(originalEnd)}`;
+      track.appendChild(ghost);
+
+      let newStart = originalStart, newEnd = originalEnd;
+      const onMove = (ev) => {
+        const dyMin = (ev.clientY - e.clientY) / PX;
+        const dyMinSnapped = Math.round(dyMin / SNAP) * SNAP;
+        if (edge === 'top') {
+          newStart = Math.min(originalEnd - SNAP, Math.max(0, originalStart + dyMinSnapped));
+          newEnd = originalEnd;
+        } else {
+          newStart = originalStart;
+          newEnd = Math.max(originalStart + SNAP, originalEnd + dyMinSnapped);
+        }
+        const newTop = originalTop + (newStart - originalStart) * PX;
+        const newH = (newEnd - newStart) * PX;
+        ghost.style.top = newTop + 'px';
+        ghost.style.height = newH + 'px';
+        ghost.textContent = `${minutesToTime(newStart)}–${minutesToTime(newEnd)}`;
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        ghost.remove();
+        if (newStart === originalStart && newEnd === originalEnd) return;
+        // Save the resized override (creating one if this band was a skeleton)
+        const bunk = block.dataset.bunk;
+        const layerType = block.dataset.layerType;
+        const ovId = block.dataset.ovId;
+        let list = currentOverrides.bunkActivityOverrides || [];
+        if (ovId) {
+          // Update existing override's time range
+          list = list.map(o => o.id === ovId ? {
+            ...o,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd)
+          } : o);
+        } else {
+          // Skeleton band — create a new resize-only override with no activity.
+          // Storing the resize as overrideMode:'resize' so the solver knows
+          // this layer runs on a custom window for this bunk.
+          list = list.filter(o => !(o.bunk === bunk && o.startMin === originalStart && o.endMin === originalEnd && o.layerType === layerType));
+          list.push({
+            id: uid(), bunk,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd),
+            originalStartMin: originalStart, originalEndMin: originalEnd,
+            layerType, overrideMode: 'resize',
+            activity: '⇕ resized', location: null, type: 'resize'
+          });
+        }
+        _boSaveOverrides(list);
+        renderBunkOverridesUI();
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  });
+
+  // ★ Day 24: palette drag → drop a new bunk-only layer onto a bunk column.
+  //   Reads `text/daw-layer` (set by the DA palette tiles in `tile.dragstart`)
+  //   and writes an overrideMode:'addLayer' override at the drop time slot.
+  wrap.querySelectorAll('.ms-daw-grade-col[data-bunk]').forEach(col => {
+    col.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types?.includes('text/daw-layer')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      col.style.outline = '2px dashed #f59e0b';
+    });
+    col.addEventListener('dragleave', () => { col.style.outline = ''; });
+    col.addEventListener('drop', (e) => {
+      col.style.outline = '';
+      const layerType = e.dataTransfer.getData('text/daw-layer');
+      if (!layerType) return;
+      e.preventDefault();
+      // Find the track within this column and convert clientY → minutes
+      const track = col.querySelector('.ms-daw-track');
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const rect = track.getBoundingClientRect();
+      const yOffset = e.clientY - rect.top;
+      const dropMin = (yOffset / PX) + (parseInt(track.dataset.earliest || '0') || 0);
+      // Default new layer to 40-min window starting at drop point, snapped to 5
+      const SNAP = 5;
+      const startMin = Math.max(0, Math.round(dropMin / SNAP) * SNAP);
+      const endMin = startMin + 40;
+      const bunk = col.dataset.bunk;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list.push({
+        id: uid(), bunk,
+        startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType, overrideMode: 'addLayer',
+        activity: '+ added layer', location: null, type: 'addLayer'
+      });
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    });
   });
 
   // Revert buttons on overrides
