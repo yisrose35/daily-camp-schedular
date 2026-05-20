@@ -4984,55 +4984,60 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
   };
 
-  // Each bunk column shows the SAME band layout as the master scheduler grade column:
-  // N narrow vertical bands (BAND_WIDTH px each), one per layer, positioned by time.
+  // Each bunk column mirrors the master scheduler grade column EXACTLY —
+  // reuse the ms-daw-* CSS classes so the bands look pixel-identical.
   const BAND_WIDTH = (typeof window.DAW_BAND_WIDTH === 'number') ? window.DAW_BAND_WIDTH : 40;
   const BAND_GAP   = 4;
   const BAND_PAD   = 4;
+  const GRADE_COL_MIN = 120;
   const layerCount = Math.max(1, layers.length);
-  const colWidth   = layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2;
+  const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-  let html = `<div class="bo-auto-grid" style="display:flex;gap:6px;margin-top:12px;overflow-x:auto;padding-bottom:8px;">`;
+  // Outer wrap with horizontal scroll
+  let html = `<div class="bo-auto-scroll" style="overflow-x:auto;overflow-y:visible;max-width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
 
-  // Time ruler column (fixed left)
-  html += `<div style="flex:0 0 70px;">`;
-  html += `<div style="height:34px;"></div>`; // header spacer
-  html += `<div style="position:relative;height:${totalHeight}px;">`;
+  // Time ruler column (sticky left)
+  html += `<div class="ms-daw-ruler-col">`;
+  html += `<div class="ms-daw-ruler-header-spacer"></div>`;
+  html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += incMins) {
     const top = (m - earliestMin) * PX;
-    html += `<div style="position:absolute;top:${top}px;font-size:10px;color:#64748b;padding-left:4px;">${minutesToTime(m)}</div>`;
+    const major = (m - earliestMin) % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${major ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
   }
   html += `</div></div>`;
 
-  // Bunk columns — each rendered exactly like a grade column in renderDAWGrid
+  // Bunk columns — one per bunk, styled like a grade column
   bunks.forEach(bunk => {
     const bunkOverrides = overrides.filter(o => o.bunk === bunk);
     const badge = bunkOverrides.length > 0
-      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>`
+      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;">${bunkOverrides.length}</span>`
       : '';
 
-    html += `<div class="bo-auto-bunk-col" data-bunk="${_escHtml(bunk)}" style="flex:0 0 ${colWidth}px;">`;
-    // Bunk header
-    html += `<div style="height:34px;background:${color};color:#fff;font-size:11px;font-weight:600;padding:8px 6px;text-align:center;border-radius:6px 6px 0 0;">${_escHtml(bunk)}${badge}</div>`;
+    html += `<div class="ms-daw-grade-col" data-bunk="${_escHtml(bunk)}" style="width:${colWidth}px;">`;
+    // Bunk header (re-uses .ms-daw-grade-header look but coloured by division)
+    html += `<div class="ms-daw-grade-header">
+      <span class="ms-daw-grade-tag" style="background:${color};">${_escHtml(bunk)}${badge}</span>
+    </div>`;
     // Bunk track
-    html += `<div class="bo-auto-track" style="position:relative;height:${totalHeight}px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 6px 6px;">`;
+    html += `<div class="ms-daw-track" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
-    // Horizontal gridlines (every 30 min)
+    // Horizontal gridlines (30-min increments)
     for (let m = earliestMin; m < latestMin; m += incMins) {
       const top = (m - earliestMin) * PX;
-      html += `<div style="position:absolute;left:0;right:0;top:${top}px;border-top:1px dashed #e2e8f0;"></div>`;
+      const cls = (m - earliestMin) % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
     }
 
-    // Narrow vertical bands — one per layer
+    // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
     layers.forEach((layer, idx) => {
       const sm = layer.startMin, em = layer.endMin;
       if (sm == null || em == null || em <= sm) return;
       const top = (sm - earliestMin) * PX;
-      const height = Math.max((em - sm) * PX - 2, 24);
+      const height = (em - sm) * PX;
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
-      // Auto-mode: multiple layers share the same time window, so require a
-      // strict layerType match so each band shows its own override state.
       const _ltKey = (layer.type || 'custom');
       const override = overrides.find(o =>
         o.bunk === bunk && o.startMin === sm && o.endMin === em
@@ -5045,23 +5050,23 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const durLabel = _dMin && _dMax && _dMin !== _dMax
         ? `${_dMin}-${_dMax}m`
         : `${_dMin || layer.periodMin || (em - sm)}m`;
+      const evName = _typeLabel(layer);
 
       if (override) {
-        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        html += `<div class="bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(layer.type || 'custom')}" data-ov-id="${_escHtml(override.id)}"
+        // Override bands get a distinct amber treatment but keep the band shape
+        html += `<div class="ms-daw-band bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}"
           title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit"
-          style="${oStyle}position:absolute;top:${top}px;left:${left}px;width:${BAND_WIDTH}px;height:${height}px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;font-size:9px;line-height:1.1;overflow:hidden;padding:2px;">
-          <div style="font-weight:700;">${_escHtml(override.activity)}</div>
-          <div style="position:absolute;top:2px;right:3px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert">✕</div>
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;">
+          <span class="band-label">${_escHtml(override.activity)}</span>
+          <span class="band-qty">override</span>
+          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;color:#7c2d12;font-weight:700;">✕</div>
         </div>`;
       } else {
-        const bg = TYPE_BG[String(layer.type || 'custom').toLowerCase()] || '#e2e8f0';
-        const evName = _typeLabel(layer);
-        html += `<div class="bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(layer.type || 'custom')}"
+        html += `<div class="ms-daw-band bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
           title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
-          style="background:${bg};color:#1e293b;border:1px solid rgba(0,0,0,0.12);position:absolute;top:${top}px;left:${left}px;width:${BAND_WIDTH}px;height:${height}px;border-radius:6px;cursor:pointer;display:flex;flex-direction:column;justify-content:center;align-items:center;text-align:center;font-size:9px;line-height:1.15;overflow:hidden;padding:2px;">
-          <div style="font-weight:600;">${_escHtml(evName)}</div>
-          <div style="font-size:8px;opacity:0.7;">${opSymbol}${layer.qty || 1} · ${durLabel}</div>
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+          <span class="band-label">${_escHtml(evName)}</span>
+          <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
         </div>`;
       }
     });
@@ -5069,7 +5074,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     html += `</div></div>`; // /track /col
   });
 
-  html += '</div>';
+  html += '</div></div>'; // /columns-wrap /scroll
   wrap.innerHTML = html;
 
   // Attach click handlers on blocks
