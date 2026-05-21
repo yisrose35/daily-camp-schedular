@@ -150,6 +150,27 @@ var PRINT_PACKS = [
         selection: 'all'
     },
     {
+        id: 'week-stack',
+        name: 'Week Pack (7 days)',
+        tagline: 'Print Mon–Sun stacked. One page per day.',
+        icon: 'grid',
+        preset: 'classic',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false },
+        selection: 'all',
+        afterApply: function () { try { window._pc3PrintWeekStack && window._pc3PrintWeekStack(); } catch (e) { console.warn('week-stack failed', e); } }
+    },
+    {
+        id: 'week-glance',
+        name: 'Week At-A-Glance',
+        tagline: 'One landscape page — every bunk, all 7 days.',
+        icon: 'grid',
+        preset: 'classic',
+        view: 'week',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: true, orientation: 'landscape', pageBreakPerBunk: false },
+        selection: 'all'
+    },
+    {
         id: 'front-desk',
         name: 'Front Desk Pack',
         tagline: 'Big, scannable, all bunks on one wall.',
@@ -275,6 +296,14 @@ var _sidebarCollapsed = false; // collapsible left sidebar for max preview width
 var _highlightGaps = false;    // visually flag Free cells (coverage gaps overlay)
 var _colorByCategory = false;  // tint cells by category (league/special/general/free)
 var _quickFilter = 'all';      // 'all' | 'leagues' | 'specials' | 'general' | 'free' — dim non-matching cells
+
+// Week View — at-a-glance Mon-Sun grid pulling from cloud.
+//   _weekData: { [dateKey]: { scheduleAssignments, leagueAssignments } | null }
+//   _weekAnchor: the Monday (date key) of the week being shown
+//   _weekLoading: true while async fetch in progress
+var _weekData = {};
+var _weekAnchor = null;
+var _weekLoading = false;
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // Excel-style cell selection state
@@ -331,6 +360,94 @@ function colLetter(c) {
     return s;
 }
 function cellId(r, c) { return colLetter(c) + (r + 1); }
+
+// ── Week View helpers ──────────────────────────────────────────────────
+// Build the 7 dateKeys (Mon-Sun) of the week containing the given date.
+function getWeekDateKeys(anchorDateStr) {
+    if (!anchorDateStr) return [];
+    var d = new Date(anchorDateStr + 'T12:00:00');
+    if (isNaN(d.getTime())) return [];
+    // Roll back to Monday (Mon=1..Sun=0 in JS; we want week to start Monday)
+    var dow = d.getDay();
+    var offsetToMon = (dow === 0) ? -6 : (1 - dow);
+    d.setDate(d.getDate() + offsetToMon);
+    var keys = [];
+    for (var i = 0; i < 7; i++) {
+        var dd = new Date(d.getTime());
+        dd.setDate(d.getDate() + i);
+        var yyyy = dd.getFullYear();
+        var mm = String(dd.getMonth() + 1).padStart(2, '0');
+        var dy = String(dd.getDate()).padStart(2, '0');
+        keys.push(yyyy + '-' + mm + '-' + dy);
+    }
+    return keys;
+}
+function formatWeekDayLabel(dateStr) {
+    if (!dateStr) return '';
+    try {
+        var d = new Date(dateStr + 'T12:00:00');
+        return d.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+    } catch (e) { return dateStr; }
+}
+// Kick off async fetch of all 7 days for the current week, then refresh.
+// Uses window.ScheduleDB.loadSchedule under the hood (cloud-or-local).
+function ensureWeekDataLoaded(force) {
+    var anchor = window.currentScheduleDate;
+    if (!anchor) return;
+    var keys = getWeekDateKeys(anchor);
+    if (!keys.length) return;
+    var weekId = keys[0];
+    if (!force && _weekAnchor === weekId && Object.keys(_weekData).length === 7) return;
+    _weekAnchor = weekId;
+    _weekData = {};
+    _weekLoading = true;
+    if (!window.ScheduleDB || typeof window.ScheduleDB.loadSchedule !== 'function') {
+        // No cloud API available — at least show today's data in its slot
+        keys.forEach(function (k) {
+            _weekData[k] = (k === anchor) ? { scheduleAssignments: window.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || {} } : null;
+        });
+        _weekLoading = false;
+        if (_activeView === 'week') liveRefresh();
+        return;
+    }
+    var remaining = keys.length;
+    keys.forEach(function (k) {
+        // For the currently-loaded date, use in-memory data directly to avoid an async hop.
+        if (k === anchor) {
+            _weekData[k] = { scheduleAssignments: window.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || {} };
+            remaining--;
+            if (remaining === 0) { _weekLoading = false; if (_activeView === 'week') liveRefresh(); }
+            return;
+        }
+        try {
+            window.ScheduleDB.loadSchedule(k).then(function (res) {
+                _weekData[k] = (res && res.success && res.data) ? res.data : null;
+            }).catch(function () { _weekData[k] = null; }).finally(function () {
+                remaining--;
+                if (remaining === 0) { _weekLoading = false; if (_activeView === 'week') liveRefresh(); }
+            });
+        } catch (e) {
+            _weekData[k] = null;
+            remaining--;
+            if (remaining === 0) { _weekLoading = false; if (_activeView === 'week') liveRefresh(); }
+        }
+    });
+}
+// Summarize a bunk's day as a short list of activity labels.
+function summarizeBunkDay(scheduleAssignments, bunk) {
+    if (!scheduleAssignments || !scheduleAssignments[bunk]) return [];
+    var labels = [];
+    var seen = {};
+    (scheduleAssignments[bunk] || []).forEach(function (entry) {
+        if (!entry || entry.continuation) return;
+        var act = entry.activity || (entry._activity && entry._activity.name) || '';
+        if (!act || act === 'Free' || act === 'Transition' || act === 'Change' || act === 'Cleanup' || act === 'Lineup') return;
+        if (seen[act]) return;
+        seen[act] = 1;
+        labels.push(act);
+    });
+    return labels;
+}
 
 // =========================================================================
 // DATA HELPERS
@@ -1253,6 +1370,7 @@ function buildMainUI() {
             '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
             '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
             '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Locations</button>' +
+            '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon–Sun at-a-glance">Week</button>' +
         '</div>' +
         '<div class="pc3-tab-actions">' +
             '<div class="pc3-popover-wrap">' +
@@ -1538,6 +1656,20 @@ function populateSidebar() {
             if (!bunks.length) return;
             var grp = { name: d, items: [] };
             bunks.forEach(function (b) { grp.items.push({ id: b, label: b }); });
+            groups.push(grp);
+        });
+    } else if (_activeView === 'week') {
+        if (titleEl) titleEl.textContent = 'Bunks (Week)';
+        if (searchEl) searchEl.placeholder = 'Search bunks…';
+        var availableW = getAvailableDivisions();
+        availableW = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(availableW)
+            : availableW.slice().sort(naturalSort);
+        availableW.forEach(function (d) {
+            var bunksW = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
+            if (!bunksW.length) return;
+            var grp = { name: d, items: [] };
+            bunksW.forEach(function (b) { grp.items.push({ id: b, label: b }); });
             groups.push(grp);
         });
     } else if (_activeView === 'location') {
@@ -2230,6 +2362,84 @@ function renderBunkSheet(bunk) {
 }
 
 // ── Location View ──
+// ── Week At-A-Glance ──────────────────────────────────────────────────
+// Rows = selected bunks, Cols = Mon-Sun (or 7-day window from currentDate).
+// Each cell shows the bunk's distinct activity titles for that day.
+// Designed to print on a single landscape sheet (parent fridge / staff wall).
+function renderWeekSheet(selectedBunks) {
+    var t = _currentTemplate;
+    var keys = getWeekDateKeys(window.currentScheduleDate);
+    if (!keys.length) {
+        return '<div class="pc3-sheet" style="padding:24px;color:#78716c;">Pick a date first to see the week at a glance.</div>';
+    }
+    var divs = getDivisions();
+    // Map bunk -> division so we can label/group
+    var bunkToDiv = {};
+    Object.keys(divs).forEach(function (d) {
+        ((divs[d] && divs[d].bunks) ? divs[d].bunks : []).forEach(function (b) { bunkToDiv[b] = d; });
+    });
+    // Filter selection to only bunks that exist
+    var bunks = (selectedBunks || []).filter(function (b) { return bunkToDiv[b]; });
+    if (!bunks.length) bunks = Object.keys(bunkToDiv);
+
+    var html = '<div class="pc3-sheet"><div class="pc3-sheet-head" style="background:' + t.headerBgColor + ';color:' + t.headerTextColor + ';padding:10px 14px;">';
+    html += '<span class="pc3-sheet-title" style="font-size:' + t.headerFontSize + 'px;font-weight:700;">Week at a Glance</span>';
+    html += '<span class="pc3-sheet-subtitle" style="float:right;font-size:12px;opacity:.85;">' + formatWeekDayLabel(keys[0]) + ' – ' + formatWeekDayLabel(keys[6]) + '</span>';
+    html += '</div>';
+
+    if (_weekLoading) {
+        html += '<div style="padding:24px;color:#78716c;font-size:13px;">Loading week from cloud…</div>';
+    }
+
+    html += '<div class="pc3-sheet-table-wrap"><table class="pc3-tbl" style="font-size:' + t.gridFontSize + 'px;">';
+    // Header row
+    html += '<thead><tr>';
+    html += '<th style="background:' + t.gridHeaderBgColor + ';color:' + t.gridHeaderTextColor + ';padding:6px 8px;min-width:120px;">Bunk</th>';
+    keys.forEach(function (k) {
+        var isToday = (k === window.currentScheduleDate);
+        html += '<th style="background:' + t.gridHeaderBgColor + ';color:' + t.gridHeaderTextColor + ';padding:6px 8px;text-align:center;' + (isToday ? 'box-shadow:inset 0 -3px 0 #147D91;' : '') + '">' + formatWeekDayLabel(k) + '</th>';
+    });
+    html += '</tr></thead><tbody>';
+
+    // Group rows by division for readability
+    var byDiv = {};
+    bunks.forEach(function (b) { var d = bunkToDiv[b] || ''; if (!byDiv[d]) byDiv[d] = []; byDiv[d].push(b); });
+    var divOrder = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(Object.keys(byDiv))
+        : Object.keys(byDiv);
+    var rowR = 0;
+    divOrder.forEach(function (d) {
+        if (!byDiv[d]) return;
+        // Division separator row
+        html += '<tr><td colspan="' + (keys.length + 1) + '" style="background:' + t.gridRowAltColor + ';color:' + t.timeColTextColor + ';font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;padding:4px 8px;border-top:1px solid ' + t.gridBorderColor + ';">' + escHtml(d) + '</td></tr>';
+        byDiv[d].forEach(function (b) {
+            var altBg = (rowR % 2 === 0) ? t.gridRowColor : t.gridRowAltColor;
+            html += '<tr data-r="' + rowR + '">';
+            html += '<th style="background:' + t.timeColBgColor + ';color:' + t.timeColTextColor + ';font-weight:' + (t.timeColBold ? '700' : '500') + ';padding:5px 8px;text-align:left;">' + escHtml(b) + '</th>';
+            keys.forEach(function (k, ci) {
+                var day = _weekData[k];
+                var bg = altBg;
+                if (!day) {
+                    html += '<td data-r="' + rowR + '" data-c="' + (ci + 1) + '" style="background:' + bg + ';color:#a8a29e;font-style:italic;font-size:10px;padding:5px 8px;vertical-align:top;">' + (_weekLoading ? '…' : '—') + '</td>';
+                    return;
+                }
+                var labels = summarizeBunkDay(day.scheduleAssignments || {}, b);
+                if (!labels.length) {
+                    html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (ci + 1) + '" style="background:' + t.freeBgColor + ';color:' + t.freeTextColor + ';text-align:center;padding:5px 8px;">—</td>';
+                    return;
+                }
+                var inner = labels.slice(0, 8).map(function (a) { return '<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:140px;">' + escHtml(a) + '</div>'; }).join('');
+                if (labels.length > 8) inner += '<div style="font-size:9px;color:#94a3b8;">+' + (labels.length - 8) + ' more</div>';
+                html += '<td class="cell-general" data-r="' + rowR + '" data-c="' + (ci + 1) + '" style="background:' + bg + ';padding:4px 6px;vertical-align:top;">' + inner + '</td>';
+            });
+            html += '</tr>';
+            rowR++;
+        });
+    });
+    html += '</tbody></table></div></div>';
+    return html;
+}
+
 function renderLocationSheet(loc) {
     var t = _currentTemplate;
     var divs = getDivisions();
@@ -2653,6 +2863,8 @@ function liveRefresh() {
         sel.forEach(function (b) { html += renderBunkSheet(b); });
     } else if (_activeView === 'location') {
         sel.forEach(function (l) { html += renderLocationSheet(l); });
+    } else if (_activeView === 'week') {
+        html += renderWeekSheet(sel);
     }
 
     pc.innerHTML = html;
@@ -3489,6 +3701,10 @@ function buildPrintHTML(sel) {
         if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/class="pc3-sheet-head"[^>]*>.*?<\/div>/s, ''); }
         else if (_activeView === 'bunk') { html += renderBunkSheet(item); }
         else if (_activeView === 'location') { html += renderLocationSheet(item); }
+        else if (_activeView === 'week') {
+            // Week view ignores per-item iteration — render the whole grid once on the first pass.
+            if (idx === 0) html += renderWeekSheet(sel);
+        }
 
         // Footer
         if (t.footerEnabled && t.footerText) {
@@ -3812,6 +4028,8 @@ function bindAll() {
             _activeView = this.getAttribute('data-view');
             document.querySelectorAll('[data-view]').forEach(function (b) { b.classList.remove('active'); });
             this.classList.add('active');
+            // Week view needs 7 days of cloud data — kick off async fetch
+            if (_activeView === 'week') ensureWeekDataLoaded(false);
             populateSidebar();
             liveRefresh();
         });
@@ -4352,6 +4570,7 @@ window._pc3ApplyPack = function (packId) {
         document.querySelectorAll('[data-view]').forEach(function (b) {
             b.classList.toggle('active', b.getAttribute('data-view') === pack.view);
         });
+        if (_activeView === 'week') ensureWeekDataLoaded(false);
         populateSidebar();
     }
     // 4. Apply selection
@@ -4469,6 +4688,71 @@ window._pc3Quickpick = function (kind) {
     liveRefresh();
 };
 window._pc3Print = triggerPrint;
+
+// Week-stack print: pull all 7 days, swap the in-memory globals for each
+// day in turn, build the same print HTML the user would see for that day,
+// concatenate with page breaks, then restore globals and print.
+// This lets us reuse the entire single-day rendering pipeline without
+// duplicating any logic. Async (cloud fetch) — shows an alert if nothing
+// to print, and is best-effort if any individual day fails to load.
+window._pc3PrintWeekStack = function () {
+    var keys = getWeekDateKeys(window.currentScheduleDate);
+    if (!keys.length) { alert('Pick a date first.'); return; }
+    // Force a fresh fetch so user always gets latest cloud state.
+    ensureWeekDataLoaded(true);
+    // Wait until _weekLoading clears, then build & print.
+    var maxWait = 100; // 10s @ 100ms
+    var iv = setInterval(function () {
+        if (!_weekLoading || --maxWait <= 0) {
+            clearInterval(iv);
+            doWeekStackPrint(keys);
+        }
+    }, 100);
+};
+function doWeekStackPrint(keys) {
+    var sel = getSelectedItems();
+    if (!sel.length) { alert('Select at least one division/bunk to print.'); return; }
+    var t = _currentTemplate;
+    readDesignValues();
+    var origSched = window.scheduleAssignments;
+    var origLeagues = window.leagueAssignments;
+    var origDate = window.currentScheduleDate;
+    var combinedHtml = '';
+    try {
+        keys.forEach(function (k, dayIdx) {
+            var day = _weekData[k];
+            // Even if no data, render an empty "no schedule" page so the week is complete
+            window.scheduleAssignments = (day && day.scheduleAssignments) || {};
+            window.leagueAssignments = (day && day.leagueAssignments) || {};
+            window.currentScheduleDate = k;
+            var dayHtml = buildPrintHTML(sel);
+            // Force a page break before each day after the first
+            if (dayIdx > 0) {
+                combinedHtml += '<div style="page-break-before:always;"></div>';
+            }
+            combinedHtml += '<div data-week-day="' + k + '">' + dayHtml + '</div>';
+        });
+    } finally {
+        window.scheduleAssignments = origSched;
+        window.leagueAssignments = origLeagues;
+        window.currentScheduleDate = origDate;
+    }
+
+    var printArea = el('printable-area');
+    if (printArea) { printArea.innerHTML = combinedHtml; printArea.style.display = 'block'; }
+    var style = document.createElement('style');
+    style.id = 'pc3-print-style';
+    style.textContent = '@page{size:' + t.paperSize + ' ' + t.orientation + ';margin:0.4in;}' +
+        '@media print{body>*:not(#printable-area){display:none!important;}#printable-area{display:block!important;}}';
+    document.head.appendChild(style);
+    setTimeout(function () {
+        window.print();
+        setTimeout(function () {
+            if (printArea) { printArea.innerHTML = ''; printArea.style.display = 'none'; }
+            var ps = document.getElementById('pc3-print-style'); if (ps) ps.remove();
+        }, 500);
+    }, 200);
+}
 window._pc3ExportExcel = exportExcel;
 window._pc3OpenLive = openLiveWindow;
 window._pc3RunLiveStandalone = runLiveStandalone;
