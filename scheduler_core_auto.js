@@ -12878,6 +12878,31 @@
             {
                 let preplacedCount = 0;
                 let preplacedByGrade = {};
+                // ★ Day 22.5: Cross-bunk specials density tracker.
+                //   When many specials land at the same time slot across different
+                //   bunks, they collectively lock up field availability at that
+                //   time slot. Phase 3 sport placement then has very few fields
+                //   to choose from for ANY bunk with a sport gap at that time —
+                //   especially small bunks (Minors 1) whose gap times happen to
+                //   coincide with high-density special slots, resulting in
+                //   cross-day rotation lock-in (same 3 sports daily).
+                //   Track density per 30-min bucket. Each special placement
+                //   increments the count for each overlapped bucket. Penalize
+                //   candidate positions during scoring so specials redistribute
+                //   timewise. Range: -75 per existing special at bucket.
+                var _p25DensityBuckets = {};
+                function _p25BumpDensity(sM, eM) {
+                    for (var _bt = Math.floor(sM / 30) * 30; _bt < eM; _bt += 30) {
+                        _p25DensityBuckets[_bt] = (_p25DensityBuckets[_bt] || 0) + 1;
+                    }
+                }
+                function _p25DensityAt(sM, eM) {
+                    var max = 0;
+                    for (var _bt = Math.floor(sM / 30) * 30; _bt < eM; _bt += 30) {
+                        if ((_p25DensityBuckets[_bt] || 0) > max) max = _p25DensityBuckets[_bt];
+                    }
+                    return max;
+                }
 
                 // Helper: compute gaps between walls
                 function spComputeGaps(walls, gs, ge) {
@@ -13314,6 +13339,18 @@
                                 if (leftGap === 0 || rightGap === 0) score += 100;
                                 if (leftGap === 0 && rightGap === 0) score += 50; // perfect fit
 
+                                // ★ Day 22.5: Time-density penalty.
+                                //   When many specials cluster at the same time, they
+                                //   collectively saturate field availability — leaving
+                                //   small bunks with very few sport options at those
+                                //   times. Penalize positions where many specials are
+                                //   already placed at this time bucket. Encourages
+                                //   timewise redistribution. Magnitude (-75 per existing
+                                //   special) chosen to outweigh +100 wall-align but not
+                                //   override -2500 dead-gap.
+                                var _p25Density = _p25DensityAt(pos, pos + specialDur);
+                                if (_p25Density > 0) score -= _p25Density * 75;
+
                                 // Balance: prefer even gap distribution
                                 if (gapSizes.length >= 2) {
                                     var totalGap = 0;
@@ -13539,6 +13576,8 @@
                         }
 
                         ensureTimelineIntegrity(bunk);
+                        // ★ Day 22.5: bump density so next special prefers a different time slot
+                        _p25BumpDensity(bestStart, bestEnd);
                         preplacedCount++;
                         preplacedByGrade[grade]++;
                         } // ← end for(_sIdx) — multi-special placement loop (★ FIX)
