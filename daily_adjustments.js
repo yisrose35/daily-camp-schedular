@@ -638,6 +638,52 @@ function daShowCopyAutoGradeModal(autoLayers, onApply) {
     var divisionsObj = window.divisions || {};
     // Build a new copy of autoLayers to return
     var updated = JSON.parse(JSON.stringify(autoLayers || {}));
+
+    // ★ ALSO propagate / clear Bell Schedule periods. Bell Schedule is stored
+    //   in globalSettings.app1.autoLayerTemplatePeriods[templateKey][grade].
+    //   Bug discovered during Auto Test walkthrough: a stray Bell Schedule
+    //   click against ONE grade (e.g. Intermediates Period 1 = 9:00-9:40am)
+    //   constrained that grade to a 40-min window forever, producing
+    //   slack=-60min and only 3 slots vs 10 for other grades. Copy Layers
+    //   didn't touch periods, so the constraint survived every "fix".
+    //   Now: target grades inherit the SOURCE grade's periods (or get
+    //   periods cleared if source has none). This makes Copy Grade
+    //   actually idempotent.
+    var _periodsChanged = false;
+    try {
+      var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+      var app1 = gs.app1 || {};
+      var periodStore = app1.autoLayerTemplatePeriods || {};
+      // Mirror periods in _current AND in each named template that already
+      // exists, so loading any template doesn't re-introduce a stale period.
+      Object.keys(periodStore).forEach(function(templateKey) {
+        var perGrade = periodStore[templateKey] || {};
+        var sourcePeriods = perGrade[sourceDiv] || [];
+        targets.forEach(function(targetDiv) {
+          if (sourcePeriods.length === 0) {
+            // Source has no bell schedule → clear target's
+            if (perGrade[targetDiv]) {
+              delete perGrade[targetDiv];
+              _periodsChanged = true;
+            }
+          } else {
+            // Source has periods → deep-clone with fresh IDs
+            perGrade[targetDiv] = sourcePeriods.map(function(p) {
+              return Object.assign({}, JSON.parse(JSON.stringify(p)), {
+                id: 'bp_' + Math.random().toString(36).slice(2, 10)
+              });
+            });
+            _periodsChanged = true;
+          }
+        });
+      });
+      if (_periodsChanged) {
+        app1.autoLayerTemplatePeriods = periodStore;
+        window.saveGlobalSettings && window.saveGlobalSettings('app1', app1);
+        window.forceSyncToCloud && window.forceSyncToCloud();
+      }
+    } catch (_ePeriods) { /* non-fatal — layer copy still succeeds */ }
+
     targets.forEach(function(targetDiv) {
       var targetMeta = divisionsObj[targetDiv] || {};
       var tStart = (typeof window.parseTimeToMinutes === 'function' && targetMeta.startTime) ? window.parseTimeToMinutes(targetMeta.startTime) : 540;

@@ -3134,6 +3134,43 @@ async function dawCopyLayersDialog() {
   const source = dawLayers[result.from] || [];
   let copied = 0;
   let replaced = 0;  // ★ count of target grades whose pre-existing layers were replaced
+
+  // ★ ALSO propagate / clear Bell Schedule periods so a stray Period 1 on
+  //   the target (e.g. left over from earlier UI exploration) can't keep
+  //   constraining the slot grid after Copy. Source periods inherit;
+  //   target periods clear if source has none. Same fix added to the
+  //   Daily Adjustments auto-mode variant.
+  try {
+    const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+    const app1 = gs.app1 || {};
+    const periodStore = app1.autoLayerTemplatePeriods || {};
+    let pChanged = false;
+    Object.keys(periodStore).forEach(templateKey => {
+      const perGrade = periodStore[templateKey] || {};
+      const sourcePeriods = perGrade[result.from] || [];
+      result.to.forEach(targetGrade => {
+        if (targetGrade === result.from) return;
+        if (sourcePeriods.length === 0) {
+          if (perGrade[targetGrade]) {
+            delete perGrade[targetGrade];
+            pChanged = true;
+          }
+        } else {
+          perGrade[targetGrade] = sourcePeriods.map(p => Object.assign(
+            {}, JSON.parse(JSON.stringify(p)),
+            { id: 'bp_' + Math.random().toString(36).slice(2, 10) }
+          ));
+          pChanged = true;
+        }
+      });
+    });
+    if (pChanged) {
+      app1.autoLayerTemplatePeriods = periodStore;
+      window.saveGlobalSettings && window.saveGlobalSettings('app1', app1);
+      window.forceSyncToCloud && window.forceSyncToCloud();
+    }
+  } catch (_ePeriods) { /* non-fatal */ }
+
   result.to.forEach(targetGrade => {
     if (targetGrade === result.from) return;
     // Clone layers with new IDs, adjusting to target division times
