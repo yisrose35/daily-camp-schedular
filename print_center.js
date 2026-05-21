@@ -1662,13 +1662,27 @@ function renderAutoDivisionTable(divName, bunks) {
     var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'swim_elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
     var activityRanges = []; // [ { startMin, endMin } ]
 
-    // ★ Day 22.5+: distinguish REAL bell-schedule periods (Method 1) from
-    //   auto-derived activity ranges (Methods 2/2b). The period header bar
-    //   should ONLY render for true bell schedules — auto-derived ranges
-    //   are noise.
+    // ★ Day 22.5+: hasRealBellSchedule means the camp actually defined
+    //   numbered Bell Schedule periods (via the Bell Schedule editor).
+    //   That's the ONLY case where the period header bar should render.
+    //   DAW layer templates (Sport/Special/Swim/Lunch) are scheduling
+    //   intent, NOT periods — they should NOT trigger the period band.
     var hasRealBellSchedule = false;
-    // Method 1: Read from DAW layer templates (bell schedule) — authoritative
-    var bellLayers = getBellScheduleLayers(divName);
+    try {
+        var _cp = window.campPeriods && window.campPeriods[divName];
+        if (Array.isArray(_cp) && _cp.length > 0) {
+            hasRealBellSchedule = true;
+            _cp.forEach(function (p) {
+                if (p && typeof p.startMin === 'number' && typeof p.endMin === 'number') {
+                    activityRanges.push({ startMin: p.startMin, endMin: p.endMin, name: p.name || null });
+                }
+            });
+        }
+    } catch (_e) { /* ignore */ }
+    // Method 1 (legacy): DAW layer templates — used ONLY for column-
+    // grouping inference when no real Bell Schedule exists. Does NOT
+    // set hasRealBellSchedule.
+    var bellLayers = !hasRealBellSchedule ? getBellScheduleLayers(divName) : null;
     if (bellLayers && bellLayers.length > 0) {
         bellLayers.forEach(function (layer) {
             var lt = (layer.type || '').toLowerCase();
@@ -1676,7 +1690,6 @@ function renderAutoDivisionTable(divName, bunks) {
                 activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin, name: layer.name || layer.label || null });
             }
         });
-        if (activityRanges.length > 0) hasRealBellSchedule = true;
         // Sort and merge overlapping ranges
         activityRanges.sort(function (a, b) { return a.startMin - b.startMin; });
         var mergedRanges = [];
