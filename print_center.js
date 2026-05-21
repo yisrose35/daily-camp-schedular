@@ -3782,27 +3782,136 @@ function buildPrintHTML(sel) {
     return html;
 }
 
+// Load xlsx-js-style on demand so we can ship styled Excel files (bold
+// headers, colored bands, freeze panes). Falls back silently to vanilla
+// XLSX if the CDN is unreachable — export still works, just plain.
+function loadStyledXLSX() {
+    return new Promise(function (resolve) {
+        if (window._xlsxStyleAttempted) return resolve();
+        window._xlsxStyleAttempted = true;
+        if (window.XLSX && window.XLSX._campistry_styled) return resolve();
+        var s = document.createElement('script');
+        s.src = 'https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.bundle.js';
+        s.onload = function () { if (window.XLSX) window.XLSX._campistry_styled = true; resolve(); };
+        s.onerror = function () { resolve(); };
+        document.head.appendChild(s);
+    });
+}
+
+// Build a workbook that LOOKS like a real schedule — column widths sized
+// by content, title row merged, frozen header + time column, banded rows,
+// styled headers (when xlsx-js-style is loaded).
+function buildPolishedWorkbook(sel) {
+    var wb = XLSX.utils.book_new();
+    var styled = !!(window.XLSX && window.XLSX._campistry_styled);
+    var dateStr = window.currentScheduleDate || '';
+
+    var STY = {
+        title:    { font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '147D91' } }, alignment: { vertical: 'center', horizontal: 'left' } },
+        header:   { font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '0F6E80' } }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true }, border: { bottom: { style: 'medium', color: { rgb: '0A5566' } } } },
+        timeCol:  { font: { bold: true, sz: 10, color: { rgb: '1C1917' } }, fill: { fgColor: { rgb: 'FAFAF9' } }, alignment: { vertical: 'center', horizontal: 'center' } },
+        cell:     { font: { sz: 10, color: { rgb: '1C1917' } }, alignment: { vertical: 'center', wrapText: true } },
+        cellAlt:  { font: { sz: 10, color: { rgb: '1C1917' } }, fill: { fgColor: { rgb: 'F8FAFC' } }, alignment: { vertical: 'center', wrapText: true } },
+        league:   { font: { bold: true, sz: 10, color: { rgb: '1E3A8A' } }, fill: { fgColor: { rgb: 'DBEAFE' } }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true } },
+        free:     { font: { sz: 10, italic: true, color: { rgb: '94A3B8' } }, alignment: { vertical: 'center', horizontal: 'center' } }
+    };
+
+    sel.forEach(function (item) {
+        var rows = buildExcelRows(item);
+        if (!rows.length) return;
+
+        // Find the column-header row (where first cell is 'Time')
+        var headerRowIdx = -1;
+        for (var ri = 0; ri < rows.length; ri++) {
+            if (rows[ri] && rows[ri][0] === 'Time') { headerRowIdx = ri; break; }
+        }
+        var ws = XLSX.utils.aoa_to_sheet(rows);
+        var numCols = 0;
+        rows.forEach(function (r) { if (r && r.length > numCols) numCols = r.length; });
+
+        // Column widths — Time col 14, every data col ~22 chars
+        var cols = [];
+        for (var c = 0; c < numCols; c++) cols.push({ wch: c === 0 ? 14 : 22 });
+        ws['!cols'] = cols;
+
+        // Row heights
+        var rowsMeta = [];
+        for (var rIdx = 0; rIdx < rows.length; rIdx++) {
+            if (rIdx === 0) rowsMeta.push({ hpt: 28 });
+            else if (rIdx === headerRowIdx) rowsMeta.push({ hpt: 22 });
+            else rowsMeta.push({ hpt: 20 });
+        }
+        ws['!rows'] = rowsMeta;
+
+        // Merge title across all columns
+        ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, numCols - 1) } }];
+
+        // Freeze header + time column
+        if (headerRowIdx >= 0) {
+            ws['!views'] = [{ state: 'frozen', ySplit: headerRowIdx + 1, xSplit: 1 }];
+        }
+
+        // Styled cells (only takes effect with xlsx-js-style)
+        if (styled) {
+            var titleAddr = XLSX.utils.encode_cell({ r: 0, c: 0 });
+            if (ws[titleAddr]) ws[titleAddr].s = STY.title;
+            for (var rr = 1; rr < rows.length; rr++) {
+                var rowVals = rows[rr] || [];
+                var isHeader = (rr === headerRowIdx);
+                for (var cc = 0; cc < numCols; cc++) {
+                    var addr = XLSX.utils.encode_cell({ r: rr, c: cc });
+                    if (!ws[addr]) {
+                        ws[addr] = { t: 's', v: '' };
+                        if (ws['!ref']) {
+                            var range = XLSX.utils.decode_range(ws['!ref']);
+                            if (cc > range.e.c) range.e.c = cc;
+                            if (rr > range.e.r) range.e.r = rr;
+                            ws['!ref'] = XLSX.utils.encode_range(range);
+                        }
+                    }
+                    if (isHeader) {
+                        ws[addr].s = STY.header;
+                    } else if (cc === 0) {
+                        ws[addr].s = STY.timeCol;
+                    } else {
+                        var v = (rowVals[cc] || '').toString();
+                        if (!v) ws[addr].s = STY.free;
+                        else if (v.indexOf(' vs ') >= 0 || v.indexOf(' | ') >= 0 || /league|game/i.test(v)) ws[addr].s = STY.league;
+                        else ws[addr].s = ((rr - headerRowIdx) % 2 === 0) ? STY.cellAlt : STY.cell;
+                    }
+                }
+            }
+        }
+
+        var name = String(item).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
+        try { XLSX.utils.book_append_sheet(wb, ws, name); }
+        catch (e) { XLSX.utils.book_append_sheet(wb, ws, name + '_' + Math.random().toString(36).slice(2, 5)); }
+    });
+
+    wb.Props = {
+        Title: 'Camp Schedule — ' + (formatDisplayDate(dateStr) || dateStr),
+        Subject: 'Daily Schedule',
+        Author: _currentTemplate.campName || 'Campistry',
+        CreatedDate: new Date()
+    };
+    return wb;
+}
+
 function exportExcel() {
     var sel = getSelectedItems();
     if (!sel.length) return alert('Select at least one item to export.');
     var dateStr = window.currentScheduleDate || new Date().toISOString().split('T')[0];
     readDesignValues();
 
-    // Use SheetJS if available
     if (typeof XLSX === 'undefined') {
         var csv = buildCSV(sel);
         downloadFile(csv, 'schedule_' + dateStr + '.csv', 'text/csv');
         return;
     }
-    var wb = XLSX.utils.book_new();
-    sel.forEach(function (item) {
-        var rows = buildExcelRows(item);
-        // Sheet name max 31 chars, no special chars
-        var name = String(item).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
-        try { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name); }
-        catch (e) { XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(rows), name + '_' + Math.random().toString(36).slice(2,5)); }
+    loadStyledXLSX().then(function () {
+        var wb = buildPolishedWorkbook(sel);
+        XLSX.writeFile(wb, 'schedule_' + dateStr + '.xlsx');
     });
-    XLSX.writeFile(wb, 'schedule_' + dateStr + '.xlsx');
 }
 
 // =========================================================================
