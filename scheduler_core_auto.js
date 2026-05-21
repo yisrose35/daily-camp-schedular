@@ -17955,18 +17955,6 @@
 
         // STEP 5 — SAVE
         // =====================================================================
-        // ★ TEMP DIAGNOSTIC: dump Minors 1's full state before save
-        try {
-            const _m1 = window.scheduleAssignments?.['Minors 1'] || [];
-            const _pbsM1 = window.divisionTimes?.Minors?._perBunkSlots?.['Minors 1'] || [];
-            console.warn('[DIAG] Minors 1 BEFORE STEP 5 save:', _m1.map((s, i) => ({
-                i, sa: s ? {_activity: s._activity, field: s.field, sM: s._startMin, eM: s._endMin, src: s._source} : null,
-                pbs: _pbsM1[i] ? {event: _pbsM1[i].event, type: _pbsM1[i].type, sM: _pbsM1[i].startMin, eM: _pbsM1[i].endMin} : null
-            })));
-            // Also store on window so tests can read it
-            window._lastGenM1State = JSON.parse(JSON.stringify(_m1));
-            window._lastGenM1Pbs = JSON.parse(JSON.stringify(_pbsM1));
-        } catch (_e) {}
         saveSwimHistory();
         saveWeekHistory(bunkTimelines);
         log('\n[STEP 5] Saving...');
