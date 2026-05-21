@@ -274,6 +274,7 @@ var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
 var _sidebarCollapsed = false; // collapsible left sidebar for max preview width
 var _highlightGaps = false;    // visually flag Free cells (coverage gaps overlay)
 var _colorByCategory = false;  // tint cells by category (league/special/general/free)
+var _quickFilter = 'all';      // 'all' | 'leagues' | 'specials' | 'general' | 'free' — dim non-matching cells
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // Excel-style cell selection state
@@ -1168,6 +1169,15 @@ function getStyles() {
     '.pc3-highlight-gaps td.cell-free::after{content:" gap";font-size:8px;opacity:.7;}' +
     /* Color-by-category: subtle left border keyed by activity type (cells already carry inline bg) */
     '.pc3-color-cat td.cell-free{border-left:3px solid #94A3B8 !important;}' +
+    '.pc3-color-cat td.cell-league{border-left:3px solid #2563EB !important;}' +
+    '.pc3-color-cat td.cell-pinned{border-left:3px solid #D97706 !important;}' +
+    '.pc3-color-cat td.cell-general{border-left:3px solid #14B8A6 !important;}' +
+    /* Quick filters — dim cells that do not match the active filter so users
+       can produce focused printouts (e.g. league-only night-out plans). */
+    '.pc3-filter-leagues td:not(.cell-league):not([colspan]){opacity:.12;}' +
+    '.pc3-filter-specials td:not(.cell-pinned):not([colspan]){opacity:.12;}' +
+    '.pc3-filter-general td:not(.cell-general):not([colspan]){opacity:.12;}' +
+    '.pc3-filter-free td:not(.cell-free):not([colspan]){opacity:.12;}' +
     /* Make tables fully visible during print regardless of overflow scrolling */
     '@media print{.pc3-sheet-table-wrap{overflow:visible !important;}.pc3-tbl{page-break-inside:auto;}.pc3-tbl thead{display:table-header-group;}.pc3-tbl tr{page-break-inside:avoid;}}' +
     '</style>';
@@ -1182,7 +1192,7 @@ function buildMainUI() {
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
     return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + (_highlightGaps ? ' pc3-highlight-gaps' : '') + (_colorByCategory ? ' pc3-color-cat' : '') + '" id="pc3-root">' +
+    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + (_highlightGaps ? ' pc3-highlight-gaps' : '') + (_colorByCategory ? ' pc3-color-cat' : '') + (_quickFilter && _quickFilter !== 'all' ? ' pc3-filter-' + _quickFilter : '') + '" id="pc3-root">' +
 
     /* ── Hero header ── */
     '<div class="pc3-hero no-print">' +
@@ -1313,6 +1323,15 @@ function buildMainUI() {
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-locations"' + (_hideLocations ? ' checked' : '') + '>Hide locations &amp; sharing notes</label>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-highlight-gaps"' + (_highlightGaps ? ' checked' : '') + '>Highlight coverage gaps (Free cells)</label>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-color-cat"' + (_colorByCategory ? ' checked' : '') + '>Color cells by category</label>' +
+                        '<div class="pc3-popover-field" style="margin-top:6px;"><span class="pc3-popover-field-lbl">Show only</span>' +
+                            '<select id="pc3-quick-filter">' +
+                                '<option value="all"' + (_quickFilter === 'all' ? ' selected' : '') + '>Everything</option>' +
+                                '<option value="leagues"' + (_quickFilter === 'leagues' ? ' selected' : '') + '>Leagues</option>' +
+                                '<option value="specials"' + (_quickFilter === 'specials' ? ' selected' : '') + '>Specials (pinned)</option>' +
+                                '<option value="general"' + (_quickFilter === 'general' ? ' selected' : '') + '>General activities</option>' +
+                                '<option value="free"' + (_quickFilter === 'free' ? ' selected' : '') + '>Free / gaps</option>' +
+                            '</select>' +
+                        '</div>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
                         '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Print</div>' +
@@ -3940,6 +3959,17 @@ function bindAll() {
         var root = document.getElementById('pc3-root');
         if (root) root.classList.toggle('pc3-color-cat', _colorByCategory);
     });
+    var qfSel = el('pc3-quick-filter');
+    if (qfSel) qfSel.addEventListener('change', function () {
+        _quickFilter = this.value || 'all';
+        try { localStorage.setItem('campistry_pc3_quickFilter', _quickFilter); } catch (e) {}
+        var root = document.getElementById('pc3-root');
+        if (root) {
+            ['leagues','specials','general','free'].forEach(function (k) {
+                root.classList.toggle('pc3-filter-' + k, _quickFilter === k);
+            });
+        }
+    });
 
     // Template selector
     var tplSel = el('pc3-template-select');
@@ -4086,6 +4116,7 @@ function initPrintCenter() {
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
     try { var savedHG = localStorage.getItem('campistry_pc3_highlightGaps'); if (savedHG !== null) _highlightGaps = savedHG === '1'; } catch (e) {}
     try { var savedCC = localStorage.getItem('campistry_pc3_colorByCategory'); if (savedCC !== null) _colorByCategory = savedCC === '1'; } catch (e) {}
+    try { var savedQF = localStorage.getItem('campistry_pc3_quickFilter'); if (savedQF) _quickFilter = savedQF; } catch (e) {}
     try { var savedPB = localStorage.getItem('campistry_pc3_pageBreakPerBunk'); if (savedPB !== null) _pageBreakPerBunk = savedPB === '1'; } catch (e) {}
     try { var savedSC = localStorage.getItem('campistry_pc3_sidebarCollapsed'); if (savedSC !== null) _sidebarCollapsed = savedSC === '1'; } catch (e) {}
     // Restore last-used style preset
