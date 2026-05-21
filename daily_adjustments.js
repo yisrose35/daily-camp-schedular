@@ -639,8 +639,10 @@ function daShowCopyAutoGradeModal(autoLayers, onApply) {
     // Build a new copy of autoLayers to return
     var updated = JSON.parse(JSON.stringify(autoLayers || {}));
 
-    // ★ ALSO propagate / clear Bell Schedule periods. Bell Schedule is stored
-    //   in globalSettings.app1.autoLayerTemplatePeriods[templateKey][grade].
+    // ★ ALSO propagate / clear Bell Schedule periods. Periods live in TWO
+    //   storage locations and BOTH must be synced:
+    //     - window.campPeriods                            (runtime, live read by gen)
+    //     - globalSettings.app1.autoLayerTemplatePeriods   (template snapshots)
     //   Bug discovered during Auto Test walkthrough: a stray Bell Schedule
     //   click against ONE grade (e.g. Intermediates Period 1 = 9:00-9:40am)
     //   constrained that grade to a 40-min window forever, producing
@@ -649,30 +651,52 @@ function daShowCopyAutoGradeModal(autoLayers, onApply) {
     //   Now: target grades inherit the SOURCE grade's periods (or get
     //   periods cleared if source has none). This makes Copy Grade
     //   actually idempotent.
+    function _clonePeriods(arr) {
+      return (arr || []).map(function(p) {
+        return Object.assign({}, JSON.parse(JSON.stringify(p)), {
+          id: 'bp_' + Math.random().toString(36).slice(2, 10)
+        });
+      });
+    }
     var _periodsChanged = false;
     try {
       var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
       var app1 = gs.app1 || {};
+
+      // 1. Update the runtime store (window.campPeriods) — this is what the
+      //    auto-scheduler actually reads during generation.
+      if (!window.campPeriods) window.campPeriods = {};
+      var liveSrc = window.campPeriods[sourceDiv] || [];
+      targets.forEach(function(targetDiv) {
+        if (liveSrc.length === 0) {
+          if (window.campPeriods[targetDiv]) {
+            delete window.campPeriods[targetDiv];
+            _periodsChanged = true;
+          }
+        } else {
+          window.campPeriods[targetDiv] = _clonePeriods(liveSrc);
+          _periodsChanged = true;
+        }
+      });
+      if (_periodsChanged) {
+        window.saveGlobalSettings && window.saveGlobalSettings('campPeriods', window.campPeriods);
+        window.dispatchEvent(new CustomEvent('campistry-periods-changed'));
+      }
+
+      // 2. Mirror to template snapshots so reloading a template doesn't
+      //    re-introduce the old period.
       var periodStore = app1.autoLayerTemplatePeriods || {};
-      // Mirror periods in _current AND in each named template that already
-      // exists, so loading any template doesn't re-introduce a stale period.
       Object.keys(periodStore).forEach(function(templateKey) {
         var perGrade = periodStore[templateKey] || {};
-        var sourcePeriods = perGrade[sourceDiv] || [];
+        var srcPeriods = perGrade[sourceDiv] || [];
         targets.forEach(function(targetDiv) {
-          if (sourcePeriods.length === 0) {
-            // Source has no bell schedule → clear target's
+          if (srcPeriods.length === 0) {
             if (perGrade[targetDiv]) {
               delete perGrade[targetDiv];
               _periodsChanged = true;
             }
           } else {
-            // Source has periods → deep-clone with fresh IDs
-            perGrade[targetDiv] = sourcePeriods.map(function(p) {
-              return Object.assign({}, JSON.parse(JSON.stringify(p)), {
-                id: 'bp_' + Math.random().toString(36).slice(2, 10)
-              });
-            });
+            perGrade[targetDiv] = _clonePeriods(srcPeriods);
             _periodsChanged = true;
           }
         });

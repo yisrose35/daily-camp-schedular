@@ -3135,31 +3135,54 @@ async function dawCopyLayersDialog() {
   let copied = 0;
   let replaced = 0;  // ★ count of target grades whose pre-existing layers were replaced
 
-  // ★ ALSO propagate / clear Bell Schedule periods so a stray Period 1 on
-  //   the target (e.g. left over from earlier UI exploration) can't keep
-  //   constraining the slot grid after Copy. Source periods inherit;
-  //   target periods clear if source has none. Same fix added to the
-  //   Daily Adjustments auto-mode variant.
+  // ★ ALSO propagate / clear Bell Schedule periods. Two storage locations
+  //   must be synced: window.campPeriods (runtime, read by gen) AND
+  //   app1.autoLayerTemplatePeriods (template snapshots). A stray Period 1
+  //   on the target (e.g. from earlier UI exploration) was constraining
+  //   the slot grid forever after Copy because the runtime store survived.
   try {
     const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
     const app1 = gs.app1 || {};
-    const periodStore = app1.autoLayerTemplatePeriods || {};
+    const _clonePeriods = (arr) => (arr || []).map(p => Object.assign(
+      {}, JSON.parse(JSON.stringify(p)),
+      { id: 'bp_' + Math.random().toString(36).slice(2, 10) }
+    ));
     let pChanged = false;
+
+    // 1. Runtime store
+    if (!window.campPeriods) window.campPeriods = {};
+    const liveSrc = window.campPeriods[result.from] || [];
+    result.to.forEach(targetGrade => {
+      if (targetGrade === result.from) return;
+      if (liveSrc.length === 0) {
+        if (window.campPeriods[targetGrade]) {
+          delete window.campPeriods[targetGrade];
+          pChanged = true;
+        }
+      } else {
+        window.campPeriods[targetGrade] = _clonePeriods(liveSrc);
+        pChanged = true;
+      }
+    });
+    if (pChanged) {
+      window.saveGlobalSettings && window.saveGlobalSettings('campPeriods', window.campPeriods);
+      window.dispatchEvent(new CustomEvent('campistry-periods-changed'));
+    }
+
+    // 2. Template snapshots
+    const periodStore = app1.autoLayerTemplatePeriods || {};
     Object.keys(periodStore).forEach(templateKey => {
       const perGrade = periodStore[templateKey] || {};
-      const sourcePeriods = perGrade[result.from] || [];
+      const srcPeriods = perGrade[result.from] || [];
       result.to.forEach(targetGrade => {
         if (targetGrade === result.from) return;
-        if (sourcePeriods.length === 0) {
+        if (srcPeriods.length === 0) {
           if (perGrade[targetGrade]) {
             delete perGrade[targetGrade];
             pChanged = true;
           }
         } else {
-          perGrade[targetGrade] = sourcePeriods.map(p => Object.assign(
-            {}, JSON.parse(JSON.stringify(p)),
-            { id: 'bp_' + Math.random().toString(36).slice(2, 10) }
-          ));
+          perGrade[targetGrade] = _clonePeriods(srcPeriods);
           pChanged = true;
         }
       });
