@@ -7669,55 +7669,26 @@
                 return result;
             }
 
-            // ★ Day 22.5 cross-day rotation fix: date-seeded per-bunk perturbation
-            //   to break field-availability lock-in. When bunks always process in
-            //   the same order, the same fields are claimed by the same divisions
-            //   at the same time slots every day, locking restricted bunks (like
-            //   Minors 1 with only 3 field-available sports at its narrow gap
-            //   windows) onto identical sport sets across days. Vary the order
-            //   slightly day-to-day so each restricted bunk gets a different
-            //   relative position over time, eventually getting first pick on
-            //   contested fields. Deterministic per-date so the same date always
-            //   produces the same gen (rotation-engine cycles still work).
-            //
-            //   PLUS staleness: bunks whose recent days had overlapping sport-sets
-            //   get an additional priority boost. Belt-and-suspenders.
-            function _datePerturbation(qBunk) {
-                var s = String(currentDate || '') + ':' + String(qBunk);
-                var h = 2166136261;
-                for (var i = 0; i < s.length; i++) {
-                    h ^= s.charCodeAt(i);
-                    h = Math.imul(h, 16777619);
-                }
-                // Normalize to 0..30 range so it can break contention ties without
-                // overwhelming raw contention deficits.
-                return (h >>> 0) % 30;
-            }
+            // ★ Day 22.5 cross-day staleness fix (part 2): compute per-bunk staleness
+            //   score from recent activity history. Bunks whose recent days had the
+            //   same sport-set are "stuck" — they need to process FIRST so they
+            //   can claim contested fields before other divisions lock them out
+            //   at their specific gap times. Without this, restricted bunks
+            //   (like Minors 1 with only 3 fields available at its narrow gap
+            //   windows) always get processed after other divisions have taken
+            //   the better fields, locking them onto the same overplayed sports
+            //   day after day.
             function _computeStaleness(qBunk) {
                 if (!weekActivityHistory) return 0;
                 var hist = weekActivityHistory[String(qBunk)] || {};
-                var rd = (typeof getRecentDays === 'function') ? getRecentDays(currentDate, 5) : [];
+                var rd = (typeof getRecentDays === 'function') ? getRecentDays(currentDate, 3) : [];
                 if (rd.length < 2) return 0;
-                // Count unique sports across recent days. Low unique-count vs
-                // total-days = repetition.
-                var allSports = new Set();
-                var totalEntries = 0;
-                rd.forEach(function(d) {
-                    (hist[d] || []).forEach(function(a) {
-                        if (!a) return;
-                        // Skip universal anchors
-                        var lc = String(a).toLowerCase();
-                        if (lc === 'swim' || lc === 'change' || lc === 'lunch' || lc === 'cleanup' || lc === 'main activity' || lc === 'league game') return;
-                        allSports.add(a);
-                        totalEntries++;
-                    });
-                });
-                if (totalEntries === 0) return 0;
-                // Staleness = how much less variety than 1-per-entry.
-                // Healthy bunk: unique == totalEntries (no repeats). Stuck bunk:
-                // unique << totalEntries.
-                var staleness = totalEntries - allSports.size;
-                return staleness; // higher = more stuck
+                var sets = rd.map(function(d) { return new Set((hist[d] || []).filter(Boolean)); });
+                var overlap = 0;
+                for (var i = 1; i < sets.length; i++) {
+                    sets[i - 1].forEach(function(a) { if (sets[i].has(a)) overlap++; });
+                }
+                return overlap; // higher = more stuck
             }
 
             // Build contention-sorted gap queue for Phase B
@@ -7736,22 +7707,17 @@
                             var qEntry = contentionMap[qt + ':' + qMeta.grade];
                             if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
                         }
-                        gapQueue.push({
-                            bunk: qBunk, gap: sGap, contention: maxDeficit,
-                            staleness: _computeStaleness(qBunk),
-                            datePerturb: _datePerturbation(qBunk)
-                        });
+                        gapQueue.push({ bunk: qBunk, gap: sGap, contention: maxDeficit, staleness: _computeStaleness(qBunk) });
                     });
                 });
             });
-            // ★ Day 22.5: priority = contention + staleness*5 + datePerturb.
-            //   contention (0-10ish): primary signal — bunks at over-demanded times
-            //   staleness*5 (0-30+ for stuck bunks): boosts repetition-locked bunks
-            //   datePerturb (0-30): date-seeded tiebreak — breaks deterministic
-            //     processing order so the same bunks don't always get leftovers
+            // ★ Day 22.5: combine contention + staleness. Staleness*5 gives stuck
+            //   bunks meaningful priority bump without overwhelming raw contention.
+            //   For a typical staleness=2-4 (overlap count), that's +10..+20 priority,
+            //   competitive with contention deficits which are usually in single digits.
             gapQueue.sort(function(a, b) {
-                var ap = a.contention + a.staleness * 5 + a.datePerturb;
-                var bp = b.contention + b.staleness * 5 + b.datePerturb;
+                var ap = a.contention + a.staleness * 5;
+                var bp = b.contention + b.staleness * 5;
                 return bp - ap;
             });
             log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, max contention=' + (gapQueue.length > 0 ? gapQueue[0].contention : 0) + ', max staleness=' + (gapQueue.length > 0 ? gapQueue.reduce(function(m, g) { return Math.max(m, g.staleness); }, 0) : 0));
