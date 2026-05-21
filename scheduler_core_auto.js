@@ -17960,6 +17960,104 @@
         // (the UI shows "Free" instead of "+Add"). This converts ALL null
         // buckets to something. Iteration 2 will make the probe smarter so
         // fewer fall back to Free.
+        // ★ STEP 4.96 — SLOT ALIGNMENT PASS (Day 22.5+ fix for "+ Add" trailing cells)
+        //   Some placement paths can leave scheduleAssignments[bunk] index-shifted
+        //   relative to _perBunkSlots[grade][bunk] — e.g. when a planned special
+        //   (Nernitas at pbs[0]) doesn't get placed, the remaining sa entries can
+        //   compact left, leaving trailing nulls AND wrong-time positioning.
+        //   This pass rebuilds sa[bunk] to be slot-index-aligned with pbs:
+        //     1. Anchor events (Swim/Change/lunch/Cleanup/Main activity/pre-/post-change)
+        //        are matched by activity name to their pbs index.
+        //     2. Remaining sa entries fill non-anchor pbs indexes in order.
+        //     3. Every sa entry gets stamped with _startMin/_endMin from its pbs slot.
+        //   After this pass the nullBucketFinalizer (Step 4.97) fills any newly
+        //   exposed empty slots, and the renderer no longer paints "+ Add" cells
+        //   for slots that already have valid activities.
+        log('[STEP 4.96] Slot-alignment pass starting...');
+        (function slotAlignmentPass() {
+            try {
+                const sa = window.scheduleAssignments || {};
+                const ANCHOR_EVENTS = new Set(['Swim','Change','lunch','Lunch','Cleanup','Main activity']);
+                const ANCHOR_TYPES = new Set(['swim','pre-change','post-change','lunch','custom']);
+                let realigned = 0, stamped = 0;
+                const divKeys = Object.keys(divisions || {});
+                for (const grade of divKeys) {
+                    if (allowedSet && !allowedSet.has(String(grade))) continue;
+                    const pbsObj = window.divisionTimes?.[grade]?._perBunkSlots;
+                    if (!pbsObj) continue;
+                    const bunks = getBunksForGrade(grade, divisions);
+                    for (const bunk of bunks) {
+                        const bunkKey = String(bunk);
+                        const pbsArr = pbsObj[bunkKey] || [];
+                        const saOld = sa[bunkKey] || [];
+                        if (!pbsArr.length) continue;
+                        // Detect misalignment: any non-null sa[i] whose _activity disagrees
+                        // with pbs[i].event for anchor-type slots, OR sa.length !== pbs.length.
+                        let needsRealign = (saOld.length !== pbsArr.length);
+                        if (!needsRealign) {
+                            for (let i = 0; i < pbsArr.length; i++) {
+                                const p = pbsArr[i];
+                                const s = saOld[i];
+                                if (!p || !s) continue;
+                                if (ANCHOR_TYPES.has(p.type) && s._activity && p.event && s._activity !== p.event) {
+                                    needsRealign = true; break;
+                                }
+                            }
+                        }
+                        // Always rebuild — keeps sa stamped with current pbs times even
+                        // when alignment is already correct (cheap and idempotent).
+                        const queue = saOld.filter(e => e && e._activity);
+                        const newSa = new Array(pbsArr.length).fill(null);
+                        const used = new Set();
+                        // Pass A: place anchor entries by activity-name match
+                        pbsArr.forEach((p, i) => {
+                            if (!p) return;
+                            const isAnchor = ANCHOR_TYPES.has(p.type) || ANCHOR_EVENTS.has(p.event);
+                            if (!isAnchor) return;
+                            for (let qi = 0; qi < queue.length; qi++) {
+                                if (used.has(qi)) continue;
+                                if (queue[qi]._activity === p.event) {
+                                    const entry = Object.assign({}, queue[qi]);
+                                    entry._startMin = p.startMin;
+                                    entry._endMin = p.endMin;
+                                    newSa[i] = entry;
+                                    used.add(qi);
+                                    stamped++;
+                                    break;
+                                }
+                            }
+                        });
+                        // Pass B: fill remaining (non-anchor) slots with remaining queue entries in order
+                        let qPtr = 0;
+                        pbsArr.forEach((p, i) => {
+                            if (!p) return;
+                            if (newSa[i]) return;
+                            const isAnchor = ANCHOR_TYPES.has(p.type) || ANCHOR_EVENTS.has(p.event);
+                            if (isAnchor) return; // anchor with no matching sa entry — leave null for finalizer
+                            while (qPtr < queue.length && used.has(qPtr)) qPtr++;
+                            if (qPtr >= queue.length) return;
+                            // Skip anchor-named queue entries that should map to anchor slots
+                            while (qPtr < queue.length && (used.has(qPtr) || ANCHOR_EVENTS.has(queue[qPtr]._activity))) qPtr++;
+                            if (qPtr >= queue.length) return;
+                            const entry = Object.assign({}, queue[qPtr]);
+                            entry._startMin = p.startMin;
+                            entry._endMin = p.endMin;
+                            newSa[i] = entry;
+                            used.add(qPtr);
+                            stamped++;
+                            qPtr++;
+                        });
+                        if (needsRealign) realigned++;
+                        sa[bunkKey] = newSa;
+                    }
+                }
+                log('[STEP 4.96] alignment done: realignedBunks=' + realigned + ' stampedEntries=' + stamped);
+            } catch (eA) {
+                warn('[STEP 4.96] Slot-alignment error: ' + eA.message + ' stack: ' + eA.stack);
+            }
+        })();
+        log('[STEP 4.96] Slot-alignment pass ended.');
+
         log('[STEP 4.97] Null-bucket finalizer starting...');
         (function nullBucketFinalizer() {
             try {
