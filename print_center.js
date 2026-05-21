@@ -1662,6 +1662,11 @@ function renderAutoDivisionTable(divName, bunks) {
     var VARIABLE_LAYER_TYPES = { 'slot': 1, 'sport': 1, 'special': 1, 'activity': 1, 'sports': 1, 'elective': 1, 'swim_elective': 1, 'smart': 1, 'split': 1, 'league': 1, 'specialty_league': 1 };
     var activityRanges = []; // [ { startMin, endMin } ]
 
+    // ★ Day 22.5+: distinguish REAL bell-schedule periods (Method 1) from
+    //   auto-derived activity ranges (Methods 2/2b). The period header bar
+    //   should ONLY render for true bell schedules — auto-derived ranges
+    //   are noise.
+    var hasRealBellSchedule = false;
     // Method 1: Read from DAW layer templates (bell schedule) — authoritative
     var bellLayers = getBellScheduleLayers(divName);
     if (bellLayers && bellLayers.length > 0) {
@@ -1671,6 +1676,7 @@ function renderAutoDivisionTable(divName, bunks) {
                 activityRanges.push({ startMin: layer.startMin, endMin: layer.endMin, name: layer.name || layer.label || null });
             }
         });
+        if (activityRanges.length > 0) hasRealBellSchedule = true;
         // Sort and merge overlapping ranges
         activityRanges.sort(function (a, b) { return a.startMin - b.startMin; });
         var mergedRanges = [];
@@ -1733,11 +1739,11 @@ function renderAutoDivisionTable(divName, bunks) {
         }
     }
 
-    // ★ Day 22.5+: track whether we found REAL bell-schedule periods vs.
-    //   the "whole day = one period" fallback. The period header row is
-    //   hidden in the fallback case — showing 'Period 1 9:00am-4:00pm'
-    //   spanning the entire day is visually noisy and confusing.
-    var hasRealPeriods = activityRanges.length > 0;
+    // ★ Day 22.5+: only render the period header row when a REAL Bell
+    //   Schedule was defined (Method 1). Methods 2/2b auto-derive ranges
+    //   from the schedule itself, which the user already sees as
+    //   activities — replicating them in a top-row band is just noise.
+    var hasRealPeriods = hasRealBellSchedule;
     if (activityRanges.length === 0) {
         activityRanges.push({ startMin: dayStart, endMin: dayEnd });
     }
