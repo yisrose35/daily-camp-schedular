@@ -1125,9 +1125,9 @@ function getStyles() {
     '.pc3-workspace{flex:1;display:flex;min-height:0;overflow:hidden;position:relative;}' +
 
     /* ── Sidebar ── */
-    '.pc3-sidebar{width:230px;background:#fff;border-right:1px solid #e7e5e4;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;transition:width .2s;}' +
+    '.pc3-sidebar{width:260px;background:#fff;border-right:1px solid #e7e5e4;display:flex;flex-direction:column;overflow:hidden;flex-shrink:0;transition:width .2s;}' +
     '.pc3-sidebar.collapsed{width:0;border-right:none;}' +
-    '.pc3-sidebar-header{padding:8px 12px 6px;font-weight:700;font-size:11px;color:#1c1917;display:flex;align-items:center;justify-content:space-between;text-transform:uppercase;letter-spacing:.5px;}' +
+    '.pc3-sidebar-header{padding:12px 14px 8px;font-weight:700;font-size:11px;color:#1c1917;display:flex;align-items:center;justify-content:space-between;text-transform:uppercase;letter-spacing:.5px;}' +
     '.pc3-sidebar-count{font-size:10px;font-weight:600;color:#147D91;background:#ecfeff;padding:2px 8px;border-radius:99px;text-transform:none;letter-spacing:0;}' +
     '.pc3-sidebar-search{padding:0 10px 6px;}' +
     '.pc3-sidebar-search-input{width:100%;padding:6px 10px;border:1px solid #e7e5e4;border-radius:6px;font-size:12px;font-family:inherit;background:#fafaf9;color:#1c1917;transition:background .15s,border-color .15s;}' +
@@ -1139,12 +1139,12 @@ function getStyles() {
     '.pc3-sidebar-group-name{flex:1;}' +
     '.pc3-sidebar-group-toggle{font-size:10px;font-weight:600;color:#147D91;background:transparent;border:none;cursor:pointer;text-transform:uppercase;letter-spacing:.4px;padding:2px 4px;border-radius:4px;font-family:inherit;}' +
     '.pc3-sidebar-group-toggle:hover{background:#ecfeff;}' +
-    '.pc3-item{display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;cursor:pointer;font-size:12px;color:#1c1917;transition:background .12s;border:1px solid transparent;}' +
+    '.pc3-item{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:13px;color:#1c1917;transition:background .12s;border:1px solid transparent;margin-bottom:2px;}' +
     '.pc3-item:hover{background:#fafaf9;}' +
     '.pc3-item.selected{background:#ecfeff;border-color:rgba(20,125,145,.15);}' +
-    '.pc3-item input[type="checkbox"]{accent-color:#147D91;margin:0;cursor:pointer;width:14px;height:14px;}' +
+    '.pc3-item input[type="checkbox"]{accent-color:#147D91;margin:0;cursor:pointer;width:15px;height:15px;flex-shrink:0;}' +
     '.pc3-item-label{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;}' +
-    '.pc3-item-count{font-size:10px;color:#a8a29e;font-weight:600;font-variant-numeric:tabular-nums;}' +
+    '.pc3-item-count{font-size:10px;color:#a8a29e;font-weight:600;font-variant-numeric:tabular-nums;flex-shrink:0;}' +
     '.pc3-sidebar-empty{padding:20px 12px;text-align:center;color:#a8a29e;font-size:12px;}' +
     '.pc3-sidebar-actions{padding:6px 10px;border-top:1px solid #e7e5e4;display:flex;gap:6px;background:#fafaf9;}' +
     '.pc3-sidebar-actions button{flex:1;font-size:11px;padding:6px 8px;border:1px solid #e7e5e4;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;color:#44403c;font-weight:600;transition:background .12s,border-color .12s;}' +
@@ -1180,7 +1180,7 @@ function getStyles() {
        between the sidebar and the grid. When sidebar is open it sits at the
        right edge of the 230px panel; when collapsed it sits at left:14px so the
        user can find it. High z-index so it never disappears behind content. */
-    '.pc3-sidebar-toggle{position:absolute;top:64px;left:222px;width:18px;height:48px;border:1px solid #e7e5e4;border-left:none;background:#fff;border-radius:0 6px 6px 0;cursor:pointer;color:#147D91;display:flex;align-items:center;justify-content:center;z-index:40;box-shadow:2px 2px 8px rgba(15,23,42,.08);transition:left .2s,background .12s,box-shadow .12s;padding:0;}' +
+    '.pc3-sidebar-toggle{position:absolute;top:64px;left:252px;width:18px;height:48px;border:1px solid #e7e5e4;border-left:none;background:#fff;border-radius:0 6px 6px 0;cursor:pointer;color:#147D91;display:flex;align-items:center;justify-content:center;z-index:40;box-shadow:2px 2px 8px rgba(15,23,42,.08);transition:left .2s,background .12s,box-shadow .12s;padding:0;}' +
     '.pc3-sidebar-toggle:hover{background:#ecfeff;color:#0F6E80;box-shadow:4px 4px 12px rgba(15,23,42,.14);}' +
     /* When collapsed, keep the full toggle on-screen anchored at the very left */
     '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
@@ -1309,7 +1309,17 @@ function getStyles() {
     '.pc3-filter-general td:not(.cell-general):not([colspan]){opacity:.12;}' +
     '.pc3-filter-free td:not(.cell-free):not([colspan]){opacity:.12;}' +
     /* Make tables fully visible during print regardless of overflow scrolling */
-    '@media print{.pc3-sheet-table-wrap{overflow:visible !important;}.pc3-tbl{page-break-inside:auto;}.pc3-tbl thead{display:table-header-group;}.pc3-tbl tr{page-break-inside:avoid;}}' +
+    '@media print{' +
+        '.pc3-sheet-table-wrap{overflow:visible !important;width:100% !important;}' +
+        '.pc3-tbl{page-break-inside:auto;width:100% !important;max-width:100% !important;table-layout:fixed !important;}' +
+        /* CRITICAL: cells default to nowrap on screen for readability, but on
+           print this prevents the table from fitting on the page and the right
+           half gets clipped. Force wrap + smaller font during print. */
+        '.pc3-tbl th,.pc3-tbl td{white-space:normal !important;word-wrap:break-word !important;overflow:hidden !important;font-size:8.5pt !important;padding:3px 4px !important;}' +
+        '.pc3-tbl thead{display:table-header-group;}' +
+        '.pc3-tbl tr{page-break-inside:avoid;}' +
+        '.pc3-sheet{width:100% !important;max-width:100% !important;box-shadow:none !important;border-radius:0 !important;}' +
+    '}' +
     '</style>';
 }
 
@@ -4691,10 +4701,15 @@ window._pc3ApplyPreset = function (presetId) {
     };
     _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, preset.overlay, keep);
     try { localStorage.setItem('campistry_pc3_preset', presetId); } catch (e) {}
-    // Refresh the popover swatch active state
+    // Refresh the popover swatch active state (Style popover)
     document.querySelectorAll('.pc3-preset-item').forEach(function (b) {
         b.classList.toggle('active', b.getAttribute('data-preset') === presetId);
     });
+    // CRITICAL: re-render the Design drawer form fields so they show the
+    // preset's actual values. Without this, subsequent edits read stale form
+    // state and silently revert the preset on the next input event.
+    var drawerScroll = el('pc3-drawer-scroll');
+    if (drawerScroll) drawerScroll.innerHTML = buildAdvancedSections();
     liveRefresh();
 };
 
