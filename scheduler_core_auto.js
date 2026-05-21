@@ -7145,30 +7145,7 @@
                 // ones before checking cooldowns. This prevents back-to-back same sport
                 // in multi-block gaps (e.g. 150min → two 60min blocks).
                 var unusedCandidates = candidates.filter(function(c) { return !used.has(c.name); });
-                // ★ Day 22.5 cross-day staleness fix: when a bunk's available fields
-                //   at this time are all sports that bunk played yesterday or the
-                //   day before, the soft -300 / -200 recent-day scoring (line 7114-7124)
-                //   is overwhelmed by rotation pulls and the bunk gets the same
-                //   sports day after day (live test: Minors 1 → Big Shot, Hit the
-                //   Deck, VR on day 3 AND day 4). Solution: VETO sports played in
-                //   the last 2 days in a first pass. Fall back to the unfiltered
-                //   pool only if every alternative is blocked.
-                var freshCandidates = unusedCandidates;
-                if (weekActivityHistory && unusedCandidates.length > 0) {
-                    var _bhFresh = weekActivityHistory[String(bunk)] || {};
-                    var _rdFresh = getRecentDays(currentDate, 2); // yesterday + day before
-                    var _recentSet = new Set();
-                    for (var _rfi = 0; _rfi < _rdFresh.length; _rfi++) {
-                        (_bhFresh[_rdFresh[_rfi]] || []).forEach(function(n) { _recentSet.add(n); });
-                    }
-                    if (_recentSet.size > 0) {
-                        var _filtered = unusedCandidates.filter(function(c) { return !_recentSet.has(c.name); });
-                        if (_filtered.length > 0) freshCandidates = _filtered;
-                        // else: every unused candidate was played in last 2 days
-                        // — keep full unusedCandidates list (don't strand the slot)
-                    }
-                }
-                var candidatePool = freshCandidates.length > 0 ? freshCandidates : candidates;
+                var candidatePool = unusedCandidates.length > 0 ? unusedCandidates : candidates;
                 // ★ Cooldown rule filter — walk candidates in score order, skip blocked
                 if (window.SchedulingRules && meta && meta.template) {
                     for (var ci = 0; ci < candidatePool.length; ci++) {
