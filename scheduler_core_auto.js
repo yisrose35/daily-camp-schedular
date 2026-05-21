@@ -7669,6 +7669,28 @@
                 return result;
             }
 
+            // ★ Day 22.5 cross-day staleness fix (part 2): compute per-bunk staleness
+            //   score from recent activity history. Bunks whose recent days had the
+            //   same sport-set are "stuck" — they need to process FIRST so they
+            //   can claim contested fields before other divisions lock them out
+            //   at their specific gap times. Without this, restricted bunks
+            //   (like Minors 1 with only 3 fields available at its narrow gap
+            //   windows) always get processed after other divisions have taken
+            //   the better fields, locking them onto the same overplayed sports
+            //   day after day.
+            function _computeStaleness(qBunk) {
+                if (!weekActivityHistory) return 0;
+                var hist = weekActivityHistory[String(qBunk)] || {};
+                var rd = (typeof getRecentDays === 'function') ? getRecentDays(currentDate, 3) : [];
+                if (rd.length < 2) return 0;
+                var sets = rd.map(function(d) { return new Set((hist[d] || []).filter(Boolean)); });
+                var overlap = 0;
+                for (var i = 1; i < sets.length; i++) {
+                    sets[i - 1].forEach(function(a) { if (sets[i].has(a)) overlap++; });
+                }
+                return overlap; // higher = more stuck
+            }
+
             // Build contention-sorted gap queue for Phase B
             var gapQueue = [];
             allBunkIds.forEach(function(qBunk) {
@@ -7685,12 +7707,20 @@
                             var qEntry = contentionMap[qt + ':' + qMeta.grade];
                             if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
                         }
-                        gapQueue.push({ bunk: qBunk, gap: sGap, contention: maxDeficit });
+                        gapQueue.push({ bunk: qBunk, gap: sGap, contention: maxDeficit, staleness: _computeStaleness(qBunk) });
                     });
                 });
             });
-            gapQueue.sort(function(a, b) { return b.contention - a.contention; });
-            log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, max contention=' + (gapQueue.length > 0 ? gapQueue[0].contention : 0));
+            // ★ Day 22.5: combine contention + staleness. Staleness*5 gives stuck
+            //   bunks meaningful priority bump without overwhelming raw contention.
+            //   For a typical staleness=2-4 (overlap count), that's +10..+20 priority,
+            //   competitive with contention deficits which are usually in single digits.
+            gapQueue.sort(function(a, b) {
+                var ap = a.contention + a.staleness * 5;
+                var bp = b.contention + b.staleness * 5;
+                return bp - ap;
+            });
+            log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, max contention=' + (gapQueue.length > 0 ? gapQueue[0].contention : 0) + ', max staleness=' + (gapQueue.length > 0 ? gapQueue.reduce(function(m, g) { return Math.max(m, g.staleness); }, 0) : 0));
 
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
