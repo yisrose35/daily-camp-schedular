@@ -7712,36 +7712,6 @@
             });
             log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, min fieldOptions=' + (gapQueue.length > 0 ? gapQueue[0].fieldOptions : 0) + ', max contention=' + (gapQueue.length > 0 ? Math.max.apply(null, gapQueue.map(function(g){return g.contention;})) : 0));
 
-            // ★ TEMP DIAG2: dump field-available sports for Minors 1 at each gap
-            try {
-                var _diag2 = { date: currentDate, minors1_gaps: [], allClaims_700_730: [] };
-                if (bunkMeta['Minors 1']) {
-                    var _m1Gaps = findGaps(bunkMeta['Minors 1'].template, bunkMeta['Minors 1'].gradeStart, bunkMeta['Minors 1'].gradeEnd);
-                    _m1Gaps.forEach(function(_g) {
-                        var available = [];
-                        var unavailable = [];
-                        Object.keys(fieldLedger).forEach(function(fn) {
-                            var fl = fieldLedger[fn];
-                            if (!fl || fl._isSpecialLocation) return;
-                            if (!Array.isArray(fl.activities) || fl.activities.length === 0) return;
-                            if (isFieldAvailable(fn, _g.start, _g.end, 'Minors 1', 'Minors', fl.activities[0])) {
-                                available.push(fn);
-                            } else {
-                                var claimsHere = (fl.claims || []).filter(function(c) { return c.startMin < _g.end && c.endMin > _g.start; });
-                                unavailable.push(fn + ' [' + claimsHere.map(function(c) { return c.bunk + '(' + c.grade + ')'; }).join(',') + ']');
-                            }
-                        });
-                        _diag2.minors1_gaps.push({
-                            time: _g.start + '-' + _g.end,
-                            available_count: available.length,
-                            available: available,
-                            unavailable: unavailable.slice(0, 10)
-                        });
-                    });
-                }
-                localStorage.setItem('_phase3Diag2', JSON.stringify(_diag2));
-            } catch (_ediag2) {}
-
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
             for (var si = 0; si < gapQueue.length; si++) {
