@@ -2165,7 +2165,26 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       } else {
         e.dataTransfer.dropEffect = 'copy';
       }
+      // ★ Tighten column snap visual: clear stale highlights from sibling tracks
+      //   so only ONE column ever shows as drop-target at a time. Without this
+      //   slow dragover firing on multiple tracks (e.g. via overlap during a
+      //   cross-grade drift) could leave more than one column highlighted and
+      //   the user couldn't tell which grade would actually receive the drop.
+      gridEl.querySelectorAll('.ms-daw-track.drop-target').forEach(t => {
+        if (t !== track) t.classList.remove('drop-target');
+      });
       track.classList.add('drop-target');
+      // Surface the target grade name as a tiny pill at the top of the track
+      //   so the user can confirm before releasing.
+      if (!track.querySelector('.ms-daw-snap-badge')) {
+        const badge = document.createElement('div');
+        badge.className = 'ms-daw-snap-badge';
+        badge.style.cssText = 'position:absolute;top:2px;left:50%;transform:translateX(-50%);'
+          + 'background:#3b82f6;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;'
+          + 'border-radius:10px;pointer-events:none;z-index:10;white-space:nowrap;';
+        badge.textContent = '↓ ' + (track.dataset.grade || '');
+        track.appendChild(badge);
+      }
 
       // ★ Live drop preview — shows where the band will land at this moment.
       //   Reuses one preview element per track so we don't spam the DOM.
@@ -2206,6 +2225,9 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         track.classList.remove('drop-target');
         const preview = track.querySelector('.ms-daw-drop-preview');
         if (preview) preview.remove();
+        // ★ Remove snap badge when leaving the column
+        const badge = track.querySelector('.ms-daw-snap-badge');
+        if (badge) badge.remove();
       }
     });
 
@@ -2215,6 +2237,8 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
       // Remove any drop-preview rectangles so they don't briefly persist
       // before the upcoming re-render replaces the track HTML.
       gridEl.querySelectorAll('.ms-daw-drop-preview').forEach(el => el.remove());
+      // ★ Clean snap badges from all tracks on drop
+      gridEl.querySelectorAll('.ms-daw-snap-badge').forEach(el => el.remove());
 
       const grade = track.dataset.grade;
       const rect = track.getBoundingClientRect();
@@ -3106,16 +3130,26 @@ async function dawCopyLayersDialog() {
   });
   
   if (!result || !result.from || !result.to || result.to.length === 0) return;
-  
+
   const source = dawLayers[result.from] || [];
   let copied = 0;
+  let replaced = 0;  // ★ count of target grades whose pre-existing layers were replaced
   result.to.forEach(targetGrade => {
     if (targetGrade === result.from) return;
     // Clone layers with new IDs, adjusting to target division times
     const targetDiv = divisions[targetGrade] || {};
     const tStart = parseTimeToMinutes(targetDiv.startTime) || 540;
     const tEnd = parseTimeToMinutes(targetDiv.endTime) || 960;
-    
+
+    // ★ FIX: Always replace target — no silent skip when grade already has layers.
+    //   Previously a pre-existing layer (e.g. one accidentally dragged via drift)
+    //   could leave a grade looking copied-to in the UI checkbox but actually
+    //   starving the downstream slot grid because Copy never overwrote it.
+    //   Track replacements explicitly so the success message tells the user
+    //   what just happened.
+    const hadExisting = Array.isArray(dawLayers[targetGrade]) && dawLayers[targetGrade].length > 0;
+    if (hadExisting) replaced++;
+
     dawLayers[targetGrade] = source.map(l => {
       const copy = {
         ...JSON.parse(JSON.stringify(l)),
@@ -3126,12 +3160,28 @@ async function dawCopyLayersDialog() {
       _mbRemapLeagueForGrade(copy, targetGrade);
       return copy;
     });
+
+    // ★ Invalidate cached per-bunk slot grid for the target grade. Without
+    //   this the next generation can read stale _perBunkSlots derived from
+    //   the OLD layer set, producing the "3-slot Intermediates" symptom even
+    //   though dawLayers itself was correctly overwritten.
+    try {
+      if (window.divisionTimes && window.divisionTimes[targetGrade]) {
+        delete window.divisionTimes[targetGrade]._perBunkSlots;
+        delete window.divisionTimes[targetGrade]._slots;
+        delete window.divisionTimes[targetGrade]._builtAt;
+      }
+    } catch (_e) { /* non-fatal */ }
+
     copied++;
   });
-  
+
   saveDAWLayers();
   renderDAWGrid();
-  await showAlert(`Copied layers to ${copied} grade(s).`);
+  const _msg = replaced > 0
+    ? `Copied layers to ${copied} grade(s) — replaced existing layers in ${replaced}.`
+    : `Copied layers to ${copied} grade(s).`;
+  await showAlert(_msg);
 }
 
 function renderDAW() {

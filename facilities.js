@@ -1242,6 +1242,44 @@ function renderGeneralConfig(container, fac) {
         });
     }
 
+    // ★ Day 22.5+ — General Activity facilities now expose the same
+    //   scheduling controls that Sports facilities have: Access & Restrictions,
+    //   Sharing Rules, and Time Rules. Previously Pool / Lunchroom / etc.
+    //   felt under-configurable because these panels only rendered for
+    //   Sports-typed facilities, even though the underlying fieldData model
+    //   already supported the data.
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    let fieldData = (app1.fields || []).find(f => f.name === fac.name);
+    if (!fieldData) {
+        fieldData = {
+            name: fac.name,
+            activities: [],
+            available: true,
+            sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
+            accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
+            timeRules: [],
+            rainyDayAvailable: false,
+            _generalOnly: true
+        };
+        if (!app1.fields) app1.fields = [];
+        app1.fields.push(fieldData);
+        window.saveGlobalSettings?.("app1", app1);
+        window.saveGlobalSettings?.("fields", app1.fields);
+    }
+
+    const divider = document.createElement("div");
+    divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
+    container.appendChild(divider);
+
+    container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
+        () => renderAccess(fieldData)));
+
+    container.appendChild(section("Sharing Rules", summarySharing(fieldData),
+        () => renderSharing(fieldData)));
+
+    container.appendChild(section("Time Rules", summaryTime(fieldData),
+        () => renderTimeRules(fieldData)));
 }
 
 // =========================================================================
