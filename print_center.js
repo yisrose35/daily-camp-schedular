@@ -250,6 +250,7 @@ var _activityAligned = true;   // true → columns sized by activity duration (n
 var _hideDurations = false;    // hide the "50m" duration line under activity titles
 var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
 var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
+var _sidebarCollapsed = false; // collapsible left sidebar for max preview width
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // Excel-style cell selection state
@@ -1027,6 +1028,12 @@ function getStyles() {
     '.pc3-zoom-dock .pc3-zoom-dock-label{min-width:46px;text-align:center;font-size:11px;font-weight:600;color:#44403c;cursor:pointer;font-variant-numeric:tabular-nums;padding:0 6px;}' +
     '.pc3-zoom-dock .pc3-zoom-dock-label:hover{color:#147D91;}' +
     '.pc3-zoom-dock-sep{width:1px;height:18px;background:#e7e5e4;margin:0 2px;}' +
+    '.pc3-zoom-glyph{font-size:18px;font-weight:600;line-height:1;color:#44403c;}' +
+    /* ★ Sidebar toggle tab — vertically centered on the divider between sidebar and grid */
+    '.pc3-sidebar-toggle{position:absolute;top:50%;left:230px;transform:translate(-50%, -50%);width:22px;height:48px;border:1px solid #e7e5e4;background:#fff;border-radius:99px;cursor:pointer;color:#44403c;display:flex;align-items:center;justify-content:center;z-index:25;box-shadow:0 2px 6px rgba(15,23,42,.08);transition:left .2s,background .12s;padding:0;}' +
+    '.pc3-sidebar-toggle:hover{background:#f5f5f4;color:#147D91;}' +
+    '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;}' +
+    '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
     /* ── Spreadsheet Table ── */
     '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
@@ -1287,7 +1294,7 @@ function buildMainUI() {
     /* ── Workspace ── */
     '<div class="pc3-workspace">' +
         /* Sidebar */
-        '<div class="pc3-sidebar" id="pc3-sidebar">' +
+        '<div class="pc3-sidebar' + (_sidebarCollapsed ? ' collapsed' : '') + '" id="pc3-sidebar">' +
             '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span><span class="pc3-sidebar-count" id="pc3-sidebar-count">0 selected</span></div>' +
             '<div class="pc3-sidebar-search">' +
                 '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search…">' +
@@ -1295,6 +1302,12 @@ function buildMainUI() {
             '<div class="pc3-sidebar-scroll" id="pc3-sidebar-scroll"></div>' +
             '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
         '</div>' +
+        /* ★ Day 22.5+: collapse/expand sidebar toggle — small tab on the
+           border between sidebar and grid area. Lets users maximize the
+           preview area when they want to focus on the schedule. */
+        '<button class="pc3-sidebar-toggle no-print" id="pc3-sidebar-toggle" onclick="window._pc3ToggleSidebar()" title="' + (_sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + '" aria-label="Toggle sidebar">' +
+            '<span class="pc3-sidebar-toggle-arrow">' + (_sidebarCollapsed ? '›' : '‹') + '</span>' +
+        '</button>' +
 
         /* Grid Area */
         '<div class="pc3-grid-area" id="pc3-grid-area">' +
@@ -1317,9 +1330,11 @@ function buildMainUI() {
             '<div id="pc3-preview-content" style="display:none;"></div>' +
             /* Floating zoom dock — bottom-right of preview */
             '<div class="pc3-zoom-dock no-print" id="pc3-zoom-dock">' +
-                '<button onclick="window._pc3Zoom(-10)" title="Zoom out">' + ICO.zoomOut + '</button>' +
+                /* ★ Day 22.5+: explicit + / − glyphs alongside icons so the
+                   buttons are unmistakably zoom controls at a glance */
+                '<button onclick="window._pc3Zoom(-10)" title="Zoom out" aria-label="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
                 '<span class="pc3-zoom-dock-label" id="pc3-zoom-dock-label" onclick="window._pc3ZoomReset && window._pc3ZoomReset()" title="Reset to 100%">' + _zoomLevel + '%</span>' +
-                '<button onclick="window._pc3Zoom(10)" title="Zoom in">' + ICO.zoomIn + '</button>' +
+                '<button onclick="window._pc3Zoom(10)" title="Zoom in" aria-label="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
                 '<span class="pc3-zoom-dock-sep"></span>' +
                 '<button onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
             '</div>' +
@@ -1439,7 +1454,12 @@ function populateSidebar() {
         if (titleEl) titleEl.textContent = 'Divisions';
         if (searchEl) searchEl.placeholder = 'Search divisions…';
         var available = getAvailableDivisions();
-        available.sort(naturalSort);
+        // ★ Day 22.5+: honor the user-defined order from Campistry Me
+        //   (parent divisions + grade order). Fall back to naturalSort if
+        //   the helper is not loaded.
+        available = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(available)
+            : available.slice().sort(naturalSort);
         available.forEach(function (d) {
             var bunkCount = divs[d] && divs[d].bunks ? divs[d].bunks.length : 0;
             items.push({ id: d, label: d, count: bunkCount + ' bunks' });
@@ -1448,7 +1468,9 @@ function populateSidebar() {
         if (titleEl) titleEl.textContent = 'Bunks';
         if (searchEl) searchEl.placeholder = 'Search bunks…';
         var available2 = getAvailableDivisions();
-        available2.sort(naturalSort);
+        available2 = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(available2)
+            : available2.slice().sort(naturalSort);
         available2.forEach(function (d) {
             var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
             if (!bunks.length) return;
@@ -2536,6 +2558,12 @@ function liveRefresh() {
 
     if (_activeView === 'division') {
         var divs = getDivisions();
+        // ★ Day 22.5+: respect user-defined grade order from Campistry Me
+        //   (parent divisions first, then grades in the order saved by user).
+        //   sel is the list of selected division names from the sidebar.
+        sel = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(sel)
+            : sel.slice();
         if (_currentTemplate.layoutMode === 'all-bunks' && isAutoMode()) {
             // Combined: gather ALL bunks across all selected divisions → one unified table
             var allDivBunks = [];
@@ -3982,6 +4010,7 @@ function initPrintCenter() {
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
     try { var savedPB = localStorage.getItem('campistry_pc3_pageBreakPerBunk'); if (savedPB !== null) _pageBreakPerBunk = savedPB === '1'; } catch (e) {}
+    try { var savedSC = localStorage.getItem('campistry_pc3_sidebarCollapsed'); if (savedSC !== null) _sidebarCollapsed = savedSC === '1'; } catch (e) {}
     // Restore last-used style preset
     try {
         var savedPreset = localStorage.getItem('campistry_pc3_preset');
@@ -4278,6 +4307,18 @@ window._pc3ToggleFullscreen = function () {
     _isFullscreen = !_isFullscreen;
     var root = el('pc3-root');
     if (root) root.classList.toggle('pc3-fullscreen', _isFullscreen);
+};
+window._pc3ToggleSidebar = function () {
+    _sidebarCollapsed = !_sidebarCollapsed;
+    var sb = el('pc3-sidebar');
+    if (sb) sb.classList.toggle('collapsed', _sidebarCollapsed);
+    var tog = el('pc3-sidebar-toggle');
+    if (tog) {
+        tog.title = _sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar';
+        var arrow = tog.querySelector('.pc3-sidebar-toggle-arrow');
+        if (arrow) arrow.textContent = _sidebarCollapsed ? '›' : '‹';
+    }
+    try { localStorage.setItem('campistry_pc3_sidebarCollapsed', _sidebarCollapsed ? '1' : '0'); } catch (e) {}
 };
 window._pc3ToggleAdvanced = function () {
     _advancedOpen = !_advancedOpen;
