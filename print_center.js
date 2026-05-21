@@ -136,8 +136,29 @@ var PRINT_PACKS = [
         icon: 'user',
         preset: 'classic',
         view: 'bunk',
-        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'portrait' },
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'portrait', pageBreakPerBunk: true },
         selection: 'all'
+    },
+    {
+        id: 'counselor',
+        name: 'Counselor Pack',
+        tagline: 'Per-bunk sheets, big type — for staff at line-up.',
+        icon: 'user',
+        preset: 'bold',
+        view: 'bunk',
+        layout: { tableOrientation: 'time-top', layoutMode: 'per-division', hideLeagueMatchups: false, orientation: 'portrait', pageBreakPerBunk: true, hideLocations: false },
+        selection: 'all'
+    },
+    {
+        id: 'front-desk',
+        name: 'Front Desk Pack',
+        tagline: 'Big, scannable, all bunks on one wall.',
+        icon: 'monitor',
+        preset: 'bold',
+        view: 'division',
+        layout: { tableOrientation: 'bunks-top', layoutMode: 'all-bunks', hideLeagueMatchups: false, orientation: 'landscape', pageBreakPerBunk: false },
+        selection: 'all',
+        afterApply: function () { try { window._pc3OpenLive && window._pc3OpenLive(); } catch (e) {} }
     },
     {
         id: 'location-roster',
@@ -4229,6 +4250,14 @@ window._pc3ApplyPack = function (packId) {
     // 2. Apply layout flags
     if (pack.layout) {
         Object.keys(pack.layout).forEach(function (k) { _currentTemplate[k] = pack.layout[k]; });
+        // Sync pack-controlled state vars that live outside _currentTemplate.
+        if (Object.prototype.hasOwnProperty.call(pack.layout, 'pageBreakPerBunk')) {
+            _pageBreakPerBunk = !!pack.layout.pageBreakPerBunk;
+            try { localStorage.setItem('campistry_pc3_pageBreakPerBunk', _pageBreakPerBunk ? '1' : '0'); } catch (e) {}
+            var rootPB = document.getElementById('pc3-root');
+            if (rootPB) rootPB.classList.toggle('pc3-pb-per-bunk', _pageBreakPerBunk);
+            var pbCb = el('pc3-page-break-bunk'); if (pbCb) pbCb.checked = _pageBreakPerBunk;
+        }
     }
     // 3. Switch view
     if (pack.view && pack.view !== _activeView) {
