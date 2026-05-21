@@ -1243,21 +1243,38 @@ function renderGeneralConfig(container, fac) {
     }
 
     // ★ Day 22.5+ — General Activity facilities expose Sharing Rules only.
-    //   Access & Restrictions and Time Rules were initially added too, but
-    //   the scheduler's pinned-anchor paths (Swim via canUsePoolAtTime, Lunch
-    //   via layer-driven placement) ignore those — they only enforce sharing
-    //   capacity. Showing controls that silently do nothing is worse than not
-    //   showing them at all, so the unsupported ones are hidden until the
+    //   Sharing is the only control the scheduler's pinned-anchor paths
+    //   (canUsePoolAtTime) currently honor. Access & Time Rules were tried
+    //   but silently ignored by Swim placement, so they're hidden until the
     //   scheduler can honor them.
+    //
+    //   ★ Default: sharing ON with highest capacity (20) and every grade
+    //   able to share with every other grade. Pool/Lunchroom are inherently
+    //   shared resources — defaulting to "1 bunk only" was confusing.
     const settings = window.loadGlobalSettings?.() || {};
     const app1 = settings.app1 || {};
     let fieldData = (app1.fields || []).find(f => f.name === fac.name);
+    const _allDivsForDefault = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+    const _pkDefault = (a, b) => [a, b].sort().join('|');
     if (!fieldData) {
+        const _defaultPairs = {};
+        // Default: every grade pair (including self-pairs) can share
+        _allDivsForDefault.forEach(g => {
+            _defaultPairs[_pkDefault(g, g)] = true;
+            _allDivsForDefault.forEach(g2 => {
+                if (g !== g2) _defaultPairs[_pkDefault(g, g2)] = true;
+            });
+        });
         fieldData = {
             name: fac.name,
             activities: [],
             available: true,
-            sharableWith: { type: 'not_sharable', divisions: [], capacity: 1 },
+            sharableWith: {
+                type: 'cross_division',
+                divisions: [],
+                capacity: 20,
+                allowedPairs: _defaultPairs
+            },
             accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
             timeRules: [],
             rainyDayAvailable: false,
@@ -1267,14 +1284,193 @@ function renderGeneralConfig(container, fac) {
         app1.fields.push(fieldData);
         window.saveGlobalSettings?.("app1", app1);
         window.saveGlobalSettings?.("fields", app1.fields);
+    } else {
+        // Migrate existing General-Activity fieldData that has the old
+        // 'not_sharable' default to the new sharing-on default. Only touch
+        // facilities that the user has not explicitly customized (i.e.,
+        // still showing the legacy default).
+        if (fieldData._generalOnly && fieldData.sharableWith?.type === 'not_sharable' && fieldData.sharableWith?.capacity === 1) {
+            const _defaultPairs = {};
+            _allDivsForDefault.forEach(g => {
+                _defaultPairs[_pkDefault(g, g)] = true;
+                _allDivsForDefault.forEach(g2 => {
+                    if (g !== g2) _defaultPairs[_pkDefault(g, g2)] = true;
+                });
+            });
+            fieldData.sharableWith = {
+                type: 'cross_division',
+                divisions: [],
+                capacity: 20,
+                allowedPairs: _defaultPairs
+            };
+            window.saveGlobalSettings?.("app1", app1);
+            window.saveGlobalSettings?.("fields", app1.fields);
+        }
     }
 
     const divider = document.createElement("div");
     divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
     container.appendChild(divider);
 
-    container.appendChild(section("Sharing Rules", summarySharing(fieldData),
-        () => renderSharing(fieldData)));
+    container.appendChild(section("Sharing Rules", summaryGeneralSharing(fieldData),
+        () => renderGeneralSharing(fieldData)));
+}
+
+// =========================================================================
+// GENERAL ACTIVITY SHARING — Pair-based UI mirroring Specials
+// =========================================================================
+function summaryGeneralSharing(f) {
+    const rules = f.sharableWith;
+    if (!rules || rules.type === 'not_sharable') return "No sharing (1 bunk only)";
+    const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
+    const cap = parseInt(rules.capacity) || 2;
+    return 'Sharing on' + (pc > 0 ? ', ' + pc + ' grade pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
+}
+
+function renderGeneralSharing(item) {
+    const container = document.createElement("div");
+    const updateSummary = () => {
+        const el = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryGeneralSharing(item);
+    };
+
+    function pk(a, b) { return [a, b].sort().join('|'); }
+
+    const renderContent = () => {
+        container.innerHTML = "";
+        const rules = item.sharableWith || { type: 'not_sharable', capacity: 1 };
+        if (!rules.allowedPairs || typeof rules.allowedPairs !== 'object') rules.allowedPairs = {};
+        item.sharableWith = rules;
+        const isSharable = rules.type !== 'not_sharable';
+
+        // ── Step 1: Allow sharing toggle ─────────────────────────
+        const hdr = document.createElement("div");
+        hdr.style.cssText = "font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:8px;";
+        hdr.textContent = "Allow sharing?";
+        container.appendChild(hdr);
+
+        const shareToggle = document.createElement("div");
+        shareToggle.style.cssText = "display:flex; gap:0; margin-bottom:14px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;";
+
+        const btnNo = document.createElement("button");
+        btnNo.textContent = "No — 1 bunk only";
+        btnNo.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; '
+            + (!isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
+
+        const btnYes = document.createElement("button");
+        btnYes.textContent = "Yes — allow sharing";
+        btnYes.style.cssText = 'flex:1; padding:9px 8px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s; border-left:1px solid #E5E7EB; '
+            + (isSharable ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#6B7280;');
+
+        btnNo.onclick = () => {
+            rules.type = 'not_sharable'; rules.capacity = 1; rules.allowedPairs = {};
+            item.sharableWith = rules; saveFieldData(); renderContent(); updateSummary();
+        };
+        btnYes.onclick = () => {
+            rules.type = 'cross_division';
+            if (!rules.capacity || rules.capacity < 2) rules.capacity = 20;
+            const defDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            defDivs.forEach(g => {
+                if (rules.allowedPairs[pk(g, g)] === undefined) rules.allowedPairs[pk(g, g)] = true;
+            });
+            item.sharableWith = rules; saveFieldData(); renderContent(); updateSummary();
+        };
+
+        shareToggle.appendChild(btnNo);
+        shareToggle.appendChild(btnYes);
+        container.appendChild(shareToggle);
+
+        if (!isSharable) {
+            const nNote = document.createElement('div');
+            nNote.style.cssText = 'color:#6B7280; font-size:0.82rem; padding:10px; background:#F9FAFB; border-radius:8px;';
+            nNote.textContent = 'Only 1 bunk will be assigned to this facility at a time.';
+            container.appendChild(nNote);
+            return;
+        }
+
+        // ── Step 2: Capacity ─────────────────────────────────────
+        const capWrap = document.createElement('div');
+        capWrap.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:16px;';
+        const capLbl = document.createElement('span');
+        capLbl.style.cssText = 'font-size:0.84rem; color:#374151;';
+        capLbl.textContent = 'Max bunks at once:';
+        const capIn = document.createElement('input');
+        capIn.type = 'number'; capIn.min = '2'; capIn.max = '50'; capIn.value = rules.capacity || 20;
+        capIn.style.cssText = 'width:64px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.9rem; font-weight:600;';
+        capIn.onchange = () => {
+            rules.capacity = Math.min(50, Math.max(2, parseInt(capIn.value) || 2));
+            capIn.value = rules.capacity;
+            item.sharableWith = rules; saveFieldData(); updateSummary();
+        };
+        capWrap.appendChild(capLbl);
+        capWrap.appendChild(capIn);
+        container.appendChild(capWrap);
+
+        // ── Step 3: Grade pairs ──────────────────────────────────
+        const allDivs = (typeof _getOrderedGrades === 'function')
+            ? _getOrderedGrades()
+            : Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+
+        if (allDivs.length < 2) {
+            const noGr = document.createElement('div');
+            noGr.style.cssText = 'font-size:0.82rem; color:#6B7280; padding:10px; background:#F9FAFB; border-radius:8px;';
+            noGr.textContent = 'No grades configured yet.';
+            container.appendChild(noGr);
+            return;
+        }
+
+        const pairHdr = document.createElement('div');
+        pairHdr.style.cssText = 'font-size:0.84rem; font-weight:500; color:#374151; margin-bottom:10px;';
+        pairHdr.textContent = 'Which grades can share with each other?';
+        container.appendChild(pairHdr);
+
+        const gridWrap = document.createElement('div');
+        gridWrap.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+        allDivs.forEach(rowGrade => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+
+            const lbl = document.createElement('span');
+            lbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:600; min-width:84px; flex-shrink:0;';
+            lbl.textContent = rowGrade + ':';
+            row.appendChild(lbl);
+
+            [...allDivs.filter(g => g !== rowGrade), rowGrade].forEach(colGrade => {
+                const isSame = colGrade === rowGrade;
+                const key = pk(rowGrade, colGrade);
+                const isOn = rules.allowedPairs[key] === true;
+
+                const chip = document.createElement('button');
+                chip.type = 'button';
+                chip.textContent = isSame ? '(same grade)' : colGrade;
+                chip.style.cssText = 'padding:4px 10px; border-radius:20px; font-size:0.8rem; cursor:pointer; transition:all 0.12s; border:1px solid '
+                    + (isOn ? '#0F5F6E' : '#D1D5DB') + '; background:'
+                    + (isOn ? '#e6f4f7' : '#fff') + '; color:'
+                    + (isOn ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (isOn ? '600' : '400') + ';';
+                if (isSame) chip.style.cssText += 'font-style:italic;';
+
+                chip.onclick = () => {
+                    if (rules.allowedPairs[key]) delete rules.allowedPairs[key];
+                    else rules.allowedPairs[key] = true;
+                    item.sharableWith = rules; saveFieldData(); renderContent(); updateSummary();
+                };
+                row.appendChild(chip);
+            });
+
+            gridWrap.appendChild(row);
+        });
+
+        container.appendChild(gridWrap);
+
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:0.75rem; color:#9CA3AF; margin-top:10px; line-height:1.5;';
+        hint.textContent = 'Sharing is always mutual — if Grade 1 can share with Grade 2, Grade 2 automatically can share with Grade 1.';
+        container.appendChild(hint);
+    };
+
+    renderContent();
+    return container;
 }
 
 // =========================================================================

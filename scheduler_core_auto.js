@@ -1309,15 +1309,19 @@
             // }
             // For now: capacity-gated only.
             //
-            // ★ Day 22.5+: Capacity is now read from the Pool facility's
-            //   Sharing Rules (set in the Facilities UI), with fallbacks to
-            //   the legacy poolLaneCapacity setting, then 12. This makes the
-            //   "Sharing Rules" panel on General Activity facilities actually
-            //   affect schedule generation — previously Swim placement
-            //   ignored field.sharableWith and used a hardcoded 12.
+            // ★ Day 22.5+: Capacity AND cross-grade pairs are now read from
+            //   the Pool facility's Sharing Rules (set in the Facilities UI).
+            //   - sharableWith.type='cross_division' + allowedPairs → only
+            //     grade pairs listed as allowed can swim concurrently
+            //   - sharableWith.type='not_sharable' → 1 bunk at a time
+            //   - sharableWith.type='all' → capacity-only check
+            //   Delegates to rtCanUse so cross-grade pair logic is identical
+            //   to specials. Previously this function did capacity-only with
+            //   a hardcoded 12 and ignored field.sharableWith entirely.
             var _poolCap = 12;
+            var _poolShareType = 'all';
+            var _poolAllowedPairs = {};
             try {
-                // Highest precedence: the Pool facility's own Sharing Rules
                 const _gsPool = (typeof globalSettings !== 'undefined' && globalSettings)
                     ? globalSettings : (window.globalSettings || {});
                 const _poolField = (_gsPool.app1?.fields || _gsPool.fields || [])
@@ -1327,36 +1331,28 @@
                     });
                 if (_poolField && _poolField.sharableWith) {
                     const _sw = _poolField.sharableWith;
-                    const _swType = _sw.type || _sw.shareType || 'not_sharable';
-                    if (_swType === 'not_sharable') {
+                    _poolShareType = _sw.type || _sw.shareType || 'all';
+                    _poolAllowedPairs = _sw.allowedPairs || {};
+                    if (_poolShareType === 'not_sharable') {
                         _poolCap = 1;
-                    } else if (_swType === 'all') {
-                        const _cap = parseInt(_sw.capacity);
-                        _poolCap = (_cap > 0) ? _cap : 999;
                     } else {
                         const _cap = parseInt(_sw.capacity);
                         if (_cap > 0) _poolCap = _cap;
+                        else if (_poolShareType === 'all') _poolCap = 999;
                     }
                 }
-                // Fallback: legacy poolLaneCapacity setting
-                if (_poolCap === 12 && window.globalSettings && window.globalSettings.app1 &&
+                // Fallback: legacy poolLaneCapacity setting (only if no field config)
+                if (_poolCap === 12 && _poolShareType === 'all' && window.globalSettings && window.globalSettings.app1 &&
                     typeof window.globalSettings.app1.poolLaneCapacity === 'number' &&
                     window.globalSettings.app1.poolLaneCapacity > 0) {
                     _poolCap = window.globalSettings.app1.poolLaneCapacity;
                 }
             } catch (_e) {}
 
-            const key = _rtKey('pool', '_pool');
-            const buckets = _resourceBuckets[key];
-            if (!buckets) return true;
-            for (let m = startMin; m < endMin; m += 5) {
-                const b = buckets[m];
-                if (!b) continue;
-                // Capacity-gated only. b.count is total bunk-slot occupancy
-                // across all grades (rtRegister increments per bunk per 5-min).
-                if (b.count >= _poolCap) return false;
-            }
-            return true;
+            // Reuse rtCanUse — same logic that drives Specials cross_division
+            //   sharing, including allowedPairs and per-grade tracking.
+            return rtCanUse('pool', '_pool', grade, startMin, endMin,
+                _poolShareType, _poolCap, /*allowedDivisions*/ [], _poolAllowedPairs);
         }
 
         // ── Rotation event concurrency tracking ─────────────────────
