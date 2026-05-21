@@ -7646,6 +7646,35 @@
                 return result;
             }
 
+            // ★ Day 22.5 cross-day rotation fix: compute per-bunk-gap "field
+            //   options count" — number of sports whose hosting fields are
+            //   not-yet-claimed at the bunk's gap time. Bunks with FEWER
+            //   options at their time slots are more constrained and need
+            //   to process FIRST, before bigger divisions saturate the
+            //   contested fields. Without this prioritization, small bunks
+            //   (Minors 1 with 3 sport slots and only ~3 field-available
+            //   sports at its narrow windows) always process LAST in queue
+            //   order and get locked onto the same overplayed sport set.
+            function _countFieldOptions(qBunk, qGrade, gap) {
+                var qMeta = bunkMeta[qBunk];
+                if (!qMeta || !qMeta.priorityList) return 99; // assume plenty of options if no meta
+                var count = 0;
+                var seenSports = new Set();
+                for (var pi = 0; pi < qMeta.priorityList.length; pi++) {
+                    var sp = qMeta.priorityList[pi];
+                    if (!sp || seenSports.has(sp.name)) continue;
+                    var fields = sp.fields || [];
+                    for (var fi = 0; fi < fields.length; fi++) {
+                        if (isFieldAvailable(fields[fi], gap.start, gap.end, qBunk, qGrade, sp.name)) {
+                            count++;
+                            seenSports.add(sp.name);
+                            break; // count sport once
+                        }
+                    }
+                }
+                return count;
+            }
+
             // Build contention-sorted gap queue for Phase B
             var gapQueue = [];
             allBunkIds.forEach(function(qBunk) {
@@ -7662,12 +7691,26 @@
                             var qEntry = contentionMap[qt + ':' + qMeta.grade];
                             if (qEntry && qEntry.deficit > maxDeficit) maxDeficit = qEntry.deficit;
                         }
-                        gapQueue.push({ bunk: qBunk, gap: sGap, contention: maxDeficit });
+                        gapQueue.push({
+                            bunk: qBunk,
+                            grade: qMeta.grade,
+                            gap: sGap,
+                            contention: maxDeficit,
+                            fieldOptions: _countFieldOptions(qBunk, qMeta.grade, sGap)
+                        });
                     });
                 });
             });
-            gapQueue.sort(function(a, b) { return b.contention - a.contention; });
-            log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, max contention=' + (gapQueue.length > 0 ? gapQueue[0].contention : 0));
+            // ★ Day 22.5: prioritize most-constrained bunks FIRST.
+            //   Primary: fieldOptions ASC (fewest options = most constrained = process first)
+            //   Tie-break: contention DESC (highest demand-supply deficit first)
+            //   Tie-break 2: by gap start time (earlier in day first, deterministic)
+            gapQueue.sort(function(a, b) {
+                if (a.fieldOptions !== b.fieldOptions) return a.fieldOptions - b.fieldOptions;
+                if (a.contention !== b.contention) return b.contention - a.contention;
+                return a.gap.start - b.gap.start;
+            });
+            log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, min fieldOptions=' + (gapQueue.length > 0 ? gapQueue[0].fieldOptions : 0) + ', max contention=' + (gapQueue.length > 0 ? Math.max.apply(null, gapQueue.map(function(g){return g.contention;})) : 0));
 
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
