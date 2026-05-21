@@ -243,6 +243,13 @@ var _liveInterval = null;
 var _liveCursorInterval = null;
 var _liveWindow = null;
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
+// ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
+//   content toggles. These are persisted via localStorage so the user's setup survives
+//   page reloads. Defaults bias toward "looks good on paper out-of-the-box".
+var _activityAligned = true;   // true → columns sized by activity duration (no fixed grid)
+var _hideDurations = false;    // hide the "50m" duration line under activity titles
+var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
+var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // Excel-style cell selection state
@@ -1116,6 +1123,12 @@ function getStyles() {
 
     /* ── Print overrides ── */
     '@media print{.no-print,.pc3-toolbar,.pc3-formula,.pc3-sidebar,.pc3-drawer{display:none!important;}.pc3{background:#fff!important;}.pc3-grid-area{background:#fff!important;padding:0!important;overflow:visible!important;}.pc3-sheet{box-shadow:none!important;border-radius:0!important;}}' +
+    /* ★ Day 22.5+ Print Center: live + print content-control classes */
+    '.pc3-hide-durations .pc3-dur{display:none !important;}' +
+    /* Per-bunk page break in Bunks view (each .pc3-sheet is one bunk) */
+    '@media print{.pc3-pb-per-bunk .pc3-sheet{page-break-after:always;break-after:page;}.pc3-pb-per-bunk .pc3-sheet:last-child{page-break-after:auto;break-after:auto;}}' +
+    /* Make tables fully visible during print regardless of overflow scrolling */
+    '@media print{.pc3-sheet-table-wrap{overflow:visible !important;}.pc3-tbl{page-break-inside:auto;}.pc3-tbl thead{display:table-header-group;}.pc3-tbl tr{page-break-inside:avoid;}}' +
     '</style>';
 }
 
@@ -1128,7 +1141,7 @@ function buildMainUI() {
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
     return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + '" id="pc3-root">' +
+    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + '" id="pc3-root">' +
 
     /* ── Hero header ── */
     '<div class="pc3-hero no-print">' +
@@ -1232,7 +1245,9 @@ function buildMainUI() {
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-row"><span>Sub-segment</span>' +
+                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Time axis</div>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-activity-aligned"' + (_activityAligned ? ' checked' : '') + '>Activity-aligned columns<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Recommended</span></label>' +
+                        '<div class="pc3-popover-row" id="pc3-subseg-row" style="' + (_activityAligned ? 'display:none;' : '') + '"><span>Sub-segment</span>' +
                             '<select id="pc3-time-increment" class="pc3-popover-select" style="max-width:110px;">' +
                                 (function () {
                                     var opts = '';
@@ -1243,6 +1258,15 @@ function buildMainUI() {
                                 })() +
                             '</select>' +
                         '</div>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
+                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Content</div>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-durations"' + (_hideDurations ? ' checked' : '') + '>Hide activity durations (50m)</label>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-locations"' + (_hideLocations ? ' checked' : '') + '>Hide locations &amp; sharing notes</label>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
+                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Print</div>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-page-break-bunk"' + (_pageBreakPerBunk ? ' checked' : '') + '>One bunk per page (Bunks view)</label>' +
                     '</div>' +
                 '</div>' +
             '</div>' +
@@ -1709,24 +1733,57 @@ function renderAutoDivisionTable(divName, bunks) {
         }
     }
 
-    // If still nothing, treat entire day as one period
+    // ★ Day 22.5+: track whether we found REAL bell-schedule periods vs.
+    //   the "whole day = one period" fallback. The period header row is
+    //   hidden in the fallback case — showing 'Period 1 9:00am-4:00pm'
+    //   spanning the entire day is visually noisy and confusing.
+    var hasRealPeriods = activityRanges.length > 0;
     if (activityRanges.length === 0) {
         activityRanges.push({ startMin: dayStart, endMin: dayEnd });
     }
 
-    try { console.log('[PrintCenter] div=' + divName + ' periods=' + activityRanges.length, activityRanges.map(function(r){return r.name||'?';})); } catch(e){}
+    try { console.log('[PrintCenter] div=' + divName + ' periods=' + activityRanges.length + ' hasReal=' + hasRealPeriods, activityRanges.map(function(r){return r.name||'?';})); } catch(e){}
 
-    // ─── 3. Build the full time-column array covering dayStart → dayEnd ─────
-    // Every increment gets a column. We also tag each column with which period it belongs to.
+    // ─── 3. Build the time-column array ─────
+    // Two modes:
+    //   (a) Activity-aligned (NEW default): columns are sized by activity
+    //       boundaries — every unique activity start/end across all bunks
+    //       becomes a column boundary. Activities never span an awkward
+    //       number of "15-min subcolumns" because there are no subcolumns.
+    //   (b) Fixed-increment (legacy): every _timeIncrement minutes is a
+    //       column. Activities of varying durations span uneven colspans.
     var timeCols = []; // [ { startMin, endMin, label, periodIdx (-1 if not in a period) } ]
-    for (var t = dayStart; t < dayEnd; t += inc) {
-        var colEnd = Math.min(t + inc, dayEnd);
-        var pIdx = -1;
-        for (var ri = 0; ri < activityRanges.length; ri++) {
-            // Column is in this period if it overlaps
-            if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+    var t, colEnd, pIdx, ri;
+    if (_activityAligned) {
+        // Collect unique boundaries across all bunks' activities
+        var boundarySet = {};
+        boundarySet[dayStart] = true;
+        boundarySet[dayEnd] = true;
+        Object.keys(bunkActs).forEach(function (bk) {
+            (bunkActs[bk] || []).forEach(function (a) {
+                if (a.startMin >= dayStart && a.startMin <= dayEnd) boundarySet[a.startMin] = true;
+                if (a.endMin >= dayStart && a.endMin <= dayEnd) boundarySet[a.endMin] = true;
+            });
+        });
+        var boundaries = Object.keys(boundarySet).map(Number).sort(function (a, b) { return a - b; });
+        for (var bi = 0; bi < boundaries.length - 1; bi++) {
+            t = boundaries[bi];
+            colEnd = boundaries[bi + 1];
+            pIdx = -1;
+            for (ri = 0; ri < activityRanges.length; ri++) {
+                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+            }
+            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
-        timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
+    } else {
+        for (t = dayStart; t < dayEnd; t += inc) {
+            colEnd = Math.min(t + inc, dayEnd);
+            pIdx = -1;
+            for (ri = 0; ri < activityRanges.length; ri++) {
+                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+            }
+            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
+        }
     }
     var numCols = timeCols.length;
 
@@ -1739,6 +1796,8 @@ function renderAutoDivisionTable(divName, bunks) {
     html += '<thead>';
 
     // ── HEADER ROW 1 (data row 1): Period labels (only over variable-activity columns) ──
+    // ★ Day 22.5+: only render the period header row when REAL periods exist.
+    if (hasRealPeriods) {
     html += '<tr>';
     html += '<th class="corner" rowspan="2" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
 
@@ -1766,13 +1825,25 @@ function renderAutoDivisionTable(divName, bunks) {
         }
     }
     html += '</tr>';
+    }  // end if (hasRealPeriods)
 
-    // ── HEADER ROW 2 (data row 2): Sub-time increment labels ──
+    // ── HEADER ROW 2 (time-label row) — the ONLY header row when no periods ──
     html += '<tr>';
-    var colW = Math.max(36, Math.min(80, 700 / numCols));
+    if (!hasRealPeriods) {
+        html += '<th class="corner" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
+    }
+    var colW = _activityAligned
+        ? Math.max(70, Math.min(140, 900 / Math.max(1, numCols)))
+        : Math.max(36, Math.min(80, 700 / numCols));
+    var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
-        html += '<th data-r="1" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(col.label) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;white-space:nowrap;padding:2px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + col.label + '</th>';
+        // Activity-aligned mode: show end time so each column header is self-documenting
+        var labelTxt = _activityAligned
+            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
+            : col.label;
+        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
+        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + labelTxt + '</th>';
     });
     html += '</tr>';
     html += '</thead><tbody>';
@@ -1814,9 +1885,9 @@ function renderAutoDivisionTable(divName, bunks) {
                     if (!actText && locText) { actText = locText; locText = ''; }
                 }
                 var displayText = actText || '\u2014';
-                if (locText) displayText += ' \u2013 ' + locText;
-                // \u2605 Append sharing bunks (other bunks at the same sports field at this time)
-                if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014') {
+                // \u2605 Day 22.5+: respect _hideLocations toggle
+                if (locText && !_hideLocations) displayText += ' \u2013 ' + locText;
+                if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014' && !_hideLocations) {
                     var _autoSh = pcFindFieldSharers(bunk, matchAct.slotIdx, divName);
                     if (_autoSh.length) {
                         var _autoNames = _autoSh.map(function(b){ return /^\d/.test(String(b)) ? 'Bunk ' + b : b; });
@@ -1851,7 +1922,8 @@ function renderAutoDivisionTable(divName, bunks) {
                 } else {
                     html += '<div style="border-radius:5px;background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
-                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                    // ★ Day 22.5+: duration line tagged with .pc3-dur so CSS toggle can hide it without re-render
+                    if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
                     html += '</div></td>';
                 }
 
@@ -3669,6 +3741,37 @@ function bindAll() {
         liveRefresh();
     });
 
+    // ★ Day 22.5+ Print Center: new layout/content/print toggles
+    var aaSel = el('pc3-activity-aligned');
+    if (aaSel) aaSel.addEventListener('change', function () {
+        _activityAligned = this.checked;
+        var subRow = el('pc3-subseg-row');
+        if (subRow) subRow.style.display = _activityAligned ? 'none' : '';
+        try { localStorage.setItem('campistry_pc3_activityAligned', _activityAligned ? '1' : '0'); } catch (e) {}
+        liveRefresh();
+    });
+    var hdSel = el('pc3-hide-durations');
+    if (hdSel) hdSel.addEventListener('change', function () {
+        _hideDurations = this.checked;
+        try { localStorage.setItem('campistry_pc3_hideDurations', _hideDurations ? '1' : '0'); } catch (e) {}
+        // Class toggle is enough — no full refresh needed
+        var root = document.getElementById('pc3-root');
+        if (root) root.classList.toggle('pc3-hide-durations', _hideDurations);
+    });
+    var hlSel = el('pc3-hide-locations');
+    if (hlSel) hlSel.addEventListener('change', function () {
+        _hideLocations = this.checked;
+        try { localStorage.setItem('campistry_pc3_hideLocations', _hideLocations ? '1' : '0'); } catch (e) {}
+        liveRefresh();  // location is baked into cell text → need full re-render
+    });
+    var pbSel = el('pc3-page-break-bunk');
+    if (pbSel) pbSel.addEventListener('change', function () {
+        _pageBreakPerBunk = this.checked;
+        try { localStorage.setItem('campistry_pc3_pageBreakPerBunk', _pageBreakPerBunk ? '1' : '0'); } catch (e) {}
+        var root = document.getElementById('pc3-root');
+        if (root) root.classList.toggle('pc3-pb-per-bunk', _pageBreakPerBunk);
+    });
+
     // Template selector
     var tplSel = el('pc3-template-select');
     if (tplSel) tplSel.addEventListener('change', function () {
@@ -3807,8 +3910,12 @@ function initPrintCenter() {
     if (!container) return;
     console.log('[PrintCenter] v' + VERSION + ' init (' + (isAutoMode() ? 'AUTO' : 'MANUAL') + ' mode)');
 
-    // Restore saved time increment
+    // Restore saved time increment + new Print Center 2.0 toggles
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
+    try { var savedAA = localStorage.getItem('campistry_pc3_activityAligned'); if (savedAA !== null) _activityAligned = savedAA === '1'; } catch (e) {}
+    try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
+    try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
+    try { var savedPB = localStorage.getItem('campistry_pc3_pageBreakPerBunk'); if (savedPB !== null) _pageBreakPerBunk = savedPB === '1'; } catch (e) {}
     // Restore last-used style preset
     try {
         var savedPreset = localStorage.getItem('campistry_pc3_preset');
