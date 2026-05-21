@@ -1248,9 +1248,11 @@ function renderGeneralConfig(container, fac) {
     //   but silently ignored by Swim placement, so they're hidden until the
     //   scheduler can honor them.
     //
-    //   ★ Default: sharing ON with highest capacity (20) and every grade
-    //   able to share with every other grade. Pool/Lunchroom are inherently
-    //   shared resources — defaulting to "1 bunk only" was confusing.
+    //   ★ Default: sharing ON with highest capacity (20). Within-grade
+    //   sharing is enabled by default for every grade (so multiple bunks
+    //   of the same grade can swim/lunch together) but cross-grade pairs
+    //   are OFF by default — the user opts in by clicking the cross-grade
+    //   chips in the pair grid.
     const settings = window.loadGlobalSettings?.() || {};
     const app1 = settings.app1 || {};
     let fieldData = (app1.fields || []).find(f => f.name === fac.name);
@@ -1258,12 +1260,9 @@ function renderGeneralConfig(container, fac) {
     const _pkDefault = (a, b) => [a, b].sort().join('|');
     if (!fieldData) {
         const _defaultPairs = {};
-        // Default: every grade pair (including self-pairs) can share
+        // Default: same-grade pairs only. Cross-grade is opt-in.
         _allDivsForDefault.forEach(g => {
             _defaultPairs[_pkDefault(g, g)] = true;
-            _allDivsForDefault.forEach(g2 => {
-                if (g !== g2) _defaultPairs[_pkDefault(g, g2)] = true;
-            });
         });
         fieldData = {
             name: fac.name,
@@ -1293,9 +1292,6 @@ function renderGeneralConfig(container, fac) {
             const _defaultPairs = {};
             _allDivsForDefault.forEach(g => {
                 _defaultPairs[_pkDefault(g, g)] = true;
-                _allDivsForDefault.forEach(g2 => {
-                    if (g !== g2) _defaultPairs[_pkDefault(g, g2)] = true;
-                });
             });
             fieldData.sharableWith = {
                 type: 'cross_division',
