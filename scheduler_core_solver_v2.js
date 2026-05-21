@@ -2236,6 +2236,70 @@
     //   SA finds a good neighborhood; repair polishes specific violations.
     smartRepair(window.scheduleAssignments, ctx);
 
+    // ★ Day 22.5+ FINAL NULL BACKFILL — guarantee 100% fill rate.
+    //   smartRepair's Pass 3 tries to fill nulls with real activities, but
+    //   gives up if no top-5 activity has a valid field for the slot. That
+    //   leaves trailing nulls at end-of-day for some bunks, which the
+    //   renderer paints as "+ Add" cells. This pass walks every bunk's slot
+    //   grid and forces any remaining nulls to a Free placeholder so the
+    //   grid is 100% filled and the user never sees "+ Add" gaps.
+    (function _finalNullBackfill() {
+      try {
+        const sa = window.scheduleAssignments || {};
+        let filledFree = 0, filledReal = 0, scanned = 0;
+        for (const [grade, gradePbs] of Object.entries(ctx.perBunkSlots || {})) {
+          for (const [bunk, pbsArr] of Object.entries(gradePbs || {})) {
+            if (!Array.isArray(pbsArr)) continue;
+            let slots = sa[bunk];
+            if (!Array.isArray(slots)) {
+              slots = new Array(pbsArr.length).fill(null);
+              sa[bunk] = slots;
+            }
+            // Extend slots to pbs length if short, truncate if longer than pbs
+            while (slots.length < pbsArr.length) slots.push(null);
+            if (slots.length > pbsArr.length) slots.length = pbsArr.length;
+            for (let i = 0; i < pbsArr.length; i++) {
+              scanned++;
+              if (slots[i]) continue;
+              const b = pbsArr[i];
+              if (!b || b.startMin == null || b.endMin == null) continue;
+              // Try a real activity first via smartRepair candidate helper
+              let placed = null;
+              try {
+                const pool = (typeof _candidateActivities === 'function')
+                  ? _candidateActivities(grade, ctx) : [];
+                for (const act of pool.slice(0, 8)) {
+                  const field = (typeof _findFieldForActivity === 'function')
+                    ? _findFieldForActivity(act, ctx) : null;
+                  if (!field) continue;
+                  placed = {
+                    field: field.name || field, sport: act, _activity: act,
+                    _autoMode: true, _autoSolved: true, _fixed: true,
+                    _startMin: b.startMin, _endMin: b.endMin,
+                    _source: 'v2-final-backfill', continuation: false
+                  };
+                  break;
+                }
+              } catch (_e1) { /* fall through to Free */ }
+              if (placed) { slots[i] = placed; filledReal++; }
+              else {
+                slots[i] = {
+                  field: 'Free', sport: null, _activity: 'Free',
+                  _autoMode: true, _fixed: true,
+                  _startMin: b.startMin, _endMin: b.endMin,
+                  _source: 'v2-final-backfill-free', continuation: false
+                };
+                filledFree++;
+              }
+            }
+          }
+        }
+        log('Final null backfill: scanned=' + scanned + ' filledReal=' + filledReal + ' filledFree=' + filledFree);
+      } catch (eB) {
+        warn('Final null backfill error: ' + (eB && eB.message));
+      }
+    })();
+
     // ★ Day 22.5 IRON GATE: final scrub for DA Resources daily time rules.
     //   No matter which path (V1, safety net, V2 SA moves, smartRepair, null
     //   bucket finalizer) placed something, this final pass clears any slot

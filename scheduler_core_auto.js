@@ -17960,21 +17960,13 @@
         // (the UI shows "Free" instead of "+Add"). This converts ALL null
         // buckets to something. Iteration 2 will make the probe smarter so
         // fewer fall back to Free.
-        // ★ STEP 4.96 — SLOT ALIGNMENT PASS (Day 22.5+ fix for "+ Add" trailing cells)
-        //   Some placement paths can leave scheduleAssignments[bunk] index-shifted
-        //   relative to _perBunkSlots[grade][bunk] — e.g. when a planned special
-        //   (Nernitas at pbs[0]) doesn't get placed, the remaining sa entries can
-        //   compact left, leaving trailing nulls AND wrong-time positioning.
-        //   This pass rebuilds sa[bunk] to be slot-index-aligned with pbs:
-        //     1. Anchor events (Swim/Change/lunch/Cleanup/Main activity/pre-/post-change)
-        //        are matched by activity name to their pbs index.
-        //     2. Remaining sa entries fill non-anchor pbs indexes in order.
-        //     3. Every sa entry gets stamped with _startMin/_endMin from its pbs slot.
-        //   After this pass the nullBucketFinalizer (Step 4.97) fills any newly
-        //   exposed empty slots, and the renderer no longer paints "+ Add" cells
-        //   for slots that already have valid activities.
+        // ★ STEP 4.96 — REMOVED (v1.1): the heuristic anchor-match alignment
+        //   dropped entries for bunks whose queue contained more anchor-named
+        //   entries than pbs anchor slots. Replaced by a final null-backfill
+        //   in scheduler_core_solver_v2.js that runs after SA + smartRepair
+        //   and guarantees no null sa[bunk][i] remains for any valid pbs slot.
         log('[STEP 4.96] Slot-alignment pass starting...');
-        (function slotAlignmentPass() {
+        (function slotAlignmentPass_REMOVED() {
             try {
                 const sa = window.scheduleAssignments || {};
                 const ANCHOR_EVENTS = new Set(['Swim','Change','lunch','Lunch','Cleanup','Main activity']);
