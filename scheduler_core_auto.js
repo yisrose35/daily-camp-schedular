@@ -1307,10 +1307,39 @@
             //   allowedPairs: [['Trios','Quartet'], ['Majors','Minors']],
             //   blockedPairs: [['Quints','Soloists']]
             // }
-            // For now: open sharing, capacity-gated only.
+            // For now: capacity-gated only.
+            //
+            // ★ Day 22.5+: Capacity is now read from the Pool facility's
+            //   Sharing Rules (set in the Facilities UI), with fallbacks to
+            //   the legacy poolLaneCapacity setting, then 12. This makes the
+            //   "Sharing Rules" panel on General Activity facilities actually
+            //   affect schedule generation — previously Swim placement
+            //   ignored field.sharableWith and used a hardcoded 12.
             var _poolCap = 12;
             try {
-                if (window.globalSettings && window.globalSettings.app1 &&
+                // Highest precedence: the Pool facility's own Sharing Rules
+                const _gsPool = (typeof globalSettings !== 'undefined' && globalSettings)
+                    ? globalSettings : (window.globalSettings || {});
+                const _poolField = (_gsPool.app1?.fields || _gsPool.fields || [])
+                    .find(function(f) {
+                        const n = (f && f.name || '').toLowerCase();
+                        return n === 'pool' || n.indexOf('pool') !== -1;
+                    });
+                if (_poolField && _poolField.sharableWith) {
+                    const _sw = _poolField.sharableWith;
+                    const _swType = _sw.type || _sw.shareType || 'not_sharable';
+                    if (_swType === 'not_sharable') {
+                        _poolCap = 1;
+                    } else if (_swType === 'all') {
+                        const _cap = parseInt(_sw.capacity);
+                        _poolCap = (_cap > 0) ? _cap : 999;
+                    } else {
+                        const _cap = parseInt(_sw.capacity);
+                        if (_cap > 0) _poolCap = _cap;
+                    }
+                }
+                // Fallback: legacy poolLaneCapacity setting
+                if (_poolCap === 12 && window.globalSettings && window.globalSettings.app1 &&
                     typeof window.globalSettings.app1.poolLaneCapacity === 'number' &&
                     window.globalSettings.app1.poolLaneCapacity > 0) {
                     _poolCap = window.globalSettings.app1.poolLaneCapacity;
