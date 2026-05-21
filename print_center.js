@@ -183,8 +183,8 @@ var PRINT_PACKS = [
     },
     {
         id: 'location-roster',
-        name: 'Location Rosters',
-        tagline: 'Who is on each field, court, or location, all day.',
+        name: 'Facility Rosters',
+        tagline: 'Who is on each facility (field, court, room) all day.',
         icon: 'mapPin',
         preset: 'classic',
         view: 'location',
@@ -993,9 +993,9 @@ function getStyles() {
     '.pc3-hero-icon-btn:hover{background:#fafaf9;border-color:#d6d3d1;color:#1c1917;}' +
 
     /* ── Tab bar ── */
-    '.pc3-tabbar{display:flex;align-items:center;gap:18px;padding:0 18px;background:#fff;border-bottom:1px solid #e7e5e4;flex-shrink:0;}' +
-    '.pc3-tabs{display:flex;align-items:center;gap:2px;}' +
-    '.pc3-tab{position:relative;padding:8px 4px;margin:0 4px;border:none;background:transparent;color:#78716c;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:color .15s;}' +
+    '.pc3-tabbar{display:flex;align-items:center;gap:24px;padding:0 18px;background:#fff;border-bottom:1px solid #e7e5e4;flex-shrink:0;flex-wrap:wrap;}' +
+    '.pc3-tabs{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}' +
+    '.pc3-tab{position:relative;padding:10px 14px;margin:0;border:none;background:transparent;color:#78716c;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;transition:color .15s;white-space:nowrap;}' +
     '.pc3-tab:hover{color:#1c1917;}' +
     '.pc3-tab.active{color:#147D91;}' +
     '.pc3-tab.active::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;background:#147D91;border-radius:2px 2px 0 0;}' +
@@ -1176,10 +1176,14 @@ function getStyles() {
     '.pc3-zoom-dock-sep{width:1px;height:18px;background:#e7e5e4;margin:0 2px;}' +
     '.pc3-zoom-glyph{font-size:18px;font-weight:600;line-height:1;color:#44403c;}' +
     /* ★ Sidebar toggle tab — vertically centered on the divider between sidebar and grid */
-    '.pc3-sidebar-toggle{position:absolute;top:50%;left:230px;transform:translate(-50%, -50%);width:24px;height:54px;border:1px solid #e7e5e4;background:#fff;border-radius:6px;cursor:pointer;color:#44403c;display:flex;align-items:center;justify-content:center;z-index:25;box-shadow:0 2px 8px rgba(15,23,42,.10);transition:left .2s,background .12s,box-shadow .12s;padding:0;}' +
-    '.pc3-sidebar-toggle:hover{background:#f5f5f4;color:#147D91;box-shadow:0 4px 12px rgba(15,23,42,.14);}' +
-    /* When collapsed, keep the full toggle on-screen by anchoring 12px in from the left edge */
-    '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:12px;}' +
+    /* Sidebar toggle — a small persistent "tab" handle that lives ON the divider
+       between the sidebar and the grid. When sidebar is open it sits at the
+       right edge of the 230px panel; when collapsed it sits at left:14px so the
+       user can find it. High z-index so it never disappears behind content. */
+    '.pc3-sidebar-toggle{position:absolute;top:64px;left:222px;width:18px;height:48px;border:1px solid #e7e5e4;border-left:none;background:#fff;border-radius:0 6px 6px 0;cursor:pointer;color:#147D91;display:flex;align-items:center;justify-content:center;z-index:40;box-shadow:2px 2px 8px rgba(15,23,42,.08);transition:left .2s,background .12s,box-shadow .12s;padding:0;}' +
+    '.pc3-sidebar-toggle:hover{background:#ecfeff;color:#0F6E80;box-shadow:4px 4px 12px rgba(15,23,42,.14);}' +
+    /* When collapsed, keep the full toggle on-screen anchored at the very left */
+    '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
     /* ── Spreadsheet Table ── */
@@ -1269,6 +1273,15 @@ function getStyles() {
     '.pc3-drawer .dp-color-pair{display:flex;align-items:center;gap:4px;font-size:10px;color:#64748b;}' +
     '.pc3-drawer .dp-color-pair span{min-width:44px;}' +
     '.pc3-drawer .dp-color-pair input[type="color"]{width:28px;height:22px;padding:1px;border:1px solid #cbd5e1;border-radius:3px;cursor:pointer;}' +
+    /* Drawer preset chips + action buttons */
+    '.pc3-drawer .dp-preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;}' +
+    '.pc3-drawer .dp-preset-btn{display:flex;align-items:center;gap:6px;padding:5px 7px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;color:#1c1917;}' +
+    '.pc3-drawer .dp-preset-btn:hover{background:#f5f5f4;border-color:#cbd5e1;}' +
+    '.pc3-drawer .dp-preset-btn.active{border-color:#147D91;background:#ecfeff;color:#0F6E80;}' +
+    '.pc3-drawer .dp-preset-sw{display:flex;gap:0;border-radius:3px;overflow:hidden;border:1px solid #e7e5e4;flex-shrink:0;height:18px;}' +
+    '.pc3-drawer .dp-preset-sw span{display:block;width:8px;height:100%;}' +
+    '.pc3-drawer .dp-action-btn{width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;color:#44403c;}' +
+    '.pc3-drawer .dp-action-btn:hover{background:#f5f5f4;border-color:#94a3b8;}' +
 
     /* ── Zoom ── */
     '.pc3-zoom{display:flex;align-items:center;gap:4px;}' +
@@ -1345,6 +1358,7 @@ function buildMainUI() {
             '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View in a new window') + '">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
+            '<button class="pc3-hero-btn" id="pc3-design-btn" onclick="window._pc3ToggleAdvanced()" title="Open full design settings — colors, fonts, header, footer, watermark">' + ICO.gear + ' Design</button>' +
             '<div class="pc3-popover-wrap">' +
                 '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Output <span style="opacity:.7;font-size:9px;">▼</span></button>' +
                 '<div class="pc3-popover" id="pc3-output-menu" style="min-width:260px;">' +
@@ -1369,7 +1383,7 @@ function buildMainUI() {
         '<div class="pc3-tabs">' +
             '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
             '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
-            '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Locations</button>' +
+            '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Facilities</button>' +
             '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon–Sun at-a-glance">Week</button>' +
         '</div>' +
         '<div class="pc3-tab-actions">' +
@@ -1536,7 +1550,20 @@ function buildMainUI() {
 // =========================================================================
 function buildAdvancedSections() {
     var t = _currentTemplate;
+    var presetSwatches = STYLE_PRESETS.map(function (p) {
+        var active = _activePreset === p.id;
+        return '<button class="dp-preset-btn' + (active ? ' active' : '') + '" data-preset="' + p.id + '" title="' + escHtml(p.description) + '">' +
+            '<span class="dp-preset-sw">' + p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
+            '<span class="dp-preset-nm">' + escHtml(p.name) + '</span>' +
+        '</button>';
+    }).join('');
     return '' +
+    /* Quick-start presets + reset — single hub for style management */
+    '<details open><summary>Quick start</summary><div class="dp-body">' +
+        '<div style="font-size:10px;color:#64748b;margin-bottom:6px;">Pick a starting point — then customize anything below.</div>' +
+        '<div class="dp-preset-grid">' + presetSwatches + '</div>' +
+        '<button class="dp-action-btn" onclick="window._pc3ResetToDefault && window._pc3ResetToDefault()" style="margin-top:8px;">Reset to default</button>' +
+    '</div></details>' +
     '<details open><summary>Header</summary><div class="dp-body">' +
         '<div class="dp-field"><label>Camp Name</label><input type="text" id="pc3-camp-name" value="' + escHtml(t.campName) + '" placeholder="Your Camp"></div>' +
         '<div class="dp-field"><label>Subtitle</label><input type="text" id="pc3-custom-subtitle" value="' + escHtml(t.customSubtitle) + '" placeholder="Daily Schedule"></div>' +
@@ -1673,8 +1700,8 @@ function populateSidebar() {
             groups.push(grp);
         });
     } else if (_activeView === 'location') {
-        if (titleEl) titleEl.textContent = 'Locations';
-        if (searchEl) searchEl.placeholder = 'Search locations…';
+        if (titleEl) titleEl.textContent = 'Facilities';
+        if (searchEl) searchEl.placeholder = 'Search facilities…';
         var allLocs = {};
         var aa = getAssignments();
         Object.keys(aa).forEach(function (bk) {
@@ -3655,23 +3682,52 @@ function triggerPrint() {
     readDesignValues();
     var t = _currentTemplate;
 
-    // Build print HTML with inline styles for printer
     var printHtml = buildPrintHTML(sel);
+    runPrint(printHtml, t);
+}
+
+// Shared print runner — hoists the print area to <body> so the print-only
+// CSS can reliably isolate it. The old approach assumed #printable-area
+// was a direct body child, but it lives deep inside #pc3-root → the
+// `body>*:not(#printable-area)` rule hid EVERYTHING and printouts were blank.
+function runPrint(printHtml, t) {
     var printArea = el('printable-area');
-    if (printArea) { printArea.innerHTML = printHtml; printArea.style.display = 'block'; }
+    if (!printArea) {
+        printArea = document.createElement('div');
+        printArea.id = 'printable-area';
+        document.body.appendChild(printArea);
+    }
+    // Remember where it lived so we can put it back after print.
+    var origParent = printArea.parentNode;
+    var origNextSibling = printArea.nextSibling;
+    if (origParent !== document.body) {
+        document.body.appendChild(printArea);
+    }
+    printArea.innerHTML = printHtml;
+    printArea.style.display = 'block';
 
     var style = document.createElement('style');
     style.id = 'pc3-print-style';
     style.textContent = '@page{size:' + t.paperSize + ' ' + t.orientation + ';margin:0.4in;}' +
-        '@media print{body>*:not(#printable-area){display:none!important;}#printable-area{display:block!important;}}';
+        '@media print{' +
+            'html,body{margin:0!important;padding:0!important;background:#fff!important;}' +
+            'body *{visibility:hidden!important;}' +
+            '#printable-area,#printable-area *{visibility:visible!important;}' +
+            '#printable-area{position:absolute!important;top:0!important;left:0!important;width:100%!important;display:block!important;}' +
+        '}';
     document.head.appendChild(style);
 
     setTimeout(function () {
         window.print();
         setTimeout(function () {
-            if (printArea) { printArea.innerHTML = ''; printArea.style.display = 'none'; }
-            var ps = document.getElementById('pc3-print-style');
-            if (ps) ps.remove();
+            printArea.innerHTML = '';
+            printArea.style.display = 'none';
+            // Put it back where it belonged so subsequent renders don't lose it.
+            if (origParent && origParent !== document.body) {
+                if (origNextSibling) origParent.insertBefore(printArea, origNextSibling);
+                else origParent.appendChild(printArea);
+            }
+            var ps = document.getElementById('pc3-print-style'); if (ps) ps.remove();
         }, 500);
     }, 200);
 }
@@ -4233,6 +4289,19 @@ function bindAll() {
     if (drawerScroll) {
         drawerScroll.addEventListener('input', function () { readDesignValues(); liveRefresh(); });
         drawerScroll.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
+        // Delegated handler for preset chips inside the drawer
+        drawerScroll.addEventListener('click', function (e) {
+            var btn = e.target.closest && e.target.closest('.dp-preset-btn');
+            if (!btn) return;
+            e.preventDefault();
+            var pid = btn.getAttribute('data-preset');
+            if (pid && window._pc3ApplyPreset) {
+                window._pc3ApplyPreset(pid);
+                drawerScroll.querySelectorAll('.dp-preset-btn').forEach(function (b) {
+                    b.classList.toggle('active', b.getAttribute('data-preset') === pid);
+                });
+            }
+        });
     }
 
     // Keyboard
@@ -4738,20 +4807,7 @@ function doWeekStackPrint(keys) {
         window.currentScheduleDate = origDate;
     }
 
-    var printArea = el('printable-area');
-    if (printArea) { printArea.innerHTML = combinedHtml; printArea.style.display = 'block'; }
-    var style = document.createElement('style');
-    style.id = 'pc3-print-style';
-    style.textContent = '@page{size:' + t.paperSize + ' ' + t.orientation + ';margin:0.4in;}' +
-        '@media print{body>*:not(#printable-area){display:none!important;}#printable-area{display:block!important;}}';
-    document.head.appendChild(style);
-    setTimeout(function () {
-        window.print();
-        setTimeout(function () {
-            if (printArea) { printArea.innerHTML = ''; printArea.style.display = 'none'; }
-            var ps = document.getElementById('pc3-print-style'); if (ps) ps.remove();
-        }, 500);
-    }, 200);
+    runPrint(combinedHtml, t);
 }
 window._pc3ExportExcel = exportExcel;
 window._pc3OpenLive = openLiveWindow;
