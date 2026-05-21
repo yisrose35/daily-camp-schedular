@@ -514,6 +514,163 @@ function daShowCopyGradeModal(skeleton, onApply) {
 }
 
 // =================================================================
+// COPY GRADE MODAL — AUTO MODE variant
+// =================================================================
+// daAutoLayers shape: { gradeName: [layerObj, ...] }
+// This mirrors daShowCopyGradeModal but operates on the auto-mode
+// layer dictionary instead of the manual-mode skeleton event array.
+// Without this Copy Grade was a no-op in auto mode because the manual
+// path read from an unused dailyOverrideSkeleton.
+function daShowCopyAutoGradeModal(autoLayers, onApply) {
+  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
+
+  var divsWithLayers = {};
+  Object.keys(autoLayers || {}).forEach(function(g) {
+    if (Array.isArray(autoLayers[g]) && autoLayers[g].length > 0) divsWithLayers[g] = true;
+  });
+
+  var existing = document.getElementById('da-modal-input-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'da-modal-input-overlay';
+  overlay.className = 'da-modal-overlay';
+
+  var modal = document.createElement('div');
+  modal.className = 'da-modal';
+  modal.style.cssText = 'max-width:440px; width:90%;';
+
+  modal.innerHTML =
+    '<div style="padding:20px 24px 0;">' +
+      '<h3 style="margin:0 0 4px; font-size:1.05rem; color:#1E293B;">Copy Grade Layers</h3>' +
+      '<p style="margin:0 0 16px; font-size:0.82rem; color:#64748B;">Copy the auto-builder layers from one grade and apply to one or more other grades.</p>' +
+    '</div>' +
+    '<div style="padding:0 24px 20px;">' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy from:</label>' +
+      '<select id="da-cga-from" style="width:100%; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; margin-bottom:16px;">' +
+        '<option value="">Select source grade...</option>' +
+        divisions.map(function(d) {
+          return '<option value="' + d + '"' + (divsWithLayers[d] ? '' : ' disabled') + '>' + d + (divsWithLayers[d] ? '' : ' (empty)') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy to:</label>' +
+      '<div id="da-cga-targets" style="display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; margin-bottom:16px;"></div>' +
+    '</div>' +
+    '<div class="da-modal-footer" style="display:flex; gap:8px; justify-content:flex-end; padding:12px 24px; border-top:1px solid #E5E7EB;">' +
+      '<button id="da-cga-cancel" class="da-btn da-btn-ghost">Cancel</button>' +
+      '<button id="da-cga-apply" class="da-btn da-btn-primary" disabled>Copy</button>' +
+    '</div>';
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  var fromSelect = modal.querySelector('#da-cga-from');
+  var targetsDiv = modal.querySelector('#da-cga-targets');
+  var applyBtn = modal.querySelector('#da-cga-apply');
+  var selectedTargets = {};
+
+  function renderTargets() {
+    var sourceDiv = fromSelect.value;
+    targetsDiv.innerHTML = '';
+    selectedTargets = {};
+
+    if (!sourceDiv) {
+      targetsDiv.innerHTML = '<div style="color:#9CA3AF; font-size:0.82rem; padding:8px;">Select a source grade first.</div>';
+      applyBtn.disabled = true;
+      return;
+    }
+
+    divisions.filter(function(d) { return d !== sourceDiv; }).forEach(function(d) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; cursor:pointer; user-select:none;';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = d;
+      cb.style.cssText = 'width:16px; height:16px; accent-color:#147D91;';
+      cb.onchange = function() {
+        if (cb.checked) selectedTargets[d] = true;
+        else delete selectedTargets[d];
+        applyBtn.disabled = Object.keys(selectedTargets).length === 0;
+      };
+      var label = document.createElement('span');
+      label.style.cssText = 'font-size:0.88rem; color:#1F2937;';
+      label.textContent = d;
+      row.appendChild(cb); row.appendChild(label);
+      if (divsWithLayers[d]) {
+        var warn = document.createElement('span');
+        warn.style.cssText = 'font-size:0.7rem; color:#D97706; margin-left:auto;';
+        warn.textContent = 'has layers (will be replaced)';
+        row.appendChild(warn);
+      }
+      targetsDiv.appendChild(row);
+    });
+
+    var selectAllRow = document.createElement('div');
+    selectAllRow.style.cssText = 'display:flex; justify-content:flex-end; margin-top:4px;';
+    var selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.style.cssText = 'font-size:0.78rem; color:#147D91; background:none; border:none; cursor:pointer; text-decoration:underline;';
+    selectAllBtn.onclick = function() {
+      targetsDiv.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+        cb.checked = true; selectedTargets[cb.value] = true;
+      });
+      applyBtn.disabled = false;
+    };
+    selectAllRow.appendChild(selectAllBtn);
+    targetsDiv.appendChild(selectAllRow);
+  }
+
+  fromSelect.onchange = renderTargets;
+  renderTargets();
+
+  modal.querySelector('#da-cga-cancel').onclick = function() { overlay.remove(); };
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  applyBtn.onclick = function() {
+    var sourceDiv = fromSelect.value;
+    var targets = Object.keys(selectedTargets);
+    if (!sourceDiv || targets.length === 0) return;
+
+    var source = autoLayers[sourceDiv] || [];
+    if (source.length === 0) { overlay.remove(); daShowAlert('Source grade has no layers to copy.'); return; }
+
+    var divisionsObj = window.divisions || {};
+    // Build a new copy of autoLayers to return
+    var updated = JSON.parse(JSON.stringify(autoLayers || {}));
+    targets.forEach(function(targetDiv) {
+      var targetMeta = divisionsObj[targetDiv] || {};
+      var tStart = (typeof window.parseTimeToMinutes === 'function' && targetMeta.startTime) ? window.parseTimeToMinutes(targetMeta.startTime) : 540;
+      var tEnd = (typeof window.parseTimeToMinutes === 'function' && targetMeta.endTime) ? window.parseTimeToMinutes(targetMeta.endTime) : 960;
+      updated[targetDiv] = source.map(function(l) {
+        var copy = Object.assign({}, JSON.parse(JSON.stringify(l)), {
+          id: 'daw_' + Math.random().toString(36).slice(2, 9),
+          startMin: Math.max(tStart, l.startMin),
+          endMin: Math.min(tEnd, l.endMin)
+        });
+        if (typeof window._mbRemapLeagueForGrade === 'function') {
+          window._mbRemapLeagueForGrade(copy, targetDiv);
+        }
+        return copy;
+      });
+      // ★ Same cache-invalidation guard as Master Scheduler's Copy Layers:
+      //   without this the next gen reads the OLD _perBunkSlots grid for
+      //   the target grade and visibly ignores the copy.
+      try {
+        if (window.divisionTimes && window.divisionTimes[targetDiv]) {
+          delete window.divisionTimes[targetDiv]._perBunkSlots;
+          delete window.divisionTimes[targetDiv]._slots;
+          delete window.divisionTimes[targetDiv]._builtAt;
+        }
+      } catch (_e) {}
+    });
+
+    overlay.remove();
+    onApply(updated);
+  };
+}
+
+// =================================================================
 // TILES - From v3.9 (working tile definitions)
 // =================================================================
 const TILES = [
@@ -4180,11 +4337,24 @@ function renderToolbar() {
   };
   
   document.getElementById('da-copy-grade-btn').onclick = () => {
-    daShowCopyGradeModal(dailyOverrideSkeleton, (updated) => {
-      dailyOverrideSkeleton = updated;
-      saveDailySkeleton();
-      renderGrid();
-    });
+    // ★ Auto mode uses a different data shape (daAutoLayers: {grade:[layers]})
+    //   than manual mode (dailyOverrideSkeleton: [events with .division]).
+    //   Previously the button always handed manual-mode skeleton to
+    //   daShowCopyGradeModal, so in auto mode the modal saw zero events
+    //   and the Copy did nothing visible.
+    if (isAutoMode) {
+      daShowCopyAutoGradeModal(daAutoLayers, (updatedLayers) => {
+        daAutoLayers = updatedLayers;
+        saveDAAutoLayers();
+        renderGrid();
+      });
+    } else {
+      daShowCopyGradeModal(dailyOverrideSkeleton, (updated) => {
+        dailyOverrideSkeleton = updated;
+        saveDailySkeleton();
+        renderGrid();
+      });
+    }
   };
 
   document.getElementById('da-clear-btn').onclick = async () => {
