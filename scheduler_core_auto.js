@@ -17960,95 +17960,11 @@
         // (the UI shows "Free" instead of "+Add"). This converts ALL null
         // buckets to something. Iteration 2 will make the probe smarter so
         // fewer fall back to Free.
-        // ★ STEP 4.96 — REMOVED (v1.1): the heuristic anchor-match alignment
-        //   dropped entries for bunks whose queue contained more anchor-named
-        //   entries than pbs anchor slots. Replaced by a final null-backfill
-        //   in scheduler_core_solver_v2.js that runs after SA + smartRepair
-        //   and guarantees no null sa[bunk][i] remains for any valid pbs slot.
-        log('[STEP 4.96] Slot-alignment pass starting...');
-        (function slotAlignmentPass_REMOVED() {
-            try {
-                const sa = window.scheduleAssignments || {};
-                const ANCHOR_EVENTS = new Set(['Swim','Change','lunch','Lunch','Cleanup','Main activity']);
-                const ANCHOR_TYPES = new Set(['swim','pre-change','post-change','lunch','custom']);
-                let realigned = 0, stamped = 0;
-                const divKeys = Object.keys(divisions || {});
-                for (const grade of divKeys) {
-                    if (allowedSet && !allowedSet.has(String(grade))) continue;
-                    const pbsObj = window.divisionTimes?.[grade]?._perBunkSlots;
-                    if (!pbsObj) continue;
-                    const bunks = getBunksForGrade(grade, divisions);
-                    for (const bunk of bunks) {
-                        const bunkKey = String(bunk);
-                        const pbsArr = pbsObj[bunkKey] || [];
-                        const saOld = sa[bunkKey] || [];
-                        if (!pbsArr.length) continue;
-                        // Detect misalignment: any non-null sa[i] whose _activity disagrees
-                        // with pbs[i].event for anchor-type slots, OR sa.length !== pbs.length.
-                        let needsRealign = (saOld.length !== pbsArr.length);
-                        if (!needsRealign) {
-                            for (let i = 0; i < pbsArr.length; i++) {
-                                const p = pbsArr[i];
-                                const s = saOld[i];
-                                if (!p || !s) continue;
-                                if (ANCHOR_TYPES.has(p.type) && s._activity && p.event && s._activity !== p.event) {
-                                    needsRealign = true; break;
-                                }
-                            }
-                        }
-                        // Always rebuild — keeps sa stamped with current pbs times even
-                        // when alignment is already correct (cheap and idempotent).
-                        const queue = saOld.filter(e => e && e._activity);
-                        const newSa = new Array(pbsArr.length).fill(null);
-                        const used = new Set();
-                        // Pass A: place anchor entries by activity-name match
-                        pbsArr.forEach((p, i) => {
-                            if (!p) return;
-                            const isAnchor = ANCHOR_TYPES.has(p.type) || ANCHOR_EVENTS.has(p.event);
-                            if (!isAnchor) return;
-                            for (let qi = 0; qi < queue.length; qi++) {
-                                if (used.has(qi)) continue;
-                                if (queue[qi]._activity === p.event) {
-                                    const entry = Object.assign({}, queue[qi]);
-                                    entry._startMin = p.startMin;
-                                    entry._endMin = p.endMin;
-                                    newSa[i] = entry;
-                                    used.add(qi);
-                                    stamped++;
-                                    break;
-                                }
-                            }
-                        });
-                        // Pass B: fill remaining (non-anchor) slots with remaining queue entries in order
-                        let qPtr = 0;
-                        pbsArr.forEach((p, i) => {
-                            if (!p) return;
-                            if (newSa[i]) return;
-                            const isAnchor = ANCHOR_TYPES.has(p.type) || ANCHOR_EVENTS.has(p.event);
-                            if (isAnchor) return; // anchor with no matching sa entry — leave null for finalizer
-                            while (qPtr < queue.length && used.has(qPtr)) qPtr++;
-                            if (qPtr >= queue.length) return;
-                            // Skip anchor-named queue entries that should map to anchor slots
-                            while (qPtr < queue.length && (used.has(qPtr) || ANCHOR_EVENTS.has(queue[qPtr]._activity))) qPtr++;
-                            if (qPtr >= queue.length) return;
-                            const entry = Object.assign({}, queue[qPtr]);
-                            entry._startMin = p.startMin;
-                            entry._endMin = p.endMin;
-                            newSa[i] = entry;
-                            used.add(qPtr);
-                            stamped++;
-                            qPtr++;
-                        });
-                        if (needsRealign) realigned++;
-                        sa[bunkKey] = newSa;
-                    }
-                }
-                log('[STEP 4.96] alignment done: realignedBunks=' + realigned + ' stampedEntries=' + stamped);
-            } catch (eA) {
-                warn('[STEP 4.96] Slot-alignment error: ' + eA.message + ' stack: ' + eA.stack);
-            }
-        })();
-        log('[STEP 4.96] Slot-alignment pass ended.');
+        // STEP 4.96 was a slot-alignment pass that proved unsafe (dropped queue
+        // entries for bunks whose sa had more anchor-named items than pbs had
+        // anchor slots). Removed in favor of the final null-backfill at the
+        // end of runAutoSchedulerV2 in scheduler_core_solver_v2.js, which is
+        // strictly additive — it never overwrites or drops existing entries.
 
         log('[STEP 4.97] Null-bucket finalizer starting...');
         (function nullBucketFinalizer() {
