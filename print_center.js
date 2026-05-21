@@ -272,6 +272,8 @@ var _hideDurations = false;    // hide the "50m" duration line under activity ti
 var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
 var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
 var _sidebarCollapsed = false; // collapsible left sidebar for max preview width
+var _highlightGaps = false;    // visually flag Free cells (coverage gaps overlay)
+var _colorByCategory = false;  // tint cells by category (league/special/general/free)
 var CLOUD_SYNC_DEBOUNCE = 2000;
 
 // Excel-style cell selection state
@@ -981,6 +983,11 @@ function getStyles() {
     '.pc3-preset-name{font-size:13px;font-weight:600;color:#1c1917;}' +
     '.pc3-preset-desc{font-size:11px;color:#78716c;line-height:1.3;margin-top:1px;}' +
     '.pc3-preset-check{color:#147D91;font-weight:700;flex-shrink:0;}' +
+    /* Inline header quick fields inside the Style popover */
+    '.pc3-popover-field{display:flex;flex-direction:column;gap:3px;padding:5px 4px;font-size:11px;color:#44403c;}' +
+    '.pc3-popover-field-lbl{font-size:10px;font-weight:600;color:#78716c;text-transform:uppercase;letter-spacing:.4px;}' +
+    '.pc3-popover-field input{padding:5px 7px;border:1px solid #e7e5e4;border-radius:6px;font-family:inherit;font-size:12px;background:#fafaf9;color:#1c1917;transition:background .12s,border-color .12s;}' +
+    '.pc3-popover-field input:focus{outline:none;background:#fff;border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.10);}' +
 
     /* legacy alias kept for any stragglers */
     '.pc3-tb-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;border:1px solid #e2e8f0;border-radius:6px;background:#fff;color:#334155;font-size:12px;font-weight:500;cursor:pointer;}' +
@@ -1051,9 +1058,10 @@ function getStyles() {
     '.pc3-zoom-dock-sep{width:1px;height:18px;background:#e7e5e4;margin:0 2px;}' +
     '.pc3-zoom-glyph{font-size:18px;font-weight:600;line-height:1;color:#44403c;}' +
     /* ★ Sidebar toggle tab — vertically centered on the divider between sidebar and grid */
-    '.pc3-sidebar-toggle{position:absolute;top:50%;left:230px;transform:translate(-50%, -50%);width:22px;height:48px;border:1px solid #e7e5e4;background:#fff;border-radius:99px;cursor:pointer;color:#44403c;display:flex;align-items:center;justify-content:center;z-index:25;box-shadow:0 2px 6px rgba(15,23,42,.08);transition:left .2s,background .12s;padding:0;}' +
-    '.pc3-sidebar-toggle:hover{background:#f5f5f4;color:#147D91;}' +
-    '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;}' +
+    '.pc3-sidebar-toggle{position:absolute;top:50%;left:230px;transform:translate(-50%, -50%);width:24px;height:54px;border:1px solid #e7e5e4;background:#fff;border-radius:6px;cursor:pointer;color:#44403c;display:flex;align-items:center;justify-content:center;z-index:25;box-shadow:0 2px 8px rgba(15,23,42,.10);transition:left .2s,background .12s,box-shadow .12s;padding:0;}' +
+    '.pc3-sidebar-toggle:hover{background:#f5f5f4;color:#147D91;box-shadow:0 4px 12px rgba(15,23,42,.14);}' +
+    /* When collapsed, keep the full toggle on-screen by anchoring 12px in from the left edge */
+    '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:12px;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
     /* ── Spreadsheet Table ── */
@@ -1155,6 +1163,11 @@ function getStyles() {
     '.pc3-hide-durations .pc3-dur{display:none !important;}' +
     /* Per-bunk page break in Bunks view (each .pc3-sheet is one bunk) */
     '@media print{.pc3-pb-per-bunk .pc3-sheet{page-break-after:always;break-after:page;}.pc3-pb-per-bunk .pc3-sheet:last-child{page-break-after:auto;break-after:auto;}}' +
+    /* Coverage-gap overlay: stripe Free cells in warning color so director can spot holes */
+    '.pc3-highlight-gaps td.cell-free{background:repeating-linear-gradient(45deg,#FEF3C7,#FEF3C7 6px,#FDE68A 6px,#FDE68A 12px) !important;color:#92400E !important;font-weight:600 !important;}' +
+    '.pc3-highlight-gaps td.cell-free::after{content:" gap";font-size:8px;opacity:.7;}' +
+    /* Color-by-category: subtle left border keyed by activity type (cells already carry inline bg) */
+    '.pc3-color-cat td.cell-free{border-left:3px solid #94A3B8 !important;}' +
     /* Make tables fully visible during print regardless of overflow scrolling */
     '@media print{.pc3-sheet-table-wrap{overflow:visible !important;}.pc3-tbl{page-break-inside:auto;}.pc3-tbl thead{display:table-header-group;}.pc3-tbl tr{page-break-inside:avoid;}}' +
     '</style>';
@@ -1169,7 +1182,7 @@ function buildMainUI() {
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
     return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + '" id="pc3-root">' +
+    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + (_highlightGaps ? ' pc3-highlight-gaps' : '') + (_colorByCategory ? ' pc3-color-cat' : '') + '" id="pc3-root">' +
 
     /* ── Hero header ── */
     '<div class="pc3-hero no-print">' +
@@ -1253,12 +1266,19 @@ function buildMainUI() {
                         }).join('') +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
+                        '<div class="pc3-popover-label">Header</div>' +
+                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Camp name</span><input type="text" id="pc3-hero-camp-name" value="' + escHtml(_currentTemplate.campName || '') + '" placeholder="Your Camp"></label>' +
+                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Subtitle</span><input type="text" id="pc3-hero-subtitle" value="' + escHtml(_currentTemplate.customSubtitle || '') + '" placeholder="Daily Schedule"></label>' +
+                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Footer</span><input type="text" id="pc3-hero-footer" value="' + escHtml(_currentTemplate.footerText || '') + '" placeholder="Generated by Campistry"></label>' +
+                    '</div>' +
+                    '<div class="pc3-popover-section">' +
                         '<div class="pc3-popover-label">Saved layouts</div>' +
                         '<div id="pc3-layouts-list" class="pc3-layouts-list"></div>' +
                         '<button class="pc3-save-layout-btn" id="pc3-save-layout-btn">+ Save current as layout</button>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
-                        (canEditTemplates() ? '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' : '') +
+                        /* Customize is a local style editor — every user can tweak how their own print output looks. Saving as a shared template stays gated separately inside the drawer. */
+                        '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' +
                         '<button class="pc3-popover-item" onclick="window._pc3ShowShortcuts && window._pc3ShowShortcuts()"><span class="pc3-popover-icon">⌘</span>Keyboard shortcuts<span class="pc3-popover-hint">?</span></button>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-inspect-mode"' + (_inspectMode ? ' checked' : '') + '>Inspect mode<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Excel-like</span></label>' +
                     '</div>' +
@@ -1291,6 +1311,8 @@ function buildMainUI() {
                         '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Content</div>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-durations"' + (_hideDurations ? ' checked' : '') + '>Hide activity durations (50m)</label>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-locations"' + (_hideLocations ? ' checked' : '') + '>Hide locations &amp; sharing notes</label>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-highlight-gaps"' + (_highlightGaps ? ' checked' : '') + '>Highlight coverage gaps (Free cells)</label>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-color-cat"' + (_colorByCategory ? ' checked' : '') + '>Color cells by category</label>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
                         '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Print</div>' +
@@ -3829,6 +3851,24 @@ function bindAll() {
         });
     });
 
+    // Inline header quick controls — Camp name / Subtitle / Footer. Debounced
+    // so typing doesn't re-render on every keystroke; flushes on blur too.
+    function _wireHeaderField(inputId, tplKey, opts) {
+        var inp = el(inputId);
+        if (!inp) return;
+        var t;
+        var commit = function () {
+            _currentTemplate[tplKey] = inp.value;
+            if (opts && opts.autoEnable) _currentTemplate[opts.autoEnable] = !!inp.value;
+            liveRefresh();
+        };
+        inp.addEventListener('input', function () { clearTimeout(t); t = setTimeout(commit, 250); });
+        inp.addEventListener('blur', function () { clearTimeout(t); commit(); });
+    }
+    _wireHeaderField('pc3-hero-camp-name', 'campName');
+    _wireHeaderField('pc3-hero-subtitle', 'customSubtitle');
+    _wireHeaderField('pc3-hero-footer', 'footerText', { autoEnable: 'footerEnabled' });
+
     // Print pack clicks (cards in empty state + rows in popover)
     document.querySelectorAll('[data-pack]').forEach(function (btn) {
         btn.addEventListener('click', function () {
@@ -3885,6 +3925,20 @@ function bindAll() {
         try { localStorage.setItem('campistry_pc3_pageBreakPerBunk', _pageBreakPerBunk ? '1' : '0'); } catch (e) {}
         var root = document.getElementById('pc3-root');
         if (root) root.classList.toggle('pc3-pb-per-bunk', _pageBreakPerBunk);
+    });
+    var hgSel = el('pc3-highlight-gaps');
+    if (hgSel) hgSel.addEventListener('change', function () {
+        _highlightGaps = this.checked;
+        try { localStorage.setItem('campistry_pc3_highlightGaps', _highlightGaps ? '1' : '0'); } catch (e) {}
+        var root = document.getElementById('pc3-root');
+        if (root) root.classList.toggle('pc3-highlight-gaps', _highlightGaps);
+    });
+    var ccSel = el('pc3-color-cat');
+    if (ccSel) ccSel.addEventListener('change', function () {
+        _colorByCategory = this.checked;
+        try { localStorage.setItem('campistry_pc3_colorByCategory', _colorByCategory ? '1' : '0'); } catch (e) {}
+        var root = document.getElementById('pc3-root');
+        if (root) root.classList.toggle('pc3-color-cat', _colorByCategory);
     });
 
     // Template selector
@@ -4030,6 +4084,8 @@ function initPrintCenter() {
     try { var savedAA = localStorage.getItem('campistry_pc3_activityAligned'); if (savedAA !== null) _activityAligned = savedAA === '1'; } catch (e) {}
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
+    try { var savedHG = localStorage.getItem('campistry_pc3_highlightGaps'); if (savedHG !== null) _highlightGaps = savedHG === '1'; } catch (e) {}
+    try { var savedCC = localStorage.getItem('campistry_pc3_colorByCategory'); if (savedCC !== null) _colorByCategory = savedCC === '1'; } catch (e) {}
     try { var savedPB = localStorage.getItem('campistry_pc3_pageBreakPerBunk'); if (savedPB !== null) _pageBreakPerBunk = savedPB === '1'; } catch (e) {}
     try { var savedSC = localStorage.getItem('campistry_pc3_sidebarCollapsed'); if (savedSC !== null) _sidebarCollapsed = savedSC === '1'; } catch (e) {}
     // Restore last-used style preset
