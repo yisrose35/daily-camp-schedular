@@ -7712,34 +7712,6 @@
             });
             log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, min fieldOptions=' + (gapQueue.length > 0 ? gapQueue[0].fieldOptions : 0) + ', max contention=' + (gapQueue.length > 0 ? Math.max.apply(null, gapQueue.map(function(g){return g.contention;})) : 0));
 
-            // ★ TEMP DIAG: dump fieldLedger state at Minors 1's first gap time (700-730)
-            //   to see what's locking fields at that time BEFORE Phase B starts.
-            try {
-                var _diagInfo = {
-                    minors1_gaps: [],
-                    field_claims_700: [],
-                    gapQueue_order_first10: []
-                };
-                if (bunkMeta['Minors 1']) {
-                    var _m1Gaps = findGaps(bunkMeta['Minors 1'].template, bunkMeta['Minors 1'].gradeStart, bunkMeta['Minors 1'].gradeEnd);
-                    _diagInfo.minors1_gaps = _m1Gaps.map(function(g) { return g.start + '-' + g.end; });
-                }
-                Object.keys(fieldLedger).forEach(function(fn) {
-                    var ledger = fieldLedger[fn];
-                    var claimsAt700 = (ledger.claims || []).filter(function(c) { return c.startMin < 730 && c.endMin > 700; });
-                    if (claimsAt700.length > 0) {
-                        _diagInfo.field_claims_700.push({
-                            field: fn,
-                            claims: claimsAt700.map(function(c) { return c.bunk + '@' + c.startMin + '-' + c.endMin + '(' + c.grade + ')'; })
-                        });
-                    }
-                });
-                _diagInfo.gapQueue_order_first10 = gapQueue.slice(0, 10).map(function(q) {
-                    return q.bunk + ' gap=' + q.gap.start + '-' + q.gap.end + ' opts=' + q.fieldOptions + ' cont=' + q.contention;
-                });
-                localStorage.setItem('_phase3DiagP1', JSON.stringify(_diagInfo));
-            } catch (_ediag) {}
-
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
             for (var si = 0; si < gapQueue.length; si++) {
@@ -12932,6 +12904,80 @@
                     return max;
                 }
 
+                // ★ Day 22.5: FIELD RESERVATION — protect sport fields at constrained
+                //   bunks' sport gap times from being locked by Phase 2.5 specials.
+                //   Diagnosed root cause: small bunks (Minors 1 with 2 bunks per grade)
+                //   have narrow sport gap windows. When Phase 2.5 places specials at
+                //   SPORT FIELDS overlapping those windows, the same_division cap-2
+                //   share locks the field for other divisions — leaving the small bunk
+                //   with no field choices at its gap times. Live diag at 700-730 showed
+                //   Jumprope+Gaga+Trench+Machanayim+7 Sticks+Jumbo all locked by specials
+                //   from Soloists/Majors/Trios/Duetos — Minors 1 stuck on 3 leftover fields.
+                //
+                //   Reservation: for each "small" bunk (≤3 bunks in division), find its
+                //   sport gap times. Build (sport_field, gap_time) → reserved-for-bunk-grade.
+                //   Phase 2.5 scoring penalizes positions that would conflict with these.
+                var _p25Reservations = {}; // key: "fieldName:bucketStart" → reservingGrade
+                try {
+                    var _sportFieldNames = new Set();
+                    Object.keys(fieldLedger).forEach(function(fn) {
+                        var fl = fieldLedger[fn];
+                        if (fl && fl._isSpecialLocation) return;
+                        if (fl && Array.isArray(fl.activities) && fl.activities.length > 0) {
+                            _sportFieldNames.add(fn);
+                        }
+                    });
+                    // Identify small bunks and find their sport gap times
+                    allGrades.forEach(function(_grade) {
+                        var _gBunks = getBunksForGrade(_grade, divisions);
+                        if (_gBunks.length === 0 || _gBunks.length > 3) return; // only small grades
+                        _gBunks.forEach(function(_bunk) {
+                            // Find this bunk's sport gap times by inspecting their template
+                            var _tl = bunkTimelines[_bunk] || [];
+                            var _gradeStart = parseTimeToMinutes((divisions[_grade]||divisions[String(_grade)])?.startTime) || 540;
+                            var _gradeEnd = parseTimeToMinutes((divisions[_grade]||divisions[String(_grade)])?.endTime) || 960;
+                            var _walls = _tl.map(function(b) { return { s: b.startMin, e: b.endMin }; });
+                            var _gaps = []; var _cur = _gradeStart;
+                            _walls.sort(function(a, b) { return a.s - b.s; });
+                            for (var _gwi = 0; _gwi < _walls.length; _gwi++) {
+                                if (_walls[_gwi].s > _cur) _gaps.push({ s: _cur, e: _walls[_gwi].s });
+                                _cur = Math.max(_cur, _walls[_gwi].e);
+                            }
+                            if (_cur < _gradeEnd) _gaps.push({ s: _cur, e: _gradeEnd });
+                            // For each gap, reserve sport fields at each 30-min bucket
+                            _gaps.forEach(function(_gap) {
+                                if (_gap.e - _gap.s < 20) return; // too small to fit sport
+                                for (var _gbt = Math.floor(_gap.s / 30) * 30; _gbt < _gap.e; _gbt += 30) {
+                                    _sportFieldNames.forEach(function(_sf) {
+                                        var _key = _sf + ':' + _gbt;
+                                        if (!_p25Reservations[_key]) _p25Reservations[_key] = new Set();
+                                        _p25Reservations[_key].add(_grade);
+                                    });
+                                }
+                            });
+                        });
+                    });
+                    log('[Phase2.5] Field reservations: ' + Object.keys(_p25Reservations).length + ' sport-field/time-bucket pairs reserved for small grades');
+                } catch (_eRes) { warn('[Phase2.5] Reservation setup error: ' + _eRes.message); }
+                function _p25HasReservation(fn, sM, eM, candGrade) {
+                    if (!fn || !_sportFieldNamesHas(fn)) return false;
+                    for (var _bt = Math.floor(sM / 30) * 30; _bt < eM; _bt += 30) {
+                        var _set = _p25Reservations[fn + ':' + _bt];
+                        if (!_set) continue;
+                        // Reservation conflicts if reserved-for is a DIFFERENT grade
+                        // (same-grade can co-share via same_division cap-2)
+                        var _hasOther = false;
+                        _set.forEach(function(_g) { if (_g !== candGrade) _hasOther = true; });
+                        if (_hasOther) return true;
+                    }
+                    return false;
+                }
+                function _sportFieldNamesHas(fn) {
+                    var fl = fieldLedger[fn];
+                    if (!fl || fl._isSpecialLocation) return false;
+                    return !!(fl.activities && fl.activities.length > 0);
+                }
+
                 // Helper: compute gaps between walls
                 function spComputeGaps(walls, gs, ge) {
                     var sorted = walls.slice().sort(function(a, b) { return a.s - b.s; });
@@ -13378,6 +13424,16 @@
                                 //   override -2500 dead-gap.
                                 var _p25Density = _p25DensityAt(pos, pos + specialDur);
                                 if (_p25Density > 0) score -= _p25Density * 75;
+
+                                // ★ Day 22.5: FIELD RESERVATION penalty.
+                                //   If this candidate would lock a SPORT field at a time
+                                //   when a small-grade bunk needs sport variety, apply
+                                //   a heavy penalty (-3000) — bigger than dead-gap penalty
+                                //   in magnitude so reservation wins. Specials redirect
+                                //   to non-sport-field locations or different time slots.
+                                if (fieldName && _p25HasReservation(fieldName, pos, pos + specialDur, grade)) {
+                                    score -= 3000;
+                                }
 
                                 // Balance: prefer even gap distribution
                                 if (gapSizes.length >= 2) {
