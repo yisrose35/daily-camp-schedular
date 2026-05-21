@@ -2287,9 +2287,24 @@ function renderCombinedAutoTable(divBunks) {
     dayStart = Math.floor(dayStart / inc) * inc;
     dayEnd = Math.ceil(dayEnd / inc) * inc;
 
-    // Build activity ranges from bell schedule (use first div)
+    // Build activity ranges
+    // ★ Day 22.5+: hasRealBellSchedule reads window.campPeriods (the actual
+    //   Bell Schedule editor), NOT DAW layer templates. DAW templates are
+    //   scheduling intent (Sport/Special/Swim/Lunch) — not bell periods.
     var activityRanges = [];
-    var bellLayers = firstDiv ? getBellScheduleLayers(firstDiv) : null;
+    var hasRealBellSchedule = false;
+    try {
+        var _cpC = firstDiv && window.campPeriods && window.campPeriods[firstDiv];
+        if (Array.isArray(_cpC) && _cpC.length > 0) {
+            hasRealBellSchedule = true;
+            _cpC.forEach(function (p) {
+                if (p && typeof p.startMin === 'number' && typeof p.endMin === 'number') {
+                    activityRanges.push({ startMin: p.startMin, endMin: p.endMin, name: p.name || null });
+                }
+            });
+        }
+    } catch (_eCp) { /* ignore */ }
+    var bellLayers = (!hasRealBellSchedule && firstDiv) ? getBellScheduleLayers(firstDiv) : null;
     if (bellLayers && bellLayers.length) {
         bellLayers.forEach(function (layer) {
             var lt = (layer.type || '').toLowerCase();
@@ -2354,53 +2369,85 @@ function renderCombinedAutoTable(divBunks) {
         }
     }
 
+    var hasRealPeriodsC = hasRealBellSchedule;
     if (!activityRanges.length) activityRanges.push({ startMin: dayStart, endMin: dayEnd, name: null });
 
-    // Build time columns
+    // Build time columns — activity-aligned by default
     var timeCols = [];
-    for (var t = dayStart; t < dayEnd; t += inc) {
-        var pIdx = -1;
-        for (var ri = 0; ri < activityRanges.length; ri++) {
-            if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+    var t, tEnd, pIdx, ri;
+    if (_activityAligned) {
+        var boundarySet = {};
+        boundarySet[dayStart] = true; boundarySet[dayEnd] = true;
+        Object.keys(bunkActs).forEach(function (bk) {
+            (bunkActs[bk] || []).forEach(function (a) {
+                if (a.startMin >= dayStart && a.startMin <= dayEnd) boundarySet[a.startMin] = true;
+                if (a.endMin >= dayStart && a.endMin <= dayEnd) boundarySet[a.endMin] = true;
+            });
+        });
+        var boundaries = Object.keys(boundarySet).map(Number).sort(function (a, b) { return a - b; });
+        for (var bi = 0; bi < boundaries.length - 1; bi++) {
+            t = boundaries[bi]; tEnd = boundaries[bi + 1]; pIdx = -1;
+            for (ri = 0; ri < activityRanges.length; ri++) {
+                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+            }
+            timeCols.push({ startMin: t, endMin: tEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
-        timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
+    } else {
+        for (t = dayStart; t < dayEnd; t += inc) {
+            pIdx = -1;
+            for (ri = 0; ri < activityRanges.length; ri++) {
+                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
+            }
+            timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
+        }
     }
     var numCols = timeCols.length;
-    var colW = Math.max(44, Math.min(90, 800 / numCols));
+    var colW = _activityAligned
+        ? Math.max(80, Math.min(160, 1000 / Math.max(1, numCols)))
+        : Math.max(44, Math.min(90, 800 / numCols));
 
     var sheetId = pcNextSheetId();
     var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;">';
     html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" style="table-layout:fixed;border-collapse:collapse;">';
     html += '<thead>';
 
-    // Period header row
-    html += '<tr>';
-    html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
-    var ci = 0;
-    while (ci < numCols) {
-        var col = timeCols[ci];
-        if (col.periodIdx >= 0) {
-            var pStart = ci, pId = col.periodIdx;
-            while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
-            var pSpan = ci - pStart;
-            var range = activityRanges[pId];
-            var periodName = range.name || ('Period ' + (pId + 1));
-            html += '<th colspan="' + pSpan + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #0e6b7e;border-bottom:none;">';
-            html += escHtml(periodName);
-            html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
-            html += '</th>';
-        } else {
-            html += '<th style="background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:none;padding:2px;"></th>';
-            ci++;
+    // ★ Period header row — ONLY when real Bell Schedule defined
+    if (hasRealPeriodsC) {
+        html += '<tr>';
+        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+        var ci = 0;
+        while (ci < numCols) {
+            var col = timeCols[ci];
+            if (col.periodIdx >= 0) {
+                var pStart = ci, pId = col.periodIdx;
+                while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
+                var pSpan = ci - pStart;
+                var range = activityRanges[pId];
+                var periodName = range.name || ('Period ' + (pId + 1));
+                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #0e6b7e;border-bottom:none;">';
+                html += escHtml(periodName);
+                html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
+                html += '</th>';
+            } else {
+                html += '<th style="background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:none;padding:2px;"></th>';
+                ci++;
+            }
         }
+        html += '</tr>';
     }
-    html += '</tr>';
 
-    // Sub-segment time label row
+    // Time label row (the ONLY header row when no Bell Schedule)
     html += '<tr>';
+    if (!hasRealPeriodsC) {
+        html += '<th class="corner" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+    }
     timeCols.forEach(function (col) {
         var bg = col.periodIdx >= 0 ? '#f0f9ff' : '#f8fafc';
-        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + (inc <= 10 ? 8 : 9) + 'px;text-align:center;padding:2px;color:#64748b;background:' + bg + ';border:1px solid #e2e8f0;font-weight:500;">' + col.label + '</th>';
+        var labelTxt = _activityAligned
+            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
+            : col.label;
+        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
+        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:3px 4px;color:#64748b;background:' + bg + ';border:1px solid #e2e8f0;font-weight:500;white-space:nowrap;">' + labelTxt + '</th>';
     });
     html += '</tr></thead><tbody>';
 
