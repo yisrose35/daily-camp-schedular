@@ -7712,6 +7712,34 @@
             });
             log('[Phase3] Bottleneck queue: ' + gapQueue.length + ' gaps, min fieldOptions=' + (gapQueue.length > 0 ? gapQueue[0].fieldOptions : 0) + ', max contention=' + (gapQueue.length > 0 ? Math.max.apply(null, gapQueue.map(function(g){return g.contention;})) : 0));
 
+            // ★ TEMP DIAG: dump fieldLedger state at Minors 1's first gap time (700-730)
+            //   to see what's locking fields at that time BEFORE Phase B starts.
+            try {
+                var _diagInfo = {
+                    minors1_gaps: [],
+                    field_claims_700: [],
+                    gapQueue_order_first10: []
+                };
+                if (bunkMeta['Minors 1']) {
+                    var _m1Gaps = findGaps(bunkMeta['Minors 1'].template, bunkMeta['Minors 1'].gradeStart, bunkMeta['Minors 1'].gradeEnd);
+                    _diagInfo.minors1_gaps = _m1Gaps.map(function(g) { return g.start + '-' + g.end; });
+                }
+                Object.keys(fieldLedger).forEach(function(fn) {
+                    var ledger = fieldLedger[fn];
+                    var claimsAt700 = (ledger.claims || []).filter(function(c) { return c.startMin < 730 && c.endMin > 700; });
+                    if (claimsAt700.length > 0) {
+                        _diagInfo.field_claims_700.push({
+                            field: fn,
+                            claims: claimsAt700.map(function(c) { return c.bunk + '@' + c.startMin + '-' + c.endMin + '(' + c.grade + ')'; })
+                        });
+                    }
+                });
+                _diagInfo.gapQueue_order_first10 = gapQueue.slice(0, 10).map(function(q) {
+                    return q.bunk + ' gap=' + q.gap.start + '-' + q.gap.end + ' opts=' + q.fieldOptions + ' cont=' + q.contention;
+                });
+                localStorage.setItem('_phase3DiagP1', JSON.stringify(_diagInfo));
+            } catch (_ediag) {}
+
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
             for (var si = 0; si < gapQueue.length; si++) {
