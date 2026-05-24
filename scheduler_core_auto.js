@@ -15506,15 +15506,20 @@
                             .filter(b => b && !b._fixed && b.endMin > preStart && b.endMin <= _preEnd278)
                             .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
-                        if (prev && TRIMMABLE_TYPES.has(prevType)) {
-                            // After carve, prev will end at preStart; check its remaining duration.
+                        if (prev && TRIMMABLE_TYPES.has(prevType) && preStart >= _schedStart278) {
+                            // After carve, prev will end at preStart. Change+swim is one atomic
+                            // unit — allow the block to shrink to zero (filtered at the
+                            // end-of-pass sort) rather than blocking Change. A consumed/short
+                            // sport is better than a swim with no pre-change.
                             const newPrevDur = preStart - prev.startMin;
-                            if (newPrevDur >= (prev.dMin || GAP_MIN_DUR) && preStart >= _schedStart278) {
+                            if (newPrevDur >= (prev.dMin || GAP_MIN_DUR)) {
                                 prev.endMin = preStart;
                                 if (prev.endTime) prev.endTime = minutesToTimeLabel(preStart);
-                                anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
-                                log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk);
+                            } else {
+                                prev.endMin = prev.startMin; // zero-duration, filtered later
                             }
+                            anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
+                            log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk + (newPrevDur < (prev.dMin || GAP_MIN_DUR) ? ' (zero-out)' : ''));
                         }
                     }
                     if (!anchors.post && postChangeDur > 0) {
