@@ -12517,6 +12517,15 @@
                             // adjacent to that grade's swim period. The change window from
                             // Phase 2.3 is removed and re-placed at the bundle boundary.
                             const _isBundleEvent = !!seqTarget && seqTarget.toLowerCase() === 'swim';
+                            // Always log the bundle decision so the user can see
+                            // why their wet-bundle config did/didn't fire.
+                            if (_verbose) {
+                                log('[Phase2.4-bundle] Event "' + evt.name +
+                                    '" seqTarget="' + (seqTarget || '(none)') +
+                                    '" seqPos="' + (seqPosition || 'either') +
+                                    '" → bundle=' + (_isBundleEvent ? 'ENABLED' : 'disabled — set Adjacent-to=swim to enable') +
+                                    ' gradeMode=' + _evtGradeMode);
+                            }
                             const _bundlePoolByGrade = {};
                             if (_isBundleEvent) {
                                 gradeEntries.forEach(({ grade: _bg, bunks: _bb }) => {
@@ -12603,6 +12612,12 @@
                                         log('[Phase2.4-bundle] Grade ' + _bg + ' bundle slot: ' +
                                             _fmt(_pool[0].startMin) + '-' + _fmt(_pool[0].endMin) +
                                             ' dir=' + _pool[0].dir);
+                                    } else if (_verbose) {
+                                        // Help diagnose why bundle is enabled but produces no slot.
+                                        const _diagSw = _grSwimBlk ? (_fmt(_grSwimBlk.startMin) + '-' + _fmt(_grSwimBlk.endMin)) : 'none';
+                                        log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle slot (swim=' + _diagSw +
+                                            ', period count=' + _sp.length + ', winStart=' + _fmt(winStart) +
+                                            ', winEnd=' + _fmt(winEnd) + ', dur=' + dur + ')');
                                     }
                                 });
                             }
