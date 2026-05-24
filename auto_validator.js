@@ -330,10 +330,16 @@
             const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1 };
             if (sharing.capacity <= 1) return; // Single-use field, no sharing to check
 
-            // ★ Strict timing is now opt-in. If the field is NOT marked
-            //   strictTiming:true, staggered sharing is acceptable as long
-            //   as capacity isn't exceeded (Check B handles capacity).
-            if (sharing.strictTiming !== true) return;
+            // ★ FIX: staggered timing is ALWAYS a violation when two bunks
+            //   share the same field. Mid-activity arrivals/departures
+            //   never make sense operationally — one bunk shows up at 9:25
+            //   to find another already 25 minutes into the game on the
+            //   same court. The opt-in strictTiming gate was wrong; it
+            //   allowed real bugs to ship. Now: always check, regardless.
+            //   Also: check ACROSS grades too — Check A only flags grade
+            //   mismatches when the field's sharing.type forbids cross-
+            //   division use. A field with type='any_division' allowing
+            //   staggered cross-grade overlap was passing silently.
 
             // Only check sport entries
             const sportUsages = usages.filter(u => !u.flags._league && !u.flags._autoSpecial);
@@ -347,25 +353,23 @@
                     // Must overlap in time
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
 
-                    // Cross-division sharing is already caught in check A
-                    // Only check same-grade sharing here
-                    if (a.grade !== b.grade) continue;
-
                     // If they overlap but don't have identical times → staggered violation
                     if (a.startMin !== b.startMin || a.endMin !== b.endMin) {
                         const key = [fieldNorm, a.bunk, b.bunk, a.startMin, b.startMin].sort().join('|');
                         if (seen.has(key)) continue;
                         seen.add(key);
 
+                        const sameGrade = a.grade === b.grade;
                         errors.push({
                             type: 'staggered_sharing',
                             field: a.field,
                             fieldNorm,
                             grade: a.grade,
                             message: `<strong>Staggered Sharing:</strong> <u>${a.field}</u> shared by ` +
-                                `${a.bunk} (${formatTime(a.startMin)}-${formatTime(a.endMin)}) and ` +
-                                `${b.bunk} (${formatTime(b.startMin)}-${formatTime(b.endMin)}) in ${a.grade}. ` +
-                                `Bunks sharing a field must start and end at the same time.`
+                                `${a.bunk} (${a.grade}, ${formatTime(a.startMin)}-${formatTime(a.endMin)}) and ` +
+                                `${b.bunk} (${b.grade}, ${formatTime(b.startMin)}-${formatTime(b.endMin)})` +
+                                (sameGrade ? '' : ' (cross-grade)') +
+                                `. Bunks sharing a field must start and end at the same time.`
                         });
                     }
                 }

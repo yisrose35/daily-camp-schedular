@@ -1199,9 +1199,16 @@
                 const _sportLower = String(sport).toLowerCase().trim();
                 const _fieldLower = String(fieldName).toLowerCase().trim();
                 const _saAll = window.scheduleAssignments || {};
+                // ★ Cross-grade staggered overlap check.
+                //   Previous version restricted to same-grade only, allowing
+                //   cross-grade pairs (e.g., Juniors-bunk1 9:00-9:50 and
+                //   Seniors-bunk2 9:25-9:55 on the same court) to slip past.
+                //   Any partial-overlap on the same field is bad regardless
+                //   of grade — mid-activity arrivals don't work.
                 for (const _otherBunk in _saAll) {
                     if (_otherBunk === bunk) continue;
-                    // Same grade?
+                    // Resolve other bunk's grade for logging only — we no
+                    // longer use it to gate the check.
                     let _otherGrade = '';
                     const _divs = window.divisions || {};
                     for (const _g in _divs) {
@@ -1209,7 +1216,6 @@
                             _otherGrade = _g; break;
                         }
                     }
-                    if (_otherGrade !== grade) continue;
                     const _otherSlots = _saAll[_otherBunk] || [];
                     for (let _oi = 0; _oi < _otherSlots.length; _oi++) {
                         const _w = _otherSlots[_oi];
@@ -1224,8 +1230,9 @@
                         if (_ws < eMin && _we > sMin) {
                             // Identical times = OK (true sharing)
                             if (_ws === sMin && _we === eMin) continue;
-                            // Partial overlap = REJECT
-                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — would partial-overlap ' + _otherBunk + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
+                            // Partial overlap = REJECT (same grade OR cross grade)
+                            const _xg = _otherGrade && _otherGrade !== grade ? ' [cross-grade ' + _otherGrade + ']' : '';
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — would partial-overlap ' + _otherBunk + _xg + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
                             return false;
                         }
                     }
