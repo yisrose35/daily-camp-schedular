@@ -2548,9 +2548,16 @@
                     log('[Phase0-Diag] swim layer for ' + grade + ': blockStart=' + blockStart + ' layer.startMin=' + layer.startMin + ' layer.endMin=' + layer.endMin + ' priorRanges=' + _wetBundleSwimRanges.length + ' fullGrade=' + (layer.fullGrade === true));
                 }
                 if (t === 'swim' && _wetBundleTargets.has(t) && _wetBundleSwimRanges.length > 0) {
-                    const _swimDur = blockEnd - blockStart;
+                    // For non-fullGrade pinned swim, blockEnd defaults to
+                    // layer.endMin (the whole window — not the actual swim
+                    // duration). Compute real swim duration from periodMin
+                    // / dMin so the stagger step is sensible.
+                    const _swimC = (typeof resolveConstraints === 'function') ? resolveConstraints(layer, 'swim') : null;
+                    const _swimDur = (layer.periodMin && layer.periodMin > 0)
+                        ? layer.periodMin
+                        : (_swimC && _swimC.dMin ? _swimC.dMin : 40);
                     const _changePad = (layer.preChangeMin || 0) + (layer.postChangeMin || 0);
-                    const _bundleSpan = Math.max(_swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0), _swimDur);
+                    const _bundleSpan = _swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0);
                     let _candStart = blockStart;
                     let _safety = 24; // bounded outer retry
                     const _overlapsPrior = (s, e) => _wetBundleSwimRanges.some(r => s < r.endMin && e > r.startMin);
@@ -2570,8 +2577,20 @@
                         blockEnd = _candStart + _swimDur;
                         log('[Phase0] Wet-bundle swim staggered for ' + grade + ' → ' +
                             Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
-                            '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0'));
+                            '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                            ' (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ')');
+                    } else {
+                        log('[Phase0-Diag] swim for ' + grade + ' could not stagger (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ' window=' + layer.startMin + '-' + layer.endMin + ')');
                     }
+                }
+                // Also pin blockEnd properly for non-fullGrade swim so the
+                // stored swim block doesn't span the whole layer window.
+                if (t === 'swim' && _wetBundleTargets.has(t) && blockEnd > blockStart + 120) {
+                    const _swimC2 = (typeof resolveConstraints === 'function') ? resolveConstraints(layer, 'swim') : null;
+                    const _trueDur = (layer.periodMin && layer.periodMin > 0)
+                        ? layer.periodMin
+                        : (_swimC2 && _swimC2.dMin ? _swimC2.dMin : 40);
+                    blockEnd = blockStart + _trueDur;
                 }
 
                 // ★ v4.0: Pool exclusivity for pinned swim
