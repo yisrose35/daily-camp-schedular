@@ -8684,6 +8684,43 @@
                             var rhDur = rhNeed.dMin || 15;
                             var rhWinStart = Math.max(rhNeed.windowStart || 0, rhMeta.gradeStart);
                             var rhWinEnd = Math.min(rhNeed.windowEnd || 1440, rhMeta.gradeEnd);
+
+                            // ★ Sequence-adjacency guard: if this need has _sequenceTarget
+                            // (e.g. Water Slide → Swim), narrow the victim search to a 20-min
+                            // window around the target block. Without this, the self-heal
+                            // would carve any sport in the broad rotation window, producing
+                            // a disconnected placement (e.g. WS at 805-855 while swim is at
+                            // 625-655). User wants adjacency over quota — skip if no swim
+                            // block is reachable inside the bunk's template.
+                            if (rhNeed._sequenceTarget) {
+                                var _seqTgtRH = rhNeed._sequenceTarget.toLowerCase();
+                                var _ADJ_TOL_RH = 20;
+                                var _anyAdj = false;
+                                var _rhAdjLo = Infinity, _rhAdjHi = -Infinity;
+                                for (var _rhti = 0; _rhti < rhTmpl.length; _rhti++) {
+                                    var _rhtb = rhTmpl[_rhti];
+                                    if (!_rhtb || _rhtb.continuation) continue;
+                                    var _rhtbT = (_rhtb.type || '').toLowerCase();
+                                    var _rhtbE = (_rhtb.event || '').toLowerCase();
+                                    if (_rhtbT !== _seqTgtRH && _rhtbE !== _seqTgtRH) continue;
+                                    _anyAdj = true;
+                                    // The block must START within the adjacency window of the target.
+                                    // 'before' = block.endMin in [target.startMin - dur - tol, target.startMin]
+                                    // 'after'  = block.startMin in [target.endMin, target.endMin + tol]
+                                    _rhAdjLo = Math.min(_rhAdjLo, _rhtb.startMin - rhDur - _ADJ_TOL_RH);
+                                    _rhAdjHi = Math.max(_rhAdjHi, _rhtb.endMin   + _ADJ_TOL_RH);
+                                }
+                                if (!_anyAdj) {
+                                    log('[Phase3-selfHeal] Skipping ' + rhNeed.event + ' for ' + rhBunk + ' — no ' + _seqTgtRH + ' block to be adjacent to');
+                                    continue;
+                                }
+                                rhWinStart = Math.max(rhWinStart, _rhAdjLo);
+                                rhWinEnd   = Math.min(rhWinEnd,   _rhAdjHi);
+                                if (rhWinStart >= rhWinEnd) {
+                                    log('[Phase3-selfHeal] Skipping ' + rhNeed.event + ' for ' + rhBunk + ' — no adjacency-safe window for ' + _seqTgtRH);
+                                    continue;
+                                }
+                            }
                             // Find a sport/slot block to sacrifice within the window.
                             // Only require the block to START within the window — it may end
                             // slightly beyond (e.g. sport 12:30-1:00, window ends at 12:55)
