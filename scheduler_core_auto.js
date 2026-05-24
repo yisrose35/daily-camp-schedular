@@ -12532,8 +12532,17 @@
                                     const _swL = (layersByGrade[_bg] || []).find(
                                         l => (l.type || '').toLowerCase() === 'swim'
                                     );
-                                    // Only bundle when change windows exist
-                                    if (!_swL || (!_swL.postChangeMin && !_swL.preChangeMin)) return;
+                                    // ★ Diagnostic: log each early-return reason so we can
+                                    //   pinpoint WHY a grade's bundle pool was empty.
+                                    if (!_swL) {
+                                        if (_verbose) log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — no swim layer in layersByGrade');
+                                        return;
+                                    }
+                                    if (!_swL.postChangeMin && !_swL.preChangeMin) {
+                                        if (_verbose) log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — swim layer has no pre/post change config (pre=' +
+                                            (_swL.preChangeMin || 0) + ' post=' + (_swL.postChangeMin || 0) + ')');
+                                        return;
+                                    }
                                     // Find a bunk in this grade that already has swim placed
                                     let _grSwimBlk = null;
                                     for (const _bk of _bb) {
@@ -12542,13 +12551,29 @@
                                         );
                                         if (_sw) { _grSwimBlk = _sw; break; }
                                     }
-                                    if (!_grSwimBlk) return;
+                                    if (!_grSwimBlk) {
+                                        if (_verbose) log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — no swim block placed yet for any bunk (' +
+                                            _bb.join(',') + '). Phase 2.3 may not have run for this grade.');
+                                        return;
+                                    }
                                     const _sp = ((window.campPeriods || {})[_bg] || [])
                                         .slice().sort((a, b) => a.startMin - b.startMin);
+                                    if (_sp.length === 0) {
+                                        if (_verbose) log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — no campPeriods (Bell Schedule) defined for this grade. Bundle requires Bell Schedule periods to know what " adjacent" means.');
+                                        return;
+                                    }
                                     const _swimPi = _sp.findIndex(
                                         p => p.startMin <= _grSwimBlk.startMin && p.endMin >= _grSwimBlk.endMin
                                     );
-                                    if (_swimPi < 0) return;
+                                    if (_swimPi < 0) {
+                                        if (_verbose) {
+                                            const _per = _sp.map(p => _fmt(p.startMin) + '-' + _fmt(p.endMin)).join(', ');
+                                            log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — swim block ' +
+                                                _fmt(_grSwimBlk.startMin) + '-' + _fmt(_grSwimBlk.endMin) +
+                                                ' does not fit inside any single Bell Schedule period. Periods: [' + _per + ']');
+                                        }
+                                        return;
+                                    }
                                     const _pool = [];
                                     // 'after': fill the period immediately following swim with
                                     // multiple dur-sized slots so more bunks can be bundled
