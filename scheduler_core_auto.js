@@ -10085,12 +10085,22 @@
                                     (pg_prev.event || pg_prev.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
                             } else if (pg_next && !isPhase0(pg_next) &&
                                        staysInPeriod(pg_gap.start, pg_next.endMin, pg_meta.grade)) {
-                                pg_next.startMin -= pg_dur;
-                                pgClosed++;
-                                pg_changed = true;
-                                pg_fixed   = true;
-                                log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed -' + pg_dur + 'min into next "' +
-                                    (pg_next.event || pg_next.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
+                                // Don't pull a block's start before its division's startTime.
+                                // E.g., a 10-min gap before a Phase-2.4 Nit at 9:10 would
+                                // otherwise drag the next block's start to 8:50.
+                                var _pgGrade = pg_meta.grade;
+                                var _pgDivStart = (divisions && divisions[_pgGrade] && parseTimeToMinutes(divisions[_pgGrade].startTime)) || null;
+                                var _wouldStart = pg_next.startMin - pg_dur;
+                                if (_pgDivStart != null && _wouldStart < _pgDivStart) {
+                                    // Skip — would create a pre-day-start activity
+                                } else {
+                                    pg_next.startMin -= pg_dur;
+                                    pgClosed++;
+                                    pg_changed = true;
+                                    pg_fixed   = true;
+                                    log('[POST-GAP] bunk=' + pg_bunk + ' micro-absorbed -' + pg_dur + 'min into next "' +
+                                        (pg_next.event || pg_next.type || '') + '" @' + pg_gap.start + '-' + pg_gap.end);
+                                }
                             }
                         }
 
@@ -18221,6 +18231,74 @@
             if (cleared > 0) warn('[STEP 4.98 IRON GATE] cleared ' + cleared + ' time-rule violation(s)');
             else log('[STEP 4.98 IRON GATE] no time-rule violations to clear');
           } catch (e) { warn('[STEP 4.98 IRON GATE] error: ' + e.message); }
+        })();
+
+        // ──────────────────────────────────────────────────────────────────
+        // STEP 4.99 — SUB-MINIMUM SPORT SWEEPER
+        // ──────────────────────────────────────────────────────────────────
+        // User-visible bug: a Phase-2.4 rotation event placed at 9:10am
+        // (e.g. Nit, 10 min) left a 10-min gap from 9:00-9:10 before it.
+        // Downstream gap-fillers tried to absorb that gap by stuffing a
+        // SPORT block into the 10-min sliver — but sport floor is 25 min.
+        // Result on screen: a truncated "...ball" tile crammed before Nit.
+        // This pass scans every bunk's final timeline and either merges
+        // sub-floor sport blocks into a same-type neighbour or converts
+        // them to Free so the print/grid renders cleanly.
+        (function _step499SubMinSportSweep() {
+            try {
+                var sportFloor = (TYPE_FLOORS && TYPE_FLOORS.sport) || 25;
+                var swept = 0;
+                var converted = 0;
+                Object.keys(bunkTimelines || {}).forEach(function (bunk) {
+                    var tl = bunkTimelines[bunk];
+                    if (!Array.isArray(tl)) return;
+                    tl.sort(function (a, b) { return (a.startMin || 0) - (b.startMin || 0); });
+                    for (var i = 0; i < tl.length; i++) {
+                        var blk = tl[i];
+                        if (!blk) continue;
+                        var bt = String(blk.type || '').toLowerCase();
+                        if (bt !== 'sport' && bt !== 'sports') continue;
+                        // Don't touch Phase 0 immovables
+                        if (blk._classification === 'pinned' || blk._fixed || blk._activityLocked) continue;
+                        var dur = (blk.endMin || 0) - (blk.startMin || 0);
+                        if (dur >= sportFloor) continue;
+                        // Sub-floor sport block — try to absorb into a neighbouring
+                        // sport of the same type first, then any movable sport.
+                        var prev = i > 0 ? tl[i - 1] : null;
+                        var next = i < tl.length - 1 ? tl[i + 1] : null;
+                        var prevIsSport = prev && /sport/i.test(String(prev.type || '')) && !prev._classification && !prev._fixed;
+                        var nextIsSport = next && /sport/i.test(String(next.type || '')) && !next._classification && !next._fixed;
+                        // Absorb into right neighbour by sliding its start left (preferred —
+                        // keeps the user-facing schedule contiguous on the left edge).
+                        if (nextIsSport && (next.startMin === blk.endMin)) {
+                            next.startMin = blk.startMin;
+                            tl.splice(i, 1); i--;
+                            swept++;
+                            continue;
+                        }
+                        // Otherwise absorb into left neighbour by extending its end.
+                        if (prevIsSport && (prev.endMin === blk.startMin)) {
+                            prev.endMin = blk.endMin;
+                            tl.splice(i, 1); i--;
+                            swept++;
+                            continue;
+                        }
+                        // No mergeable neighbour — convert to Free so renderer
+                        // shows a blank rather than a malformed sport tile.
+                        blk.type = 'slot';
+                        blk.event = 'Free';
+                        if (blk._activity) delete blk._activity;
+                        if (blk._assignedSport) delete blk._assignedSport;
+                        blk._source = (blk._source || '') + '|sub-min-sweep';
+                        converted++;
+                    }
+                });
+                if (swept || converted) {
+                    log('[STEP 4.99] Sub-min sport sweep: ' + swept + ' absorbed into neighbours, ' + converted + ' converted to Free');
+                }
+            } catch (eS) {
+                warn('[STEP 4.99] sub-min sport sweep error: ' + eS.message);
+            }
         })();
 
         // STEP 5 — SAVE
