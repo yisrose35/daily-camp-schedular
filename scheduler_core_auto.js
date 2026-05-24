@@ -2401,6 +2401,14 @@
                 }
                 return 0; // preserve original order for ties
             });
+            // ★ Cross-grade wet-bundle swim stagger: track ranges already
+            //   claimed by earlier grades' force-pinned swim placements so
+            //   subsequent grades shift forward in their window instead of
+            //   stacking at the same start time. Without this, every grade's
+            //   swim lands at layer.startMin → pool double-booked AND every
+            //   grade's Water Slide bundle pool picks the same post-swim
+            //   slot → WS double-booked too.
+            const _wetBundleSwimRanges = []; // [{startMin, endMin}]
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -2528,6 +2536,40 @@
 
                 // ★ v4.0: Cross-division check for pinned specials
                 if (t === 'special' && !canUseSpecialAtTime(eventName, grade, blockStart, blockEnd)) return;
+
+                // ★ Cross-grade wet-bundle swim stagger.
+                //   When this swim layer is a wet-bundle target (force-pinned
+                //   by STEP 1.5) and prior grades have already placed a
+                //   wet-bundle swim, shift forward so we don't stack on top
+                //   of them. The shift accounts for swim duration + the
+                //   adjacent rotation event (Water Slide) + change buffers
+                //   so each grade's full bundle fits clear of the prior.
+                if (t === 'swim' && _wetBundleTargets.has(t) && _wetBundleSwimRanges.length > 0) {
+                    const _swimDur = blockEnd - blockStart;
+                    const _changePad = (layer.preChangeMin || 0) + (layer.postChangeMin || 0);
+                    const _bundleSpan = _swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0);
+                    let _candStart = blockStart;
+                    let _safety = 24; // bounded outer retry
+                    const _overlapsPrior = (s, e) => _wetBundleSwimRanges.some(r => s < r.endMin && e > r.startMin);
+                    while (_overlapsPrior(_candStart, _candStart + _swimDur) && _safety-- > 0) {
+                        _candStart += _bundleSpan;
+                        if (_candStart + _swimDur > layer.endMin) {
+                            // Past the window — fall back to original start
+                            // and rely on Phase 3 / facility integrity sweep
+                            // to resolve the residual collision. Better than
+                            // dropping the swim entirely.
+                            _candStart = blockStart;
+                            break;
+                        }
+                    }
+                    if (_candStart !== blockStart) {
+                        blockStart = _candStart;
+                        blockEnd = _candStart + _swimDur;
+                        log('[Phase0] Wet-bundle swim staggered for ' + grade + ' → ' +
+                            Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
+                            '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0'));
+                    }
+                }
 
                 // ★ v4.0: Pool exclusivity for pinned swim
                 // If the preferred period is pool-blocked (another grade swims
@@ -2811,6 +2853,11 @@
 
                 if (t === 'special') registerSpecialUsage(eventName, grade, blockStart, blockEnd);
                 if (t === 'swim') registerPoolUsage(grade, blockStart, blockEnd);
+                // ★ Record this swim's range so subsequent grades' wet-bundle
+                //   swim placements can stagger around it (see top of forEach).
+                if (t === 'swim' && _wetBundleTargets.has(t)) {
+                    _wetBundleSwimRanges.push({ startMin: blockStart, endMin: blockEnd });
+                }
                 // Register linked rotation event placed in Phase 0 so Phase 2.4 skips it
                 if (_linkedRotPlaced) {
                     registerRotationEventUsage(_linkedRotPlaced.evt.id, grade, _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd);
@@ -12675,8 +12722,16 @@
                                     ' gradeMode=' + _evtGradeMode);
                             }
                             const _bundlePoolByGrade = {};
+                            // ★ Cross-grade bundle stagger: track time ranges already
+                            //   claimed by earlier grades' pools so later grades pick
+                            //   non-overlapping windows. Without this, with no Bell
+                            //   Schedule periods, every grade picks the SAME post-swim
+                            //   slot and all bunks land at the pool/Water Slide
+                            //   simultaneously — pool & WS capacity violated.
+                            const _bundleClaimedRanges = []; // [{startMin, endMin}]
+                            const _rangeOverlapsAny = (s, e) => _bundleClaimedRanges.some(r => s < r.endMin && e > r.startMin);
                             if (_isBundleEvent) {
-                                gradeEntries.forEach(({ grade: _bg, bunks: _bb }) => {
+                                gradeEntries.forEach(({ grade: _bg, bunks: _bb }, _bgIdx) => {
                                     const _swL = (layersByGrade[_bg] || []).find(
                                         l => (l.type || '').toLowerCase() === 'swim'
                                     );
@@ -12761,12 +12816,25 @@
                                                     }
                                                 });
                                             });
-                                            if (_afterEnd - _afterStart >= dur) {
+                                            // ★ Cross-grade stagger: scan from _afterStart in dur steps
+                                            //   for the first window that doesn't overlap an earlier
+                                            //   grade's bundle claim. Without staggering, all grades
+                                            //   stack on the same post-swim slot → pool double-booked.
+                                            let _bestStart = null;
+                                            for (let _try = _afterStart; _try + dur <= _afterEnd; _try += dur) {
+                                                if (!_rangeOverlapsAny(_try, _try + dur)) { _bestStart = _try; break; }
+                                            }
+                                            // If every slot inside the window overlaps a prior grade,
+                                            // fall back to _afterStart (better to defer to bundle
+                                            // collision resolution than skip the grade entirely).
+                                            if (_bestStart === null && _afterEnd - _afterStart >= dur) _bestStart = _afterStart;
+                                            if (_bestStart !== null) {
                                                 _pool.push({
-                                                    startMin: _afterStart, endMin: _afterStart + dur,
+                                                    startMin: _bestStart, endMin: _bestStart + dur,
                                                     usedCount: 0, dir: 'after',
-                                                    immediatelyAdjacent: true
+                                                    immediatelyAdjacent: _bestStart === _afterStart
                                                 });
+                                                _bundleClaimedRanges.push({ startMin: _bestStart, endMin: _bestStart + dur });
                                             } else if (_verbose) {
                                                 log('[Phase2.4-bundle] Grade ' + _bg + ' after-pool empty: only ' +
                                                     (_afterEnd - _afterStart) + 'min between swim end and next pinned wall (need ' + dur + 'min)');
