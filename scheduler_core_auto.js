@@ -586,6 +586,10 @@
         window._preGenClearActive = true;
         window._generationInProgress = true;
         window._divisionTimesLocked = false;
+        // Reset the dead-gap warning dedup map so this generation can log fresh.
+        // Without this, a previous run's logged gaps would silence real new ones.
+        window._loggedDeadGaps = {};
+        window._loggedRebalStuck = {};
 
         const _step0AllowedDivs = options.allowedDivisions || null;
         // ★ Day 22.5: per-bunk scope (subset of allowedDivisions' bunks). When set,
@@ -9652,11 +9656,20 @@
                     var diag_nextSurplus = (diag_next && !isPhase0(diag_next))
                         ? ((diag_next.endMin - diag_next.startMin) - resolveConstraints(diag_next.layer, (diag_next.type || '').toLowerCase(), diag_next).dMin)
                         : 'n/a';
-                    warn('[REBAL-STUCK] bunk=' + diag_bunk + ' ' + diag_type + '/' + (diag_blk.event || '') +
-                        ' ' + diag_dur + 'min (dMin=' + diag_c.dMin + ', deficit=' + (diag_c.dMin - diag_dur) + ')' +
-                        ' _source=' + (diag_blk._source || '?') +
-                        ' | prev=[' + diag_prevInfo + ', surplus=' + diag_prevSurplus + ']' +
-                        ' next=[' + diag_nextInfo + ', surplus=' + diag_nextSurplus + ']');
+                    // Throttle: same bunk's same gap was being logged with a full
+                    // stack trace every iteration (×8) — that's where ~80% of
+                    // the 280s generation time was going. Log once per gap.
+                    window._loggedRebalStuck = window._loggedRebalStuck || {};
+                    var _rsKey = diag_bunk + ':' + (diag_blk.startMin || 0) + ':' + (diag_blk.endMin || 0);
+                    if (!window._loggedRebalStuck[_rsKey]) {
+                        window._loggedRebalStuck[_rsKey] = true;
+                        warn('[REBAL-STUCK] bunk=' + diag_bunk + ' ' + diag_type + '/' + (diag_blk.event || '') +
+                            ' ' + diag_dur + 'min (dMin=' + diag_c.dMin + ', deficit=' + (diag_c.dMin - diag_dur) + ')' +
+                            ' _source=' + (diag_blk._source || '?') +
+                            ' | prev=[' + diag_prevInfo + ', surplus=' + diag_prevSurplus + ']' +
+                            ' next=[' + diag_nextInfo + ', surplus=' + diag_nextSurplus + ']');
+                    }
+                    diag_blk._structuralDeadGap = true;
                 }
             }
 
@@ -9797,7 +9810,19 @@
                                 }
                             }
                             if (!eMerged) {
-                                warn('[Phase3] ENFORCE: could not fix sub-dMin ' + eType + ' (' + eDur + '<' + eDMin + ') for bunk ' + eBunk + ' — trapped between walls');
+                                // ★ Mark as structural so subsequent iterations don't keep
+                                //   trying to "fix" what's geometrically impossible. Also
+                                //   throttle the warning — same bunk's same gap was being
+                                //   logged with a full stack trace every iteration (×8),
+                                //   which turned a real issue into 1200+ console lines.
+                                eBlk._structuralDeadGap = true;
+                                eBlk._noBacktrack = true;
+                                window._loggedDeadGaps = window._loggedDeadGaps || {};
+                                var _ddKey = eBunk + ':' + eBlk.startMin + ':' + eBlk.endMin;
+                                if (!window._loggedDeadGaps[_ddKey]) {
+                                    window._loggedDeadGaps[_ddKey] = true;
+                                    warn('[Phase3] ENFORCE: sub-dMin ' + eType + ' (' + eDur + '<' + eDMin + ') for ' + eBunk + ' — trapped between walls (marked structural, will stop retrying)');
+                                }
                             }
                         }
                     }
