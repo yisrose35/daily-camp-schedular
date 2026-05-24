@@ -2544,10 +2544,13 @@
                 //   of them. The shift accounts for swim duration + the
                 //   adjacent rotation event (Water Slide) + change buffers
                 //   so each grade's full bundle fits clear of the prior.
+                if (t === 'swim' && _wetBundleTargets.has(t)) {
+                    log('[Phase0-Diag] swim layer for ' + grade + ': blockStart=' + blockStart + ' layer.startMin=' + layer.startMin + ' layer.endMin=' + layer.endMin + ' priorRanges=' + _wetBundleSwimRanges.length + ' fullGrade=' + (layer.fullGrade === true));
+                }
                 if (t === 'swim' && _wetBundleTargets.has(t) && _wetBundleSwimRanges.length > 0) {
                     const _swimDur = blockEnd - blockStart;
                     const _changePad = (layer.preChangeMin || 0) + (layer.postChangeMin || 0);
-                    const _bundleSpan = _swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0);
+                    const _bundleSpan = Math.max(_swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0), _swimDur);
                     let _candStart = blockStart;
                     let _safety = 24; // bounded outer retry
                     const _overlapsPrior = (s, e) => _wetBundleSwimRanges.some(r => s < r.endMin && e > r.startMin);
