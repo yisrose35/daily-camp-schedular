@@ -12873,8 +12873,13 @@
                                     }
                                 }
 
-                                if (!_chosenSlot) {
-                                    // Pass 1: strict — must be within a period, no boundary gap, no small gap
+                                if (!_chosenSlot && !seqTarget) {
+                                    // Pass 1: strict — must be within a period, no boundary gap, no small gap.
+                                    // SKIP this generic stagger fallback when the event has a _sequenceTarget
+                                    // (e.g. Water Slide → Swim). The bundle path and _adjSlots loop above
+                                    // already tried every adjacency-respecting option; falling through here
+                                    // would place WS far from its target swim (disconnected). User prefers
+                                    // skipping the bunk for today over a disconnected placement.
                                     _chosenSlot = _stagSlots.find(s =>
                                         (s.ownerGrade === null || s.ownerGrade === grade) &&
                                         s.usedCount < _evtConcurrency &&
@@ -12883,6 +12888,9 @@
                                         !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
                                         !wouldCreatePeriodBoundaryGap(bunk, grade, s.startMin, s.endMin)
                                     ) || null;
+                                }
+                                if (!_chosenSlot && seqTarget && _verbose) {
+                                    log('[Phase2.4-bundle]   ⤵ ' + bunk + '/' + grade + ' — no adjacency-safe slot for "' + evt.name + '"; deferring to a future day instead of placing disconnected.');
                                 }
 
                                 // Pass 2 (relaxed boundary-gap) removed — creating an unfillable sub-period
