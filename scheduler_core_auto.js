@@ -5473,12 +5473,34 @@
                         blk.endMin = Math.round(blk.endMin / 5) * 5;
                         extended = true;
                     } else {
-                        var prevE = (j > 0) ? tl[j-1].endMin : 0;
+                        // ★ For j === 0, the "previous wall" is the division's
+                        //   startTime — NOT midnight. Without this clamp, a
+                        //   first-slot dMin enforcement could pull a sport's
+                        //   start back hours before the camp day begins. (E.g.
+                        //   Cubs Hockey 9:00-9:10 sub-dMin → engine tried to
+                        //   satisfy 30-min floor by extending left, computed
+                        //   prevE=0 (midnight), and landed startMin at 8:40.)
+                        var _bunkDivStart = null;
+                        try {
+                            var _bunkDivs = window.divisions || {};
+                            for (var _bdg in _bunkDivs) {
+                                if ((_bunkDivs[_bdg].bunks || []).map(String).indexOf(String(bunk)) >= 0) {
+                                    _bunkDivStart = parseTimeToMinutes(_bunkDivs[_bdg].startTime);
+                                    break;
+                                }
+                            }
+                        } catch (_e) {}
+                        var prevE = (j > 0) ? tl[j-1].endMin : (_bunkDivStart != null ? _bunkDivStart : 0);
                         var availL = blk.startMin - prevE;
                         if (dur + availL >= dMin) {
-                            blk.startMin = blk.endMin - Math.min(dMin, dMax);
-                            blk.startMin = Math.round(blk.startMin / 5) * 5;
-                            extended = true;
+                            var _candStart = blk.endMin - Math.min(dMin, dMax);
+                            _candStart = Math.round(_candStart / 5) * 5;
+                            // Final guard: never cross the floor (prev block
+                            // OR division startTime, whichever is greater).
+                            if (_candStart >= prevE) {
+                                blk.startMin = _candStart;
+                                extended = true;
+                            }
                         }
                     }
                     if (!extended) {
@@ -5505,6 +5527,41 @@
                     else tl[k].endMin = tl[k+1].startMin;
                 }
             }
+
+            // ★ Pass 5: DAY-START GUARD
+            //   Universal safety net — no block may start before the bunk's
+            //   division.startTime, regardless of which earlier pass tried to
+            //   shift it there. Catches stragglers from POST-GAP shifts, LNS,
+            //   negotiate, rebalance, or any future code path that decrements
+            //   startMin without remembering the day boundary.
+            var _dgBunkDivStart = null;
+            try {
+                var _dgDivs = window.divisions || {};
+                for (var _dgg in _dgDivs) {
+                    if ((_dgDivs[_dgg].bunks || []).map(String).indexOf(String(bunk)) >= 0) {
+                        _dgBunkDivStart = parseTimeToMinutes(_dgDivs[_dgg].startTime);
+                        break;
+                    }
+                }
+            } catch (_e) {}
+            if (_dgBunkDivStart != null) {
+                for (var dgi = 0; dgi < tl.length; dgi++) {
+                    var dgBlk = tl[dgi];
+                    if (!dgBlk || dgBlk.startMin == null) continue;
+                    if (dgBlk.startMin < _dgBunkDivStart) {
+                        // Clamp start to day-start. If duration would go sub-zero,
+                        // drop the block entirely (let downstream Phase fill Free).
+                        var dgNewStart = _dgBunkDivStart;
+                        if (dgBlk.endMin <= dgNewStart) {
+                            tl[dgi] = null;
+                            continue;
+                        }
+                        dgBlk.startMin = dgNewStart;
+                    }
+                }
+                tl = tl.filter(function (b) { return b && b.endMin > b.startMin; });
+            }
+
             bunkTimelines[bunk] = tl.filter(function(b) { return b.endMin > b.startMin; });
         }
 
