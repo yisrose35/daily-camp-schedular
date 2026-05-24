@@ -2591,9 +2591,30 @@
                     //   Safety: only shift backward by ≤ changePad so we never
                     //   collide with the previous grade's pool slot, and never
                     //   below layer.startMin.
-                    if (_linkedRotDur > 0 && _changePad > 0) {
+                    // NOTE: the earlier _linkedRotDur skipped individual-mode
+                    // rotation events (Water Slide is individual). For bundle
+                    // alignment we need the WS duration regardless of mode,
+                    // so recompute here.
+                    let _wetBundleRotDur = 0;
+                    if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                        try {
+                            const _allRotsForAlign = window.RotationEvents.loadRotationEvents() || [];
+                            for (const _rE of _allRotsForAlign) {
+                                if (!_rE || !_rE.sequence) continue;
+                                if ((_rE.sequence.targetActivity || '').toLowerCase() !== t) continue;
+                                if (currentDate && _rE.dateRange) {
+                                    if (currentDate < _rE.dateRange.start || currentDate > _rE.dateRange.end) continue;
+                                }
+                                const _rGr = (Array.isArray(_rE.grades) && _rE.grades.length > 0) ? new Set(_rE.grades) : null;
+                                if (_rGr && !_rGr.has(grade)) continue;
+                                const _rD = parseInt(_rE.durationPerBunk) || 0;
+                                if (_rD > _wetBundleRotDur) _wetBundleRotDur = _rD;
+                            }
+                        } catch (_e2) {}
+                    }
+                    if (_wetBundleRotDur > 0 && _changePad > 0) {
                         // After-bundle structure: swim → post-change → WS → trailing change
-                        const _afterEnd = blockEnd + _postChangeM + _linkedRotDur + _postChangeM;
+                        const _afterEnd = blockEnd + _postChangeM + _wetBundleRotDur + _postChangeM;
                         let _nextWall = layer.endMin;
                         getBunksForGrade(grade, divisions).forEach(function (bk) {
                             (bunkTimelines[bk] || []).forEach(function (b) {
@@ -2608,8 +2629,8 @@
                         const _wouldBeBefore = _afterEnd > _nextWall;
                         if (_wouldBeBefore) {
                             // Target swim start so before-bundle starts at layer floor.
-                            // before-bundle.startMin = swim_start - preChange - linkedRotDur.
-                            const _targetSwimStart = layer.startMin + _preChangeM + _linkedRotDur;
+                            // before-bundle.startMin = swim_start - preChange - WS_dur.
+                            const _targetSwimStart = layer.startMin + _preChangeM + _wetBundleRotDur;
                             // Only shift if target is earlier AND the gap we close
                             // is sub-fillMin (otherwise it'd be a fillable gap — leave it).
                             const _fillMin = 25;
