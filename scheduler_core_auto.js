@@ -7938,12 +7938,22 @@
 
             // Phase B: AGGRESSIVE gap filling — BOTTLENECK-FIRST ORDER
             // Processes gaps by contention (most constrained time windows first)
+            var _phase3StartT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+            var _PHASE3_BUDGET_MS = 15000; // hard wall-clock cap so we never silently hang
             for (var si = 0; si < gapQueue.length; si++) {
+                var _nowT = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+                if (_nowT - _phase3StartT > _PHASE3_BUDGET_MS) {
+                    log('[Phase3] ⏱ BUDGET EXCEEDED after ' + Math.round((_nowT-_phase3StartT)/1000) + 's at gap ' + si + '/' + gapQueue.length + ' — bailing to STEP 5 fillers');
+                    break;
+                }
                 var sBunk = gapQueue[si].bunk;
                 var sMeta = bunkMeta[sBunk];
                 var sGaps = [gapQueue[si].gap]; // process one gap at a time from the queue
+                var _sGapsCap = 12; // safety: never let sub-gap regrowth explode
 
-                for (var sg = 0; sg < sGaps.length; sg++) {
+                if (si % 5 === 0) log('[Phase3] gap ' + si + '/' + gapQueue.length + ' bunk=' + sBunk + ' (' + Math.round((_nowT-_phase3StartT)/1000) + 's elapsed)');
+
+                for (var sg = 0; sg < sGaps.length && sg < _sGapsCap; sg++) {
                     var gap = sGaps[sg];
                     var gapSize = gap.end - gap.start;
                     if (gapSize < sMeta.fillMinDur) continue;
