@@ -18989,6 +18989,83 @@
             }
         })();
 
+        // =====================================================================
+        // STEP 4.996 — SEQUENCE-ADJACENCY FINAL SWEEP
+        // =====================================================================
+        // Guaranteed catch-all: for every bunk, find any rotation_event whose
+        // configured _sequenceTarget activity exists nearby. If it does NOT
+        // sit within 20 min of a target block in the same bunk, demote it to
+        // Free. Every upstream placement path adds its own guard, but a
+        // post-pipeline sweep here ensures the final schedule never ships
+        // with a disconnected Water Slide etc., regardless of who placed it.
+        (function _step4996SequenceAdjacencySweep() {
+            try {
+                if (!window.RotationEvents || typeof window.RotationEvents.loadRotationEvents !== 'function') return;
+                var _rEvts = window.RotationEvents.loadRotationEvents() || [];
+                // Build map: event name (lc) → seqTarget (lc)
+                var _seqByEvtName = {};
+                _rEvts.forEach(function(rE) {
+                    if (!rE || !rE.sequence || !rE.sequence.targetActivity) return;
+                    if (currentDate && rE.dateRange) {
+                        if (currentDate < rE.dateRange.start || currentDate > rE.dateRange.end) return;
+                    }
+                    _seqByEvtName[String(rE.name || '').toLowerCase()] = String(rE.sequence.targetActivity).toLowerCase();
+                });
+                if (!Object.keys(_seqByEvtName).length) return;
+                var _ADJ_TOL_FINAL = 20;
+                var _demotedCount = 0;
+                allGrades.forEach(function(g) {
+                    getBunksForGrade(g, divisions).forEach(function(bunkName) {
+                        var tl = bunkTimelines[bunkName] || [];
+                        for (var i = 0; i < tl.length; i++) {
+                            var blk = tl[i];
+                            if (!blk || blk.continuation) continue;
+                            var bt = (blk.type || '').toLowerCase();
+                            if (bt !== 'rotation_event') continue;
+                            var evtName = String(blk.event || '').toLowerCase();
+                            var seqTgt = blk._sequenceTarget ? String(blk._sequenceTarget).toLowerCase() : _seqByEvtName[evtName];
+                            if (!seqTgt) continue;
+                            // Search for a target block within tolerance
+                            var adjOK = false;
+                            for (var j = 0; j < tl.length; j++) {
+                                if (j === i) continue;
+                                var tb = tl[j];
+                                if (!tb || tb.continuation) continue;
+                                var tbT = (tb.type || '').toLowerCase();
+                                var tbE = (tb.event || '').toLowerCase();
+                                if (tbT !== seqTgt && tbE !== seqTgt) continue;
+                                if (blk.endMin <= tb.startMin && (tb.startMin - blk.endMin) <= _ADJ_TOL_FINAL) { adjOK = true; break; }
+                                if (blk.startMin >= tb.endMin && (blk.startMin - tb.endMin) <= _ADJ_TOL_FINAL) { adjOK = true; break; }
+                            }
+                            if (adjOK) continue;
+                            // Demote to Free slot of same span
+                            warn('[STEP 4.996] Demoted ' + bunkName + '/' + (blk.event || blk.type) + ' @ ' + (blk.startMin) + '-' + (blk.endMin) + ' → Free — not adjacent to ' + seqTgt);
+                            blk.type = 'slot';
+                            blk.event = 'Free';
+                            blk._activity = 'Free';
+                            blk._assignedSport = null;
+                            blk._assignedSpecial = null;
+                            blk._customActivity = null;
+                            blk._rotationEventId = null;
+                            blk._sequenceTarget = null;
+                            blk.field = null;
+                            blk._fixed = false;
+                            blk._activityLocked = false;
+                            blk._source = 'seq-adjacency-demoted';
+                            _demotedCount++;
+                        }
+                    });
+                });
+                if (_demotedCount > 0) {
+                    log('[STEP 4.996] Sequence-adjacency sweep: demoted ' + _demotedCount + ' disconnected rotation_event(s) to Free');
+                } else {
+                    log('[STEP 4.996] Sequence-adjacency sweep: clean (every rotation_event is adjacent to its target)');
+                }
+            } catch (eS) {
+                warn('[STEP 4.996] sequence-adjacency sweep error: ' + eS.message);
+            }
+        })();
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
