@@ -3801,13 +3801,33 @@ function loadStyledXLSX() {
 // Build a workbook that LOOKS like a real schedule — column widths sized
 // by content, title row merged, frozen header + time column, banded rows,
 // styled headers (when xlsx-js-style is loaded).
+// Replace fancy Unicode dashes/quotes that Excel-on-Windows sometimes
+// misinterprets (renders as "â€"" mojibake when the locale isn't UTF-8)
+// with their plain ASCII counterparts. The .xlsx XML itself is UTF-8 but
+// some Excel installs still get confused; safer to ship plain dashes.
+function sanitizeForExcel(s) {
+    if (s == null) return '';
+    return String(s)
+        .replace(/[–—]/g, '-')   // – — → -
+        .replace(/[‘’]/g, "'")   // ‘ ’ → '
+        .replace(/[“”]/g, '"')   // “ ” → "
+        .replace(/·/g, '*')           // · → *
+        .replace(/…/g, '...');        // … → ...
+}
+function sanitizeRows(rows) {
+    return rows.map(function (r) {
+        return (r || []).map(function (v) { return typeof v === 'string' ? sanitizeForExcel(v) : v; });
+    });
+}
+
 function buildPolishedWorkbook(sel) {
     var wb = XLSX.utils.book_new();
     var styled = !!(window.XLSX && window.XLSX._campistry_styled);
     var dateStr = window.currentScheduleDate || '';
 
     var STY = {
-        title:    { font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '147D91' } }, alignment: { vertical: 'center', horizontal: 'left' } },
+        title:    { font: { bold: true, sz: 16, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '147D91' } }, alignment: { vertical: 'center', horizontal: 'left', indent: 1 } },
+        subtitle: { font: { sz: 11, color: { rgb: '475569' } }, fill: { fgColor: { rgb: 'F1F5F9' } }, alignment: { vertical: 'center', horizontal: 'left', indent: 1 } },
         header:   { font: { bold: true, sz: 11, color: { rgb: 'FFFFFF' } }, fill: { fgColor: { rgb: '0F6E80' } }, alignment: { vertical: 'center', horizontal: 'center', wrapText: true }, border: { bottom: { style: 'medium', color: { rgb: '0A5566' } } } },
         timeCol:  { font: { bold: true, sz: 10, color: { rgb: '1C1917' } }, fill: { fgColor: { rgb: 'FAFAF9' } }, alignment: { vertical: 'center', horizontal: 'center' } },
         cell:     { font: { sz: 10, color: { rgb: '1C1917' } }, alignment: { vertical: 'center', wrapText: true } },
@@ -3817,7 +3837,7 @@ function buildPolishedWorkbook(sel) {
     };
 
     sel.forEach(function (item) {
-        var rows = buildExcelRows(item);
+        var rows = sanitizeRows(buildExcelRows(item));
         if (!rows.length) return;
 
         // Find the column-header row (where first cell is 'Time')
@@ -3825,9 +3845,25 @@ function buildPolishedWorkbook(sel) {
         for (var ri = 0; ri < rows.length; ri++) {
             if (rows[ri] && rows[ri][0] === 'Time') { headerRowIdx = ri; break; }
         }
+        // BACKFILL empty data cells with a thin em-dash placeholder so rows
+        // don't visually disappear when a bunk has no assignment for a slot
+        // that another bunk does. Cosmetic only — keeps the grid scannable.
+        if (headerRowIdx >= 0) {
+            for (var br = headerRowIdx + 1; br < rows.length; br++) {
+                var rr = rows[br];
+                if (!rr || !rr.length) continue;
+                // From column 1 onward (skip Time col), if cell is null/'', stamp '-'
+                for (var bc = 1; bc < rr.length; bc++) {
+                    if (rr[bc] == null || rr[bc] === '') rr[bc] = '-';
+                }
+            }
+        }
         var ws = XLSX.utils.aoa_to_sheet(rows);
         var numCols = 0;
         rows.forEach(function (r) { if (r && r.length > numCols) numCols = r.length; });
+        // Make sure title+subtitle rows know about the full column count
+        // for merges to span correctly.
+        if (numCols < 2) numCols = 2;
 
         // Column widths — Time col 14, every data col ~22 chars
         var cols = [];
@@ -3838,13 +3874,17 @@ function buildPolishedWorkbook(sel) {
         var rowsMeta = [];
         for (var rIdx = 0; rIdx < rows.length; rIdx++) {
             if (rIdx === 0) rowsMeta.push({ hpt: 28 });
+            else if (rIdx === 1) rowsMeta.push({ hpt: 18 });
             else if (rIdx === headerRowIdx) rowsMeta.push({ hpt: 22 });
             else rowsMeta.push({ hpt: 20 });
         }
         ws['!rows'] = rowsMeta;
 
-        // Merge title across all columns
-        ws['!merges'] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, numCols - 1) } }];
+        // Merge title AND subtitle across all columns
+        ws['!merges'] = [
+            { s: { r: 0, c: 0 }, e: { r: 0, c: numCols - 1 } },
+            { s: { r: 1, c: 0 }, e: { r: 1, c: numCols - 1 } }
+        ];
 
         // Freeze header + time column
         if (headerRowIdx >= 0) {
@@ -3855,7 +3895,9 @@ function buildPolishedWorkbook(sel) {
         if (styled) {
             var titleAddr = XLSX.utils.encode_cell({ r: 0, c: 0 });
             if (ws[titleAddr]) ws[titleAddr].s = STY.title;
-            for (var rr = 1; rr < rows.length; rr++) {
+            var subtitleAddr = XLSX.utils.encode_cell({ r: 1, c: 0 });
+            if (ws[subtitleAddr]) ws[subtitleAddr].s = STY.subtitle;
+            for (var rr = 2; rr < rows.length; rr++) {
                 var rowVals = rows[rr] || [];
                 var isHeader = (rr === headerRowIdx);
                 for (var cc = 0; cc < numCols; cc++) {
@@ -3986,8 +4028,12 @@ function buildExcelRows(item) {
     if (_activeView === 'division') {
         // ─── Division header rows ───
         var bunks = (divs[item] && divs[item].bunks ? divs[item].bunks : []).slice();
-        rows.push([item + ' — ' + formatDisplayDate(dateStr), '', '', '', mode + ' Builder']);
-        rows.push([]); // blank row
+        // Title row holds ONLY the title — the merge will cover all columns.
+        // Builder/date info goes on a dedicated subtitle row so nothing
+        // gets visually clipped by the merge.
+        rows.push([item]);
+        rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
+        rows.push([]); // spacer
 
         if (isAutoMode()) {
             // ★★★ AUTO MODE: Per-bunk schedule with unified time axis ★★★
@@ -4096,7 +4142,8 @@ function buildExcelRows(item) {
         var dn = null;
         for (var d in divs) { if (divs[d].bunks && divs[d].bunks.indexOf(item) >= 0) { dn = d; break; } }
 
-        rows.push([item + (dn ? ' (' + dn + ')' : '') + ' — ' + formatDisplayDate(dateStr), '', '', mode + ' Builder']);
+        rows.push([item + (dn ? ' (' + dn + ')' : '')]);
+        rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
         rows.push([]);
         rows.push(['Time', 'Activity', 'Location']);
 
@@ -4155,7 +4202,8 @@ function buildExcelRows(item) {
 
     } else if (_activeView === 'location') {
         // ─── Location view ───
-        rows.push([item + ' — ' + formatDisplayDate(dateStr), '', mode + ' Builder']);
+        rows.push([item]);
+        rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
         rows.push([]);
         rows.push(['Time', 'Bunk(s)']);
 
