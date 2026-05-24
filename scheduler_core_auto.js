@@ -2544,9 +2544,6 @@
                 //   of them. The shift accounts for swim duration + the
                 //   adjacent rotation event (Water Slide) + change buffers
                 //   so each grade's full bundle fits clear of the prior.
-                if (t === 'swim' && _wetBundleTargets.has(t)) {
-                    log('[Phase0-Diag] swim layer for ' + grade + ': blockStart=' + blockStart + ' layer.startMin=' + layer.startMin + ' layer.endMin=' + layer.endMin + ' priorRanges=' + _wetBundleSwimRanges.length + ' fullGrade=' + (layer.fullGrade === true));
-                }
                 if (t === 'swim' && _wetBundleTargets.has(t) && _wetBundleSwimRanges.length > 0) {
                     // For non-fullGrade pinned swim, blockEnd defaults to
                     // layer.endMin (the whole window — not the actual swim
@@ -2579,8 +2576,6 @@
                             Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
                             '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
                             ' (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ')');
-                    } else {
-                        log('[Phase0-Diag] swim for ' + grade + ' could not stagger (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ' window=' + layer.startMin + '-' + layer.endMin + ')');
                     }
                 }
                 // Also pin blockEnd properly for non-fullGrade swim so the
@@ -19005,11 +19000,12 @@
                         const f = typeof e.field === 'string' ? e.field : (e.field && e.field.name) || '';
                         if (!f || f === 'Free' || f === 'Transition') return;
                         if (e._league || e._h2h) return; // league engine self-manages
-                        // Skip Change blocks — they happen in each bunk's own changing
-                        // area, not on a shared facility. Multiple bunks "Change" at
-                        // the same time-bucket is normal and not a conflict.
-                        const _excludedTypes = ['pre-change','post-change','change'];
-                        const _excludedActs = ['change'];
+                        // Skip operational shared activities — Change blocks happen
+                        // in each bunk's own changing area; lunch/dismissal/snack
+                        // are camp-wide shared facilities by design (everyone at
+                        // once is the intent, not a conflict).
+                        const _excludedTypes = ['pre-change','post-change','change','lunch','dismissal','snack','snacks'];
+                        const _excludedActs = ['change','lunch','dismissal','snack','snacks'];
                         const _typeForExclude = String(e.type || '').toLowerCase();
                         const _actForExclude = String(e._activity || e.sport || e.event || '').toLowerCase();
                         if (_excludedTypes.indexOf(_typeForExclude) >= 0) return;
@@ -19062,7 +19058,13 @@
                             // Overlap detected
                             const sameAct = a.activity === b.activity;
                             const sameWindow = a.startMin === b.startMin && a.endMin === b.endMin;
-                            if (sameAct && sameWindow) continue; // legitimate sharing
+                            // Same activity at all = legitimate sharing — the
+                            // activity's capacity/sharing config is the authority,
+                            // not this sweep. Wet-bundle rotation events (e.g.
+                            // Water Slide) deliberately put multiple bunks at the
+                            // same facility — sometimes with offsets when their
+                            // swims are staggered. Don't second-guess that here.
+                            if (sameAct) continue;
                             conflicts.push({ a: a, b: b, sameAct: sameAct, sameWindow: sameWindow });
                         }
                     }
