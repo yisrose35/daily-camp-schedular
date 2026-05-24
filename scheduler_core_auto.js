@@ -12912,6 +12912,47 @@
                                     }
                                 }
                             });
+                            // ── Whole-grade bundle cleanup ──
+                            // Mirror of the individual-mode cleanup: remove change
+                            // blocks sandwiched between the rotation event and swim
+                            // for every bunk that received this event. Without this,
+                            // whole_grade-configured "water slides" placed adjacent
+                            // to swim still showed Change → Swim → Change → Slides.
+                            if (_isBundleEvent && placements.length > 0) {
+                                const _BCLEAN_GAP_WG = 20;
+                                gradeEntries.forEach(({ grade: _wgGrade, bunks: _wgBunks }) => {
+                                    _wgBunks.forEach(_cleanBunk => {
+                                        const _cTL = bunkTimelines[_cleanBunk] || [];
+                                        const _cRE = _cTL.find(b => b && b._rotationEventId === evt.id);
+                                        const _cSW = _cTL.find(b => b && (b.type || '').toLowerCase() === 'swim');
+                                        if (!_cRE || !_cSW) return;
+                                        // Rotation event AFTER swim → drop post-change between them
+                                        if (_cRE.startMin >= _cSW.endMin &&
+                                            _cRE.startMin - _cSW.endMin <= _BCLEAN_GAP_WG) {
+                                            let _ci;
+                                            while ((_ci = _cTL.findIndex(b => b &&
+                                                (b.type || '').toLowerCase() === 'post-change' &&
+                                                b.startMin >= _cSW.endMin - 1 &&
+                                                b.endMin   <= _cRE.startMin + 1)) >= 0) {
+                                                _cTL.splice(_ci, 1);
+                                            }
+                                        }
+                                        // Rotation event BEFORE swim → drop pre-change between them
+                                        if (_cSW.startMin >= _cRE.endMin &&
+                                            _cSW.startMin - _cRE.endMin <= _BCLEAN_GAP_WG) {
+                                            let _ci;
+                                            while ((_ci = _cTL.findIndex(b => b &&
+                                                (b.type || '').toLowerCase() === 'pre-change' &&
+                                                b.startMin >= _cRE.endMin - 1 &&
+                                                b.endMin   <= _cSW.startMin + 1)) >= 0) {
+                                                _cTL.splice(_ci, 1);
+                                            }
+                                        }
+                                    });
+                                });
+                                gradeEntries.forEach(({ bunks: _wgBunks2 }) =>
+                                    _wgBunks2.forEach(_eb => ensureTimelineIntegrity(_eb)));
+                            }
                         }
                     });
 
@@ -15228,7 +15269,15 @@
                     const layer = sw.layer;
                     if (!layer) return;
                     // Detect adjacent linked rotation_events (generic — matches
-                    // any rotation_event whose _sequenceTarget equals this block's type)
+                    // any rotation_event whose _sequenceTarget equals this block's type).
+                    //
+                    // ★ Adjacency tolerance: use ≤ 20-min gap (period-boundary
+                    //   tolerance) instead of strict equality. A swim ending at
+                    //   10:25 and Water Slides starting at 10:35 (10-min period
+                    //   gap) is still a bundle — campers stay in suits between
+                    //   them. Strict `=== sw.endMin` rejected this case and
+                    //   wrapped change around swim ONLY, leaving a sandwich.
+                    const _BUNDLE_GAP_TOL = 20;
                     const _swType = (sw.type || '').toLowerCase();
                     let bundleStart = sw.startMin, bundleEnd = sw.endMin;
                     bunkTimelines[bunk].forEach(adj => {
@@ -15236,10 +15285,14 @@
                         if (!adj._sequenceTarget) return;
                         var tgt = adj._sequenceTarget.toLowerCase();
                         if (tgt !== _swType) return;
-                        // Adjacent before?
-                        if (adj.endMin === sw.startMin) bundleStart = Math.min(bundleStart, adj.startMin);
-                        // Adjacent after?
-                        if (adj.startMin === sw.endMin) bundleEnd = Math.max(bundleEnd, adj.endMin);
+                        // Adjacent before? Allow a small period-boundary gap.
+                        if (adj.endMin <= sw.startMin && (sw.startMin - adj.endMin) <= _BUNDLE_GAP_TOL) {
+                            bundleStart = Math.min(bundleStart, adj.startMin);
+                        }
+                        // Adjacent after? Allow a small period-boundary gap.
+                        if (adj.startMin >= sw.endMin && (adj.startMin - sw.endMin) <= _BUNDLE_GAP_TOL) {
+                            bundleEnd = Math.max(bundleEnd, adj.endMin);
+                        }
                     });
                     // Always read change durations from the live grade-level swim layer config
                     // so we get the current user-configured values, not a stale Phase-0 copy.
