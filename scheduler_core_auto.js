@@ -15441,9 +15441,21 @@
                     let bundleStart = sw.startMin, bundleEnd = sw.endMin;
                     bunkTimelines[bunk].forEach(adj => {
                         if (!adj || (adj.type || '').toLowerCase() !== 'rotation_event') return;
-                        if (!adj._sequenceTarget) return;
-                        var tgt = adj._sequenceTarget.toLowerCase();
-                        if (tgt !== _swType) return;
+                        // Prefer explicit _sequenceTarget match. If that property has been
+                        // lost (can happen across iter-loop elite restoration), accept any
+                        // rotation_event that's immediately adjacent (≤ tolerance) to swim
+                        // — adjacency itself is the strongest signal that the user wired
+                        // them as a bundle in Phase 2.4.
+                        var tgt = (adj._sequenceTarget || '').toLowerCase();
+                        var _seqMatches = tgt === _swType;
+                        if (!_seqMatches && !adj._sequenceTarget) {
+                            // No tag at all — only treat as bundle if directly touching swim.
+                            var _gapBefore = sw.startMin - adj.endMin;
+                            var _gapAfter  = adj.startMin - sw.endMin;
+                            _seqMatches = (adj.endMin <= sw.startMin && _gapBefore <= _BUNDLE_GAP_TOL) ||
+                                          (adj.startMin >= sw.endMin && _gapAfter  <= _BUNDLE_GAP_TOL);
+                        }
+                        if (!_seqMatches) return;
                         // Adjacent before? Allow a small period-boundary gap.
                         if (adj.endMin <= sw.startMin && (sw.startMin - adj.endMin) <= _BUNDLE_GAP_TOL) {
                             bundleStart = Math.min(bundleStart, adj.startMin);
@@ -15516,19 +15528,27 @@
                             .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType) && preStart >= _schedStart278) {
-                            // After carve, prev will end at preStart. Change+swim is one atomic
-                            // unit — allow the block to shrink to zero (filtered at the
-                            // end-of-pass sort) rather than blocking Change. A consumed/short
-                            // sport is better than a swim with no pre-change.
                             const newPrevDur = preStart - prev.startMin;
-                            if (newPrevDur >= (prev.dMin || GAP_MIN_DUR)) {
+                            const _prevDMin = prev.dMin || GAP_MIN_DUR;
+                            const _isRot = prevType === 'rotation_event';
+                            if (newPrevDur >= _prevDMin) {
+                                // Safe trim — block stays at or above its dMin.
                                 prev.endMin = preStart;
                                 if (prev.endTime) prev.endTime = minutesToTimeLabel(preStart);
+                                anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
+                                log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk);
+                            } else if (!_isRot) {
+                                // Sport/slot only: zero-out to make room. Change+swim is atomic,
+                                // a consumed sport is better than a missing Change.
+                                // NEVER zero-out a rotation_event — that destroys user-pinned
+                                // walls (e.g. Water Slide bundle).
+                                prev.endMin = prev.startMin;
+                                anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
+                                log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk + ' (zero-out ' + prevType + ')');
                             } else {
-                                prev.endMin = prev.startMin; // zero-duration, filtered later
+                                // rotation_event can't be safely trimmed — skip carve.
+                                log('[2.78] Skipped pre-change carve at ' + bunk + ': rotation_event "' + (prev.event || prev.type) + '" cannot shrink below dMin');
                             }
-                            anchors = { pre: { startMin: preStart, endMin: _preEnd278 }, post: anchors.post };
-                            log('[2.78] Carved to ' + preStart + ' for pre-change [' + preStart + ',' + _preEnd278 + '] at ' + bunk + (newPrevDur < (prev.dMin || GAP_MIN_DUR) ? ' (zero-out)' : ''));
                         }
                     }
                     if (!anchors.post && postChangeDur > 0) {
