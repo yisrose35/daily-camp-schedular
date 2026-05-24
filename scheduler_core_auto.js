@@ -12859,7 +12859,18 @@
                                                            Math.min(Math.abs(b.endMin - _tgtS), Math.abs(b.startMin - _tgtE));
                                                 return dA - dB;
                                             });
+                                        // Adjacency hard cutoff: ≤20 min between slot and target.
+                                        // _adjSlots sorts by proximity but doesn't bound distance —
+                                        // without this guard the loop would accept a slot hours away
+                                        // (e.g. closest 'after' slot at 12:20pm when swim ended 10:55am).
+                                        // User explicit preference: never place a sequence-targeted
+                                        // event disconnected from its target.
+                                        const _ADJ_TOL_24 = 20;
                                         for (const s of _adjSlots) {
+                                            const _distA = (s.startMin >= _tgtE) ? (s.startMin - _tgtE) : Infinity;
+                                            const _distB = (s.endMin   <= _tgtS) ? (_tgtS - s.endMin)   : Infinity;
+                                            const _dist  = Math.min(_distA, _distB);
+                                            if (_dist > _ADJ_TOL_24) continue;
                                             if (isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
                                                 isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                                 !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&
