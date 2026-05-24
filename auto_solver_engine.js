@@ -1199,16 +1199,20 @@
                 const _sportLower = String(sport).toLowerCase().trim();
                 const _fieldLower = String(fieldName).toLowerCase().trim();
                 const _saAll = window.scheduleAssignments || {};
-                // ★ Cross-grade staggered overlap check.
-                //   Previous version restricted to same-grade only, allowing
-                //   cross-grade pairs (e.g., Juniors-bunk1 9:00-9:50 and
-                //   Seniors-bunk2 9:25-9:55 on the same court) to slip past.
-                //   Any partial-overlap on the same field is bad regardless
-                //   of grade — mid-activity arrivals don't work.
+                // ★ Defense layer: cross-grade AND cross-activity overlap check.
+                //   A physical facility (Soccer Field, Arts Room) can host at most
+                //   one activity at a time. Period. Even if the field is set to
+                //   sharable, "sharing" means MULTIPLE BUNKS doing the SAME thing
+                //   at the EXACT same time — never two different activities, and
+                //   never staggered start/end times. Anything else is invisible
+                //   chaos for the staff actually running camp.
+                //
+                //   Previous version restricted both: same-grade only, and
+                //   same-activity only. We now block ANY overlap on the same
+                //   field unless the other usage is the EXACT same activity at
+                //   EXACT same start/end (true sharing).
                 for (const _otherBunk in _saAll) {
                     if (_otherBunk === bunk) continue;
-                    // Resolve other bunk's grade for logging only — we no
-                    // longer use it to gate the check.
                     let _otherGrade = '';
                     const _divs = window.divisions || {};
                     for (const _g in _divs) {
@@ -1222,17 +1226,21 @@
                         if (!_w || _w.continuation) continue;
                         const _wField = String(_w.field || '').toLowerCase().trim();
                         if (_wField !== _fieldLower) continue;
-                        const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
-                        if (_wAct !== _sportLower) continue;
                         const _ws = _w._startMin, _we = _w._endMin;
                         if (_ws == null || _we == null) continue;
                         // Overlap? (half-open)
                         if (_ws < eMin && _we > sMin) {
-                            // Identical times = OK (true sharing)
-                            if (_ws === sMin && _we === eMin) continue;
-                            // Partial overlap = REJECT (same grade OR cross grade)
+                            const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
+                            const sameActivity = (_wAct === _sportLower);
+                            const sameWindow = (_ws === sMin && _we === eMin);
+                            // True sharing: same activity AT THE SAME TIME — OK
+                            if (sameActivity && sameWindow) continue;
+                            // Anything else = REJECT
                             const _xg = _otherGrade && _otherGrade !== grade ? ' [cross-grade ' + _otherGrade + ']' : '';
-                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — would partial-overlap ' + _otherBunk + _xg + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
+                            const _why = !sameActivity
+                                ? 'different-activity conflict (' + (_w._activity || _w.sport || '?') + ')'
+                                : 'partial-overlap';
+                            log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — ' + _why + ' with ' + _otherBunk + _xg + ' (' + _ws + '-' + _we + ' vs ' + sMin + '-' + eMin + ')');
                             return false;
                         }
                     }

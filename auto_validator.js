@@ -191,11 +191,14 @@
 
             for (let i = 0; i < usages.length; i++) {
                 const a = usages[i];
-                if (a.flags._league || a.flags._autoSpecial) continue;
+                // Leagues self-manage cross-grade scheduling; everything
+                // else (sports + specials) competes for the same physical
+                // facility and must not cross-claim it.
+                if (a.flags._league) continue;
 
                 for (let j = i + 1; j < usages.length; j++) {
                     const b = usages[j];
-                    if (b.flags._league || b.flags._autoSpecial) continue;
+                    if (b.flags._league) continue;
                     if (a.grade === b.grade) continue;
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
 
@@ -250,8 +253,9 @@
         fieldIndex.forEach((usages, fieldNorm) => {
             const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1 };
 
-            // Filter to sport entries only (skip specials and leagues)
-            const sportUsages = usages.filter(u => !u.flags._league && !u.flags._autoSpecial);
+            // Include sports + specials (both compete for the field).
+            // Only exclude leagues (which run their own field-allocator).
+            const sportUsages = usages.filter(u => !u.flags._league);
             if (sportUsages.length < 2) return;
 
             // Group by grade (for same_division, capacity is per-grade)

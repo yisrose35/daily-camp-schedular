@@ -18346,6 +18346,126 @@
             }
         })();
 
+        // ──────────────────────────────────────────────────────────────────
+        // STEP 4.995 — FACILITY-OVERLAP INTEGRITY SWEEP
+        // ──────────────────────────────────────────────────────────────────
+        // Hard guarantee: no facility hosts two DIFFERENT activities (or
+        // staggered same-activity) at the same time, regardless of which
+        // engine placed them. Sports go through rtCanUse; specials go
+        // through special.maxUsage. The two trackers don't always reconcile,
+        // so cross-activity overlap on the same facility can slip through.
+        // This is the final safety net BEFORE save: scan every bunk's
+        // timeline, group by (facility, time-overlap), and demote any
+        // non-immovable loser to Free so the bad pair never ships.
+        //
+        //   • True sharing (same activity, identical times) is allowed.
+        //   • Different activities on same field overlapping → conflict.
+        //   • Same activity, staggered → conflict.
+        //   • Phase-0 immovables (pinned/league/lunch/trips) win; the
+        //     other entry is demoted. If both are immovable, log loudly
+        //     so user can see — but neither is touched.
+        (function _step4995FacilityOverlapSweep() {
+            try {
+                const sa = window.scheduleAssignments || {};
+                // Build list of all entries with timing + field
+                const entries = [];
+                Object.keys(sa).forEach(function (bunk) {
+                    const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        const f = typeof e.field === 'string' ? e.field : (e.field && e.field.name) || '';
+                        if (!f || f === 'Free' || f === 'Transition') return;
+                        if (e._league || e._h2h) return; // league engine self-manages
+                        const sm = e._startMin != null ? e._startMin : e.startMin;
+                        const em = e._endMin   != null ? e._endMin   : e.endMin;
+                        if (sm == null || em == null) return;
+                        entries.push({
+                            bunk: bunk, idx: idx, entry: e,
+                            field: String(f).toLowerCase().trim(),
+                            fieldDisplay: f,
+                            startMin: sm, endMin: em,
+                            activity: String(e._activity || e.sport || e.event || '').toLowerCase().trim(),
+                            activityDisplay: e._activity || e.sport || e.event || '',
+                            isImmovable: !!(e._classification === 'pinned' || e._fixed || e._activityLocked || e._isTrip)
+                        });
+                    });
+                });
+
+                // Group by field, sort by startMin, walk pairwise
+                const byField = {};
+                entries.forEach(function (en) {
+                    if (!byField[en.field]) byField[en.field] = [];
+                    byField[en.field].push(en);
+                });
+
+                const conflicts = [];
+                Object.keys(byField).forEach(function (field) {
+                    const list = byField[field].sort(function (a, b) { return a.startMin - b.startMin; });
+                    for (let i = 0; i < list.length; i++) {
+                        for (let j = i + 1; j < list.length; j++) {
+                            const a = list[i], b = list[j];
+                            if (a.startMin >= b.endMin) continue; // sorted — no later pair can overlap with a
+                            if (a.endMin <= b.startMin) continue;
+                            // Overlap detected
+                            const sameAct = a.activity === b.activity;
+                            const sameWindow = a.startMin === b.startMin && a.endMin === b.endMin;
+                            if (sameAct && sameWindow) continue; // legitimate sharing
+                            conflicts.push({ a: a, b: b, sameAct: sameAct, sameWindow: sameWindow });
+                        }
+                    }
+                });
+
+                if (!conflicts.length) {
+                    log('[STEP 4.995] Facility integrity: clean (no overlapping cross-activity / staggered uses)');
+                    return;
+                }
+
+                // Resolve each conflict by demoting the non-immovable side
+                // to Free. If both are immovable (user-pinned vs trip etc.)
+                // we log the irresolvable case but leave them alone.
+                let demoted = 0, irresolvable = 0;
+                conflicts.forEach(function (c) {
+                    const a = c.a, b = c.b;
+                    let loser = null;
+                    if (!a.isImmovable && !b.isImmovable) {
+                        // Pick the later/shorter as loser to minimize disruption
+                        loser = (b.startMin > a.startMin) ? b : (a.endMin - a.startMin) < (b.endMin - b.startMin) ? a : b;
+                    } else if (a.isImmovable && !b.isImmovable) {
+                        loser = b;
+                    } else if (!a.isImmovable && b.isImmovable) {
+                        loser = a;
+                    } else {
+                        // Both immovable — flag, don't touch
+                        warn('[STEP 4.995] IRRESOLVABLE facility conflict @ ' + a.fieldDisplay +
+                            ': ' + a.bunk + '/' + (a.activityDisplay || '?') + ' (' + a.startMin + '-' + a.endMin + ') vs ' +
+                            b.bunk + '/' + (b.activityDisplay || '?') + ' (' + b.startMin + '-' + b.endMin + ') — both pinned/immovable');
+                        irresolvable++;
+                        return;
+                    }
+                    // Demote loser to Free
+                    const e = loser.entry;
+                    e._activity = 'Free';
+                    if (e.sport) delete e.sport;
+                    if (e.event) e.event = 'Free';
+                    e.field = 'Free';
+                    e._wasFacilityConflictDemotion = {
+                        original: { activity: loser.activityDisplay, field: loser.fieldDisplay },
+                        conflictWith: { bunk: (loser === a ? b.bunk : a.bunk), activity: (loser === a ? b.activityDisplay : a.activityDisplay) }
+                    };
+                    demoted++;
+                    warn('[STEP 4.995] Demoted ' + loser.bunk + '/' + loser.activityDisplay +
+                        ' @ ' + loser.fieldDisplay + ' (' + loser.startMin + '-' + loser.endMin +
+                        ') → Free — facility conflict with ' + (loser === a ? b.bunk : a.bunk) +
+                        '/' + (loser === a ? b.activityDisplay : a.activityDisplay));
+                });
+
+                log('[STEP 4.995] Facility integrity: ' + conflicts.length + ' conflicts found — ' +
+                    demoted + ' demoted to Free, ' + irresolvable + ' irresolvable (both immovable)');
+            } catch (eF) {
+                warn('[STEP 4.995] facility-overlap sweep error: ' + eF.message);
+            }
+        })();
+
         // STEP 5 — SAVE
         // =====================================================================
         saveSwimHistory();
