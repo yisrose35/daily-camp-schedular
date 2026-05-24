@@ -12591,15 +12591,37 @@
                                     if (seqPosition === 'after' || seqPosition === 'either') {
                                         if (_noPeriods) {
                                             // No periods configured → bundle is just one slot
-                                            // starting immediately at swimEnd, clamped to winEnd.
+                                            // starting immediately at swimEnd, clamped to winEnd
+                                            // AND to the start of the next pinned/fixed block
+                                            // (lunch, league, etc.). Without that clamp the
+                                            // bundle slot would overlap lunch and Phase 2.4's
+                                            // tryWindow check would reject it, leaving the
+                                            // bunk to fall through to the generic path.
                                             const _afterStart = Math.max(_grSwimBlk.endMin, winStart);
-                                            const _afterEnd   = winEnd;
+                                            // Find the earliest pinned block AFTER swim across
+                                            // the grade's bunks. Use the most-constrained bunk
+                                            // (earliest next-pin) as the binding wall.
+                                            let _afterEnd = winEnd;
+                                            _bb.forEach(function (_pb) {
+                                                const _ptl = bunkTimelines[_pb] || [];
+                                                _ptl.forEach(function (_blk) {
+                                                    if (!_blk || _blk.continuation) return;
+                                                    if (!(_blk._classification === 'pinned' || _blk._fixed || _blk._activityLocked)) return;
+                                                    if (_blk.type && _blk.type === 'swim') return; // ignore the swim itself
+                                                    if (_blk.startMin > _afterStart && _blk.startMin < _afterEnd) {
+                                                        _afterEnd = _blk.startMin;
+                                                    }
+                                                });
+                                            });
                                             if (_afterEnd - _afterStart >= dur) {
                                                 _pool.push({
                                                     startMin: _afterStart, endMin: _afterStart + dur,
                                                     usedCount: 0, dir: 'after',
                                                     immediatelyAdjacent: true
                                                 });
+                                            } else if (_verbose) {
+                                                log('[Phase2.4-bundle] Grade ' + _bg + ' after-pool empty: only ' +
+                                                    (_afterEnd - _afterStart) + 'min between swim end and next pinned wall (need ' + dur + 'min)');
                                             }
                                         } else {
                                             for (let _pi = _swimPi + 1; _pi < _sp.length; _pi++) {
@@ -12632,15 +12654,33 @@
                                         _pool.length === 0) {
                                         if (_noPeriods) {
                                             // No periods → bundle is one slot ending immediately
-                                            // at swimStart, clamped to winStart.
-                                            const _beforeEnd   = Math.min(_grSwimBlk.startMin, winEnd);
+                                            // at swimStart, clamped to winStart AND to the end of
+                                            // the latest pinned block BEFORE swim.
+                                            const _beforeEnd = Math.min(_grSwimBlk.startMin, winEnd);
+                                            // Find the latest pinned block END across grade's
+                                            // bunks (Nit, leagues, earlier rotation events, etc.)
+                                            let _beforeStartFloor = winStart;
+                                            _bb.forEach(function (_pb) {
+                                                const _ptl = bunkTimelines[_pb] || [];
+                                                _ptl.forEach(function (_blk) {
+                                                    if (!_blk || _blk.continuation) return;
+                                                    if (!(_blk._classification === 'pinned' || _blk._fixed || _blk._activityLocked)) return;
+                                                    if (_blk.type && _blk.type === 'swim') return; // ignore the swim itself
+                                                    if (_blk.endMin < _beforeEnd && _blk.endMin > _beforeStartFloor) {
+                                                        _beforeStartFloor = _blk.endMin;
+                                                    }
+                                                });
+                                            });
                                             const _beforeStart = _beforeEnd - dur;
-                                            if (_beforeStart >= winStart) {
+                                            if (_beforeStart >= _beforeStartFloor) {
                                                 _pool.push({
                                                     startMin: _beforeStart, endMin: _beforeEnd,
                                                     usedCount: 0, dir: 'before',
                                                     immediatelyAdjacent: true
                                                 });
+                                            } else if (_verbose) {
+                                                log('[Phase2.4-bundle] Grade ' + _bg + ' before-pool empty: only ' +
+                                                    (_beforeEnd - _beforeStartFloor) + 'min between previous pinned wall and swim start (need ' + dur + 'min)');
                                             }
                                         } else {
                                             for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
