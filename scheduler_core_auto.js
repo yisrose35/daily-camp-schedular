@@ -15708,6 +15708,122 @@
             });
         });
         log('[2.78] Re-anchored: dropped ' + _reanchorDropped + ' old change blocks, placed ' + _reanchorPlaced + ' period-anchored ones');
+
+        // ── STEP 2.78b — STANDALONE WET-ROTATION WRAP ──
+        // Wrap any rotation_event with _sequenceTarget=swim that wasn't
+        // bundled with a swim block (e.g. Water Slide placed via stagger
+        // pool at 12:20pm while swim is at 10:25am). The user wants every
+        // Water Slide to have Change before/after — bundled or not.
+        let _wrapPlaced = 0;
+        allGrades.forEach(grade => {
+            const _swLayerWrap = (layersByGrade[grade] || []).find(
+                l => (l.type || '').toLowerCase() === 'swim'
+            );
+            if (!_swLayerWrap) return;
+            const _preDurWrap  = (_swLayerWrap.preChangeMin  > 0) ? _swLayerWrap.preChangeMin  : 0;
+            const _postDurWrap = (_swLayerWrap.postChangeMin > 0) ? _swLayerWrap.postChangeMin : 0;
+            if (_preDurWrap <= 0 && _postDurWrap <= 0) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const tlW = bunkTimelines[bunk];
+                if (!Array.isArray(tlW)) return;
+                // Find candidate WS-like rotation_events
+                tlW.slice().forEach(rb => {
+                    if (!rb) return;
+                    if ((rb.type || '').toLowerCase() !== 'rotation_event') return;
+                    if (!rb._sequenceTarget || rb._sequenceTarget.toLowerCase() !== 'swim') return;
+                    // If a change block already touches this WS, skip (it was bundled).
+                    const _hasPre = tlW.some(b => b &&
+                        (b.type || '').toLowerCase() === 'pre-change' &&
+                        Math.abs(b.endMin - rb.startMin) <= 1);
+                    const _hasPost = tlW.some(b => b &&
+                        (b.type || '').toLowerCase() === 'post-change' &&
+                        Math.abs(b.startMin - rb.endMin) <= 1);
+                    // Also skip if WS is touching a swim block (bundle wrap covers it).
+                    const _touchesSwim = tlW.some(b => b &&
+                        (b.type || '').toLowerCase() === 'swim' &&
+                        (Math.abs(b.endMin - rb.startMin) <= 20 || Math.abs(b.startMin - rb.endMin) <= 20));
+                    if (_touchesSwim) return;
+                    const _groupId = nextSwimGroupId();
+                    // Pre-change before WS
+                    if (_preDurWrap > 0 && !_hasPre) {
+                        const _psW = rb.startMin - _preDurWrap;
+                        const _peW = rb.startMin;
+                        // Carve / displace any non-fixed slot/sport in the window
+                        let _placeable = true;
+                        tlW.forEach(blk => {
+                            if (!blk || blk === rb) return;
+                            if (blk._fixed) {
+                                if (blk.startMin < _peW && blk.endMin > _psW) _placeable = false;
+                                return;
+                            }
+                            const bt = String(blk.type || '').toLowerCase();
+                            if (!['slot', 'sport'].includes(bt)) return;
+                            if (!(blk.startMin < _peW && blk.endMin > _psW)) return;
+                            if (blk.endMin <= _peW) {
+                                const nd = _psW - blk.startMin;
+                                if (nd >= (blk.dMin || GAP_MIN_DUR)) { blk.endMin = _psW; if (blk.endTime) blk.endTime = minutesToTimeLabel(_psW); }
+                                else { blk.endMin = blk.startMin; }
+                            } else {
+                                const nd = blk.endMin - _peW;
+                                if (nd >= (blk.dMin || GAP_MIN_DUR)) { blk.startMin = _peW; if (blk.startTime) blk.startTime = minutesToTimeLabel(_peW); }
+                                else { blk.endMin = blk.startMin; }
+                            }
+                        });
+                        if (_placeable && _psW >= 0) {
+                            tlW.push({
+                                startMin: _psW, endMin: _peW,
+                                type: 'pre-change', event: 'Change', layer: null,
+                                dMin: _preDurWrap, dMax: _preDurWrap,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _activityLocked: true,
+                                _source: 'ws-pre-change', _swimGroupId: _groupId
+                            });
+                            _wrapPlaced++;
+                        }
+                    }
+                    // Post-change after WS
+                    if (_postDurWrap > 0 && !_hasPost) {
+                        const _psPW = rb.endMin;
+                        const _pePW = rb.endMin + _postDurWrap;
+                        let _placeable2 = true;
+                        tlW.forEach(blk => {
+                            if (!blk || blk === rb) return;
+                            if (blk._fixed) {
+                                if (blk.startMin < _pePW && blk.endMin > _psPW) _placeable2 = false;
+                                return;
+                            }
+                            const bt = String(blk.type || '').toLowerCase();
+                            if (!['slot', 'sport'].includes(bt)) return;
+                            if (!(blk.startMin < _pePW && blk.endMin > _psPW)) return;
+                            if (blk.startMin >= _psPW) {
+                                const nd = blk.endMin - _pePW;
+                                if (nd >= (blk.dMin || GAP_MIN_DUR)) { blk.startMin = _pePW; if (blk.startTime) blk.startTime = minutesToTimeLabel(_pePW); }
+                                else { blk.endMin = blk.startMin; }
+                            } else {
+                                const nd = _psPW - blk.startMin;
+                                if (nd >= (blk.dMin || GAP_MIN_DUR)) { blk.endMin = _psPW; if (blk.endTime) blk.endTime = minutesToTimeLabel(_psPW); }
+                                else { blk.endMin = blk.startMin; }
+                            }
+                        });
+                        if (_placeable2) {
+                            tlW.push({
+                                startMin: _psPW, endMin: _pePW,
+                                type: 'post-change', event: 'Change', layer: null,
+                                dMin: _postDurWrap, dMax: _postDurWrap,
+                                _classification: 'pinned', _committed: true,
+                                _fixed: true, _activityLocked: true,
+                                _source: 'ws-post-change', _swimGroupId: _groupId
+                            });
+                            _wrapPlaced++;
+                        }
+                    }
+                });
+                bunkTimelines[bunk] = tlW
+                    .filter(b => b && b.endMin > b.startMin)
+                    .sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+            });
+        });
+        if (_wrapPlaced > 0) log('[2.78b] Wrapped standalone wet-rotation events: ' + _wrapPlaced + ' change blocks placed');
         // Mirror to divisionTimes._perBunkSlots so the renderer sees them too.
         allGrades.forEach(grade => {
             const dt = window.divisionTimes?.[grade];
