@@ -1280,7 +1280,12 @@ function getNeedsForBunk(bunkName, dateKey) {
             _rotationEventId: evt.id,
             _rotationEventConcurrency: effectiveConcurrency,
             _rotationEventColor: evt.color || '#F59E0B',
-            _rotationEventLocation: evt.location || null
+            _rotationEventLocation: evt.location || null,
+            // ★ Include sequence config so downstream solvers (Phase 3 self-heal,
+            // CSP, CSP-Relax) can enforce adjacency. Without these the adjacency
+            // guards silently allow disconnected placement.
+            _sequenceTarget: (evt.sequence && evt.sequence.targetActivity) ? evt.sequence.targetActivity : null,
+            _sequencePosition: (evt.sequence && evt.sequence.position) ? evt.sequence.position : 'either'
         });
     });
 
