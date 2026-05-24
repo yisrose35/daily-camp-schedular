@@ -1119,7 +1119,11 @@
             dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20,
             'pre-change': 5, 'post-change': 5, change: 5,
             // Trips are user-defined: floor is small so short trips aren't padded
-            trip: 5
+            trip: 5,
+            // Rotation events (Scheduled Activities like lice check, photo day) are
+            // user-defined fixed durations — floor at 5 so a 10-min Nit isn't
+            // padded up to 20 by the GAP_MIN_DUR fallback.
+            rotation_event: 5, scheduled_activity: 5
         };
         const TYPE_CEILINGS = {
             swim: 60, league: 60, specialty_league: 60, special: 60,
@@ -1129,7 +1133,10 @@
             // Trips are user-defined fixed durations and can span hours. Ceiling
             // must be a full day so the dMax trim pass (which DOES touch fixed
             // blocks) doesn't chop a 3-hour trip down to 90 min.
-            trip: 1440
+            trip: 1440,
+            // Rotation events: ceiling must respect whatever duration the user
+            // configured; cap at full day so a 90-min rotation event isn't trimmed.
+            rotation_event: 1440, scheduled_activity: 1440
         };
 
         function resolveConstraints(layer, type, block) {
