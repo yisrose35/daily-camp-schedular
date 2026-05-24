@@ -12558,14 +12558,18 @@
                                     }
                                     const _sp = ((window.campPeriods || {})[_bg] || [])
                                         .slice().sort((a, b) => a.startMin - b.startMin);
-                                    if (_sp.length === 0) {
-                                        if (_verbose) log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — no campPeriods (Bell Schedule) defined for this grade. Bundle requires Bell Schedule periods to know what " adjacent" means.');
-                                        return;
-                                    }
-                                    const _swimPi = _sp.findIndex(
+                                    // ★ When Bell Schedule periods aren't configured, the
+                                    //   "adjacent period" concept doesn't apply. Synthesize
+                                    //   a fake adjacency window that's just [swimEnd, winEnd]
+                                    //   for AFTER and [winStart, swimStart] for BEFORE.
+                                    //   The wet-bundle pool then becomes one slot placed
+                                    //   IMMEDIATELY adjacent to swim — no period gap, exactly
+                                    //   what the user expects (Change → Swim → Slides → Change).
+                                    const _noPeriods = _sp.length === 0;
+                                    const _swimPi = _noPeriods ? 0 : _sp.findIndex(
                                         p => p.startMin <= _grSwimBlk.startMin && p.endMin >= _grSwimBlk.endMin
                                     );
-                                    if (_swimPi < 0) {
+                                    if (!_noPeriods && _swimPi < 0) {
                                         if (_verbose) {
                                             const _per = _sp.map(p => _fmt(p.startMin) + '-' + _fmt(p.endMin)).join(', ');
                                             log('[Phase2.4-bundle] Grade ' + _bg + ' NO bundle — swim block ' +
@@ -12585,26 +12589,40 @@
                                     // adjacent period but not guaranteed to be back-to-back
                                     // (Phase 3 may fill the earlier sub-slots for that bunk).
                                     if (seqPosition === 'after' || seqPosition === 'either') {
-                                        for (let _pi = _swimPi + 1; _pi < _sp.length; _pi++) {
-                                            const _p = _sp[_pi];
-                                            // Clamp slots to the event window rather than requiring the
-                                            // entire period to sit inside it — this prevents valid
-                                            // adjacent periods from being skipped when they start slightly
-                                            // before winStart (e.g., a period starting at 10:40 when
-                                            // winStart is 10:50 still has usable sub-slots from 10:50+).
-                                            const _aCStart = Math.max(_p.startMin, winStart);
-                                            const _aCEnd   = Math.min(_p.endMin, winEnd);
-                                            if (_aCEnd - _aCStart < dur) continue;
-                                            let _firstSlot = true;
-                                            for (let _wsS = _aCStart; _wsS + dur <= _aCEnd; _wsS += dur) {
+                                        if (_noPeriods) {
+                                            // No periods configured → bundle is just one slot
+                                            // starting immediately at swimEnd, clamped to winEnd.
+                                            const _afterStart = Math.max(_grSwimBlk.endMin, winStart);
+                                            const _afterEnd   = winEnd;
+                                            if (_afterEnd - _afterStart >= dur) {
                                                 _pool.push({
-                                                    startMin: _wsS, endMin: _wsS + dur,
+                                                    startMin: _afterStart, endMin: _afterStart + dur,
                                                     usedCount: 0, dir: 'after',
-                                                    immediatelyAdjacent: _firstSlot
+                                                    immediatelyAdjacent: true
                                                 });
-                                                _firstSlot = false;
                                             }
-                                            break; // only the immediately adjacent period
+                                        } else {
+                                            for (let _pi = _swimPi + 1; _pi < _sp.length; _pi++) {
+                                                const _p = _sp[_pi];
+                                                // Clamp slots to the event window rather than requiring the
+                                                // entire period to sit inside it — this prevents valid
+                                                // adjacent periods from being skipped when they start slightly
+                                                // before winStart (e.g., a period starting at 10:40 when
+                                                // winStart is 10:50 still has usable sub-slots from 10:50+).
+                                                const _aCStart = Math.max(_p.startMin, winStart);
+                                                const _aCEnd   = Math.min(_p.endMin, winEnd);
+                                                if (_aCEnd - _aCStart < dur) continue;
+                                                let _firstSlot = true;
+                                                for (let _wsS = _aCStart; _wsS + dur <= _aCEnd; _wsS += dur) {
+                                                    _pool.push({
+                                                        startMin: _wsS, endMin: _wsS + dur,
+                                                        usedCount: 0, dir: 'after',
+                                                        immediatelyAdjacent: _firstSlot
+                                                    });
+                                                    _firstSlot = false;
+                                                }
+                                                break; // only the immediately adjacent period
+                                            }
                                         }
                                     }
                                     // 'before': fill the period immediately preceding swim
@@ -12612,24 +12630,38 @@
                                     // is "immediately adjacent" to swim.
                                     if ((seqPosition === 'before' || seqPosition === 'either') &&
                                         _pool.length === 0) {
-                                        for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
-                                            const _p = _sp[_pi];
-                                            // Clamp to event window — same logic as 'after' above.
-                                            const _bCStart = Math.max(_p.startMin, winStart);
-                                            const _bCEnd   = Math.min(_p.endMin, winEnd);
-                                            if (_bCEnd - _bCStart < dur) continue;
-                                            const _slotsInPeriod = [];
-                                            for (let _wsS = _bCStart; _wsS + dur <= _bCEnd; _wsS += dur) {
-                                                _slotsInPeriod.push(_wsS);
-                                            }
-                                            _slotsInPeriod.forEach(function(_wsS, _sIdx) {
+                                        if (_noPeriods) {
+                                            // No periods → bundle is one slot ending immediately
+                                            // at swimStart, clamped to winStart.
+                                            const _beforeEnd   = Math.min(_grSwimBlk.startMin, winEnd);
+                                            const _beforeStart = _beforeEnd - dur;
+                                            if (_beforeStart >= winStart) {
                                                 _pool.push({
-                                                    startMin: _wsS, endMin: _wsS + dur,
+                                                    startMin: _beforeStart, endMin: _beforeEnd,
                                                     usedCount: 0, dir: 'before',
-                                                    immediatelyAdjacent: _sIdx === _slotsInPeriod.length - 1
+                                                    immediatelyAdjacent: true
                                                 });
-                                            });
-                                            break;
+                                            }
+                                        } else {
+                                            for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
+                                                const _p = _sp[_pi];
+                                                // Clamp to event window — same logic as 'after' above.
+                                                const _bCStart = Math.max(_p.startMin, winStart);
+                                                const _bCEnd   = Math.min(_p.endMin, winEnd);
+                                                if (_bCEnd - _bCStart < dur) continue;
+                                                const _slotsInPeriod = [];
+                                                for (let _wsS = _bCStart; _wsS + dur <= _bCEnd; _wsS += dur) {
+                                                    _slotsInPeriod.push(_wsS);
+                                                }
+                                                _slotsInPeriod.forEach(function(_wsS, _sIdx) {
+                                                    _pool.push({
+                                                        startMin: _wsS, endMin: _wsS + dur,
+                                                        usedCount: 0, dir: 'before',
+                                                        immediatelyAdjacent: _sIdx === _slotsInPeriod.length - 1
+                                                    });
+                                                });
+                                                break;
+                                            }
                                         }
                                     }
                                     if (_pool.length > 0) _bundlePoolByGrade[_bg] = _pool;
