@@ -15478,7 +15478,12 @@
                     // activities (swim, lunch, specials, rotation_events, etc.)
                     // are never carved.
                     const tl278 = bunkTimelines[bunk];
-                    const TRIMMABLE_TYPES = new Set(['sport', 'slot']);
+                    // Sport/slot are always trimmable. rotation_event is trimmable
+                    // ONLY when it was extended by Phase 3's dead-gap absorber and
+                    // overlaps the change window — giving Change priority over a
+                    // dead-gap-padded rotation event is correct (the rot's natural
+                    // dur is short; the padding was just to fill space).
+                    const TRIMMABLE_TYPES = new Set(['sport', 'slot', 'rotation_event']);
                     // Derive schedule boundaries for this grade so carve results stay in-hours.
                     const _gp278 = (window.campPeriods && window.campPeriods[grade])
                         ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
@@ -15501,9 +15506,13 @@
                             }
                         }
                         const preStart = _preEnd278 - preChangeDur;
-                        // Find the trimmable block whose end falls inside the Change window
+                        // Find the trimmable block whose end falls inside the Change window.
+                        // Include _fixed rotation_events too: Phase 3's dead-gap absorber
+                        // can extend them well past their natural dMin (e.g. Nit 10→35min);
+                        // trimming the extension back to make room for Change is correct.
                         const prev = tl278
-                            .filter(b => b && !b._fixed && b.endMin > preStart && b.endMin <= _preEnd278)
+                            .filter(b => b && b.endMin > preStart && b.endMin <= _preEnd278 &&
+                                (!b._fixed || (b.type || '').toLowerCase() === 'rotation_event'))
                             .sort((a, b) => b.endMin - a.endMin)[0] || null;
                         const prevType = prev ? String(prev.type || '').toLowerCase() : '';
                         if (prev && TRIMMABLE_TYPES.has(prevType) && preStart >= _schedStart278) {
