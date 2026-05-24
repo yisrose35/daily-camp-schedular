@@ -18379,6 +18379,18 @@
                         const sm = e._startMin != null ? e._startMin : e.startMin;
                         const em = e._endMin   != null ? e._endMin   : e.endMin;
                         if (sm == null || em == null) return;
+                        // Two tiers of "can't touch":
+                        //   userPinned — user-anchored content (trips, manual
+                        //     bunk overrides, user-set pins). NEVER demote.
+                        //   operational — type-required content (swim,
+                        //     lunch, dismissal, snack, league, post/pre-
+                        //     change). Operationally required, NEVER demote.
+                        //   engine-pinned (Phase 0/2.4/2.5 _classification:'pinned')
+                        //     is NOT in either tier — the engine put it
+                        //     there and the engine can move it.
+                        const _typeLc = String(e.type || '').toLowerCase();
+                        const userPinned = !!(e._isTrip || e._bunkOverride || e._userPinned);
+                        const operational = ['swim','lunch','dismissal','snack','snacks','league','specialty_league','pre-change','post-change','change'].indexOf(_typeLc) >= 0;
                         entries.push({
                             bunk: bunk, idx: idx, entry: e,
                             field: String(f).toLowerCase().trim(),
@@ -18386,7 +18398,10 @@
                             startMin: sm, endMin: em,
                             activity: String(e._activity || e.sport || e.event || '').toLowerCase().trim(),
                             activityDisplay: e._activity || e.sport || e.event || '',
-                            isImmovable: !!(e._classification === 'pinned' || e._fixed || e._activityLocked || e._isTrip)
+                            // Tier scoring: 2 = user-pinned (never demote),
+                            //               1 = operational (never demote unless paired against tier-2),
+                            //               0 = engine-placed (always demotable)
+                            tier: userPinned ? 2 : (operational ? 1 : 0)
                         });
                     });
                 });
@@ -18420,28 +18435,34 @@
                     return;
                 }
 
-                // Resolve each conflict by demoting the non-immovable side
-                // to Free. If both are immovable (user-pinned vs trip etc.)
-                // we log the irresolvable case but leave them alone.
-                let demoted = 0, irresolvable = 0;
+                // Resolve every conflict — one side is ALWAYS demoted.
+                // Tier ordering: 2 (user-pinned) > 1 (operational) > 0 (engine).
+                // Loser is the lower tier. Tie → later start / shorter
+                // duration / higher bunk-index loses (stable + minimal disruption).
+                // Both tier-2 (true user-pin vs trip): warn loudly but still
+                // demote later one — a user-pinned conflict is a bug too and
+                // letting the schedule ship with overlap is worse.
+                let demoted = 0, userPinClashes = 0;
                 conflicts.forEach(function (c) {
                     const a = c.a, b = c.b;
-                    let loser = null;
-                    if (!a.isImmovable && !b.isImmovable) {
-                        // Pick the later/shorter as loser to minimize disruption
-                        loser = (b.startMin > a.startMin) ? b : (a.endMin - a.startMin) < (b.endMin - b.startMin) ? a : b;
-                    } else if (a.isImmovable && !b.isImmovable) {
-                        loser = b;
-                    } else if (!a.isImmovable && b.isImmovable) {
-                        loser = a;
+                    let loser, winner;
+                    if (a.tier !== b.tier) {
+                        loser  = a.tier < b.tier ? a : b;
+                        winner = a.tier < b.tier ? b : a;
                     } else {
-                        // Both immovable — flag, don't touch
-                        warn('[STEP 4.995] IRRESOLVABLE facility conflict @ ' + a.fieldDisplay +
-                            ': ' + a.bunk + '/' + (a.activityDisplay || '?') + ' (' + a.startMin + '-' + a.endMin + ') vs ' +
-                            b.bunk + '/' + (b.activityDisplay || '?') + ' (' + b.startMin + '-' + b.endMin + ') — both pinned/immovable');
-                        irresolvable++;
-                        return;
+                        if (a.tier === 2) userPinClashes++;
+                        // Same tier: prefer earlier-starting / longer block as keeper
+                        if (a.startMin !== b.startMin) {
+                            loser  = a.startMin > b.startMin ? a : b;
+                            winner = a.startMin > b.startMin ? b : a;
+                        } else {
+                            const aDur = a.endMin - a.startMin;
+                            const bDur = b.endMin - b.startMin;
+                            loser  = aDur <= bDur ? a : b;
+                            winner = aDur <= bDur ? b : a;
+                        }
                     }
+
                     // Demote loser to Free
                     const e = loser.entry;
                     e._activity = 'Free';
@@ -18450,17 +18471,19 @@
                     e.field = 'Free';
                     e._wasFacilityConflictDemotion = {
                         original: { activity: loser.activityDisplay, field: loser.fieldDisplay },
-                        conflictWith: { bunk: (loser === a ? b.bunk : a.bunk), activity: (loser === a ? b.activityDisplay : a.activityDisplay) }
+                        conflictWith: { bunk: winner.bunk, activity: winner.activityDisplay }
                     };
                     demoted++;
+                    const _tierLabel = loser.tier === 2 ? ' [user-pin overruled]' : loser.tier === 1 ? ' [operational overruled]' : '';
                     warn('[STEP 4.995] Demoted ' + loser.bunk + '/' + loser.activityDisplay +
                         ' @ ' + loser.fieldDisplay + ' (' + loser.startMin + '-' + loser.endMin +
-                        ') → Free — facility conflict with ' + (loser === a ? b.bunk : a.bunk) +
-                        '/' + (loser === a ? b.activityDisplay : a.activityDisplay));
+                        ') → Free — facility conflict with ' + winner.bunk +
+                        '/' + winner.activityDisplay + _tierLabel);
                 });
 
                 log('[STEP 4.995] Facility integrity: ' + conflicts.length + ' conflicts found — ' +
-                    demoted + ' demoted to Free, ' + irresolvable + ' irresolvable (both immovable)');
+                    demoted + ' demoted to Free' +
+                    (userPinClashes > 0 ? ', ' + userPinClashes + ' user-pin clash(es) auto-resolved (review needed)' : ''));
             } catch (eF) {
                 warn('[STEP 4.995] facility-overlap sweep error: ' + eF.message);
             }
