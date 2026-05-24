@@ -340,9 +340,15 @@
             //   mismatches when the field's sharing.type forbids cross-
             //   division use. A field with type='any_division' allowing
             //   staggered cross-grade overlap was passing silently.
+            //   ALSO: include specials. Origami at the Arts Room is just
+            //   as physically constrained as Basketball on the Court —
+            //   two bunks can't arrive 25 minutes apart and share it.
+            //   Previously _autoSpecial was filtered out across all
+            //   checks, which made specials-on-shared-fields invisible.
 
-            // Only check sport entries
-            const sportUsages = usages.filter(u => !u.flags._league && !u.flags._autoSpecial);
+            // Include sport + special entries; only leagues are league-
+            // managed externally and may legitimately stagger by design.
+            const sportUsages = usages.filter(u => !u.flags._league);
             if (sportUsages.length < 2) return;
 
             for (let i = 0; i < sportUsages.length; i++) {
