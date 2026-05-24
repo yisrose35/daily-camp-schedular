@@ -10367,6 +10367,15 @@
 
         const MAX_ITERATIONS = 8;   // ★ v11.2: lowered from 15 — BEST is hit by iter 4 on real data; iters 5+ are pure exploration that gets discarded
         const BASE_STALE_STOP = 2;  // ★ v11.2: lowered from 3 — stop earlier; SA polish handles any tail improvements
+        // ★ Wall-clock budget: when a schedule has structurally unfixable
+        //   constraint violations (e.g., a 20-min hole between two pinned
+        //   walls where nothing fits), the iteration loop keeps finding
+        //   marginally-different "best" scores via random seeds and burns
+        //   the full MAX_ITERATIONS. Cap total search time so user gets a
+        //   result in seconds, not a minute. Best schedule so far is
+        //   always kept and returned on bail-out.
+        const WALL_CLOCK_BUDGET_MS = 15000;  // 15 seconds
+        const _iterLoopStart = Date.now();
        let _iterSeed = 0, bestScore = Infinity, bestTimelines = null;
         let bestWarnings = [], staleCount = 0, totalIters = 0;
 
@@ -14149,10 +14158,20 @@
                 }
             }
 
+            // Wall-clock budget — bail out if exploration has burned its
+            // time allowance. Best schedule so far is preserved via
+            // elitePool + bestTimelines and used by the post-loop restore.
+            if ((Date.now() - _iterLoopStart) > WALL_CLOCK_BUDGET_MS) {
+                log('[ITER ' + totalIters + '] ★ Wall-clock budget exceeded (' +
+                    Math.round((Date.now() - _iterLoopStart) / 1000) + 's > ' +
+                    Math.round(WALL_CLOCK_BUDGET_MS / 1000) + 's) — stopping search.');
+                _qat = true; // reuse the quality-aware-termination flag to break the loop
+            }
+
         } while (!_qat && bestScore > 0 && staleCount < STALE_STOP && totalIters < MAX_ITERATIONS);
 
         log('══════════════════════════════════════════════════════════');
-        log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations' + (_qat ? ' (structural limit reached)' : ''));
+        log('BEST: ' + bestScore + ' after ' + totalIters + ' iterations' + (_qat ? ' (structural limit reached)' : '') + ' in ' + Math.round((Date.now() - _iterLoopStart) / 100) / 10 + 's');
         log('Elite pool: ' + elitePool.length + ' schedules | Tabu list: ' + tabuList.size + ' seeds forbidden');
         if (elitePool.length > 0) {
             log('Elite scores: ' + elitePool.map(function(e) { return e.score + '(seed=' + e.seed + ')'; }).join(', '));
