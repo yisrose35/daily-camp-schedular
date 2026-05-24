@@ -2337,9 +2337,44 @@ function overlayTripsOnDAW(gridEl) {
   if (globalStart === null) globalStart = 540;
   const PX_PER_MIN = 3; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
 
+  // Helper: expand parent divisions to their leaf grades (which is what the
+  // DAW grid renders as tracks). Trip popover lets users pick parents, but
+  // the DAW only has tracks for leaves. Without this expansion the overlay
+  // silently fails for any trip targeting a parent division.
+  function _tripExpandToLeafGrades(divList) {
+    var out = [];
+    var seen = {};
+    (divList || []).forEach(function (d) {
+      if (!d) return;
+      var info = divisions[d];
+      if (info && info.isParent) {
+        // Find leaves whose parent is d (or whose key is listed in info.children/grades)
+        var children = Array.isArray(info.children) ? info.children
+                      : Array.isArray(info.grades) ? info.grades
+                      : null;
+        if (children && children.length) {
+          children.forEach(function (c) { if (!seen[c]) { seen[c] = 1; out.push(c); } });
+          return;
+        }
+        // Fallback: scan every division whose parent points back to d
+        Object.keys(divisions).forEach(function (k) {
+          var ki = divisions[k];
+          if (!ki || ki.isParent) return;
+          if (ki.parent === d || ki.parentDivision === d) {
+            if (!seen[k]) { seen[k] = 1; out.push(k); }
+          }
+        });
+        return;
+      }
+      if (!seen[d]) { seen[d] = 1; out.push(d); }
+    });
+    return out;
+  }
+
   trips.forEach(trip => {
-    // Trips can target one or multiple divisions
-    const divs = Array.isArray(trip.division) ? trip.division : [trip.division];
+    // Trips can target one or multiple divisions (parent or leaf)
+    const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
+    const divs = _tripExpandToLeafGrades(rawDivs);
     const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
     const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
     if (tStart == null || tEnd == null) return;

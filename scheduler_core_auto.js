@@ -1117,13 +1117,19 @@
             swim: 30, league: 30, specialty_league: 30, special: 20,
             sport: 25, sports: 25, lunch: 20, snack: 15, snacks: 15,
             dismissal: 10, slot: GAP_MIN_DUR, activity: GAP_MIN_DUR, elective: 20,
-            'pre-change': 5, 'post-change': 5, change: 5
+            'pre-change': 5, 'post-change': 5, change: 5,
+            // Trips are user-defined: floor is small so short trips aren't padded
+            trip: 5
         };
         const TYPE_CEILINGS = {
             swim: 60, league: 60, specialty_league: 60, special: 60,
             sport: GAP_MAX_DUR, sports: GAP_MAX_DUR, lunch: 45, snack: 30,
             snacks: 30, dismissal: 30, slot: GAP_MAX_DUR, activity: GAP_MAX_DUR, elective: 60,
-            'pre-change': 30, 'post-change': 30, change: 30
+            'pre-change': 30, 'post-change': 30, change: 30,
+            // Trips are user-defined fixed durations and can span hours. Ceiling
+            // must be a full day so the dMax trim pass (which DOES touch fixed
+            // blocks) doesn't chop a 3-hour trip down to 90 min.
+            trip: 1440
         };
 
         function resolveConstraints(layer, type, block) {
@@ -11452,21 +11458,56 @@
             let dailyTrips = [];
             try { const stored = localStorage.getItem('campDailyTrips_' + (window.currentScheduleDate || '')); if (stored) dailyTrips = JSON.parse(stored); } catch(e) {}
             if (!dailyTrips.length) dailyTrips = dailyData?.dailyTrips || [];
+            // Expand parent divisions to leaf grades so a trip targeting
+            // a parent (e.g. "Juniors") applies to every leaf grade beneath it.
+            function _tripDivToGrades(divList) {
+                var out = [];
+                var seen = {};
+                (divList || []).forEach(function (d) {
+                    if (!d) return;
+                    var info = divisions[d];
+                    if (info && info.isParent) {
+                        var children = Array.isArray(info.children) ? info.children
+                                      : Array.isArray(info.grades) ? info.grades
+                                      : null;
+                        if (children && children.length) {
+                            children.forEach(function (c) { if (!seen[c]) { seen[c] = 1; out.push(c); } });
+                            return;
+                        }
+                        Object.keys(divisions).forEach(function (k) {
+                            var ki = divisions[k];
+                            if (!ki || ki.isParent) return;
+                            if (ki.parent === d || ki.parentDivision === d) {
+                                if (!seen[k]) { seen[k] = 1; out.push(k); }
+                            }
+                        });
+                        return;
+                    }
+                    if (!seen[d]) { seen[d] = 1; out.push(d); }
+                });
+                return out;
+            }
+
             dailyTrips.forEach(trip => {
                 // ★ Day 22.5 fix: trip.division may be a string (add path) OR an
                 //   array (edit path consolidates multi-division trips). Normalize.
-                const grades = Array.isArray(trip.division) ? trip.division : [trip.division];
+                const rawGrades = Array.isArray(trip.division) ? trip.division : [trip.division];
+                const grades = _tripDivToGrades(rawGrades);
                 const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
                 const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
                 if (tStart == null || tEnd == null) return;
                 grades.forEach(grade => {
                     if (!grade || !divisions[grade]) return;
                     if (allowedSet && !allowedSet.has(String(grade))) return;
+                    var _tripDur = tEnd - tStart;
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         bunkTimelines[bunk].push({
                             startMin: tStart, endMin: tEnd, type: 'trip', event: trip.event || 'Trip',
                             layer: null, _classification: 'pinned', _committed: true, _fixed: true,
-                            _isTrip: true, _activityLocked: true, _noBacktrack: true
+                            _isTrip: true, _activityLocked: true, _noBacktrack: true,
+                            // Stamp exact duration constraints so the dMax/dMin enforcers
+                            // treat the trip as a precise pin instead of trimming it.
+                            dMin: _tripDur, dMax: _tripDur
                         });
                         tripBlockCount++;
                     });
