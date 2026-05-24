@@ -2220,39 +2220,17 @@
                 return false;
             };
 
-            // PRE: walk back from the bundle's first period.
-            // ★ PRIORITY 0: when a linked rotation event precedes swim (e.g. Water Slide
-            // before Swim), the natural "change time" is the inter-period gap between the
-            // rotation event's end and swim's start — not a block inside a prior period.
-            // Check for that gap first so Period 1 stays a full 40-min activity.
+            // PRE: walk back from the bundle's outer edge (bStart), NOT swimStart.
+            // For a wet-bundle "before" case (Water Slide → Swim), the user-requested
+            // order is: Change → WS → Swim → Change. Pre-change must precede the entire
+            // bundle (i.e. before WS), never wedge inside the bundle.
             var pre = null;
-            if (preChange > 0 && bStart < swimStart) {
-                // Find the end of the latest block that starts inside the bundle but ends
-                // before swimStart (this is the linked rotation event).
-                var _rotEnd = bStart;
-                for (var _ci = 0; _ci < conflicts.length; _ci++) {
-                    var _cb = conflicts[_ci];
-                    if (!_cb) continue;
-                    var _cbs = _cb.startMin != null ? _cb.startMin : null;
-                    var _cbe = _cb.endMin   != null ? _cb.endMin   : null;
-                    if (_cbs == null || _cbe == null) continue;
-                    if (_cbs >= bStart && _cbe <= swimStart && _cbe > _rotEnd) _rotEnd = _cbe;
-                }
-                if (_rotEnd > bStart && _rotEnd < swimStart) {
-                    // Use the gap [_rotEnd, swimStart) as the pre-change window.
-                    var _gapDur = Math.min(preChange, swimStart - _rotEnd);
-                    if (_gapDur > 0 && !rangeOccupied(_rotEnd, _rotEnd + _gapDur)) {
-                        pre = { startMin: _rotEnd, endMin: _rotEnd + _gapDur };
-                    }
-                }
-            }
-            if (preChange > 0 && !pre) {
-                // If swimStart is at a period boundary, snap preGapEnd to the previous
-                // period's end so the Change block stays fully within one period and
-                // doesn't straddle the inter-period gap.
-                var _preGapEnd = swimStart;
+            if (preChange > 0) {
+                // If bStart is at a period boundary, snap preGapEnd to the previous
+                // period's end so Change stays fully within one period.
+                var _preGapEnd = bStart;
                 for (var _piPre = 1; _piPre < gp.length; _piPre++) {
-                    if (gp[_piPre].startMin === swimStart && gp[_piPre - 1].endMin < swimStart) {
+                    if (gp[_piPre].startMin === bStart && gp[_piPre - 1].endMin < bStart) {
                         _preGapEnd = gp[_piPre - 1].endMin;
                         break;
                     }
@@ -2264,14 +2242,15 @@
                 }
             }
 
-            // POST: place Change in the gap immediately after swim (not multiple periods ahead).
-            // If swimEnd lands exactly on a period boundary, snap to the next period start
-            // so Change stays within a period rather than straddling the inter-period gap.
+            // POST: place Change in the gap immediately after the bundle's outer edge (bEnd),
+            // NOT swimEnd. For "after" wet-bundle (Swim → WS), post must follow WS.
+            // If bEnd lands on a period boundary, snap to the next period start so Change
+            // stays within a period rather than straddling the inter-period gap.
             var post = null;
             if (postChange > 0) {
-                var _postGapStart = swimEnd;
+                var _postGapStart = bEnd;
                 for (var _ppi = 0; _ppi < gp.length - 1; _ppi++) {
-                    if (swimEnd === gp[_ppi].endMin && gp[_ppi + 1].startMin > swimEnd) {
+                    if (bEnd === gp[_ppi].endMin && gp[_ppi + 1].startMin > bEnd) {
                         _postGapStart = gp[_ppi + 1].startMin;
                         break;
                     }
@@ -7000,6 +6979,41 @@
                             var positions = getValidPositions(need, template, gradeStart, gradeEnd, fillMinDur);
                             var relaxationType = null, relaxationDetail = null;
 
+                            // ★ Sequence adjacency guard: if this need has _sequenceTarget
+                            // (e.g. Water Slide → Swim), all CSP-Relax candidates MUST be
+                            // adjacent to a block of the target type. Without this, Level 4
+                            // (±30min wide-shift) could place WS far from the swim block,
+                            // breaking the user's "Change → WS → Swim → Change" bundle.
+                            var _seqTgtCSP = (need._sequenceTarget || '').toLowerCase();
+                            var _seqFilterFn = null;
+                            if (_seqTgtCSP) {
+                                var _tgtBlks = [];
+                                for (var _ti = 0; _ti < template.length; _ti++) {
+                                    var _tb = template[_ti];
+                                    if (!_tb || _tb.continuation) continue;
+                                    var _tbT = (_tb.type || '').toLowerCase();
+                                    var _tbE = (_tb.event || '').toLowerCase();
+                                    if (_tbT === _seqTgtCSP || _tbE === _seqTgtCSP) {
+                                        _tgtBlks.push({ s: _tb.startMin, e: _tb.endMin });
+                                    }
+                                }
+                                if (_tgtBlks.length > 0) {
+                                    var _ADJ_TOL_CSP = 20;
+                                    _seqFilterFn = function(pos) {
+                                        var pE = pos.start + pos.dur;
+                                        for (var _gi = 0; _gi < _tgtBlks.length; _gi++) {
+                                            var t = _tgtBlks[_gi];
+                                            // Adjacent before target (with gap tolerance)
+                                            if (pE <= t.s && (t.s - pE) <= _ADJ_TOL_CSP) return true;
+                                            // Adjacent after target
+                                            if (pos.start >= t.e && (pos.start - t.e) <= _ADJ_TOL_CSP) return true;
+                                        }
+                                        return false;
+                                    };
+                                    positions = positions.filter(_seqFilterFn);
+                                }
+                            }
+
                             // Level 0: Try original constraints
                             if (positions.length === 0) {
                                 // Level 1: Shift time window ±15min
@@ -7008,6 +7022,7 @@
                                 shifted.windowStart = Math.max(gradeStart, (need.windowStart || gradeStart) - 15);
                                 shifted.windowEnd = Math.min(gradeEnd, (need.windowEnd || gradeEnd) + 15);
                                 positions = getValidPositions(shifted, template, gradeStart, gradeEnd, fillMinDur);
+                                if (_seqFilterFn) positions = positions.filter(_seqFilterFn);
                                 if (positions.length > 0) { relaxationType = 'time_shift'; relaxationDetail = '±15min window shift'; }
                             }
                             if (positions.length === 0) {
@@ -7019,6 +7034,7 @@
                                     shortened.dMin = Math.max(typeFloor, need.dMin - 5);
                                     shortened.dMax = Math.max(shortened.dMin, (need.dMax || 60) - 5);
                                     positions = getValidPositions(shortened, template, gradeStart, gradeEnd, fillMinDur);
+                                    if (_seqFilterFn) positions = positions.filter(_seqFilterFn);
                                     if (positions.length > 0) { relaxationType = 'duration_reduce'; relaxationDetail = '-5min duration'; need = shortened; }
                                 }
                             }
@@ -7034,6 +7050,7 @@
                                     combined.dMax = Math.max(combined.dMin, (need.dMax || 60) - 5);
                                 }
                                 positions = getValidPositions(combined, template, gradeStart, gradeEnd, fillMinDur);
+                                if (_seqFilterFn) positions = positions.filter(_seqFilterFn);
                                 if (positions.length > 0) { relaxationType = 'combined'; relaxationDetail = 'shift+reduce'; need = combined; }
                             }
                             if (positions.length === 0) {
@@ -7043,6 +7060,7 @@
                                 wide.windowStart = Math.max(gradeStart, (need.windowStart || gradeStart) - 30);
                                 wide.windowEnd = Math.min(gradeEnd, (need.windowEnd || gradeEnd) + 30);
                                 positions = getValidPositions(wide, template, gradeStart, gradeEnd, fillMinDur);
+                                if (_seqFilterFn) positions = positions.filter(_seqFilterFn);
                                 if (positions.length > 0) { relaxationType = 'wide_shift'; relaxationDetail = '±30min window shift'; }
                             }
 
