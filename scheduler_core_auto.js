@@ -2185,7 +2185,36 @@
             var gp = (gradeForPeriods && window.campPeriods && window.campPeriods[gradeForPeriods])
                 ? window.campPeriods[gradeForPeriods].slice().sort(function(a, b) { return a.startMin - b.startMin; })
                 : [];
-            if (gp.length === 0) return { pre: null, post: null };
+            // No-periods fallback: when the camp has no bell schedule, place
+            // pre/post-change immediately adjacent to the bundle's outer edges.
+            // This is the common case for the auto builder where periods aren't
+            // configured. Without this, Phase 2.78 drops Phase-2.4's bundle
+            // change blocks and produces nothing, leaving swim without change.
+            if (gp.length === 0) {
+                var conflictsNP = Array.isArray(conflictBlocks) ? conflictBlocks : [];
+                var rangeOccupiedNP = function(rs, re) {
+                    if (rs == null || re == null || rs >= re) return true;
+                    for (var ciNP = 0; ciNP < conflictsNP.length; ciNP++) {
+                        var bNP = conflictsNP[ciNP];
+                        if (!bNP) continue;
+                        var bsNP = bNP.startMin, beNP = bNP.endMin;
+                        if (bsNP == null || beNP == null) continue;
+                        if (bsNP >= bStart && beNP <= bEnd) continue; // inside bundle — ignore
+                        if (bsNP < re && beNP > rs) return true;
+                    }
+                    return false;
+                };
+                var preNP = null, postNP = null;
+                if (preChange > 0) {
+                    var psNP = bStart - preChange, peNP = bStart;
+                    if (!rangeOccupiedNP(psNP, peNP)) preNP = { startMin: psNP, endMin: peNP };
+                }
+                if (postChange > 0) {
+                    var psPNP = bEnd, pePNP = bEnd + postChange;
+                    if (!rangeOccupiedNP(psPNP, pePNP)) postNP = { startMin: psPNP, endMin: pePNP };
+                }
+                return { pre: preNP, post: postNP };
+            }
 
             // Find the period that contains or starts at bStart (for pre walk-back)
             // and the period that contains or ends at bEnd (for post walk-forward).
