@@ -507,6 +507,39 @@ function markCompleted(eventId, dateKey, bunkNames) {
     saveRotationEvents(events);
 }
 
+// Wipe a single date's completion entries across ALL rotation events.
+// Called at the START of every regeneration so the new gen can place the
+// activity fresh — without this, the previous gen's markCompleted call
+// makes Phase 2.4 think every bunk already did the activity and skip them.
+// Other dates' history is preserved (so multi-day rotations still track
+// who's already had their turn on previous days).
+//
+// allowedBunks: optional. If provided (partial regen), only those bunks
+//   are removed from the date's list; other bunks (out of scope) stay
+//   marked completed so a partial regen doesn't undo their placement.
+//   Pass null/undefined for a full regen — wipes the whole date.
+function clearCompletedForDate(dateKey, allowedBunks) {
+    if (!dateKey) return 0;
+    const events = loadRotationEvents();
+    const scoped = Array.isArray(allowedBunks) && allowedBunks.length > 0;
+    const scopeSet = scoped ? new Set(allowedBunks.map(String)) : null;
+    let cleared = 0;
+    events.forEach(evt => {
+        if (!evt.completedBunks || !Array.isArray(evt.completedBunks[dateKey])) return;
+        if (scoped) {
+            const before = evt.completedBunks[dateKey].length;
+            evt.completedBunks[dateKey] = evt.completedBunks[dateKey].filter(b => !scopeSet.has(String(b)));
+            cleared += before - evt.completedBunks[dateKey].length;
+            if (evt.completedBunks[dateKey].length === 0) delete evt.completedBunks[dateKey];
+        } else {
+            cleared += evt.completedBunks[dateKey].length;
+            delete evt.completedBunks[dateKey];
+        }
+    });
+    if (cleared > 0) saveRotationEvents(events);
+    return cleared;
+}
+
 /**
  * Write rotation event blocks into bunk timelines (for auto-scheduler integration).
  * Called from scheduler_core_auto.js after the main scheduling pass.
@@ -1090,6 +1123,7 @@ function getSchedulerHook() {
         getAssignmentsForDate,
         writeBlocksToTimelines,
         markCompleted,
+        clearCompletedForDate,
         hasActiveEvents: function (dateKey) {
             const events = loadRotationEvents();
             return events.some(e => isDateInRange(dateKey, e.dateRange.start, e.dateRange.end));
@@ -1340,6 +1374,7 @@ const RotationEvents = {
     getAssignmentsForDate,
     writeBlocksToTimelines,
     markCompleted,
+    clearCompletedForDate,
     getSchedulerHook,
     getRemainingBunks,
     getCompletedBunks,

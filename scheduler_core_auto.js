@@ -674,6 +674,32 @@
             window.fieldUsageBySlot = {};
             window.locationUsageBySlot = {};
         }
+
+        // ★ Clear rotation-event completion entries for THIS date so a regen
+        //   starts fresh. Without this, every bunk marked completed on the
+        //   previous gen would be skipped by Phase 2.4 ("already did this
+        //   activity"), and the new schedule would have no rotation event
+        //   placed at all.
+        //   - Full regen: wipes the entire date's completion list.
+        //   - Partial regen: only removes the bunks IN scope; out-of-scope
+        //     bunks stay marked so the new gen respects their existing slot.
+        //   - Other dates' completion history is untouched (multi-day
+        //     rotations still know who's already had their turn).
+        try {
+            const _regenDateKey = window.currentScheduleDate || window.currentDate || '';
+            if (_regenDateKey && window.RotationEvents && typeof window.RotationEvents.clearCompletedForDate === 'function') {
+                const _regenScopeBunks = _isPartialGen && _partialGenBunks ? [..._partialGenBunks] : null;
+                const _rotCleared = window.RotationEvents.clearCompletedForDate(_regenDateKey, _regenScopeBunks);
+                if (_rotCleared > 0) {
+                    log('[STEP 0] Cleared ' + _rotCleared + ' rotation-event completion entries for ' + _regenDateKey +
+                        (_regenScopeBunks ? ' (partial regen scope)' : ' (full regen)') +
+                        ' — fresh slate for re-placement.');
+                }
+            }
+        } catch (eRot) {
+            warn('[STEP 0] Failed to clear rotation-event completions: ' + eRot.message);
+        }
+
         if (window.GlobalFieldLocks) window.GlobalFieldLocks.reset();
         if (window.AutoFieldLocks) {
             window.AutoFieldLocks.reset();
