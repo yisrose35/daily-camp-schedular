@@ -6968,6 +6968,31 @@
                                 }
                             }
 
+                            // ★ Sequence-adjacency guard: a rotation_event whose
+                            // _sequenceTarget points to another type (e.g. Water Slide
+                            // -> Swim) MUST land within 20 min of an existing target
+                            // block in this bunk's template. solveCSP doesn't know
+                            // about adjacency, so drop here if disconnected.
+                            if (need.type === 'rotation_event' && need._sequenceTarget) {
+                                var _seqTgtP3 = need._sequenceTarget.toLowerCase();
+                                var _solEnd = sol.start + sol.dur;
+                                var _ADJ_TOL_P3 = 20;
+                                var _adjOK_P3 = false;
+                                for (var _tpi = 0; _tpi < template.length; _tpi++) {
+                                    var _tpb = template[_tpi];
+                                    if (!_tpb || _tpb.continuation) continue;
+                                    var _tpbT = (_tpb.type || '').toLowerCase();
+                                    var _tpbE = (_tpb.event || '').toLowerCase();
+                                    if (_tpbT !== _seqTgtP3 && _tpbE !== _seqTgtP3) continue;
+                                    if (_solEnd <= _tpb.startMin && (_tpb.startMin - _solEnd) <= _ADJ_TOL_P3) { _adjOK_P3 = true; break; }
+                                    if (sol.start >= _tpb.endMin && (sol.start - _tpb.endMin) <= _ADJ_TOL_P3) { _adjOK_P3 = true; break; }
+                                }
+                                if (!_adjOK_P3) {
+                                    log('[Phase3] DROPPED disconnected ' + need.type + '/' + need.event + ' at ' + sol.start + ' for bunk ' + bunk + ' — not adjacent to ' + _seqTgtP3);
+                                    continue;
+                                }
+                            }
+
                             // Register resources
                             if (need.type === 'swim') { registerCrossGrade(grade, 'swim', sol.start, placeEnd, need.event); registerPoolUsage(grade, sol.start, placeEnd); }
                             if (need.type === 'special' && need._assignedSpecial) {
