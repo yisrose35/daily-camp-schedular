@@ -1059,6 +1059,25 @@
 
         const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack']);
 
+        // ★ Build set of layer types that are wet-bundle targets (any active
+        // rotation event whose sequence.targetActivity points to that type).
+        // These layers MUST be force-pinned so Phase 0 places them before
+        // Phase 2.4 builds the wet-bundle pool — otherwise the bundle code
+        // logs "no swim block placed yet" and every bundled bunk's WS gets
+        // deferred to Phase 3, which then scatters them disconnected.
+        const _wetBundleTargets = new Set();
+        try {
+            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                (window.RotationEvents.loadRotationEvents() || []).forEach(rE => {
+                    if (!rE || !rE.sequence || !rE.sequence.targetActivity) return;
+                    if (currentDate && rE.dateRange) {
+                        if (currentDate < rE.dateRange.start || currentDate > rE.dateRange.end) return;
+                    }
+                    _wetBundleTargets.add(String(rE.sequence.targetActivity).toLowerCase());
+                });
+            }
+        } catch (_ePinTgt) {}
+
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
             const lt = (layer.type || '').toLowerCase();
@@ -1066,6 +1085,11 @@
             // ★ fullGrade swim/lunch/snacks → always pinned so Phase 0 places them
             //   grade-wide at the same time for every bunk (like a league).
             if (layer.fullGrade === true && FULL_GRADE_TYPES.has(lt)) {
+                classification = 'pinned';
+            } else if (_wetBundleTargets.has(lt)) {
+                // ★ Wet-bundle target (e.g. swim when Water Slide is configured
+                // "Adjacent to: Swim") — force pinned regardless of ratio so
+                // Phase 2.4 sees swim in bunkTimelines when building bundles.
                 classification = 'pinned';
             } else if (ratio >= 1) {
                 classification = 'pinned';
@@ -1076,6 +1100,9 @@
             }
             return Object.assign({}, layer, { _classification: classification, _ratio: ratio });
         });
+        if (_wetBundleTargets.size > 0) {
+            log('[STEP 1.5] Force-pinning wet-bundle target layer types: ' + Array.from(_wetBundleTargets).join(', '));
+        }
 
         const classOrder = { pinned: 0, windowed: 1, open: 2 };
         classified.sort((a, b) => {
@@ -18876,6 +18903,15 @@
                         const f = typeof e.field === 'string' ? e.field : (e.field && e.field.name) || '';
                         if (!f || f === 'Free' || f === 'Transition') return;
                         if (e._league || e._h2h) return; // league engine self-manages
+                        // Skip Change blocks — they happen in each bunk's own changing
+                        // area, not on a shared facility. Multiple bunks "Change" at
+                        // the same time-bucket is normal and not a conflict.
+                        const _excludedTypes = ['pre-change','post-change','change'];
+                        const _excludedActs = ['change'];
+                        const _typeForExclude = String(e.type || '').toLowerCase();
+                        const _actForExclude = String(e._activity || e.sport || e.event || '').toLowerCase();
+                        if (_excludedTypes.indexOf(_typeForExclude) >= 0) return;
+                        if (_excludedActs.indexOf(_actForExclude) >= 0) return;
                         const sm = e._startMin != null ? e._startMin : e.startMin;
                         const em = e._endMin   != null ? e._endMin   : e.endMin;
                         if (sm == null || em == null) return;
