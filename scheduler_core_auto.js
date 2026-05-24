@@ -7513,8 +7513,10 @@
 
                 var bestPartial = null;     // longest contiguous fill if no complete one found
                 var bestPartialCoverage = 0;
+                var _nodeBudget = 4000; // hard cap on recursion nodes; ~104^6 worst case is intractable
 
                 function recurse(cursor, sequence, depth) {
+                    if (--_nodeBudget <= 0) return null; // exhausted — caller falls back to bestPartial
                     if (cursor >= gapEnd) return sequence; // fully filled — success
                     if (depth >= 6) return null;
                     var remaining = gapEnd - cursor;
