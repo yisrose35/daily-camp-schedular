@@ -20140,6 +20140,13 @@
                             var remainderStart = newEnd;
                             var remainderEnd = victim.endMin;
 
+                            // ★ Pool sharing rule: don't heal a SWIM into a pool slot that a
+                            //   non-allowed grade already occupies (same guard as the Phase 3
+                            //   self-heal / guarantee passes). Defer rather than force the share.
+                            if (lt === 'swim' && !poolSwimPairFreeAt(grade, newStart, newEnd, bunk)) {
+                                continue;
+                            }
+
                             // Replace the sport block with the required layer
                             var phEventName = lt === 'special' ? phSpecialName : (ll.event || lt);
                             sorted[bestIdx] = {
