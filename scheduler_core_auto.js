@@ -2558,43 +2558,10 @@
                     const _changePad   = _preChangeM + _postChangeM;
                     const _bundleSpan  = _swimDur + _changePad + (_linkedRotDur > 0 ? _linkedRotDur : 0);
 
-                    // ── Pass 1: forward stagger to avoid pool collision with
-                    //   earlier grades' swims. (Same as before.)
-                    if (_wetBundleSwimRanges.length > 0) {
-                        let _candStart = blockStart;
-                        let _safety = 24;
-                        const _overlapsPrior = (s, e) => _wetBundleSwimRanges.some(r => s < r.endMin && e > r.startMin);
-                        while (_overlapsPrior(_candStart, _candStart + _swimDur) && _safety-- > 0) {
-                            _candStart += _bundleSpan;
-                            if (_candStart + _swimDur > layer.endMin) {
-                                _candStart = blockStart;
-                                break;
-                            }
-                        }
-                        if (_candStart !== blockStart) {
-                            blockStart = _candStart;
-                            blockEnd = _candStart + _swimDur;
-                            log('[Phase0] Wet-bundle swim staggered for ' + grade + ' → ' +
-                                Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
-                                '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
-                                ' (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ')');
-                        }
-                    }
-
-                    // ── Pass 2: bundle-alignment shift.
-                    //   If "after"-direction bundle won't fit before the next
-                    //   pinned wall (typically lunch), Phase 2.4 will pick
-                    //   "before"-direction. In that case shift swim earlier so
-                    //   the before-bundle (preChange → WS → swim → postChange)
-                    //   starts flush at the layer floor (day start) rather
-                    //   than leaving a sub-fillMin lead-in gap.
-                    //   Safety: only shift backward by ≤ changePad so we never
-                    //   collide with the previous grade's pool slot, and never
-                    //   below layer.startMin.
-                    // NOTE: the earlier _linkedRotDur skipped individual-mode
-                    // rotation events (Water Slide is individual). For bundle
-                    // alignment we need the WS duration regardless of mode,
-                    // so recompute here.
+                    // Resolve the linked rotation event's duration regardless of
+                    // gradeMode. _linkedRotDur (above) skips individual-mode events
+                    // like Water Slide, but we still need their width to keep an
+                    // adjacent period free for the bundle.
                     let _wetBundleRotDur = 0;
                     if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
                         try {
@@ -2612,7 +2579,96 @@
                             }
                         } catch (_e2) {}
                     }
-                    if (_wetBundleRotDur > 0 && _changePad > 0) {
+
+                    // ── Pass 1: stagger swim across grades to avoid pool collisions.
+                    //   Phase 2.4 builds the wet bundle by placing the rotation event
+                    //   in the Bell period ADJACENT to swim, and hard-rejects any swim
+                    //   that straddles a period boundary ("does not fit inside a single
+                    //   Bell Schedule period"). So when periods exist we stagger by
+                    //   *period*: pick the nearest period that (a) holds the swim,
+                    //   (b) is free of other pinned blocks, (c) has a free adjacent
+                    //   period for the bundle, and (d) doesn't overlap a prior grade's
+                    //   swim. Falls back to the raw-offset stagger when no periods.
+                    const _overlapsPrior = (s, e) => _wetBundleSwimRanges.some(r => s < r.endMin && e > r.startMin);
+                    const _spStag = (window.campPeriods && window.campPeriods[grade])
+                        ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
+                        : [];
+                    if (_spStag.length > 0) {
+                        const _slotFree = (s, e) => targetBunks.every(bk => {
+                            const tl = bunkTimelines[bk] || [];
+                            return !tl.some(b => b && !b.continuation &&
+                                (b.type || '').toLowerCase() !== 'swim' &&
+                                b.startMin < e && b.endMin > s);
+                        });
+                        const _holdsSwim = (p) => (p.endMin - p.startMin) >= _swimDur &&
+                            p.startMin >= layer.startMin && p.startMin + _swimDur <= layer.endMin &&
+                            _slotFree(p.startMin, p.startMin + _swimDur);
+                        const _hasAdj = (i) => {
+                            if (_wetBundleRotDur <= 0) return true;
+                            const _chk = (j, atStart) => {
+                                const np = _spStag[j];
+                                if (!np || (np.endMin - np.startMin) < _wetBundleRotDur) return false;
+                                if (np.startMin < layer.startMin || np.endMin > layer.endMin) return false;
+                                return atStart ? _slotFree(np.startMin, np.startMin + _wetBundleRotDur)
+                                               : _slotFree(np.endMin - _wetBundleRotDur, np.endMin);
+                            };
+                            return _chk(i + 1, true) || _chk(i - 1, false);
+                        };
+                        const _cand = [];
+                        for (let i = 0; i < _spStag.length; i++) {
+                            if (!_holdsSwim(_spStag[i])) continue;
+                            _cand.push({ start: _spStag[i].startMin, adj: _hasAdj(i),
+                                         dist: Math.abs(_spStag[i].startMin - blockStart) });
+                        }
+                        // Prefer adjacency-capable periods, then closeness to current spot.
+                        _cand.sort((a, b) => (a.adj === b.adj) ? a.dist - b.dist : (a.adj ? -1 : 1));
+                        let _chosen = null;
+                        for (const c of _cand) { if (c.adj && !_overlapsPrior(c.start, c.start + _swimDur)) { _chosen = c.start; break; } }
+                        if (_chosen === null) for (const c of _cand) { if (!_overlapsPrior(c.start, c.start + _swimDur)) { _chosen = c.start; break; } }
+                        if (_chosen === null && _cand.length > 0) _chosen = _cand[0].start;
+                        if (_chosen !== null && _chosen !== blockStart) {
+                            blockStart = _chosen;
+                            blockEnd = _chosen + _swimDur;
+                            log('[Phase0] Wet-bundle swim period-staggered for ' + grade + ' → ' +
+                                Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
+                                '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                                ' (period-aligned, rotDur=' + _wetBundleRotDur + ')');
+                        }
+                    } else if (_wetBundleSwimRanges.length > 0) {
+                        let _candStart = blockStart;
+                        let _safety = 24;
+                        while (_overlapsPrior(_candStart, _candStart + _swimDur) && _safety-- > 0) {
+                            _candStart += _bundleSpan;
+                            if (_candStart + _swimDur > layer.endMin) {
+                                _candStart = blockStart;
+                                break;
+                            }
+                        }
+                        if (_candStart !== blockStart) {
+                            blockStart = _candStart;
+                            blockEnd = _candStart + _swimDur;
+                            log('[Phase0] Wet-bundle swim staggered for ' + grade + ' → ' +
+                                Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
+                                '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                                ' (swimDur=' + _swimDur + ' bundleSpan=' + _bundleSpan + ')');
+                        }
+                    }
+
+                    // ── Pass 2: bundle-alignment shift (NO-PERIOD mode only).
+                    //   When Bell periods exist, Pass 1 already snapped swim to a
+                    //   period with a free adjacent period for the bundle; shifting
+                    //   it off that boundary here would re-break single-period
+                    //   containment, so this flush-shift is skipped in period mode.
+                    //   If "after"-direction bundle won't fit before the next
+                    //   pinned wall (typically lunch), Phase 2.4 will pick
+                    //   "before"-direction. In that case shift swim earlier so
+                    //   the before-bundle (preChange → WS → swim → postChange)
+                    //   starts flush at the layer floor (day start) rather
+                    //   than leaving a sub-fillMin lead-in gap.
+                    //   Safety: only shift backward by ≤ changePad so we never
+                    //   collide with the previous grade's pool slot, and never
+                    //   below layer.startMin.
+                    if (_spStag.length === 0 && _wetBundleRotDur > 0 && _changePad > 0) {
                         // After-bundle structure: swim → post-change → WS → trailing change
                         const _afterEnd = blockEnd + _postChangeM + _wetBundleRotDur + _postChangeM;
                         let _nextWall = layer.endMin;
