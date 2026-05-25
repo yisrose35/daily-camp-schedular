@@ -16230,14 +16230,24 @@
                     const _hasPost = tlW.some(b => b &&
                         (b.type || '').toLowerCase() === 'post-change' &&
                         Math.abs(b.startMin - rb.endMin) <= 1);
-                    // Also skip if WS is touching a swim block (bundle wrap covers it).
-                    const _touchesSwim = tlW.some(b => b &&
+                    // Bundle-aware: if a swim sits immediately on ONE side of this
+                    // Water Slide, that side is INTERNAL to the bundle
+                    // (Change→Swim→WS  or  WS→Swim→Change) and the swim's own
+                    // anchor owns the Change there. But the OUTER side still needs
+                    // a Change. The old code returned on ANY swim touch, which left
+                    // every bundle that ENDS in a Water Slide with no trailing
+                    // Change (e.g. Soloists 4: …Swim→WaterSlide with nothing after).
+                    // So only suppress the internal side; still wrap the outer edge.
+                    const _swimBefore = tlW.some(b => b &&
                         (b.type || '').toLowerCase() === 'swim' &&
-                        (Math.abs(b.endMin - rb.startMin) <= 20 || Math.abs(b.startMin - rb.endMin) <= 20));
-                    if (_touchesSwim) return;
+                        b.endMin <= rb.startMin && (rb.startMin - b.endMin) <= 20);
+                    const _swimAfter = tlW.some(b => b &&
+                        (b.type || '').toLowerCase() === 'swim' &&
+                        b.startMin >= rb.endMin && (b.startMin - rb.endMin) <= 20);
                     const _groupId = nextSwimGroupId();
-                    // Pre-change before WS
-                    if (_preDurWrap > 0 && !_hasPre) {
+                    // Pre-change before WS (skip if swim is the block right before
+                    // the WS — that edge is internal to the bundle).
+                    if (_preDurWrap > 0 && !_hasPre && !_swimBefore) {
                         const _psW = rb.startMin - _preDurWrap;
                         const _peW = rb.startMin;
                         // Carve / displace any non-fixed slot/sport in the window
@@ -16273,8 +16283,11 @@
                             _wrapPlaced++;
                         }
                     }
-                    // Post-change after WS
-                    if (_postDurWrap > 0 && !_hasPost) {
+                    // Post-change after WS (skip if swim is the block right after
+                    // the WS — that edge is internal). When swim is BEFORE the WS
+                    // (Swim→WaterSlide), this is the bundle's trailing outer edge
+                    // and MUST be wrapped — this is the Soloists-4 missing-Change fix.
+                    if (_postDurWrap > 0 && !_hasPost && !_swimAfter) {
                         const _psPW = rb.endMin;
                         const _pePW = rb.endMin + _postDurWrap;
                         let _placeable2 = true;
@@ -19463,6 +19476,38 @@
                 warn('[STEP 4.996] sequence-adjacency sweep error: ' + eS.message);
             }
         })();
+
+        // ★ DIAG (wet-bundle Change audit) — read the AUTHORITATIVE final
+        //   scheduleAssignments (reflects STEP 4 sport fill + 4.9 recapture,
+        //   unlike bunkTimelines) and dump the full row of any bunk whose swim
+        //   is missing a Change touching it. Pinpoints what occupies the
+        //   post-change window (e.g. Soloists 4 WS→Swim) in the final data, so
+        //   the trailing-Change fix can be made surgically instead of blind.
+        try {
+            const _saWD = window.scheduleAssignments || {};
+            const _gmWD = s => (s && (s._startMin != null ? s._startMin : s.startMin));
+            const _geWD = s => (s && (s._endMin   != null ? s._endMin   : s.endMin));
+            const _fmtWD = m => (m == null ? '?' : Math.floor(m / 60) + ':' + String(((m % 60) + 60) % 60).padStart(2, '0'));
+            const _isChangeWD = s => { const t = (s.type || '').toLowerCase(), a = (s._activity || s.event || '').toLowerCase(); return t.indexOf('change') >= 0 || a === 'change'; };
+            const _isSwimWD = s => { const t = (s.type || '').toLowerCase(), a = (s._activity || s.event || '').toLowerCase(); return t === 'swim' || a === 'swim'; };
+            let _wdFlagged = 0;
+            Object.keys(_saWD).forEach(bk => {
+                const arr = _saWD[bk];
+                if (!Array.isArray(arr)) return;
+                const row = arr.filter(s => s && _gmWD(s) != null).slice().sort((a, b) => _gmWD(a) - _gmWD(b));
+                const swim = row.find(_isSwimWD);
+                if (!swim) return;
+                const sS = _gmWD(swim), sE = _geWD(swim);
+                const preOK  = row.some(s => _isChangeWD(s) && Math.abs(_geWD(s) - sS) <= 6);
+                const postOK = row.some(s => _isChangeWD(s) && Math.abs(_gmWD(s) - sE) <= 6);
+                if (preOK && postOK) return;
+                _wdFlagged++;
+                log('[WetDiag] ' + bk + ' swim=' + _fmtWD(sS) + '-' + _fmtWD(sE) +
+                    ' preChange=' + preOK + ' postChange=' + postOK + ' | ' +
+                    row.map(s => (s.type || '?') + ':' + (s._activity || s.event || '') + '@' + _fmtWD(_gmWD(s)) + '-' + _fmtWD(_geWD(s))).join('  '));
+            });
+            if (_wdFlagged === 0) log('[WetDiag] every swim has a Change on both sides — clean');
+        } catch (_ewd) {}
 
         // STEP 5 — SAVE
         // =====================================================================
