@@ -2669,6 +2669,47 @@
                     blockEnd = blockStart + _trueDur;
                 }
 
+                // ★ PERIODS CASE — spread grades' swims across distinct periods.
+                //   When Bell Schedule periods exist, the no-periods stagger is
+                //   gated off (it knocks swim off the period grid). But without
+                //   it, every grade defaults to layer.startMin's period — and if
+                //   the Pool facility is configured shareable (high capacity),
+                //   canUsePoolAtTime never says "no", so ALL grades swim at once.
+                //   Camp reality: one division swims per period, sharing only up
+                //   to the pool's configured capacity. So: assign each grade's
+                //   swim to the LEAST-LOADED fitting period (fewest prior grades
+                //   already swimming there), staying period-aligned so the wet
+                //   bundle still builds. Pool capacity is still enforced later by
+                //   canUsePoolAtTime; this just stops the everyone-at-once pileup.
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
+                    const _swimDurS = blockEnd - blockStart;
+                    const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
+                    // Periods that fit the swim and lie within the layer window.
+                    const _fitS = _gpS.filter(p =>
+                        (p.endMin - p.startMin) >= _swimDurS &&
+                        p.startMin >= layer.startMin &&
+                        p.startMin + _swimDurS <= layer.endMin);
+                    if (_fitS.length > 0) {
+                        const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
+                        let _bestP = null, _bestLoad = Infinity, _bestDist = Infinity;
+                        for (const p of _fitS) {
+                            const _load = _loadOf(p.startMin);
+                            const _dist = Math.abs(p.startMin - blockStart);
+                            if (_load < _bestLoad || (_load === _bestLoad && _dist < _bestDist)) {
+                                _bestP = p; _bestLoad = _load; _bestDist = _dist;
+                            }
+                        }
+                        if (_bestP && _bestP.startMin !== blockStart) {
+                            blockStart = _bestP.startMin;
+                            blockEnd = _bestP.startMin + _swimDurS;
+                            log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
+                                Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
+                                '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                                ' (period load was ' + _bestLoad + ')');
+                        }
+                    }
+                }
+
                 // ★ Swim must not overlap the bunk's OWN pinned anchors
                 //   (Main activity, league, lunch, etc.). canUsePoolAtTime only
                 //   guards the shared pool, not the bunk timeline — so a swim
