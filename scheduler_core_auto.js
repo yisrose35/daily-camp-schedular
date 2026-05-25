@@ -19567,10 +19567,16 @@
                     if (!Array.isArray(arr)) return;
                     arr.forEach(function (slot) {
                         if (!slot) return;
-                        if ((slot.type || '').toLowerCase() !== 'rotation_event') return;
+                        // ★ Identify the wet-bundle rotation event by NAME / sequence
+                        //   target, NOT by type. scheduleAssignments slots routinely
+                        //   carry a blank `type` (the WS prints as "?:Water Slide" in
+                        //   WetDiag) — filtering on type==='rotation_event' here was a
+                        //   no-op that let stranded Water Slides survive into the grid.
                         const evtName = String(slot._activity || slot.event || '').toLowerCase();
                         const seqTgt = slot._sequenceTarget ? String(slot._sequenceTarget).toLowerCase() : _seqMap2[evtName];
-                        if (!seqTgt) return;
+                        if (!seqTgt) return; // not a wet-bundle rotation event (swims/sports/changes have no seqTarget)
+                        // Guard: never demote the swim target itself.
+                        if (evtName === seqTgt) return;
                         const ws = _gm2(slot), we = _ge2(slot);
                         if (ws == null || we == null) return;
                         const adj = arr.some(function (o) {
