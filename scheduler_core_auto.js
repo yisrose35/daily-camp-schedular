@@ -19679,6 +19679,22 @@
                 allGrades.forEach(function(g) {
                     getBunksForGrade(g, divisions).forEach(function(bunkName) {
                         var tl = bunkTimelines[bunkName] || [];
+                        // True adjacency needs the span BETWEEN the rotation event and its
+                        //   target to be EMPTY (only Change/Cleanup may sit there) — a bare
+                        //   20-min time tolerance otherwise accepts a full sport wedged
+                        //   between the Water Slide and swim (the disconnected-Soloists bug).
+                        var _spanClearBT = function (loEnd, hiStart, exI, exJ) {
+                            if (hiStart <= loEnd) return true;
+                            for (var k = 0; k < tl.length; k++) {
+                                if (k === exI || k === exJ) continue;
+                                var ob = tl[k];
+                                if (!ob || ob.continuation) continue;
+                                var obt = (ob.type || '').toLowerCase();
+                                if (obt === 'change' || obt === 'pre-change' || obt === 'post-change' || obt === 'cleanup') continue;
+                                if (ob.startMin < hiStart && ob.endMin > loEnd) return false;
+                            }
+                            return true;
+                        };
                         for (var i = 0; i < tl.length; i++) {
                             var blk = tl[i];
                             if (!blk || blk.continuation) continue;
@@ -19696,12 +19712,20 @@
                                 var tbT = (tb.type || '').toLowerCase();
                                 var tbE = (tb.event || '').toLowerCase();
                                 if (tbT !== seqTgt && tbE !== seqTgt) continue;
-                                if (blk.endMin <= tb.startMin && (tb.startMin - blk.endMin) <= _ADJ_TOL_FINAL) { adjOK = true; break; }
-                                if (blk.startMin >= tb.endMin && (blk.startMin - tb.endMin) <= _ADJ_TOL_FINAL) { adjOK = true; break; }
+                                if (blk.endMin <= tb.startMin && (tb.startMin - blk.endMin) <= _ADJ_TOL_FINAL && _spanClearBT(blk.endMin, tb.startMin, i, j)) { adjOK = true; break; }
+                                if (blk.startMin >= tb.endMin && (blk.startMin - tb.endMin) <= _ADJ_TOL_FINAL && _spanClearBT(tb.endMin, blk.startMin, i, j)) { adjOK = true; break; }
                             }
                             if (adjOK) continue;
                             // Demote to Free slot of same span
                             warn('[STEP 4.996] Demoted ' + bunkName + '/' + (blk.event || blk.type) + ' @ ' + (blk.startMin) + '-' + (blk.endMin) + ' → Free — not adjacent to ' + seqTgt);
+                            // Un-mark the completion (marked earlier from bunkTimelines) so this
+                            //   bunk re-attempts the event on a future day rather than being
+                            //   recorded done for a slide we just dropped.
+                            try {
+                                if (blk._rotationEventId && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
+                                    window.RotationEvents.removeCompletion(blk._rotationEventId, bunkName);
+                                }
+                            } catch (_eRC996) {}
                             blk.type = 'slot';
                             blk.event = 'Free';
                             blk._activity = 'Free';
@@ -19762,6 +19786,22 @@
                 Object.keys(_sa).forEach(function (bk) {
                     const arr = _sa[bk];
                     if (!Array.isArray(arr)) return;
+                    // Adjacency requires the span between the rotation event and its target
+                    //   to hold only a Change/Cleanup — not a full sport (the 20-min time
+                    //   tolerance alone wrongly accepts a sport wedged between WS and swim).
+                    const _spanClearSA = function (loEnd, hiStart, exWi, exJ) {
+                        if (hiStart <= loEnd) return true;
+                        for (let k = 0; k < arr.length; k++) {
+                            if (k === exWi || k === exJ) continue;
+                            const ob = arr[k]; if (!ob) continue;
+                            const obt = (ob.type || '').toLowerCase();
+                            if (obt === 'change' || obt === 'pre-change' || obt === 'post-change' || obt === 'cleanup') continue;
+                            const obs = _gm2(ob), obe = _ge2(ob);
+                            if (obs == null || obe == null) continue;
+                            if (obs < hiStart && obe > loEnd) return false;
+                        }
+                        return true;
+                    };
                     for (let wi = 0; wi < arr.length; wi++) {
                         const slot = arr[wi];
                         if (!slot) continue;
@@ -19780,10 +19820,15 @@
                             if (ot !== seqTgt && oa !== seqTgt) continue;
                             const os = _gm2(o), oe = _ge2(o);
                             if (os == null || oe == null) continue;
-                            if ((we <= os && (os - we) <= _ADJ2) || (ws >= oe && (ws - oe) <= _ADJ2)) { adj = true; break; }
+                            if ((we <= os && (os - we) <= _ADJ2 && _spanClearSA(we, os, wi, j)) || (ws >= oe && (ws - oe) <= _ADJ2 && _spanClearSA(oe, ws, wi, j))) { adj = true; break; }
                         }
                         if (adj) continue;                 // bundle already tight — leave it
                         // Still disconnected after 2.78-pre → demote to Free (drop the WS).
+                        try {
+                            if (slot._rotationEventId && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
+                                window.RotationEvents.removeCompletion(slot._rotationEventId, bk);
+                            }
+                        } catch (_eRC996b) {}
                         slot.type = 'slot'; slot.event = 'Free'; slot._activity = 'Free';
                         slot.field = null; slot._rotationEventId = null; slot._sequenceTarget = null;
                         slot._assignedSpecial = null; slot._assignedSport = null; slot._isSpecialLocation = false;
