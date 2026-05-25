@@ -1369,6 +1369,65 @@
             rtRegister('pool', '_pool', grade, startMin, endMin);
         }
 
+        // ── Pool-pairing guard for FALLBACK swim placement (self-heal/guarantee) ──
+        //   Phase 0 / 2.3 / 3-CSP all gate swim on canUsePoolAtTime, but the
+        //   self-heal & guarantee passes only check per-bunk rules — so they can
+        //   drop a swim into the pool at the same time as a grade the Pool's
+        //   Sharing Rules DON'T allow (e.g. Duetos+Soloists when only same-grade
+        //   sharing is configured). The rt ledger may not include Phase-0 swims by
+        //   self-heal time, so this scans the LIVE bunkTimelines (authoritative)
+        //   and returns false if placing `grade`'s swim in [sMin,eMin) would exceed
+        //   pool capacity OR co-occupy with a non-allowed grade. Callers then DEFER
+        //   the swim (do a sport instead) rather than force the disallowed share.
+        let _bunkGradeCacheForPool = null;
+        function _gradeOfBunkForPool(bk) {
+            if (!_bunkGradeCacheForPool) {
+                _bunkGradeCacheForPool = {};
+                try {
+                    (allGrades || []).forEach(function (g) {
+                        (getBunksForGrade(g, divisions) || []).forEach(function (b) { _bunkGradeCacheForPool[b] = g; });
+                    });
+                } catch (e) {}
+            }
+            return _bunkGradeCacheForPool[bk] || null;
+        }
+        function poolSwimPairFreeAt(grade, sMin, eMin, ignoreBunk) {
+            try {
+                const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+                const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(function (f) { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
+                if (!_pf || !_pf.sharableWith) return true; // no Pool sharing config → unrestricted (legacy)
+                const _sw = _pf.sharableWith;
+                const _type = _sw.type || _sw.shareType || 'all';
+                const _pairs = _sw.allowedPairs || {};
+                const _cap = _type === 'not_sharable' ? 1 : (parseInt(_sw.capacity) > 0 ? parseInt(_sw.capacity) : (_type === 'all' ? 999 : 12));
+                let _bunkCount = 0;
+                const _otherGrades = {};
+                const _bt = bunkTimelines || {};
+                Object.keys(_bt).forEach(function (bk) {
+                    if (bk === ignoreBunk) return;
+                    const tl = _bt[bk] || [];
+                    for (let i = 0; i < tl.length; i++) {
+                        const b = tl[i];
+                        if (!b || b.continuation) continue;
+                        if ((b.type || '').toLowerCase() !== 'swim') continue;
+                        if (b.startMin < eMin && b.endMin > sMin) {
+                            _bunkCount++;
+                            const g = _gradeOfBunkForPool(bk);
+                            if (g && g !== grade) _otherGrades[g] = true;
+                            break;
+                        }
+                    }
+                });
+                if (_bunkCount >= _cap) return false;          // capacity counts BUNKS
+                const _og = Object.keys(_otherGrades);
+                if (_og.length === 0) return true;             // only same-grade (or empty) → fine
+                if (_type === 'all') return true;              // capacity-only (already checked)
+                if (_type === 'not_sharable' || _type === 'same_division') return false;
+                if (_type === 'custom') { const _ad = _sw.divisions || []; return _og.concat([grade]).every(function (g) { return _ad.indexOf(g) !== -1; }); }
+                return isCrossDivAllowed(grade, _og, _pairs);  // cross_division
+            } catch (e) { return true; } // never hard-block on error
+        }
+
         function canUsePoolAtTime(grade, startMin, endMin) {
             // ── POOL SHARING v2 (2026-05-17) ────────────────────────────
             // Old rule: pool is exclusive per grade (one grade at a time, any
@@ -8981,6 +9040,12 @@
                         if (!rulesAllow({ startMin: hPlaceStart, endMin: hNewEnd, type: hlt, event: hEventName }, hTmpl)) {
                             continue; // rule violation — skip this layer for this bunk
                         }
+                        // ★ Pool sharing rule: never force a disallowed cross-grade co-swim.
+                        //   Defer the swim (a sport fills here instead) rather than break the
+                        //   Pool's allowedPairs/capacity — matches "share only if allowed".
+                        if (hlt === 'swim' && !poolSwimPairFreeAt(hMeta.grade, hPlaceStart, hNewEnd, hBunk)) {
+                            continue;
+                        }
                         var hRemainStart = hNewEnd;
                         var hRemainEnd = hVictim.endMin;
                         // Also fill the gap before the clamped start
@@ -9269,6 +9334,10 @@
                         // Scheduling rules check before committing guarantee
                         if (!rulesAllow({ startMin: gPlaceStart, endMin: gLayerEnd, type: glt, event: gll.event || glt }, gTmpl)) {
                             continue; // rule violation — try next sport block
+                        }
+                        // ★ Pool sharing rule: never force a disallowed cross-grade co-swim.
+                        if (glt === 'swim' && !poolSwimPairFreeAt(gMeta.grade, gPlaceStart, gLayerEnd, gBunk)) {
+                            continue; // defer this swim — pool pairing not allowed at this time
                         }
 
                         var gRemainStart = gLayerEnd;
