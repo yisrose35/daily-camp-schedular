@@ -2722,13 +2722,36 @@
                     let _fitS = _fitInWin(_bandS, _bandE);
                     if (_fitS.length === 0) _fitS = _fitInWin(layer.startMin, layer.endMin);
                     if (_fitS.length > 0) {
+                        // ★ Lunch-edge penalty: steer the wet-bundle swim AWAY from the
+                        //   period immediately before/after lunch. When swim sits in the
+                        //   pre-lunch period, its Water Slide can only bundle on the OTHER
+                        //   side (lunch blocks one side) and often ends up stranded after
+                        //   lunch — splitting the bundle. Grades whose swim lands in a
+                        //   clear period (e.g. Trios at 10:50) bundle perfectly. So bias
+                        //   the swim to a period with a lunch-free neighbour for the WS.
+                        let _lunchSB = null, _lunchEB = null;
+                        try {
+                            const _lL = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'lunch');
+                            if (_lL && _lL.startMin != null) { _lunchSB = _lL.startMin; _lunchEB = _lL.endMin; }
+                            if (_lunchSB == null) {
+                                for (const _bk of targetBunks) {
+                                    const _lb = (bunkTimelines[_bk] || []).find(b => b && ((b.type || '').toLowerCase() === 'lunch' || (b.event || '').toLowerCase() === 'lunch'));
+                                    if (_lb) { _lunchSB = _lb.startMin; _lunchEB = _lb.endMin; break; }
+                                }
+                            }
+                        } catch (_elb) {}
+                        const _isLunchEdge = (p) => _lunchSB != null &&
+                            (Math.abs(p.endMin - _lunchSB) <= 10 || Math.abs(p.startMin - _lunchEB) <= 10);
                         const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
-                        let _bestP = null, _bestLoad = Infinity, _bestDist = Infinity;
+                        let _bestP = null, _bestScore = Infinity, _bestDist = Infinity;
                         for (const p of _fitS) {
-                            const _load = _loadOf(p.startMin);
+                            // Score = pool load + heavy lunch-edge penalty (so a clear
+                            //   period always wins over a lunch-edge one, but a lunch-edge
+                            //   period is still chosen if it's the only option).
+                            const _score = _loadOf(p.startMin) + (_isLunchEdge(p) ? 100 : 0);
                             const _dist = Math.abs(p.startMin - blockStart);
-                            if (_load < _bestLoad || (_load === _bestLoad && _dist < _bestDist)) {
-                                _bestP = p; _bestLoad = _load; _bestDist = _dist;
+                            if (_score < _bestScore || (_score === _bestScore && _dist < _bestDist)) {
+                                _bestP = p; _bestScore = _score; _bestDist = _dist;
                             }
                         }
                         if (_bestP && _bestP.startMin !== blockStart) {
@@ -2737,7 +2760,7 @@
                             log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
                                 Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
                                 '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
-                                ' (period load was ' + _bestLoad + ')');
+                                ' (load ' + (_bestScore % 100) + (_bestScore >= 100 ? ', lunch-edge — only option' : '') + ')');
                         }
                     }
                 }
@@ -19509,6 +19532,76 @@
                 }
             } catch (eS) {
                 warn('[STEP 4.996] sequence-adjacency sweep error: ' + eS.message);
+            }
+        })();
+
+        // =====================================================================
+        // STEP 4.996b — SEQUENCE-ADJACENCY SWEEP ON THE *RENDERED* SCHEDULE
+        // =====================================================================
+        // STEP 4.996 above edits bunkTimelines, but STEP 4 / 4.9 mutate
+        // window.scheduleAssignments independently — so a disconnected Water
+        // Slide (e.g. swim before lunch, WS stranded AFTER lunch) survives into
+        // the saved/rendered grid even though 4.996 "demoted" it. Re-run the
+        // adjacency check directly on scheduleAssignments so a split bundle
+        // never ships: any rotation_event whose swim target isn't within
+        // tolerance is demoted to Free here too. (The v2 solver's hole cost
+        // backfills the freed slot with a sport.)
+        (function _step4996bRenderedAdjacencySweep() {
+            try {
+                if (!window.RotationEvents || typeof window.RotationEvents.loadRotationEvents !== 'function') return;
+                const _sa = window.scheduleAssignments || {};
+                const _rEvts2 = window.RotationEvents.loadRotationEvents() || [];
+                const _seqMap2 = {};
+                _rEvts2.forEach(function (e) {
+                    if (!e || !e.sequence || !e.sequence.targetActivity) return;
+                    if (currentDate && e.dateRange && (currentDate < e.dateRange.start || currentDate > e.dateRange.end)) return;
+                    _seqMap2[String(e.name || '').toLowerCase()] = String(e.sequence.targetActivity).toLowerCase();
+                });
+                if (!Object.keys(_seqMap2).length) return;
+                const _gm2 = function (s) { return s && (s._startMin != null ? s._startMin : s.startMin); };
+                const _ge2 = function (s) { return s && (s._endMin != null ? s._endMin : s.endMin); };
+                const _ADJ2 = 20;
+                let _demoted2 = 0;
+                Object.keys(_sa).forEach(function (bk) {
+                    const arr = _sa[bk];
+                    if (!Array.isArray(arr)) return;
+                    arr.forEach(function (slot) {
+                        if (!slot) return;
+                        if ((slot.type || '').toLowerCase() !== 'rotation_event') return;
+                        const evtName = String(slot._activity || slot.event || '').toLowerCase();
+                        const seqTgt = slot._sequenceTarget ? String(slot._sequenceTarget).toLowerCase() : _seqMap2[evtName];
+                        if (!seqTgt) return;
+                        const ws = _gm2(slot), we = _ge2(slot);
+                        if (ws == null || we == null) return;
+                        const adj = arr.some(function (o) {
+                            if (!o || o === slot) return false;
+                            const ot = (o.type || '').toLowerCase(), oa = (o._activity || o.event || '').toLowerCase();
+                            if (ot !== seqTgt && oa !== seqTgt) return false;
+                            const os = _gm2(o), oe = _ge2(o);
+                            if (os == null || oe == null) return false;
+                            return (we <= os && (os - we) <= _ADJ2) || (ws >= oe && (ws - oe) <= _ADJ2);
+                        });
+                        if (adj) return;
+                        slot.type = 'slot';
+                        slot.event = 'Free';
+                        slot._activity = 'Free';
+                        slot.field = null;
+                        slot._rotationEventId = null;
+                        slot._sequenceTarget = null;
+                        slot._assignedSpecial = null;
+                        slot._assignedSport = null;
+                        slot._isSpecialLocation = false;
+                        slot._fixed = false;
+                        slot._activityLocked = false;
+                        slot._source = 'seq-adjacency-demoted-rendered';
+                        _demoted2++;
+                        warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free (rendered) — not adjacent to ' + seqTgt);
+                    });
+                });
+                if (_demoted2 > 0) log('[STEP 4.996b] Rendered-schedule sweep: demoted ' + _demoted2 + ' disconnected rotation_event(s) to Free');
+                else log('[STEP 4.996b] Rendered-schedule sweep: clean');
+            } catch (e996b) {
+                warn('[STEP 4.996b] rendered sweep error: ' + e996b.message);
             }
         })();
 
