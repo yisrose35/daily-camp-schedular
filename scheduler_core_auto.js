@@ -15885,6 +15885,90 @@
         // drops every pre/post and rebuilds them from the swim block's
         // layer config + computeSwimChangeAnchors.
         log('\n[STEP 2.78] Re-anchoring swim change blocks...');
+
+        // ── STEP 2.78-pre: pull a stranded Water Slide ADJACENT to its swim ──
+        //   BEFORE the re-anchor loop, so the loop's bundle detection lays the
+        //   wet bundle out as [pre-change][WS][swim][post-change] — i.e.
+        //   Change → Water Slide → Swim → Change, with NO change between the two
+        //   wet activities and NO lunch in the middle. At this point (pre-STEP-4)
+        //   the gap periods are still empty, so the WS can simply move into the
+        //   free period next to swim on the lunch-free side; the slot it vacates
+        //   becomes a gap that STEP 4 fills with a sport. Facility checks
+        //   (4.5/4.95/4.995) re-validate afterwards, so no stale field conflict.
+        try {
+            const _seqMapPull = {};
+            const _rePull = (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function')
+                ? (window.RotationEvents.loadRotationEvents() || []) : [];
+            _rePull.forEach(function (e) {
+                if (!e || !e.sequence || !e.sequence.targetActivity) return;
+                if (currentDate && e.dateRange && (currentDate < e.dateRange.start || currentDate > e.dateRange.end)) return;
+                _seqMapPull[String(e.name || '').toLowerCase()] = String(e.sequence.targetActivity).toLowerCase();
+            });
+            let _pulled = 0;
+            allGrades.forEach(function (grade) {
+                const _gp = (window.campPeriods && window.campPeriods[grade])
+                    ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin) : [];
+                if (!_gp.length) return;
+                getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                    const tl = bunkTimelines[bunk];
+                    if (!Array.isArray(tl)) return;
+                    const swims = tl.filter(b => b && (b.type || '').toLowerCase() === 'swim');
+                    if (!swims.length) return;
+                    tl.slice().forEach(function (ws) {
+                        if (!ws) return;
+                        const a = (ws.event || ws._activity || '').toLowerCase();
+                        const seqT = ws._sequenceTarget ? String(ws._sequenceTarget).toLowerCase() : _seqMapPull[a];
+                        if (seqT !== 'swim') return;                 // not a wet-bundle rotation event
+                        if (a === 'swim') return;                    // it's the swim itself
+                        if (!((ws.type || '').toLowerCase() === 'rotation_event' || ws._rotationEventId || ws._sequenceTarget || _seqMapPull[a])) return;
+                        // nearest swim to this WS
+                        let sw = null, bestD = Infinity;
+                        swims.forEach(s => {
+                            const d = Math.min(Math.abs(s.startMin - ws.endMin), Math.abs(ws.startMin - s.endMin));
+                            if (d < bestD) { bestD = d; sw = s; }
+                        });
+                        if (!sw) return;
+                        const adjacent = (ws.endMin <= sw.startMin && (sw.startMin - ws.endMin) <= 20) ||
+                                         (ws.startMin >= sw.endMin && (ws.startMin - sw.endMin) <= 20);
+                        if (adjacent) return;                        // already bundled tight
+                        let lunchS = null;
+                        tl.forEach(b => { if (b && ((b.type || '').toLowerCase() === 'lunch' || (b.event || '').toLowerCase() === 'lunch')) lunchS = b.startMin; });
+                        const swimBeforeLunch = (lunchS != null) ? (sw.endMin <= lunchS) : true;
+                        const wsDur = ws.endMin - ws.startMin;
+                        // A period is usable if no FIXED/pinned block (swim, lunch, special,
+                        //   change, anchor) overlaps it — gaps (future sports) don't block.
+                        const _periodFree = (p) => !tl.some(b => {
+                            if (!b || b === ws) return false;
+                            const bt = (b.type || '').toLowerCase();
+                            if (!(b._fixed || b._classification === 'pinned' || bt === 'swim' || bt === 'lunch')) return false;
+                            return b.startMin < p.endMin && b.endMin > p.startMin;
+                        });
+                        let target = null;
+                        if (swimBeforeLunch) {
+                            for (let i = _gp.length - 1; i >= 0; i--) {
+                                const p = _gp[i];
+                                if (p.endMin <= sw.startMin && (sw.startMin - p.endMin) <= 20 && (p.endMin - p.startMin) >= (wsDur - 5) && _periodFree(p)) { target = p; break; }
+                            }
+                        } else {
+                            for (let i = 0; i < _gp.length; i++) {
+                                const p = _gp[i];
+                                if (p.startMin >= sw.endMin && (p.startMin - sw.endMin) <= 20 && (p.endMin - p.startMin) >= (wsDur - 5) && _periodFree(p)) { target = p; break; }
+                            }
+                        }
+                        if (!target) return;                         // no clean adjacent period — leave for 4.996b to drop
+                        ws.startMin = target.startMin;
+                        ws.endMin = Math.min(target.startMin + wsDur, target.endMin);
+                        if (ws.startTime !== undefined) ws.startTime = minutesToTimeLabel(ws.startMin);
+                        if (ws.endTime !== undefined) ws.endTime = minutesToTimeLabel(ws.endMin);
+                        _pulled++;
+                        log('[2.78-pre] Pulled ' + bunk + ' "' + (ws.event || ws._activity) + '" adjacent to swim → ' +
+                            ws.startMin + '-' + ws.endMin + ' (' + (swimBeforeLunch ? 'before' : 'after') + ' swim)');
+                    });
+                });
+            });
+            if (_pulled > 0) log('[2.78-pre] Pulled ' + _pulled + ' stranded Water Slide(s) adjacent to swim before re-anchoring');
+        } catch (_ePull) { warn('[2.78-pre] WS-pull error: ' + _ePull.message); }
+
         let _reanchorPlaced = 0, _reanchorDropped = 0;
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
@@ -19536,16 +19620,20 @@
         })();
 
         // =====================================================================
-        // STEP 4.996b — SEQUENCE-ADJACENCY SWEEP ON THE *RENDERED* SCHEDULE
+        // STEP 4.996b — SEQUENCE-ADJACENCY SAFETY NET ON THE *RENDERED* SCHEDULE
         // =====================================================================
-        // STEP 4.996 above edits bunkTimelines, but STEP 4 / 4.9 mutate
-        // window.scheduleAssignments independently — so a disconnected Water
-        // Slide (e.g. swim before lunch, WS stranded AFTER lunch) survives into
-        // the saved/rendered grid even though 4.996 "demoted" it. Re-run the
-        // adjacency check directly on scheduleAssignments so a split bundle
-        // never ships: any rotation_event whose swim target isn't within
-        // tolerance is demoted to Free here too. (The v2 solver's hole cost
-        // backfills the freed slot with a sport.)
+        // STEP 2.78-pre already pulls any stranded Water Slide into the free
+        // period adjacent to its swim (lunch-free side) and STEP 2.78 lays the
+        // bundle out as Change → Water Slide → Swim → Change. This sweep is a
+        // pure SAFETY NET: STEP 4 / 4.9 mutate window.scheduleAssignments
+        // independently, so if a wet-bundle rotation_event somehow STILL isn't
+        // within tolerance of its swim target in the final grid, demote it to
+        // Free rather than ship a disconnected bundle. (The v2 solver's hole
+        // cost backfills the freed slot with a sport.) We deliberately do NOT
+        // relocate here — a post-pipeline swap can land the WS on the wrong
+        // side of the swim (wrong order) and re-introduce a field conflict that
+        // bypasses the 4.5/4.95/4.995 facility checks; the proper relocate
+        // happens earlier in 2.78-pre, before those checks re-run.
         (function _step4996bRenderedAdjacencySweep() {
             try {
                 if (!window.RotationEvents || typeof window.RotationEvents.loadRotationEvents !== 'function') return;
@@ -19561,50 +19649,10 @@
                 const _gm2 = function (s) { return s && (s._startMin != null ? s._startMin : s.startMin); };
                 const _ge2 = function (s) { return s && (s._endMin != null ? s._endMin : s.endMin); };
                 const _ADJ2 = 20;
-                let _demoted2 = 0, _relocated2 = 0;
-                // Swap the time-window fields between two slot objects (used after
-                //   swapping their array positions, so each activity takes the other's
-                //   grid time-slot). scheduleAssignments is a positional array aligned
-                //   to the period grid, so a position+time swap relocates the activity
-                //   grid-consistently with no hole.
-                const _TIMEKEYS = ['_startMin', '_endMin', 'startMin', 'endMin', 'startTime', 'endTime'];
-                const _swapTimes = function (a, b) {
-                    if (!a || !b) return;
-                    _TIMEKEYS.forEach(function (k) {
-                        const av = a[k], bv = b[k];
-                        if (bv !== undefined) a[k] = bv; else delete a[k];
-                        if (av !== undefined) b[k] = av; else delete b[k];
-                    });
-                };
+                let _demoted2 = 0;
                 Object.keys(_sa).forEach(function (bk) {
                     const arr = _sa[bk];
                     if (!Array.isArray(arr)) return;
-                    const _isSwimSlot = function (o) {
-                        if (!o) return false;
-                        return (o.type || '').toLowerCase() === 'swim' || (o._activity || o.event || '').toLowerCase() === 'swim';
-                    };
-                    // A slot the WS may be swapped INTO: a plain sport/Free block that is
-                    //   not pinned and not itself part of a bundle/anchor.
-                    const _isMovableTarget = function (o) {
-                        if (!o) return false; // empty grid cell — skip (swapping would leave a hole)
-                        if (o._fixed || o._activityLocked) return false;
-                        const a = (o._activity || o.event || '').toLowerCase();
-                        const t = (o.type || '').toLowerCase();
-                        if (_isSwimSlot(o)) return false;
-                        if (t === 'lunch' || t === 'cleanup' || t.indexOf('change') >= 0 || t === 'main-anchor') return false;
-                        if (a === 'lunch' || a === 'cleanup' || a.indexOf('change') >= 0 || a.indexOf('main activity') >= 0) return false;
-                        if (o._sequenceTarget || o._rotationEventId || _seqMap2[a]) return false; // another wet event
-                        return true;
-                    };
-                    const _demote = function (slot, evtName, ws, we, seqTgt) {
-                        slot.type = 'slot'; slot.event = 'Free'; slot._activity = 'Free';
-                        slot.field = null; slot._rotationEventId = null; slot._sequenceTarget = null;
-                        slot._assignedSpecial = null; slot._assignedSport = null; slot._isSpecialLocation = false;
-                        slot._fixed = false; slot._activityLocked = false;
-                        slot._source = 'seq-adjacency-demoted-rendered';
-                        _demoted2++;
-                        warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free — could not relocate adjacent to ' + seqTgt);
-                    };
                     for (let wi = 0; wi < arr.length; wi++) {
                         const slot = arr[wi];
                         if (!slot) continue;
@@ -19614,8 +19662,8 @@
                         if (evtName === seqTgt) continue; // never touch the swim target itself
                         const ws = _gm2(slot), we = _ge2(slot);
                         if (ws == null || we == null) continue;
-                        // Find the swim target + whether the WS is already adjacent to it.
-                        let swimSlot = null, adj = false;
+                        // Is the WS adjacent to any swim-target block in this bunk?
+                        let adj = false;
                         for (let j = 0; j < arr.length; j++) {
                             if (j === wi) continue;
                             const o = arr[j]; if (!o) continue;
@@ -19623,61 +19671,21 @@
                             if (ot !== seqTgt && oa !== seqTgt) continue;
                             const os = _gm2(o), oe = _ge2(o);
                             if (os == null || oe == null) continue;
-                            if (!swimSlot) swimSlot = o;
                             if ((we <= os && (os - we) <= _ADJ2) || (ws >= oe && (ws - oe) <= _ADJ2)) { adj = true; break; }
                         }
-                        if (adj) continue;                 // bundle already tight
-                        if (!swimSlot) { _demote(slot, evtName, ws, we, seqTgt); continue; }
-                        // ── Relocate the WS to the period adjacent to the swim, on the
-                        //    side that does NOT cross lunch, by swapping it with the
-                        //    movable sport sitting there. Keeps the Water Slide AND
-                        //    keeps the bundle tight (no lunch in the middle).
-                        const sS = _gm2(swimSlot), sE = _ge2(swimSlot);
-                        let lunchS = null, lunchE = null;
-                        for (let j = 0; j < arr.length; j++) {
-                            const o = arr[j]; if (!o) continue;
-                            if ((o._activity || o.event || '').toLowerCase() === 'lunch') { lunchS = _gm2(o); lunchE = _ge2(o); break; }
-                        }
-                        const swimBeforeLunch = (lunchS != null) ? (sE <= lunchS) : true;
-                        const wsDur = we - ws;
-                        let targetIdx = -1;
-                        if (swimBeforeLunch) {
-                            // WS goes BEFORE swim: nearest movable slot ending just before swim start
-                            let bestEnd = -1;
-                            for (let j = 0; j < arr.length; j++) {
-                                if (j === wi) continue;
-                                const o = arr[j]; const oe = _ge2(o), os = _gm2(o);
-                                if (oe == null || os == null) continue;
-                                if (oe <= sS && (sS - oe) <= 50 && (oe - os) >= (wsDur - 10) && _isMovableTarget(o) && oe > bestEnd) {
-                                    bestEnd = oe; targetIdx = j;
-                                }
-                            }
-                        } else {
-                            // WS goes AFTER swim: nearest movable slot starting just after swim end
-                            let bestStart = Infinity;
-                            for (let j = 0; j < arr.length; j++) {
-                                if (j === wi) continue;
-                                const o = arr[j]; const oe = _ge2(o), os = _gm2(o);
-                                if (oe == null || os == null) continue;
-                                if (os >= sE && (os - sE) <= 50 && (oe - os) >= (wsDur - 10) && _isMovableTarget(o) && os < bestStart) {
-                                    bestStart = os; targetIdx = j;
-                                }
-                            }
-                        }
-                        if (targetIdx >= 0) {
-                            const wsObj = arr[wi], sportObj = arr[targetIdx];
-                            arr[wi] = sportObj; arr[targetIdx] = wsObj; // swap positions
-                            _swapTimes(arr[wi], arr[targetIdx]);        // each takes the other's grid time
-                            _relocated2++;
-                            log('[STEP 4.996b] Relocated ' + bk + '/' + (evtName || 'WS') + ' to ' + _gm2(wsObj) + '-' + _ge2(wsObj) +
-                                ' (was ' + ws + '-' + we + ') — bundled ' + (swimBeforeLunch ? 'before' : 'after') + ' swim, no lunch split');
-                        } else {
-                            _demote(slot, evtName, ws, we, seqTgt);
-                        }
+                        if (adj) continue;                 // bundle already tight — leave it
+                        // Still disconnected after 2.78-pre → demote to Free (drop the WS).
+                        slot.type = 'slot'; slot.event = 'Free'; slot._activity = 'Free';
+                        slot.field = null; slot._rotationEventId = null; slot._sequenceTarget = null;
+                        slot._assignedSpecial = null; slot._assignedSport = null; slot._isSpecialLocation = false;
+                        slot._fixed = false; slot._activityLocked = false;
+                        slot._source = 'seq-adjacency-demoted-rendered';
+                        _demoted2++;
+                        warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free — still not adjacent to ' + seqTgt + ' after 2.78-pre');
                     }
                 });
-                if (_relocated2 > 0 || _demoted2 > 0) log('[STEP 4.996b] Rendered-schedule sweep: relocated ' + _relocated2 + ', demoted ' + _demoted2 + ' disconnected rotation_event(s)');
-                else log('[STEP 4.996b] Rendered-schedule sweep: clean');
+                if (_demoted2 > 0) log('[STEP 4.996b] Rendered-schedule safety net: demoted ' + _demoted2 + ' still-disconnected rotation_event(s)');
+                else log('[STEP 4.996b] Rendered-schedule safety net: clean');
             } catch (e996b) {
                 warn('[STEP 4.996b] rendered sweep error: ' + e996b.message);
             }
