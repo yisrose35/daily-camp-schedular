@@ -19660,6 +19660,39 @@
         // Free. Every upstream placement path adds its own guard, but a
         // post-pipeline sweep here ensures the final schedule never ships
         // with a disconnected Water Slide etc., regardless of who placed it.
+
+        // ★ Shared backfill: when a disconnected rotation event is demoted, fill
+        //   the freed slot with a SHARABLE filler special instead of leaving a
+        //   "Free" hole. Sharable (type !== not_sharable) means concurrent use is
+        //   allowed, so adding one more bunk cannot violate exclusive-facility
+        //   rules — safe to do AFTER the 4.5/4.95/4.995 validators have run.
+        //   Skips specials the bunk already has (no duplicates). Returns name|null.
+        var _pickSharableFiller = function (_grade, _bunk, _durMin, _excludeLc) {
+            if (!_durMin || _durMin < 5 || typeof todaysSpecials === 'undefined' || !todaysSpecials) return null;
+            var _best = null, _bestDur = 0;
+            for (var _pf = 0; _pf < todaysSpecials.length; _pf++) {
+                var _sp = todaysSpecials[_pf];
+                if (!_sp || !_sp.name) continue;
+                if (_excludeLc && _excludeLc[String(_sp.name).toLowerCase()]) continue;
+                try {
+                    if (_grade && _bunk != null && typeof isSpecialAvailableForBunk === 'function' &&
+                        !isSpecialAvailableForBunk(_sp.name, _grade, _bunk, globalSettings)) continue;
+                } catch (_eAv) { continue; }
+                var _stype = null;
+                try {
+                    var _cfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(_sp.name, globalSettings) : null;
+                    var _sw = _cfg && _cfg.sharableWith;
+                    _stype = _sw && (_sw.type || _sw.shareType);
+                } catch (_eCfg) {}
+                if (!_stype || _stype === 'not_sharable') continue; // sharable-only (conflict-safe)
+                var _d = 0;
+                try { _d = getSpecialDuration(_sp.name, activityProperties, globalSettings) || _sp.defaultDuration || _sp.duration || _sp.durationMin || _sp.periodMin || 0; } catch (_eD) {}
+                if (_d <= 0 || _d > _durMin) continue;
+                if (_d > _bestDur) { _best = _sp.name; _bestDur = _d; }
+            }
+            return _best;
+        };
+
         (function _step4996SequenceAdjacencySweep() {
             try {
                 if (!window.RotationEvents || typeof window.RotationEvents.loadRotationEvents !== 'function') return;
@@ -19738,6 +19771,24 @@
                             blk._fixed = false;
                             blk._activityLocked = false;
                             blk._source = 'seq-adjacency-demoted';
+                            // ★ Backfill the freed slot with a sharable filler special so the
+                            //   day doesn't ship a Free hole (this sweep runs after the fillers).
+                            try {
+                                var _exHas996 = {};
+                                tl.forEach(function (_b) {
+                                    if (!_b) return;
+                                    var _n = _b._assignedSpecial || _b.event || '';
+                                    if (_n) _exHas996[String(_n).toLowerCase()] = true;
+                                });
+                                var _fnm996 = _pickSharableFiller(g, bunkName, (blk.endMin - blk.startMin), _exHas996);
+                                if (_fnm996) {
+                                    blk.type = 'special';
+                                    blk.event = _fnm996;
+                                    blk._activity = _fnm996;
+                                    blk._assignedSpecial = _fnm996;
+                                    blk._source = 'seq-demote-backfill';
+                                }
+                            } catch (_eBF996) {}
                             _demotedCount++;
                         }
                     });
@@ -19783,6 +19834,13 @@
                 const _ge2 = function (s) { return s && (s._endMin != null ? s._endMin : s.endMin); };
                 const _ADJ2 = 20;
                 let _demoted2 = 0;
+                // bunk → grade map (this sweep iterates scheduleAssignments by bunk only)
+                var _bkToGrade = {};
+                try {
+                    allGrades.forEach(function (g) {
+                        getBunksForGrade(g, divisions).forEach(function (b) { _bkToGrade[String(b)] = g; });
+                    });
+                } catch (_eBG) {}
                 Object.keys(_sa).forEach(function (bk) {
                     const arr = _sa[bk];
                     if (!Array.isArray(arr)) return;
@@ -19834,6 +19892,24 @@
                         slot._assignedSpecial = null; slot._assignedSport = null; slot._isSpecialLocation = false;
                         slot._fixed = false; slot._activityLocked = false;
                         slot._source = 'seq-adjacency-demoted-rendered';
+                        // ★ Backfill the freed slot with a sharable filler special so the
+                        //   rendered day doesn't ship a Free hole.
+                        try {
+                            var _exHas996b = {};
+                            arr.forEach(function (_o) {
+                                if (!_o) return;
+                                var _n = _o._assignedSpecial || _o._activity || _o.event || '';
+                                if (_n) _exHas996b[String(_n).toLowerCase()] = true;
+                            });
+                            var _fnm996b = _pickSharableFiller(_bkToGrade[bk], bk, (we - ws), _exHas996b);
+                            if (_fnm996b) {
+                                slot.type = 'special';
+                                slot.event = _fnm996b;
+                                slot._activity = _fnm996b;
+                                slot._assignedSpecial = _fnm996b;
+                                slot._source = 'seq-demote-backfill-rendered';
+                            }
+                        } catch (_eBF996b) {}
                         _demoted2++;
                         warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free — still not adjacent to ' + seqTgt + ' after 2.78-pre');
                     }
