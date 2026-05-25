@@ -1102,6 +1102,22 @@
         });
         if (_wetBundleTargets.size > 0) {
             log('[STEP 1.5] Force-pinning wet-bundle target layer types: ' + Array.from(_wetBundleTargets).join(', '));
+            // ★ DIAG: print the resolved Pool sharing config so we can tell
+            //   whether the everyone-locked-out behavior is a capacity limit
+            //   (cap counts BUNKS) vs an exclusive/not_sharable setting.
+            try {
+                const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+                const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(f => { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
+                if (_pf && _pf.sharableWith) {
+                    const _sw = _pf.sharableWith;
+                    const _st = _sw.type || _sw.shareType || 'all';
+                    const _cap = _st === 'not_sharable' ? 1 : (parseInt(_sw.capacity) > 0 ? parseInt(_sw.capacity) : (_st === 'all' ? 999 : 12));
+                    log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_sw.allowedPairs || {}).length));
+                } else {
+                    const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
+                    log('[STEP 1.5] Pool sharing config: NO Pool field sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
+                }
+            } catch (_epc) {}
         }
 
         const classOrder = { pinned: 0, windowed: 1, open: 2 };
@@ -2852,7 +2868,17 @@
                             }
                         }
                     }
-                    if (!_poolFound) return;
+                    if (!_poolFound) {
+                        if (t === 'swim' && _wetBundleTargets.has(t)) {
+                            try {
+                                log('[Phase0-Diag] ' + grade + ' wet-bundle swim BAILED — no period clear of pool + all ' +
+                                    targetBunks.length + ' bunks\' anchors (poolCands=' + _allPoolCandidates.length +
+                                    ' adjOk=' + _poolAdj.length + ', dur=' + (blockEnd - blockStart) +
+                                    '). Falls to Phase 2.3 staggered.');
+                            } catch (_ebdiag) {}
+                        }
+                        return;
+                    }
                 }
 
                 // Idempotency guard: if any target bunk already has a swim block,
@@ -3055,6 +3081,14 @@
                 //   swim placements can stagger around it (see top of forEach).
                 if (t === 'swim' && _wetBundleTargets.has(t)) {
                     _wetBundleSwimRanges.push({ startMin: blockStart, endMin: blockEnd });
+                    try {
+                        log('[Phase0-Diag] ' + grade + ' wet-bundle swim COMMITTED ' +
+                            Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') + '-' +
+                            Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                            ' for ' + targetBunks.length + ' bunks' +
+                            (_linkedRotPlaced ? ' (+WaterSlide ' +
+                                Math.floor(_linkedRotPlaced.wsStart/60) + ':' + String(_linkedRotPlaced.wsStart%60).padStart(2,'0') + ')' : ' (no adjacent WS in Phase0)'));
+                    } catch (_ecdiag) {}
                 }
                 // Register linked rotation event placed in Phase 0 so Phase 2.4 skips it
                 if (_linkedRotPlaced) {
@@ -12352,6 +12386,21 @@
                             && p.endMin   <= _p23WinEnd;
                     });
 
+                    // ★ DIAG: per-grade swim placement context. Pins down why
+                    //   afternoon-band grades (Soloists/Quints) can't place swim:
+                    //   is it zero candidate periods (window/band mismatch) or
+                    //   all candidates blocked (capacity/anchors)?
+                    try {
+                        var _p23Bnd = (staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim) || null;
+                        var _p23Fmt = function (m) { return Math.floor(m/60) + ':' + String(m%60).padStart(2,'0'); };
+                        log('[Phase2.3-Diag] ' + grade + ' swimDur=' + _p23SwimDur +
+                            ' win=' + _p23Fmt(_p23WinStart) + '-' + _p23Fmt(_p23WinEnd) +
+                            ' periods=' + _p23Periods.length +
+                            ' fitCandidates=' + _p23Candidates.length +
+                            (_p23Candidates.length ? ' [' + _p23Candidates.map(function (p) { return _p23Fmt(p.startMin) + '-' + _p23Fmt(p.endMin); }).join(', ') + ']' : '') +
+                            (_p23Bnd ? ' matrixBand=' + _p23Fmt(_p23Bnd.start) + '-' + _p23Fmt(_p23Bnd.end) : ' matrixBand=none'));
+                    } catch (_ep23d) {}
+
                     // Bundle-aware swim placement: pre-load wet bundle rotation events
                     // for this grade so candidate periods can be scored by how well
                     // they set up an adjacent slot for the rotation event.
@@ -12426,7 +12475,35 @@
                         var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
 
                         if (!_p23Chosen) {
-                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim (will fall through to Phase 3)');
+                            // ★ DIAG: categorize WHY no slot was found (runs only on
+                            //   failure, so the rescan cost is negligible). Tells us if
+                            //   the pool is saturated (capacity/sharing config) or the
+                            //   bunk's own anchors fill every candidate period.
+                            var _p23dPool = 0, _p23dAnchor = 0, _p23dFirst = '';
+                            for (var _dci = 0; _dci < _p23Candidates.length; _dci++) {
+                                var _dcP = _p23Candidates[_dci];
+                                for (var _dcs = _dcP.startMin; _dcs + _p23SwimDur <= _dcP.endMin; _dcs += _p23SwimDur) {
+                                    var _dce = _dcs + _p23SwimDur;
+                                    if (!canUsePoolAtTime(grade, _dcs, _dce)) { _p23dPool++; continue; }
+                                    var _dcTL = bunkTimelines[bunk] || [];
+                                    for (var _dti = 0; _dti < _dcTL.length; _dti++) {
+                                        var _dcB = _dcTL[_dti];
+                                        if (!_dcB) continue;
+                                        if (!(_dcB._activityLocked || _dcB._fixed || _dcB._classification === 'pinned')) continue;
+                                        var _dcBt = (_dcB.type || '').toLowerCase();
+                                        if (_dcBt === 'pre-change' || _dcBt === 'post-change') continue;
+                                        if (_dcB.startMin < _dce && _dcB.endMin > _dcs) {
+                                            _p23dAnchor++;
+                                            if (!_p23dFirst) _p23dFirst = (_dcB.type || _dcB.event || '?') + '@' + Math.floor(_dcB.startMin/60) + ':' + String(_dcB.startMin%60).padStart(2,'0');
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            log('[Phase2.3] ✗ ' + bunk + '/' + grade + ' — no free slot for staggered swim ' +
+                                '(fitCandidates=' + _p23Candidates.length + ' poolBlocked=' + _p23dPool +
+                                ' anchorBlocked=' + _p23dAnchor + (_p23dFirst ? ' firstBlocker=' + _p23dFirst : '') +
+                                '; will fall through to Phase 3)');
                             return;
                         }
 
