@@ -13080,16 +13080,79 @@
                                         return;
                                     }
                                     const _pool = [];
-                                    // 'after': fill the period immediately following swim with
-                                    // multiple dur-sized slots so more bunks can be bundled
-                                    // on the same day. The very first slot (period start) is
-                                    // "immediately adjacent" — the gap between swim period end
-                                    // and that slot is too small to schedule anything, so there
-                                    // is literally nothing between swim and water slide.
-                                    // Subsequent slots within the same period are still in the
-                                    // adjacent period but not guaranteed to be back-to-back
-                                    // (Phase 3 may fill the earlier sub-slots for that bunk).
-                                    if (seqPosition === 'after' || seqPosition === 'either') {
+                                    // 'before' (PREFERRED for 'either'): fill the period
+                                    // immediately preceding swim. The last slot (closest to swim)
+                                    // is "immediately adjacent". Preferring 'before' makes the
+                                    // bundle render as [pre-change][WS][swim][post-change] =
+                                    // Change → Water Slide → Swim → Change, the canonical wet-bundle
+                                    // order. It also sidesteps the swim's own post-change anchor —
+                                    // the 'after' direction wants the slot right after swim, which
+                                    // is exactly where the post-change sits, so 'after' bundles
+                                    // collide and get deferred.
+                                    if (seqPosition === 'before' || seqPosition === 'either') {
+                                        if (_noPeriods) {
+                                            // No periods → bundle is one slot ending immediately
+                                            // at swimStart, clamped to winStart AND to the end of
+                                            // the latest pinned block BEFORE swim.
+                                            const _beforeEnd = Math.min(_grSwimBlk.startMin, winEnd);
+                                            // Find the latest pinned block END across grade's
+                                            // bunks (Nit, leagues, earlier rotation events, etc.)
+                                            let _beforeStartFloor = winStart;
+                                            _bb.forEach(function (_pb) {
+                                                const _ptl = bunkTimelines[_pb] || [];
+                                                _ptl.forEach(function (_blk) {
+                                                    if (!_blk || _blk.continuation) return;
+                                                    if (!(_blk._classification === 'pinned' || _blk._fixed || _blk._activityLocked)) return;
+                                                    if (_blk.type && _blk.type === 'swim') return; // ignore the swim itself
+                                                    if (_blk.endMin < _beforeEnd && _blk.endMin > _beforeStartFloor) {
+                                                        _beforeStartFloor = _blk.endMin;
+                                                    }
+                                                });
+                                            });
+                                            const _beforeStart = _beforeEnd - dur;
+                                            if (_beforeStart >= _beforeStartFloor) {
+                                                _pool.push({
+                                                    startMin: _beforeStart, endMin: _beforeEnd,
+                                                    usedCount: 0, dir: 'before',
+                                                    immediatelyAdjacent: true
+                                                });
+                                            } else if (_verbose) {
+                                                log('[Phase2.4-bundle] Grade ' + _bg + ' before-pool empty: only ' +
+                                                    (_beforeEnd - _beforeStartFloor) + 'min between previous pinned wall and swim start (need ' + dur + 'min)');
+                                            }
+                                        } else {
+                                            for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
+                                                const _p = _sp[_pi];
+                                                // Clamp to event window — same logic as 'after' below.
+                                                const _bCStart = Math.max(_p.startMin, winStart);
+                                                const _bCEnd   = Math.min(_p.endMin, winEnd);
+                                                if (_bCEnd - _bCStart < dur) continue;
+                                                const _slotsInPeriod = [];
+                                                for (let _wsS = _bCStart; _wsS + dur <= _bCEnd; _wsS += dur) {
+                                                    _slotsInPeriod.push(_wsS);
+                                                }
+                                                _slotsInPeriod.forEach(function(_wsS, _sIdx) {
+                                                    _pool.push({
+                                                        startMin: _wsS, endMin: _wsS + dur,
+                                                        usedCount: 0, dir: 'before',
+                                                        immediatelyAdjacent: _sIdx === _slotsInPeriod.length - 1
+                                                    });
+                                                });
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    // 'after' (explicit 'after', or 'either' FALLBACK when there is
+                                    // no room before swim — e.g. swim at the very start of the day):
+                                    // fill the period immediately following swim with multiple
+                                    // dur-sized slots so more bunks can be bundled on the same day.
+                                    // The first slot (period start) is "immediately adjacent" — the
+                                    // gap between swim period end and that slot is too small to
+                                    // schedule anything between swim and water slide. Subsequent
+                                    // slots within the same period are still in the adjacent period
+                                    // but not guaranteed back-to-back (Phase 3 may fill earlier
+                                    // sub-slots for that bunk).
+                                    if (seqPosition === 'after' || (seqPosition === 'either' && _pool.length === 0)) {
                                         if (_noPeriods) {
                                             // No periods configured → bundle is just one slot
                                             // starting immediately at swimEnd, clamped to winEnd
@@ -13158,63 +13221,6 @@
                                                     _firstSlot = false;
                                                 }
                                                 break; // only the immediately adjacent period
-                                            }
-                                        }
-                                    }
-                                    // 'before': fill the period immediately preceding swim
-                                    // with multiple slots. The last slot (closest to swim)
-                                    // is "immediately adjacent" to swim.
-                                    if ((seqPosition === 'before' || seqPosition === 'either') &&
-                                        _pool.length === 0) {
-                                        if (_noPeriods) {
-                                            // No periods → bundle is one slot ending immediately
-                                            // at swimStart, clamped to winStart AND to the end of
-                                            // the latest pinned block BEFORE swim.
-                                            const _beforeEnd = Math.min(_grSwimBlk.startMin, winEnd);
-                                            // Find the latest pinned block END across grade's
-                                            // bunks (Nit, leagues, earlier rotation events, etc.)
-                                            let _beforeStartFloor = winStart;
-                                            _bb.forEach(function (_pb) {
-                                                const _ptl = bunkTimelines[_pb] || [];
-                                                _ptl.forEach(function (_blk) {
-                                                    if (!_blk || _blk.continuation) return;
-                                                    if (!(_blk._classification === 'pinned' || _blk._fixed || _blk._activityLocked)) return;
-                                                    if (_blk.type && _blk.type === 'swim') return; // ignore the swim itself
-                                                    if (_blk.endMin < _beforeEnd && _blk.endMin > _beforeStartFloor) {
-                                                        _beforeStartFloor = _blk.endMin;
-                                                    }
-                                                });
-                                            });
-                                            const _beforeStart = _beforeEnd - dur;
-                                            if (_beforeStart >= _beforeStartFloor) {
-                                                _pool.push({
-                                                    startMin: _beforeStart, endMin: _beforeEnd,
-                                                    usedCount: 0, dir: 'before',
-                                                    immediatelyAdjacent: true
-                                                });
-                                            } else if (_verbose) {
-                                                log('[Phase2.4-bundle] Grade ' + _bg + ' before-pool empty: only ' +
-                                                    (_beforeEnd - _beforeStartFloor) + 'min between previous pinned wall and swim start (need ' + dur + 'min)');
-                                            }
-                                        } else {
-                                            for (let _pi = _swimPi - 1; _pi >= 0; _pi--) {
-                                                const _p = _sp[_pi];
-                                                // Clamp to event window — same logic as 'after' above.
-                                                const _bCStart = Math.max(_p.startMin, winStart);
-                                                const _bCEnd   = Math.min(_p.endMin, winEnd);
-                                                if (_bCEnd - _bCStart < dur) continue;
-                                                const _slotsInPeriod = [];
-                                                for (let _wsS = _bCStart; _wsS + dur <= _bCEnd; _wsS += dur) {
-                                                    _slotsInPeriod.push(_wsS);
-                                                }
-                                                _slotsInPeriod.forEach(function(_wsS, _sIdx) {
-                                                    _pool.push({
-                                                        startMin: _wsS, endMin: _wsS + dur,
-                                                        usedCount: 0, dir: 'before',
-                                                        immediatelyAdjacent: _sIdx === _slotsInPeriod.length - 1
-                                                    });
-                                                });
-                                                break;
                                             }
                                         }
                                     }
