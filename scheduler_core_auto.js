@@ -1066,6 +1066,7 @@
         // logs "no swim block placed yet" and every bundled bunk's WS gets
         // deferred to Phase 3, which then scatters them disconnected.
         const _wetBundleTargets = new Set();
+        const _wetBundleEvtByTarget = {}; // target type (e.g. 'swim') -> { concurrency, dur, pos }
         try {
             if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
                 (window.RotationEvents.loadRotationEvents() || []).forEach(rE => {
@@ -1073,7 +1074,18 @@
                     if (currentDate && rE.dateRange) {
                         if (currentDate < rE.dateRange.start || currentDate > rE.dateRange.end) return;
                     }
-                    _wetBundleTargets.add(String(rE.sequence.targetActivity).toLowerCase());
+                    const _tgt = String(rE.sequence.targetActivity).toLowerCase();
+                    _wetBundleTargets.add(_tgt);
+                    // ★ Capture the slide's per-slot capacity ("Bunks at a Time") and
+                    //   per-bunk duration so Phase 0's swim spreader can keep the
+                    //   (global) Water Slide facility from being oversubscribed in any
+                    //   one period — spreading slides across all usable periods instead
+                    //   of piling every grade's slide into the same 1-2 periods.
+                    const _cc = Math.max(1, parseInt(rE.concurrency) || 1);
+                    const _du = parseInt(rE.durationPerBunk) || 0;
+                    if (!_wetBundleEvtByTarget[_tgt] || _cc < _wetBundleEvtByTarget[_tgt].concurrency) {
+                        _wetBundleEvtByTarget[_tgt] = { concurrency: _cc, dur: _du, pos: (rE.sequence.position || 'either') };
+                    }
                 });
             }
         } catch (_ePinTgt) {}
@@ -2484,6 +2496,13 @@
             //   grade's Water Slide bundle pool picks the same post-swim
             //   slot → WS double-booked too.
             const _wetBundleSwimRanges = []; // [{startMin, endMin}]
+            // ★ Water Slide facility coordination (periods case). As each grade's
+            //   swim is placed, we also reserve the period its slide will use, so
+            //   later grades steer their swim toward a period whose slide-neighbor
+            //   still has open capacity. This is what turns ~4 bundled bunks into
+            //   the full 6-periods × concurrency ceiling.
+            const _wsSlideUsage = {};   // period startMin -> projected sliding bunks claimed there
+            const _poolPeriodOwner = {}; // period startMin -> grade already swimming there (pool is same-grade-only)
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -2756,104 +2775,140 @@
                 //   already swimming there), staying period-aligned so the wet
                 //   bundle still builds. Pool capacity is still enforced later by
                 //   canUsePoolAtTime; this just stops the everyone-at-once pileup.
-                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods) {
                     const _swimDurS = blockEnd - blockStart;
                     const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
-                    // ★ Constrain the spread to this grade's SWIM BAND (from the
-                    //   rotation matrix), not the whole day. Without this, whole-
-                    //   day load-balancing pushes a morning-band grade (e.g.
-                    //   Minors 10:50-12:43) into the afternoon, consuming the
-                    //   scarce afternoon period an afternoon-band grade (e.g.
-                    //   Soloists 2:14-3:45) needs — leaving Soloists swim-less.
+                    // ★ The grade's SWIM BAND (from the rotation matrix). Bands are
+                    //   rotated per grade (Latin square) so each grade prefers a
+                    //   different time-of-day — that spread is what keeps the pool
+                    //   from over-stacking and protects the late-band grade (Soloists)
+                    //   from losing its afternoon slot. We keep the band as a SOFT
+                    //   preference (penalty for leaving it) rather than a hard wall, so
+                    //   a grade CAN escape a lunch-edge / slide-saturated band when it
+                    //   must — but won't wander off and steal another grade's period.
                     let _bandS = layer.startMin, _bandE = layer.endMin;
                     try {
                         const _swBand = staggerPlan && staggerPlan[grade] &&
                             staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim;
                         if (_swBand && _swBand.end > _swBand.start) { _bandS = _swBand.start; _bandE = _swBand.end; }
                     } catch (_eBand) {}
-                    // Periods that fit the swim within the band (small slack for
-                    // boundary alignment). Fall back to the full layer window if
-                    // the band is too narrow to contain any whole period.
                     const _fitInWin = (lo, hi) => _gpS.filter(p =>
                         (p.endMin - p.startMin) >= _swimDurS &&
                         p.startMin >= Math.max(layer.startMin, lo - 5) &&
                         p.startMin + _swimDurS <= Math.min(layer.endMin, hi + 5));
-                    let _fitS = _fitInWin(_bandS, _bandE);
-                    if (_fitS.length === 0) _fitS = _fitInWin(layer.startMin, layer.endMin);
-                    if (_fitS.length > 0) {
-                        // ★ Lunch-edge penalty: steer the wet-bundle swim AWAY from the
-                        //   period immediately before/after lunch. When swim sits in the
-                        //   pre-lunch period, its Water Slide can only bundle on the OTHER
-                        //   side (lunch blocks one side) and often ends up stranded after
-                        //   lunch — splitting the bundle. Grades whose swim lands in a
-                        //   clear period (e.g. Trios at 10:50) bundle perfectly. So bias
-                        //   the swim to a period with a lunch-free neighbour for the WS.
-                        let _lunchSB = null, _lunchEB = null;
-                        try {
-                            const _lL = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'lunch');
-                            if (_lL && _lL.startMin != null) { _lunchSB = _lL.startMin; _lunchEB = _lL.endMin; }
-                            if (_lunchSB == null) {
-                                for (const _bk of targetBunks) {
-                                    const _lb = (bunkTimelines[_bk] || []).find(b => b && ((b.type || '').toLowerCase() === 'lunch' || (b.event || '').toLowerCase() === 'lunch'));
-                                    if (_lb) { _lunchSB = _lb.startMin; _lunchEB = _lb.endMin; break; }
-                                }
+                    // Lunch detection (steer the swim so a slide-neighbour stays usable).
+                    let _lunchSB = null, _lunchEB = null;
+                    try {
+                        const _lL = (layersByGrade[grade] || []).find(l => (l.type || '').toLowerCase() === 'lunch');
+                        if (_lL && _lL.startMin != null) { _lunchSB = _lL.startMin; _lunchEB = _lL.endMin; }
+                        if (_lunchSB == null) {
+                            for (const _bk of targetBunks) {
+                                const _lb = (bunkTimelines[_bk] || []).find(b => b && ((b.type || '').toLowerCase() === 'lunch' || (b.event || '').toLowerCase() === 'lunch'));
+                                if (_lb) { _lunchSB = _lb.startMin; _lunchEB = _lb.endMin; break; }
                             }
-                        } catch (_elb) {}
-                        const _isLunchEdge = (p) => _lunchSB != null &&
-                            (Math.abs(p.endMin - _lunchSB) <= 10 || Math.abs(p.startMin - _lunchEB) <= 10);
-                        const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
-                        // ★ Full-bundle steering: the wet bundle wants
-                        //   Change→WaterSlide→Swim→Change. That needs (a) a FREE period
-                        //   adjacent to swim for the Water Slide, and (b) room BEFORE the
-                        //   WS for a leading Change — impossible if the WS would sit in the
-                        //   day's first period. So score periods by whether they let a full
-                        //   bundle form, not just pool load. A period is "free for WS" if
-                        //   it's not lunch and no pinned anchor overlaps it across the
-                        //   grade's bunks (sports aren't placed yet in Phase 0).
-                        const _periodFreeForWS = (idx) => {
-                            if (idx < 0 || idx >= _gpS.length) return false;
-                            const q = _gpS[idx];
-                            if ((q.endMin - q.startMin) < _swimDurS - 5) return false;
-                            if (_lunchSB != null && q.startMin < _lunchEB && q.endMin > _lunchSB) return false;
-                            return targetBunks.every(bk => !(bunkTimelines[bk] || []).some(b => {
-                                if (!b || b.continuation) return false;
-                                if (!(b._classification === 'pinned' || b._fixed)) return false;
-                                if ((b.type || '').toLowerCase() === 'swim') return false;
-                                return b.startMin < q.endMin && b.endMin > q.startMin;
-                            }));
-                        };
-                        let _bestP = null, _bestScore = Infinity, _bestDist = Infinity;
+                        }
+                    } catch (_elb) {}
+                    const _isLunchEdge = (p) => _lunchSB != null &&
+                        (Math.abs(p.endMin - _lunchSB) <= 10 || Math.abs(p.startMin - _lunchEB) <= 10);
+                    const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
+                    // A period is "free for the Water Slide" if it's not lunch and no
+                    //   pinned anchor overlaps it across the grade's bunks (sports aren't
+                    //   placed yet in Phase 0).
+                    const _periodFreeForWS = (idx) => {
+                        if (idx < 0 || idx >= _gpS.length) return false;
+                        const q = _gpS[idx];
+                        if ((q.endMin - q.startMin) < _swimDurS - 5) return false;
+                        if (_lunchSB != null && q.startMin < _lunchEB && q.endMin > _lunchSB) return false;
+                        return targetBunks.every(bk => !(bunkTimelines[bk] || []).some(b => {
+                            if (!b || b.continuation) return false;
+                            if (!(b._classification === 'pinned' || b._fixed)) return false;
+                            if ((b.type || '').toLowerCase() === 'swim') return false;
+                            return b.startMin < q.endMin && b.endMin > q.startMin;
+                        }));
+                    };
+                    // ★ Water Slide facility coordination. The slide a swim-in-period-_pi
+                    //   would use is the BEFORE-period (canonical Change→WS→Swim order)
+                    //   if free, else the after-period. We reserve that slide-period in
+                    //   _wsSlideUsage as each grade is placed, so later grades steer their
+                    //   swim toward a period whose slide-neighbour still has room. THIS is
+                    //   what lets all 6 periods carry a slide (cap × 6) instead of every
+                    //   grade piling its slide into the same 1-2 periods.
+                    const _wsCfg = _wetBundleEvtByTarget[t] || _wetBundleEvtByTarget['swim'] || { concurrency: 2 };
+                    const _wsCc = Math.max(1, _wsCfg.concurrency || 2);
+                    const _wsSlideCount = Math.min((targetBunks && targetBunks.length) || 1, _wsCc);
+                    const _slideNeighborStart = (_pi) => {
+                        if (_periodFreeForWS(_pi - 1)) return _gpS[_pi - 1].startMin;
+                        if (_periodFreeForWS(_pi + 1)) return _gpS[_pi + 1].startMin;
+                        return null;
+                    };
+                    const _slideOpen = (_pi) => {
+                        const ns = _slideNeighborStart(_pi);
+                        if (ns == null) return false;
+                        return (_wsSlideUsage[ns] || 0) + _wsSlideCount <= _wsCc;
+                    };
+                    // Candidate periods: prefer the band, but expand to the whole day
+                    //   when no band period can form an open-slide bundle (lunch-edge /
+                    //   pool taken / slide-neighbour already saturated). Out-of-band picks
+                    //   carry a soft penalty so the swim stays as close to its band as it
+                    //   can — preserving the cross-grade spread that protects Soloists.
+                    const _bandFit = _fitInWin(_bandS, _bandE);
+                    const _fullFit = _fitInWin(layer.startMin, layer.endMin);
+                    const _bandHasOpen = _bandFit.some(p => {
+                        const pi = _gpS.findIndex(q => q.startMin === p.startMin);
+                        return !_isLunchEdge(p) && _poolPeriodOwner[p.startMin] == null && _slideOpen(pi);
+                    });
+                    let _fitS = _bandHasOpen ? _bandFit : (_fullFit.length ? _fullFit : _bandFit);
+                    if (_fitS.length === 0) _fitS = _fullFit.length ? _fullFit : _bandFit;
+                    if (_fitS.length > 0) {
+                        let _bestP = null, _bestNs = null, _bestScore = Infinity, _bestDist = Infinity;
                         for (const p of _fitS) {
                             const _pi = _gpS.findIndex(q => q.startMin === p.startMin);
-                            // WS prefers the period BEFORE swim (canonical order); the
-                            //   period after is the fallback (e.g. day-start swims).
                             const _beforeFree = _periodFreeForWS(_pi - 1);
                             const _afterFree  = _periodFreeForWS(_pi + 1);
                             const _hasWSNeighbor = _beforeFree || _afterFree;
-                            // A leading Change fits only if the before-WS period is not the
-                            //   day's first period (so the WS itself isn't at day-start).
                             const _fullBundleOk = _beforeFree && (_pi - 1) >= 1;
                             const _isDayStart = (_pi === 0);
-                            // Lower = better. Lunch-edge stays the strongest avoid; then a
-                            //   missing WS-neighbour (bundle would defer); then day-start /
-                            //   no-leading-change. Pool load (scaled) still spreads grades
-                            //   across periods so the pool isn't over-stacked.
-                            let _score = _loadOf(p.startMin) * 40 + (_isLunchEdge(p) ? 1000 : 0);
-                            if (!_hasWSNeighbor) _score += 400; // WS can't bundle here → defers
-                            if (_isDayStart)     _score += 150; // swim at day-start
-                            if (!_fullBundleOk)  _score += 80;  // no room for a leading Change
+                            const _ns = _slideNeighborStart(_pi);
+                            const _slideSat = _ns == null || (_wsSlideUsage[_ns] || 0) + _wsSlideCount > _wsCc;
+                            const _poolTaken = _poolPeriodOwner[p.startMin] != null && _poolPeriodOwner[p.startMin] !== grade;
+                            const _outOfBand = (p.startMin + 5 < _bandS) || (p.startMin + _swimDurS - 5 > _bandE);
+                            // Lower = better. Pool collision (swim FAILS — pool is same-
+                            //   grade-only) is the strongest avoid, then lunch-edge, then
+                            //   slide-saturation (slide would defer), then out-of-band,
+                            //   then no-neighbour / day-start.
+                            let _score = _loadOf(p.startMin) * 40;
+                            if (_poolTaken)      _score += 2000;
+                            if (_isLunchEdge(p)) _score += 1000;
+                            if (_slideSat)       _score += 600;  // slide-neighbour full → this slide would defer
+                            if (_outOfBand)      _score += 500;  // soft band preference (keeps grades spread)
+                            if (!_hasWSNeighbor) _score += 400;  // WS can't bundle here → defers
+                            if (_isDayStart)     _score += 150;
+                            if (!_fullBundleOk)  _score += 80;
                             const _dist = Math.abs(p.startMin - blockStart);
                             if (_score < _bestScore || (_score === _bestScore && _dist < _bestDist)) {
-                                _bestP = p; _bestScore = _score; _bestDist = _dist;
+                                _bestP = p; _bestNs = _ns; _bestScore = _score; _bestDist = _dist;
                             }
                         }
-                        if (_bestP && _bestP.startMin !== blockStart) {
-                            blockStart = _bestP.startMin;
-                            blockEnd = _bestP.startMin + _swimDurS;
-                            log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
-                                Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
-                                '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
-                                ' (score ' + _bestScore + (_bestScore >= 1000 ? ', lunch-edge — only option' : '') + ')');
+                        // Only act when the best candidate isn't itself a pool collision.
+                        //   If every period is already pool-claimed (the pool-floor
+                        //   casualty — 7 grades, 6 periods), leave the swim at its band
+                        //   default so the existing swim-deferral handles it gap-free,
+                        //   instead of relocating it on top of another grade's pool.
+                        if (_bestP && _bestScore < 2000) {
+                            if (_bestP.startMin !== blockStart) {
+                                blockStart = _bestP.startMin;
+                                blockEnd = _bestP.startMin + _swimDurS;
+                                log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
+                                    Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
+                                    '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
+                                    ' (score ' + _bestScore +
+                                    (_bestNs != null ? ', slide@' + Math.floor(_bestNs/60) + ':' + String(_bestNs%60).padStart(2,'0') : ', slide deferred') +
+                                    (_bestScore >= 1000 ? ', constrained — best available' : '') + ')');
+                            }
+                            // ★ Reserve this grade's pool period + projected slide period so
+                            //   later grades route around them (the cross-grade pipeline).
+                            _poolPeriodOwner[blockStart] = grade;
+                            if (_bestNs != null) _wsSlideUsage[_bestNs] = (_wsSlideUsage[_bestNs] || 0) + _wsSlideCount;
                         }
                     }
                 }
