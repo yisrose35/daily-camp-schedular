@@ -2669,13 +2669,33 @@
                     blockEnd = blockStart + _trueDur;
                 }
 
+                // ★ Swim must not overlap the bunk's OWN pinned anchors
+                //   (Main activity, league, lunch, etc.). canUsePoolAtTime only
+                //   guards the shared pool, not the bunk timeline — so a swim
+                //   positioned over a Main-activity anchor would survive the
+                //   pool check, then get CLIPPED below dMin by the later
+                //   integrity pass (the Minors 20-min-swim bug). Detect that
+                //   overlap and route through the same relocation logic.
+                //   Gated to the periods case: relocation needs a period grid
+                //   to move within. In the no-periods case the stagger handles
+                //   placement and there are no period candidates to fall back
+                //   on (firing here would find nothing and skip swim entirely).
+                const _swimOverlapsOwnAnchor = (t === 'swim') && _gradeHasPeriods && targetBunks.some(bk => {
+                    return (bunkTimelines[bk] || []).some(b => {
+                        if (!b || b.continuation) return false;
+                        if (!(b._classification === 'pinned' || b._fixed)) return false;
+                        const _bt = (b.type || '').toLowerCase();
+                        if (_bt === 'swim' || _bt === 'pre-change' || _bt === 'post-change') return false;
+                        return b.startMin < blockEnd && b.endMin > blockStart;
+                    });
+                });
                 // ★ v4.0: Pool exclusivity for pinned swim
                 // If the preferred period is pool-blocked (another grade swims
                 // there), try other period starts instead of giving up. Without
                 // this, a fullGrade swim that fails pool exclusivity falls
                 // through to the per-bunk CSP solver which scatters bunks
                 // across different periods — breaking the fullGrade constraint.
-                if (t === 'swim' && !canUsePoolAtTime(grade, blockStart, blockEnd)) {
+                if (t === 'swim' && (!canUsePoolAtTime(grade, blockStart, blockEnd) || _swimOverlapsOwnAnchor)) {
                     const _fgDur = blockEnd - blockStart;
                     const _poolPeriods = (window.campPeriods && window.campPeriods[grade])
                         ? window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin)
@@ -2717,10 +2737,15 @@
                     let _poolAdj = _allPoolCandidates.filter(c => c.adjOk).sort((a, b) => a.dist - b.dist);
                     let _poolNonAdj = _allPoolCandidates.filter(c => !c.adjOk).sort((a, b) => a.dist - b.dist);
                     let _poolFound = false;
+                    // Acceptance: pool free AND the swim window itself is clear
+                    //   of the bunk's own anchors (_poolRotFree checks every
+                    //   target bunk's timeline for overlap). Prevents relocating
+                    //   swim onto another anchor and getting re-clipped.
+                    const _swimSlotClear = (cs, ce) => canUsePoolAtTime(grade, cs, ce) && _poolRotFree(cs, ce);
                     // Pass 1: only adjacent-OK periods
                     for (const cand of _poolAdj) {
                         const cs = cand.p.startMin, ce = cs + _fgDur;
-                        if (canUsePoolAtTime(grade, cs, ce)) {
+                        if (_swimSlotClear(cs, ce)) {
                             blockStart = cs;
                             blockEnd = ce;
                             _poolFound = true;
@@ -2731,7 +2756,7 @@
                     if (!_poolFound && _linkedRotDur > 0) {
                         for (const cand of _poolNonAdj) {
                             const cs = cand.p.startMin, ce = cs + _fgDur;
-                            if (canUsePoolAtTime(grade, cs, ce)) {
+                            if (_swimSlotClear(cs, ce)) {
                                 blockStart = cs;
                                 blockEnd = ce;
                                 _poolFound = true;
@@ -2743,6 +2768,24 @@
                     if (!_poolFound && _linkedRotDur === 0) {
                         const _poolAll = _allPoolCandidates.sort((a, b) => a.dist - b.dist);
                         for (const cand of _poolAll) {
+                            const cs = cand.p.startMin, ce = cs + _fgDur;
+                            if (_swimSlotClear(cs, ce)) {
+                                blockStart = cs;
+                                blockEnd = ce;
+                                _poolFound = true;
+                                break;
+                            }
+                        }
+                    }
+                    // Pass 4: pool-conflict-only fallback (anchor-clear couldn't
+                    //   be satisfied) — accept a pool-free period even if it
+                    //   overlaps an anchor, so we at least keep full swim
+                    //   duration somewhere rather than a clipped block. The
+                    //   later integrity pass resolves the (now full-duration)
+                    //   overlap by moving the lower-priority side.
+                    if (!_poolFound) {
+                        const _poolAll2 = _allPoolCandidates.slice().sort((a, b) => a.dist - b.dist);
+                        for (const cand of _poolAll2) {
                             const cs = cand.p.startMin, ce = cs + _fgDur;
                             if (canUsePoolAtTime(grade, cs, ce)) {
                                 blockStart = cs;
