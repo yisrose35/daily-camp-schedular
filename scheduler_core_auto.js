@@ -2684,11 +2684,27 @@
                 if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
                     const _swimDurS = blockEnd - blockStart;
                     const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
-                    // Periods that fit the swim and lie within the layer window.
-                    const _fitS = _gpS.filter(p =>
+                    // ★ Constrain the spread to this grade's SWIM BAND (from the
+                    //   rotation matrix), not the whole day. Without this, whole-
+                    //   day load-balancing pushes a morning-band grade (e.g.
+                    //   Minors 10:50-12:43) into the afternoon, consuming the
+                    //   scarce afternoon period an afternoon-band grade (e.g.
+                    //   Soloists 2:14-3:45) needs — leaving Soloists swim-less.
+                    let _bandS = layer.startMin, _bandE = layer.endMin;
+                    try {
+                        const _swBand = staggerPlan && staggerPlan[grade] &&
+                            staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim;
+                        if (_swBand && _swBand.end > _swBand.start) { _bandS = _swBand.start; _bandE = _swBand.end; }
+                    } catch (_eBand) {}
+                    // Periods that fit the swim within the band (small slack for
+                    // boundary alignment). Fall back to the full layer window if
+                    // the band is too narrow to contain any whole period.
+                    const _fitInWin = (lo, hi) => _gpS.filter(p =>
                         (p.endMin - p.startMin) >= _swimDurS &&
-                        p.startMin >= layer.startMin &&
-                        p.startMin + _swimDurS <= layer.endMin);
+                        p.startMin >= Math.max(layer.startMin, lo - 5) &&
+                        p.startMin + _swimDurS <= Math.min(layer.endMin, hi + 5));
+                    let _fitS = _fitInWin(_bandS, _bandE);
+                    if (_fitS.length === 0) _fitS = _fitInWin(layer.startMin, layer.endMin);
                     if (_fitS.length > 0) {
                         const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
                         let _bestP = null, _bestLoad = Infinity, _bestDist = Infinity;
