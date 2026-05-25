@@ -2506,11 +2506,6 @@
                 // a period with adjacent room for the linked event.
                 let _linkedRotDur = 0;
                 let _linkedRotPos = null; // 'before' | 'after' | 'either'
-                // ★ Is a swim-adjacent rotation event (e.g. Water Slide) ACTIVE for this
-                //   grade today? Set even for individual-mode events (unlike _linkedRotDur,
-                //   which stays fullGrade-only). Used to free the swim from its rotation-
-                //   matrix band ONLY on days a bundle is actually happening (the "balance").
-                let _wetBundleActiveForGrade = false;
                 if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
                     try {
                         const _preAllRots = window.RotationEvents.loadRotationEvents() || [];
@@ -2523,9 +2518,6 @@
                             }
                             const rGrades = (Array.isArray(rEvt.grades) && rEvt.grades.length > 0) ? new Set(rEvt.grades) : null;
                             if (rGrades && !rGrades.has(grade)) continue;
-                            // A swim-adjacent event applies to this grade today (either mode) →
-                            //   flag it so the swim can be freed from its rotation band below.
-                            if ((parseInt(rEvt.durationPerBunk) || 0) > 0) _wetBundleActiveForGrade = true;
                             // Individual-mode events stagger per-bunk — Phase 2.4 handles them.
                             // Phase 0 only places whole-grade walls, so skip individual events here.
                             if (rEvt.gradeMode === 'individual') continue;
@@ -2764,35 +2756,30 @@
                 //   already swimming there), staying period-aligned so the wet
                 //   bundle still builds. Pool capacity is still enforced later by
                 //   canUsePoolAtTime; this just stops the everyone-at-once pileup.
-                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && (_wetBundleSwimRanges.length > 0 || _wetBundleActiveForGrade)) {
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
                     const _swimDurS = blockEnd - blockStart;
                     const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
-                    // Periods that fit the swim within [lo,hi] (small slack for boundary
-                    // alignment), clamped to the layer window.
+                    // ★ Constrain the spread to this grade's SWIM BAND (from the
+                    //   rotation matrix), not the whole day. Without this, whole-
+                    //   day load-balancing pushes a morning-band grade (e.g.
+                    //   Minors 10:50-12:43) into the afternoon, consuming the
+                    //   scarce afternoon period an afternoon-band grade (e.g.
+                    //   Soloists 2:14-3:45) needs — leaving Soloists swim-less.
+                    let _bandS = layer.startMin, _bandE = layer.endMin;
+                    try {
+                        const _swBand = staggerPlan && staggerPlan[grade] &&
+                            staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim;
+                        if (_swBand && _swBand.end > _swBand.start) { _bandS = _swBand.start; _bandE = _swBand.end; }
+                    } catch (_eBand) {}
+                    // Periods that fit the swim within the band (small slack for
+                    // boundary alignment). Fall back to the full layer window if
+                    // the band is too narrow to contain any whole period.
                     const _fitInWin = (lo, hi) => _gpS.filter(p =>
                         (p.endMin - p.startMin) >= _swimDurS &&
                         p.startMin >= Math.max(layer.startMin, lo - 5) &&
                         p.startMin + _swimDurS <= Math.min(layer.endMin, hi + 5));
-                    // ★ BALANCE (user-requested): on a NORMAL day keep swim inside its
-                    //   rotation-matrix morning/afternoon band so swim time-of-day still
-                    //   varies across the week (prevents whole-day load-balancing from
-                    //   stealing a band grade's scarce period). But when a swim-adjacent
-                    //   event (e.g. Water Slide) is ACTIVE for this grade today, free the
-                    //   swim to the whole day so it can land in a period with an open
-                    //   adjacent slot for the bundle — maximizing how many bunks slide.
-                    let _fitS;
-                    if (_wetBundleActiveForGrade) {
-                        _fitS = _fitInWin(layer.startMin, layer.endMin);
-                    } else {
-                        let _bandS = layer.startMin, _bandE = layer.endMin;
-                        try {
-                            const _swBand = staggerPlan && staggerPlan[grade] &&
-                                staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim;
-                            if (_swBand && _swBand.end > _swBand.start) { _bandS = _swBand.start; _bandE = _swBand.end; }
-                        } catch (_eBand) {}
-                        _fitS = _fitInWin(_bandS, _bandE);
-                        if (_fitS.length === 0) _fitS = _fitInWin(layer.startMin, layer.endMin);
-                    }
+                    let _fitS = _fitInWin(_bandS, _bandE);
+                    if (_fitS.length === 0) _fitS = _fitInWin(layer.startMin, layer.endMin);
                     if (_fitS.length > 0) {
                         // ★ Lunch-edge penalty: steer the wet-bundle swim AWAY from the
                         //   period immediately before/after lunch. When swim sits in the
