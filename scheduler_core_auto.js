@@ -2743,12 +2743,46 @@
                         const _isLunchEdge = (p) => _lunchSB != null &&
                             (Math.abs(p.endMin - _lunchSB) <= 10 || Math.abs(p.startMin - _lunchEB) <= 10);
                         const _loadOf = (ps) => _wetBundleSwimRanges.filter(r => ps < r.endMin && (ps + _swimDurS) > r.startMin).length;
+                        // ★ Full-bundle steering: the wet bundle wants
+                        //   Change→WaterSlide→Swim→Change. That needs (a) a FREE period
+                        //   adjacent to swim for the Water Slide, and (b) room BEFORE the
+                        //   WS for a leading Change — impossible if the WS would sit in the
+                        //   day's first period. So score periods by whether they let a full
+                        //   bundle form, not just pool load. A period is "free for WS" if
+                        //   it's not lunch and no pinned anchor overlaps it across the
+                        //   grade's bunks (sports aren't placed yet in Phase 0).
+                        const _periodFreeForWS = (idx) => {
+                            if (idx < 0 || idx >= _gpS.length) return false;
+                            const q = _gpS[idx];
+                            if ((q.endMin - q.startMin) < _swimDurS - 5) return false;
+                            if (_lunchSB != null && q.startMin < _lunchEB && q.endMin > _lunchSB) return false;
+                            return targetBunks.every(bk => !(bunkTimelines[bk] || []).some(b => {
+                                if (!b || b.continuation) return false;
+                                if (!(b._classification === 'pinned' || b._fixed)) return false;
+                                if ((b.type || '').toLowerCase() === 'swim') return false;
+                                return b.startMin < q.endMin && b.endMin > q.startMin;
+                            }));
+                        };
                         let _bestP = null, _bestScore = Infinity, _bestDist = Infinity;
                         for (const p of _fitS) {
-                            // Score = pool load + heavy lunch-edge penalty (so a clear
-                            //   period always wins over a lunch-edge one, but a lunch-edge
-                            //   period is still chosen if it's the only option).
-                            const _score = _loadOf(p.startMin) + (_isLunchEdge(p) ? 100 : 0);
+                            const _pi = _gpS.findIndex(q => q.startMin === p.startMin);
+                            // WS prefers the period BEFORE swim (canonical order); the
+                            //   period after is the fallback (e.g. day-start swims).
+                            const _beforeFree = _periodFreeForWS(_pi - 1);
+                            const _afterFree  = _periodFreeForWS(_pi + 1);
+                            const _hasWSNeighbor = _beforeFree || _afterFree;
+                            // A leading Change fits only if the before-WS period is not the
+                            //   day's first period (so the WS itself isn't at day-start).
+                            const _fullBundleOk = _beforeFree && (_pi - 1) >= 1;
+                            const _isDayStart = (_pi === 0);
+                            // Lower = better. Lunch-edge stays the strongest avoid; then a
+                            //   missing WS-neighbour (bundle would defer); then day-start /
+                            //   no-leading-change. Pool load (scaled) still spreads grades
+                            //   across periods so the pool isn't over-stacked.
+                            let _score = _loadOf(p.startMin) * 40 + (_isLunchEdge(p) ? 1000 : 0);
+                            if (!_hasWSNeighbor) _score += 400; // WS can't bundle here → defers
+                            if (_isDayStart)     _score += 150; // swim at day-start
+                            if (!_fullBundleOk)  _score += 80;  // no room for a leading Change
                             const _dist = Math.abs(p.startMin - blockStart);
                             if (_score < _bestScore || (_score === _bestScore && _dist < _bestDist)) {
                                 _bestP = p; _bestScore = _score; _bestDist = _dist;
@@ -2760,7 +2794,7 @@
                             log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
                                 Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
                                 '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
-                                ' (load ' + (_bestScore % 100) + (_bestScore >= 100 ? ', lunch-edge — only option' : '') + ')');
+                                ' (score ' + _bestScore + (_bestScore >= 1000 ? ', lunch-edge — only option' : '') + ')');
                         }
                     }
                 }
