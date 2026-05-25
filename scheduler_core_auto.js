@@ -19561,50 +19561,122 @@
                 const _gm2 = function (s) { return s && (s._startMin != null ? s._startMin : s.startMin); };
                 const _ge2 = function (s) { return s && (s._endMin != null ? s._endMin : s.endMin); };
                 const _ADJ2 = 20;
-                let _demoted2 = 0;
+                let _demoted2 = 0, _relocated2 = 0;
+                // Swap the time-window fields between two slot objects (used after
+                //   swapping their array positions, so each activity takes the other's
+                //   grid time-slot). scheduleAssignments is a positional array aligned
+                //   to the period grid, so a position+time swap relocates the activity
+                //   grid-consistently with no hole.
+                const _TIMEKEYS = ['_startMin', '_endMin', 'startMin', 'endMin', 'startTime', 'endTime'];
+                const _swapTimes = function (a, b) {
+                    if (!a || !b) return;
+                    _TIMEKEYS.forEach(function (k) {
+                        const av = a[k], bv = b[k];
+                        if (bv !== undefined) a[k] = bv; else delete a[k];
+                        if (av !== undefined) b[k] = av; else delete b[k];
+                    });
+                };
                 Object.keys(_sa).forEach(function (bk) {
                     const arr = _sa[bk];
                     if (!Array.isArray(arr)) return;
-                    arr.forEach(function (slot) {
-                        if (!slot) return;
-                        // ★ Identify the wet-bundle rotation event by NAME / sequence
-                        //   target, NOT by type. scheduleAssignments slots routinely
-                        //   carry a blank `type` (the WS prints as "?:Water Slide" in
-                        //   WetDiag) — filtering on type==='rotation_event' here was a
-                        //   no-op that let stranded Water Slides survive into the grid.
-                        const evtName = String(slot._activity || slot.event || '').toLowerCase();
-                        const seqTgt = slot._sequenceTarget ? String(slot._sequenceTarget).toLowerCase() : _seqMap2[evtName];
-                        if (!seqTgt) return; // not a wet-bundle rotation event (swims/sports/changes have no seqTarget)
-                        // Guard: never demote the swim target itself.
-                        if (evtName === seqTgt) return;
-                        const ws = _gm2(slot), we = _ge2(slot);
-                        if (ws == null || we == null) return;
-                        const adj = arr.some(function (o) {
-                            if (!o || o === slot) return false;
-                            const ot = (o.type || '').toLowerCase(), oa = (o._activity || o.event || '').toLowerCase();
-                            if (ot !== seqTgt && oa !== seqTgt) return false;
-                            const os = _gm2(o), oe = _ge2(o);
-                            if (os == null || oe == null) return false;
-                            return (we <= os && (os - we) <= _ADJ2) || (ws >= oe && (ws - oe) <= _ADJ2);
-                        });
-                        if (adj) return;
-                        slot.type = 'slot';
-                        slot.event = 'Free';
-                        slot._activity = 'Free';
-                        slot.field = null;
-                        slot._rotationEventId = null;
-                        slot._sequenceTarget = null;
-                        slot._assignedSpecial = null;
-                        slot._assignedSport = null;
-                        slot._isSpecialLocation = false;
-                        slot._fixed = false;
-                        slot._activityLocked = false;
+                    const _isSwimSlot = function (o) {
+                        if (!o) return false;
+                        return (o.type || '').toLowerCase() === 'swim' || (o._activity || o.event || '').toLowerCase() === 'swim';
+                    };
+                    // A slot the WS may be swapped INTO: a plain sport/Free block that is
+                    //   not pinned and not itself part of a bundle/anchor.
+                    const _isMovableTarget = function (o) {
+                        if (!o) return false; // empty grid cell — skip (swapping would leave a hole)
+                        if (o._fixed || o._activityLocked) return false;
+                        const a = (o._activity || o.event || '').toLowerCase();
+                        const t = (o.type || '').toLowerCase();
+                        if (_isSwimSlot(o)) return false;
+                        if (t === 'lunch' || t === 'cleanup' || t.indexOf('change') >= 0 || t === 'main-anchor') return false;
+                        if (a === 'lunch' || a === 'cleanup' || a.indexOf('change') >= 0 || a.indexOf('main activity') >= 0) return false;
+                        if (o._sequenceTarget || o._rotationEventId || _seqMap2[a]) return false; // another wet event
+                        return true;
+                    };
+                    const _demote = function (slot, evtName, ws, we, seqTgt) {
+                        slot.type = 'slot'; slot.event = 'Free'; slot._activity = 'Free';
+                        slot.field = null; slot._rotationEventId = null; slot._sequenceTarget = null;
+                        slot._assignedSpecial = null; slot._assignedSport = null; slot._isSpecialLocation = false;
+                        slot._fixed = false; slot._activityLocked = false;
                         slot._source = 'seq-adjacency-demoted-rendered';
                         _demoted2++;
-                        warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free (rendered) — not adjacent to ' + seqTgt);
-                    });
+                        warn('[STEP 4.996b] Demoted ' + bk + '/' + (evtName || 'rotation_event') + ' @ ' + ws + '-' + we + ' → Free — could not relocate adjacent to ' + seqTgt);
+                    };
+                    for (let wi = 0; wi < arr.length; wi++) {
+                        const slot = arr[wi];
+                        if (!slot) continue;
+                        const evtName = String(slot._activity || slot.event || '').toLowerCase();
+                        const seqTgt = slot._sequenceTarget ? String(slot._sequenceTarget).toLowerCase() : _seqMap2[evtName];
+                        if (!seqTgt) continue;            // not a wet-bundle rotation event
+                        if (evtName === seqTgt) continue; // never touch the swim target itself
+                        const ws = _gm2(slot), we = _ge2(slot);
+                        if (ws == null || we == null) continue;
+                        // Find the swim target + whether the WS is already adjacent to it.
+                        let swimSlot = null, adj = false;
+                        for (let j = 0; j < arr.length; j++) {
+                            if (j === wi) continue;
+                            const o = arr[j]; if (!o) continue;
+                            const oa = (o._activity || o.event || '').toLowerCase(), ot = (o.type || '').toLowerCase();
+                            if (ot !== seqTgt && oa !== seqTgt) continue;
+                            const os = _gm2(o), oe = _ge2(o);
+                            if (os == null || oe == null) continue;
+                            if (!swimSlot) swimSlot = o;
+                            if ((we <= os && (os - we) <= _ADJ2) || (ws >= oe && (ws - oe) <= _ADJ2)) { adj = true; break; }
+                        }
+                        if (adj) continue;                 // bundle already tight
+                        if (!swimSlot) { _demote(slot, evtName, ws, we, seqTgt); continue; }
+                        // ── Relocate the WS to the period adjacent to the swim, on the
+                        //    side that does NOT cross lunch, by swapping it with the
+                        //    movable sport sitting there. Keeps the Water Slide AND
+                        //    keeps the bundle tight (no lunch in the middle).
+                        const sS = _gm2(swimSlot), sE = _ge2(swimSlot);
+                        let lunchS = null, lunchE = null;
+                        for (let j = 0; j < arr.length; j++) {
+                            const o = arr[j]; if (!o) continue;
+                            if ((o._activity || o.event || '').toLowerCase() === 'lunch') { lunchS = _gm2(o); lunchE = _ge2(o); break; }
+                        }
+                        const swimBeforeLunch = (lunchS != null) ? (sE <= lunchS) : true;
+                        const wsDur = we - ws;
+                        let targetIdx = -1;
+                        if (swimBeforeLunch) {
+                            // WS goes BEFORE swim: nearest movable slot ending just before swim start
+                            let bestEnd = -1;
+                            for (let j = 0; j < arr.length; j++) {
+                                if (j === wi) continue;
+                                const o = arr[j]; const oe = _ge2(o), os = _gm2(o);
+                                if (oe == null || os == null) continue;
+                                if (oe <= sS && (sS - oe) <= 50 && (oe - os) >= (wsDur - 10) && _isMovableTarget(o) && oe > bestEnd) {
+                                    bestEnd = oe; targetIdx = j;
+                                }
+                            }
+                        } else {
+                            // WS goes AFTER swim: nearest movable slot starting just after swim end
+                            let bestStart = Infinity;
+                            for (let j = 0; j < arr.length; j++) {
+                                if (j === wi) continue;
+                                const o = arr[j]; const oe = _ge2(o), os = _gm2(o);
+                                if (oe == null || os == null) continue;
+                                if (os >= sE && (os - sE) <= 50 && (oe - os) >= (wsDur - 10) && _isMovableTarget(o) && os < bestStart) {
+                                    bestStart = os; targetIdx = j;
+                                }
+                            }
+                        }
+                        if (targetIdx >= 0) {
+                            const wsObj = arr[wi], sportObj = arr[targetIdx];
+                            arr[wi] = sportObj; arr[targetIdx] = wsObj; // swap positions
+                            _swapTimes(arr[wi], arr[targetIdx]);        // each takes the other's grid time
+                            _relocated2++;
+                            log('[STEP 4.996b] Relocated ' + bk + '/' + (evtName || 'WS') + ' to ' + _gm2(wsObj) + '-' + _ge2(wsObj) +
+                                ' (was ' + ws + '-' + we + ') — bundled ' + (swimBeforeLunch ? 'before' : 'after') + ' swim, no lunch split');
+                        } else {
+                            _demote(slot, evtName, ws, we, seqTgt);
+                        }
+                    }
                 });
-                if (_demoted2 > 0) log('[STEP 4.996b] Rendered-schedule sweep: demoted ' + _demoted2 + ' disconnected rotation_event(s) to Free');
+                if (_relocated2 > 0 || _demoted2 > 0) log('[STEP 4.996b] Rendered-schedule sweep: relocated ' + _relocated2 + ', demoted ' + _demoted2 + ' disconnected rotation_event(s)');
                 else log('[STEP 4.996b] Rendered-schedule sweep: clean');
             } catch (e996b) {
                 warn('[STEP 4.996b] rendered sweep error: ' + e996b.message);
