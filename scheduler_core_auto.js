@@ -16014,6 +16014,27 @@
                             }
                         }
                     }
+                    // ★ Shrink-to-fit pre-change: a fixed wall (Main / lunch)
+                    //   ends just before swim leaving only a small free gap
+                    //   (inter-period passing time). Drop a shrunk pre-change into
+                    //   that gap rather than failing. Covers e.g. Minors (Main
+                    //   ends 2:10, 5-min gap, swim 2:15).
+                    if (!anchors.pre && preChangeDur > 0) {
+                        let _wallEndPre = _schedStart278;
+                        tl278.forEach(b => {
+                            if (!b || b === sw) return;
+                            if (b.endMin <= bundleStart && b.endMin > _wallEndPre) _wallEndPre = b.endMin;
+                        });
+                        const _preFitStart = Math.max(_wallEndPre, bundleStart - preChangeDur);
+                        if (bundleStart - _preFitStart >= 5 && _preFitStart >= _schedStart278) {
+                            const _preGapFree = !tl278.some(b => b && b !== sw &&
+                                b.startMin < bundleStart && b.endMin > _preFitStart);
+                            if (_preGapFree) {
+                                anchors = { pre: { startMin: _preFitStart, endMin: bundleStart }, post: anchors.post };
+                                log('[2.78] Pre-change fit to ' + (bundleStart - _preFitStart) + 'm gap [' + _preFitStart + ',' + bundleStart + '] before swim at ' + bunk);
+                            }
+                        }
+                    }
                     if (!anchors.post && postChangeDur > 0) {
                         // Find first trimmable block at or after bundleEnd, within change window + gap buffer
                         const nxt = tl278
@@ -16056,6 +16077,20 @@
                                 if (nxt.startTime) nxt.startTime = minutesToTimeLabel(chEnd);
                                 anchors = { pre: anchors.pre, post: { startMin: chStart, endMin: chEnd } };
                                 log('[2.78] Carved ' + carveAmt + 'm from "' + (nxt.event || nxt.type) + '" for post-change after bundle at ' + bunk);
+                            }
+                        } else if (nxt && nxt._fixed && (nxt.startMin - bundleEnd) >= 5) {
+                            // ★ Shrink-to-fit: a free gap (typically the 5-min
+                            //   inter-period passing gap) sits between swim and a
+                            //   fixed wall (lunch / cleanup). Place the Change IN
+                            //   that gap, shrunk to fit, instead of overlapping the
+                            //   wall or giving up. This is the dominant missing-
+                            //   post-change case: swim in the period right before
+                            //   lunch (Soloists 4 + all Quints — swim ends 12:55,
+                            //   lunch 1:00 → 5-min Change 12:55-1:00).
+                            const _fitEndPW = Math.min(bundleEnd + postChangeDur, nxt.startMin);
+                            if (bundleEnd >= _schedStart278 && _fitEndPW > bundleEnd) {
+                                anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: _fitEndPW } };
+                                log('[2.78] Post-change fit to ' + (nxt.startMin - bundleEnd) + 'm gap [' + bundleEnd + ',' + _fitEndPW + '] before fixed "' + (nxt.event || nxt.type) + '" at ' + bunk);
                             }
                         } else if (nxt && nxt._fixed) {
                             // Swim + Change is one atomic unit. A fixed special (or other pinned
