@@ -2544,7 +2544,17 @@
                 //   of them. The shift accounts for swim duration + the
                 //   adjacent rotation event (Water Slide) + change buffers
                 //   so each grade's full bundle fits clear of the prior.
-                if (t === 'swim' && _wetBundleTargets.has(t)) {
+                // ★ The wet-bundle swim stagger below is ONLY for the
+                //   no-Bell-Schedule case. When campPeriods exist, swim MUST
+                //   stay snapped to a single period (Phase 2.4 rejects a swim
+                //   that straddles a period boundary), and the period grid
+                //   already distributes swims across grades. Applying the
+                //   60-min offset / alignment shift here knocks swim off the
+                //   period grid → "does not fit inside any single Bell
+                //   Schedule period" → bundle fails for most grades.
+                const _gradeHasPeriods = !!(window.campPeriods && window.campPeriods[grade] &&
+                    window.campPeriods[grade].length > 0);
+                if (t === 'swim' && _wetBundleTargets.has(t) && !_gradeHasPeriods) {
                     // For non-fullGrade pinned swim, blockEnd defaults to
                     // layer.endMin (the whole window — not the actual swim
                     // duration). Compute real swim duration from periodMin
