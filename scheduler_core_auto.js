@@ -2484,6 +2484,154 @@
             //   grade's Water Slide bundle pool picks the same post-swim
             //   slot → WS double-booked too.
             const _wetBundleSwimRanges = []; // [{startMin, endMin}]
+
+            // ═══════════════════════════════════════════════════════════════
+            // WET-BUNDLE SLOT ALLOCATOR (global, capacity-aware, urgency-first)
+            // ═══════════════════════════════════════════════════════════════
+            // Decides UP FRONT which wet-bundle grade swims in which period so its
+            // adjacent rotation event (Water Slide) can bundle — coordinated across
+            // ALL grades at once. The old per-grade placement was greedy: whoever
+            // was placed first grabbed the scarce bundle slots, permanently starving
+            // a late-band grade (Quartet). A naive "just move it early" then starved
+            // OTHERS by overfilling the slide's concurrency cap (it evicted Soloists).
+            // This pass models pool + slide capacity FORWARD with its own counters
+            // (the live resource ledger is empty pre-placement, so it can't predict
+            // the Phase-2.4 slide congestion), and assigns grades to (swim-period,
+            // slide-period) pairs urgency-first, never exceeding either cap — so no
+            // grade is evicted to seat another. Output: _bundleSwimPlan[grade] =
+            // swimStartMin, consulted by the swim spreader below. Fully defensive:
+            // any error or window._DISABLE_BUNDLE_ALLOCATOR falls back to the old
+            // per-grade behaviour, and every pinned position is still validated by
+            // the downstream pool/anchor checks.
+            const _bundleSwimPlan = {};
+            (function _planWetBundleSwims() {
+                if (window._DISABLE_BUNDLE_ALLOCATOR) return;
+                try {
+                    if (!(window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function')) return;
+                    const _rots = window.RotationEvents.loadRotationEvents() || [];
+                    const _wb = _rots.filter(function (e) {
+                        return e && e.sequence &&
+                            String(e.sequence.targetActivity || '').toLowerCase() === 'swim' &&
+                            e.gradeMode === 'individual' &&
+                            !(currentDate && e.dateRange && (currentDate < e.dateRange.start || currentDate > e.dateRange.end));
+                    });
+                    if (!_wb.length) return;
+
+                    // Pool capacity — mirror canUsePoolAtTime's config source.
+                    var _poolCap = 999;
+                    try {
+                        var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+                        var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                        var _pf = _flds.find(function (f) { var n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
+                        if (_pf && _pf.sharableWith) {
+                            var _st = _pf.sharableWith.type || _pf.sharableWith.shareType || 'all';
+                            if (_st === 'not_sharable') _poolCap = 1;
+                            else { var _c = parseInt(_pf.sharableWith.capacity); _poolCap = _c > 0 ? _c : 999; }
+                        }
+                    } catch (_eP) {}
+
+                    var _bunksOf = {};
+                    allGrades.forEach(function (g) { _bunksOf[g] = getBunksForGrade(g, divisions).length; });
+
+                    _wb.forEach(function (evt) {
+                        var _conc = Math.max(1, parseInt(evt.concurrency) || 1);
+                        var _evtGrades = (Array.isArray(evt.grades) && evt.grades.length)
+                            ? evt.grades.filter(function (g) { return allGrades.indexOf(g) >= 0; })
+                            : allGrades.slice();
+
+                        // bundle-debt: how many of a grade's bunks have NOT yet done
+                        // the event anywhere in its date range. Higher debt = more
+                        // urgent. Drives priority so coverage spreads across the range
+                        // (a grade covered yesterday yields to one still owed today).
+                        var _debtOf = function (g) {
+                            try {
+                                var set = new Set(getBunksForGrade(g, divisions).map(String));
+                                var cb = evt.completedBunks || {};
+                                var seen = {};
+                                Object.keys(cb).forEach(function (dk) {
+                                    (cb[dk] || []).forEach(function (b) {
+                                        var bs = String(b);
+                                        if (set.has(bs)) seen[bs] = 1;
+                                    });
+                                });
+                                return Math.max(0, (_bunksOf[g] || 0) - Object.keys(seen).length);
+                            } catch (_e) { return _bunksOf[g] || 0; }
+                        };
+
+                        var _elig = _evtGrades.filter(function (g) {
+                            var hasSwim = (layersByGrade[g] || []).some(function (l) { return (l.type || '').toLowerCase() === 'swim'; });
+                            return hasSwim && (_bunksOf[g] > 0) && _debtOf(g) > 0;
+                        });
+                        if (!_elig.length) return;
+
+                        var _lunchOf = function (g) {
+                            var l = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'lunch'; });
+                            return (l && l.startMin != null) ? { s: l.startMin, e: l.endMin } : null;
+                        };
+                        var _periodsOf = function (g) {
+                            return ((((window.campPeriods || {})[g]) || []).slice()).sort(function (a, b) { return a.startMin - b.startMin; });
+                        };
+                        var _swimDurOf = function (g) {
+                            try {
+                                var sl = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'swim'; });
+                                if (sl) return sl.periodMin || sl.dMin || 40;
+                            } catch (_e) {}
+                            return 40;
+                        };
+
+                        var _slideLoad = {}; // slide periodStart -> bunks committed
+                        var _poolLoadP = {}; // swim  periodStart -> bunks committed
+                        var _pos = (evt.sequence.position || 'either');
+
+                        // urgency-first: most owed, then smallest grade (most constrained, easiest to seat)
+                        var _ranked = _elig.slice().sort(function (a, b) {
+                            return (_debtOf(b) - _debtOf(a)) || (_bunksOf[a] - _bunksOf[b]);
+                        });
+
+                        _ranked.forEach(function (g) {
+                            var periods = _periodsOf(g);
+                            if (periods.length < 2) return;
+                            var bunks = _bunksOf[g];
+                            var lunch = _lunchOf(g);
+                            var swimDur = _swimDurOf(g);
+                            var best = null;
+                            for (var i = 0; i < periods.length; i++) {
+                                var S = periods[i];
+                                if ((S.endMin - S.startMin) < swimDur - 5) continue;
+                                if (lunch && S.startMin < lunch.e && S.endMin > lunch.s) continue;
+                                if ((_poolLoadP[S.startMin] || 0) + bunks > _poolCap) continue;
+                                var _tryD = function (D, dir) {
+                                    if (!D) return null;
+                                    if ((D.endMin - D.startMin) < swimDur - 5) return null;
+                                    if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) return null;
+                                    if ((_slideLoad[D.startMin] || 0) + bunks > _conc) return null;
+                                    // prefer 'before' (canonical Change→WS→Swim→Change), earlier slide, less-loaded slide
+                                    var sc = (dir === 'before' ? 0 : 50) + (D.startMin / 100) + (_slideLoad[D.startMin] || 0) * 5;
+                                    return { S: S, D: D, score: sc };
+                                };
+                                var cands = [];
+                                if (_pos === 'before' || _pos === 'either') cands.push(_tryD(periods[i - 1], 'before'));
+                                if (_pos === 'after' || _pos === 'either') cands.push(_tryD(periods[i + 1], 'after'));
+                                cands.forEach(function (c) { if (c && (!best || c.score < best.score)) best = c; });
+                            }
+                            if (best) {
+                                _bundleSwimPlan[g] = best.S.startMin;
+                                _poolLoadP[best.S.startMin] = (_poolLoadP[best.S.startMin] || 0) + bunks;
+                                _slideLoad[best.D.startMin] = (_slideLoad[best.D.startMin] || 0) + bunks;
+                            }
+                        });
+                    });
+
+                    var _pk = Object.keys(_bundleSwimPlan);
+                    if (_pk.length) {
+                        log('[Phase0-Allocator] Wet-bundle swim plan (' + _pk.length + ' grades): ' +
+                            _pk.map(function (g) { return g + '@' + Math.floor(_bundleSwimPlan[g] / 60) + ':' + String(_bundleSwimPlan[g] % 60).padStart(2, '0'); }).join(', '));
+                    }
+                } catch (_eAlloc) {
+                    try { warn('[Phase0-Allocator] planning error (fallback to per-grade): ' + (_eAlloc && _eAlloc.message)); } catch (_e2) {}
+                }
+            })();
+
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -2756,7 +2904,22 @@
                 //   already swimming there), staying period-aligned so the wet
                 //   bundle still builds. Pool capacity is still enforced later by
                 //   canUsePoolAtTime; this just stops the everyone-at-once pileup.
-                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
+                // ★ Allocator override: if the global wet-bundle plan assigned this
+                //   grade a swim period, pin it and skip the per-grade band spread —
+                //   the plan already chose a pool- and slide-capacity-safe bundle slot
+                //   coordinated across all grades. Downstream pool/anchor checks still
+                //   validate it; if they reject, the placer relocates as before.
+                if (t === 'swim' && _wetBundleTargets.has(t) && _bundleSwimPlan && _bundleSwimPlan[grade] != null) {
+                    var _planSwimDur = blockEnd - blockStart;
+                    if (_bundleSwimPlan[grade] !== blockStart) {
+                        blockStart = _bundleSwimPlan[grade];
+                        blockEnd = blockStart + _planSwimDur;
+                        log('[Phase0-Allocator] ' + grade + ' swim → plan ' +
+                            Math.floor(blockStart / 60) + ':' + String(blockStart % 60).padStart(2, '0') +
+                            '-' + Math.floor(blockEnd / 60) + ':' + String(blockEnd % 60).padStart(2, '0'));
+                    }
+                }
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0 && !(_bundleSwimPlan && _bundleSwimPlan[grade] != null)) {
                     const _swimDurS = blockEnd - blockStart;
                     const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
                     // ★ Constrain the spread to this grade's SWIM BAND (from the
