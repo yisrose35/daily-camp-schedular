@@ -12122,6 +12122,26 @@
 
         let todaysSwimmers = {};
 
+        // ★ Date-seed the swim-band rotation. _typeOrderSeed (below) was derived
+        //   purely from the iteration counter, so EVERY day explored the identical
+        //   set of swim-band structures. That deterministically parked the same
+        //   grade (e.g. Quartet) in an un-bundleable late-afternoon swim band on
+        //   every single day — its Water Slide never had an adjacent free period,
+        //   so it was never covered anywhere in a multi-day rotation. Offsetting
+        //   the seed by a hash of the date rotates the band assignment day-to-day,
+        //   so each grade cycles through early/mid bands too and gets a bundleable
+        //   swim on at least one day of the range. (Swim isn't locked in — the day
+        //   is free to reshape around the slide; downstream pool/anchor checks
+        //   still validate every placement.)
+        let _dateBandOffset = 0;
+        try {
+            const _dbs = String(currentDate || '');
+            for (let _dbi = 0; _dbi < _dbs.length; _dbi++) {
+                _dateBandOffset = ((_dateBandOffset * 31) + _dbs.charCodeAt(_dbi)) >>> 0;
+            }
+            _dateBandOffset %= 100000;
+        } catch (_eDbo) { _dateBandOffset = 0; }
+
         do {
             // ★ v16.0: Brain pre-iteration strategy — adjust levers based on what failed
             adaptiveBrain.preIterStrategy(totalIters);
@@ -12130,7 +12150,7 @@
             // explores a structurally different day layout each time — not just a reshuffled
             // grade assignment within the same ordering.  Using a large prime stride ensures
             // no two iterations within 35 repeats accidentally pick the same permutation.
-            const _typeOrderSeed = totalIters * 7919 + 1;
+            const _typeOrderSeed = totalIters * 7919 + 1 + _dateBandOffset;
             staggerPlan = buildRotationMatrix(allGrades, _iterSeed, _typeOrderSeed);
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { bunkTimelines[bunk] = []; }));
 
