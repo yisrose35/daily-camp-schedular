@@ -1326,16 +1326,68 @@
         const oldDateKey = _currentDateKey;
         log('Date changed:', oldDateKey, '→', newDateKey);
 
+        // ★★★ Capture transition ownership SYNCHRONOUSLY — before any await.
+        // calendar.js sets window._pendingDateTransition immediately before it
+        // dispatches campistry-date-changed, so the flag is reliably set in THIS
+        // tick. Reading it only after the unsubscribe await below could see it
+        // already cleared by integration_hooks, producing a false "not owned"
+        // decision and re-opening the race.
+        const _ownedByIH = !!(window._pendingDateTransition &&
+                              window._pendingDateTransition.to === newDateKey);
+
         // ═══════════════════════════════════════════════════════════════
-        // STEP 1: Unsubscribe from old date's realtime
+        // STEP 1: Unsubscribe from old date's realtime (non-destructive)
         // ═══════════════════════════════════════════════════════════════
         if (window.ScheduleSync?.unsubscribe) {
             log('Unsubscribing from realtime for', oldDateKey);
-            await window.ScheduleSync.unsubscribe();
+            try { await window.ScheduleSync.unsubscribe(); } catch (e) { /* non-fatal */ }
         }
 
         // ═══════════════════════════════════════════════════════════════
-        // STEP 2: AUTO-SAVE current schedule before switching dates
+        // ★★★ FIX — date round-trip drift (dual date-change handler race) ★★★
+        // integration_hooks.js ALSO handles this same date change: it auto-saves
+        // the OLD date (while OLD data is still in window.scheduleAssignments)
+        // then loads the NEW date, serialized behind window._pendingDateTransition.
+        // If THIS handler ALSO runs its own save+load, the two async sequences
+        // interleave on the shared window.scheduleAssignments and one of them
+        // writes the NEW date's data under the OLD date's cloud key — silently
+        // corrupting a day's schedule just by navigating to it. (Same class of
+        // bug as commit 6c455045, but that fix only hardened integration_hooks'
+        // handler; this orchestrator handler stayed unguarded and reintroduced
+        // the race.)
+        //
+        // Resolution: when integration_hooks owns the transition (its flag is
+        // set for THIS target date), DEFER — do not save or load here. Wait for
+        // it to finish, then just sync our internal pointer. Fallback: if it
+        // never completes (e.g. its date-picker hook isn't installed on this
+        // page), take over so the date can never come up blank.
+        // ═══════════════════════════════════════════════════════════════
+        if (_ownedByIH) {
+            log('Transition owned by integration_hooks — deferring orchestrator save/load to avoid race');
+            const _waitStart = Date.now();
+            while (window._pendingDateTransition &&
+                   window._pendingDateTransition.to === newDateKey &&
+                   (Date.now() - _waitStart) < 4000) {
+                await new Promise(r => setTimeout(r, 100));
+            }
+            if (!(window._pendingDateTransition && window._pendingDateTransition.to === newDateKey)) {
+                // integration_hooks completed the save+load. Sync our pointer.
+                _currentDateKey = newDateKey;
+                // Safety net: only load if it somehow left memory empty.
+                if (Object.keys(window.scheduleAssignments || {}).length === 0) {
+                    log('Memory empty after integration_hooks transition — orchestrator loading as fallback');
+                    await loadSchedule(newDateKey);
+                }
+                return;
+            }
+            // integration_hooks never finished — take over (clear flag, fall through).
+            logWarn('integration_hooks did not complete date transition in 4s — orchestrator taking over');
+            window._pendingDateTransition = null;
+        }
+
+        // ═══════════════════════════════════════════════════════════════
+        // OWNER PATH: no integration_hooks transition in flight (programmatic
+        // load, calendar-view-only path, or takeover) — we save OLD + load NEW.
         // ═══════════════════════════════════════════════════════════════
         if (oldDateKey) {
             const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
@@ -1349,7 +1401,7 @@
             }
         }
 
-        // STEP 3: Load new date (which will also subscribe to realtime)
+        // Load new date (which will also subscribe to realtime)
         await loadSchedule(newDateKey);
     }
 
