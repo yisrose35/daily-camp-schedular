@@ -2510,15 +2510,24 @@
                     });
                     if (!_wb.length) return;
 
-                    var _poolCap = 999;
+                    // Mirror canUsePoolAtTime (L1431) EXACTLY so the plan and the
+                    //   placer never disagree: capture shareType + allowedPairs too,
+                    //   default cap 12, honor not_sharable/all/cross_division + the
+                    //   legacy poolLaneCapacity fallback.
+                    var _poolCap = 12, _poolShareType = 'all', _poolAllowedPairs = {};
                     try {
                         var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
                         var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                         var _pf = _flds.find(function (f) { var n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
                         if (_pf && _pf.sharableWith) {
-                            var _st = _pf.sharableWith.type || _pf.sharableWith.shareType || 'all';
-                            if (_st === 'not_sharable') _poolCap = 1;
-                            else { var _c = parseInt(_pf.sharableWith.capacity); _poolCap = _c > 0 ? _c : 999; }
+                            var _sw = _pf.sharableWith;
+                            _poolShareType = _sw.type || _sw.shareType || 'all';
+                            _poolAllowedPairs = _sw.allowedPairs || {};
+                            if (_poolShareType === 'not_sharable') _poolCap = 1;
+                            else { var _c = parseInt(_sw.capacity); if (_c > 0) _poolCap = _c; else if (_poolShareType === 'all') _poolCap = 999; }
+                        }
+                        if (_poolCap === 12 && _poolShareType === 'all' && _gs.app1 && typeof _gs.app1.poolLaneCapacity === 'number' && _gs.app1.poolLaneCapacity > 0) {
+                            _poolCap = _gs.app1.poolLaneCapacity;
                         }
                     } catch (_eP) {}
 
@@ -2548,25 +2557,57 @@
                         var _lunchOf = function (g) { var l = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'lunch'; }); return (l && l.startMin != null) ? { s: l.startMin, e: l.endMin } : null; };
                         var _periodsOf = function (g) { return ((((window.campPeriods || {})[g]) || []).slice()).sort(function (a, b) { return a.startMin - b.startMin; }); };
                         var _swimDurOf = function (g) { try { var sl = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'swim'; }); if (sl) return sl.periodMin || sl.dMin || 40; } catch (_e) {} return 40; };
+                        // ── Phase 2, constraint 6 (own-anchor collision). The planner runs
+                        //    BEFORE the orderedPinned placement loop, so bunkTimelines (what
+                        //    _swimOverlapsOwnAnchor reads at ~L3000) isn't populated yet.
+                        //    Derive anchors from the classified pinned layers with the SAME
+                        //    predicate: _classification==='pinned', type ∉ {swim,pre/post-change}.
+                        //    layersByGrade holds RAW layers (no _classification) so we filter
+                        //    pinnedLayers by grade instead.
+                        var _anchorsOf = function (g) {
+                            return pinnedLayers.filter(function (l) {
+                                if (String(l.grade || l.division || '') !== String(g)) return false;
+                                var t = (l.type || '').toLowerCase();
+                                if (t === 'swim' || t === 'pre-change' || t === 'post-change') return false;
+                                return (l.startMin != null && l.endMin != null);
+                            }).map(function (l) { return { s: l.startMin, e: l.endMin, t: (l.type || '').toLowerCase() }; });
+                        };
+                        var _ovl = function (a1, a2, b1, b2) { return a1 < b2 && a2 > b1; };
 
-                        var _slideLoad = {}, _poolLoadP = {}, _pos = (evt.sequence.position || 'either');
+                        // Forward-simulated occupancy by interval OVERLAP (not exact-start, so
+                        //   staggered-but-overlapping swims count together) + the grade lists
+                        //   needed for the allowedPairs check (constraint 2).
+                        var _seatedSwims = [], _seatedSlides = [], _pos = (evt.sequence.position || 'either');
+                        var _poolConc = function (s, e) { return _seatedSwims.filter(function (x) { return _ovl(s, e, x.s, x.e); }); };
+                        var _slideConc = function (s, e) { return _seatedSlides.filter(function (x) { return _ovl(s, e, x.s, x.e); }); };
                         var _ranked = _elig.slice().sort(function (a, b) { return (_debtOf(b) - _debtOf(a)) || (_bunksOf[a] - _bunksOf[b]); });
                         var _seated = [], _deferred = [];
                         _ranked.forEach(function (g) {
                             var periods = _periodsOf(g);
                             if (periods.length < 2) { _deferred.push(g + '(no-periods)'); return; }
-                            var bunks = _bunksOf[g], lunch = _lunchOf(g), swimDur = _swimDurOf(g), best = null;
+                            var bunks = _bunksOf[g], lunch = _lunchOf(g), swimDur = _swimDurOf(g), anchors = _anchorsOf(g), best = null;
+                            var _why = { lunch: 0, anchor: 0, cap: 0, pair: 0, slide: 0 };
                             for (var i = 0; i < periods.length; i++) {
-                                var S = periods[i];
+                                var S = periods[i], sEnd = S.startMin + swimDur;
                                 if ((S.endMin - S.startMin) < swimDur - 5) continue;
-                                if (lunch && S.startMin < lunch.e && S.endMin > lunch.s) continue;
-                                if ((_poolLoadP[S.startMin] || 0) + bunks > _poolCap) continue;
+                                if (lunch && S.startMin < lunch.e && S.endMin > lunch.s) { _why.lunch++; continue; }
+                                // constraint 6: swim can't overlap this grade's own pinned anchors
+                                if (anchors.some(function (a) { return _ovl(S.startMin, sEnd, a.s, a.e); })) { _why.anchor++; continue; }
+                                var _swConc = _poolConc(S.startMin, sEnd);
+                                var _swBunks = _swConc.reduce(function (t, x) { return t + x.bunks; }, 0);
+                                if (_swBunks + bunks > _poolCap) { _why.cap++; continue; }
+                                // constraint 2: allowedPairs — concurrent swimmers must be legal co-occupants
+                                if (_poolShareType === 'cross_division' && !isCrossDivAllowed(g, _swConc.map(function (x) { return x.grade; }), _poolAllowedPairs)) { _why.pair++; continue; }
+                                if (_poolShareType === 'not_sharable' && _swConc.length > 0) { _why.pair++; continue; }
                                 var _tryD = function (D, dir) {
                                     if (!D) return null;
                                     if ((D.endMin - D.startMin) < swimDur - 5) return null;
-                                    if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) return null;
-                                    if ((_slideLoad[D.startMin] || 0) + bunks > _conc) return null;
-                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 0 : 50) + (D.startMin / 100) + (_slideLoad[D.startMin] || 0) * 5 };
+                                    if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) { _why.lunch++; return null; }
+                                    if (anchors.some(function (a) { return _ovl(D.startMin, D.endMin, a.s, a.e); })) { _why.anchor++; return null; }
+                                    var _slConc = _slideConc(D.startMin, D.endMin);
+                                    var _slBunks = _slConc.reduce(function (t, x) { return t + x.bunks; }, 0);
+                                    if (_slBunks + bunks > _conc) { _why.slide++; return null; }
+                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 0 : 50) + (D.startMin / 100) + _slBunks * 5 };
                                 };
                                 var cands = [];
                                 if (_pos === 'before' || _pos === 'either') cands.push(_tryD(periods[i - 1], 'before'));
@@ -2574,11 +2615,12 @@
                                 cands.forEach(function (c) { if (c && (!best || c.score < best.score)) best = c; });
                             }
                             if (best) {
-                                _poolLoadP[best.S.startMin] = (_poolLoadP[best.S.startMin] || 0) + bunks;
-                                _slideLoad[best.D.startMin] = (_slideLoad[best.D.startMin] || 0) + bunks;
+                                _seatedSwims.push({ s: best.S.startMin, e: best.S.startMin + swimDur, grade: g, bunks: bunks });
+                                _seatedSlides.push({ s: best.D.startMin, e: best.D.endMin, grade: g, bunks: bunks });
                                 _seated.push(g + ' swim@' + _fmt(best.S.startMin) + '→slide@' + _fmt(best.D.startMin) + '(' + best.dir + ',' + bunks + 'b,debt' + _debtOf(g) + ')');
                             } else {
-                                _deferred.push(g + '(debt' + _debtOf(g) + ',no-cap-slot)');
+                                var _r = Object.keys(_why).filter(function (k) { return _why[k] > 0; }).map(function (k) { return k + ':' + _why[k]; }).join(',');
+                                _deferred.push(g + '(debt' + _debtOf(g) + ',blocked[' + (_r || 'no-adjacent') + '])');
                             }
                         });
                         _diag.events.push({ event: evt.name, conc: _conc, seated: _seated, deferred: _deferred });
