@@ -2715,6 +2715,24 @@
                 }
             } catch (_eReorder) {}
 
+            // ★ Custom "connect-to" adjacency: a custom layer with adjacentTo must be
+            //   placed AFTER its target activity (e.g. Swim) so the target's block is
+            //   already in bunkTimelines when we compute the adjacent slot. Float all
+            //   adjacency-custom layers to the end of the pinned placement order.
+            try {
+                var _hasAdjCustom = orderedPinned.some(function (l) { return (l.type || '').toLowerCase() === 'custom' && l.adjacentTo; });
+                if (_hasAdjCustom) {
+                    var _adjC = [], _restC = [];
+                    orderedPinned.forEach(function (l) {
+                        if ((l.type || '').toLowerCase() === 'custom' && l.adjacentTo) _adjC.push(l);
+                        else _restC.push(l);
+                    });
+                    orderedPinned.length = 0;
+                    _restC.forEach(function (l) { orderedPinned.push(l); });
+                    _adjC.forEach(function (l) { orderedPinned.push(l); });
+                }
+            } catch (_eAdjReorder) {}
+
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -2766,6 +2784,56 @@
                 //   duration 45min), pick the center of the window rather than filling the whole span.
                 let blockStart = layer.startMin;
                 let blockEnd = layer.endMin;
+                // ★ Custom "connect-to" adjacency: place this custom block immediately
+                //   before/after its target activity (e.g. Swim) instead of its fixed band.
+                //   The target was committed earlier (reorder above floats adjacency-custom
+                //   layers last), so read its block — extended through any attached pre/post-
+                //   change — and butt the custom block flush against that span. Grade-wide:
+                //   uses the first target bunk's target block. Falls back to the fixed band
+                //   if the target isn't placed or there's no adjacent room.
+                if (isCustom && layer.adjacentTo) {
+                    try {
+                        const _adjType = String(layer.adjacentTo).toLowerCase();
+                        const _adjPos = layer.adjacentPosition || 'either';
+                        const _custDur = Math.max(5, (layer.endMin - layer.startMin) || layer.periodMin || 30);
+                        const _div = getDivisionTimes(grade, divisions);
+                        let _tgt = null, _tgtTL = null;
+                        for (let _bi = 0; _bi < targetBunks.length && !_tgt; _bi++) {
+                            const _tl = bunkTimelines[targetBunks[_bi]] || [];
+                            for (let _ti = 0; _ti < _tl.length; _ti++) {
+                                const _b = _tl[_ti];
+                                if (_b && !_b.continuation && (_b.type || '').toLowerCase() === _adjType) { _tgt = _b; _tgtTL = _tl; break; }
+                            }
+                        }
+                        if (_tgt) {
+                            let _spanS = _tgt.startMin, _spanE = _tgt.endMin;
+                            _tgtTL.forEach(function (b) {
+                                if (!b) return; const bt = (b.type || '').toLowerCase();
+                                if (bt === 'pre-change' && b.endMin === _spanS) _spanS = b.startMin;
+                                if (bt === 'post-change' && b.startMin === _spanE) _spanE = b.endMin;
+                            });
+                            const _overlaps = (s, e) => _tgtTL.some(b => b && !b.continuation && b.startMin < e && b.endMin > s);
+                            const _after = { s: _spanE, e: _spanE + _custDur };
+                            const _before = { s: _spanS - _custDur, e: _spanS };
+                            const _afterOk = (_after.e <= _div.end) && !_overlaps(_after.s, _after.e);
+                            const _beforeOk = (_before.s >= _div.start) && !_overlaps(_before.s, _before.e);
+                            let _chosen = null;
+                            if (_adjPos === 'before') _chosen = _beforeOk ? _before : (_afterOk ? _after : null);
+                            else if (_adjPos === 'after') _chosen = _afterOk ? _after : (_beforeOk ? _before : null);
+                            else _chosen = _afterOk ? _after : (_beforeOk ? _before : null); // 'either' → prefer after
+                            if (_chosen) {
+                                blockStart = _chosen.s; blockEnd = _chosen.e;
+                                log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connected to ' + _adjType + ' → ' +
+                                    Math.floor(blockStart / 60) + ':' + String(blockStart % 60).padStart(2, '0') + '-' +
+                                    Math.floor(blockEnd / 60) + ':' + String(blockEnd % 60).padStart(2, '0') + ' (' + _adjPos + ')');
+                            } else {
+                                log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connect-to ' + _adjType + ': no adjacent room — using fixed band');
+                            }
+                        } else {
+                            log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connect-to ' + _adjType + ': target not placed — using fixed band');
+                        }
+                    } catch (_eAdjC) { try { warn('[Phase0] custom adjacency error: ' + (_eAdjC && _eAdjC.message)); } catch (_e2) {} }
+                }
                 if (layer.fullGrade === true && FULL_GRADE_TYPES.has(t)) {
                     const fgC = resolveConstraints(layer, t);
                     const dur = layer.periodMin || fgC.dMin || 30;
@@ -3468,7 +3536,7 @@
                     registerRotationEventUsage(_linkedRotPlaced.evt.id, grade, _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd);
                     registerCrossGrade(grade, 'rotation_event', _linkedRotPlaced.wsStart, _linkedRotPlaced.wsEnd, _linkedRotPlaced.evt.name);
                 }
-                if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', layer.startMin, layer.endMin, layer.customActivity);
+                if (isCustom && layer.customField) registerCrossGrade(grade, 'custom', blockStart, blockEnd, layer.customActivity);
             });
             // ★ v11.3: Validate all timelines after pinned layer placement
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk =>
