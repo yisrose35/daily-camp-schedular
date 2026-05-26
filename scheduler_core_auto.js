@@ -1077,6 +1077,17 @@
                 });
             }
         } catch (_ePinTgt) {}
+        // ★ Custom "connect-to" layers (e.g. a one-day Water Slide custom layer with
+        //   adjacentTo='swim') ALSO force-pin their target, so swim is placed in Phase 0
+        //   (not the staggered Phase 2.3 path) and the custom block can attach adjacent —
+        //   the same force-pin mechanism multi-day wet-bundle events use.
+        try {
+            (layers || []).forEach(function (l) {
+                if (l && (l.type || '').toLowerCase() === 'custom' && l.adjacentTo) {
+                    _wetBundleTargets.add(String(l.adjacentTo).toLowerCase());
+                }
+            });
+        } catch (_eCustTgt) {}
 
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
@@ -1090,6 +1101,11 @@
                 // ★ Wet-bundle target (e.g. swim when Water Slide is configured
                 // "Adjacent to: Swim") — force pinned regardless of ratio so
                 // Phase 2.4 sees swim in bunkTimelines when building bundles.
+                classification = 'pinned';
+            } else if (lt === 'custom' && layer.adjacentTo) {
+                // ★ Custom "connect-to" layer — force pinned so it's placed in Phase 0
+                //   (where the adjacency logic runs + locks it as a wall), not the windowed
+                //   path where later fill/recapture passes would scatter it.
                 classification = 'pinned';
             } else if (ratio >= 1) {
                 classification = 'pinned';
