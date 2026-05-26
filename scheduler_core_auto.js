@@ -1136,10 +1136,18 @@
                 if (!_groups[_key]) {
                     _groups[_key] = { act: _act, field: _field, adj: _adj, pos: _pos, dur: _dur,
                         grades: [], excluded: [], color: l.color || l.customColor || '#06B6D4',
-                        winS: null, winE: null, totalBunks: 0 };
+                        winS: null, winE: null, totalBunks: 0,
+                        shareCap: null, shareGrades: {} };
                 }
                 const grp = _groups[_key];
                 if (grp.grades.indexOf(_g) < 0) grp.grades.push(_g);
+                // ★ Sharing config (capacity + which grades may co-occupy). It's a
+                //   facility-level property but stored per-layer; merge across the group:
+                //   capacity = first non-null, allowedGrades = union.
+                if (l.customSharing) {
+                    if (grp.shareCap == null && l.customSharing.capacity > 0) grp.shareCap = parseInt(l.customSharing.capacity) || null;
+                    (l.customSharing.allowedGrades || []).forEach(function (ag) { grp.shareGrades[String(ag)] = true; });
+                }
                 // Full division day as the window so the engine can attach the slide
                 //   adjacent to swim wherever swim lands.
                 try {
@@ -1157,6 +1165,27 @@
             Object.keys(_groups).forEach(function (_key, _gi) {
                 const grp = _groups[_key];
                 if (!grp.grades.length) return;
+                // ── Derive sharing enforcement from the user's config ──
+                //   • capacity = "max bunks at a time" (blank → all bunks = no cap).
+                //   • allowedGrades non-empty → cross_division: only those grades may
+                //     co-occupy with a DIFFERENT grade; same-grade always co-shares
+                //     (g|g pairs), unlisted grades get the slot to themselves.
+                //   • allowedGrades empty → shareType 'all' (any grades, capped only).
+                const _shareGradeList = Object.keys(grp.shareGrades);
+                const _cap = (grp.shareCap && grp.shareCap > 0) ? grp.shareCap : Math.max(1, grp.totalBunks);
+                let _shareType = 'all', _allowedPairs = null;
+                if (_shareGradeList.length > 0) {
+                    _shareType = 'cross_division';
+                    _allowedPairs = {};
+                    // every same-grade pair (a grade always shares with itself, up to cap)
+                    grp.grades.forEach(function (g) { _allowedPairs[[g, g].sort().join('|')] = true; });
+                    // every cross pair among the listed grades
+                    for (let _i = 0; _i < _shareGradeList.length; _i++) {
+                        for (let _j = _i; _j < _shareGradeList.length; _j++) {
+                            _allowedPairs[[_shareGradeList[_i], _shareGradeList[_j]].sort().join('|')] = true;
+                        }
+                    }
+                }
                 _synthCustomRotEvents.push({
                     id: '__synthcustom_' + _gi,
                     name: grp.act,
@@ -1169,13 +1198,16 @@
                     excludedBunks: grp.excluded,
                     completedBunks: {},
                     gradeMode: 'individual',
-                    // No configured "bunks at a time" on a custom layer → let pool capacity
-                    //   (the real shared-facility constraint on swim) drive the cross-grade
-                    //   stagger; any real slide-field cap is still enforced by facility
-                    //   checks (4.5/4.95/4.995). Generous so slide planning never blocks.
-                    concurrency: Math.max(1, grp.totalBunks),
+                    // Concurrency = the user's capacity. With no cap configured this is
+                    //   the total bunk count (effectively unlimited). The cross-grade
+                    //   time-concurrency + pairing gate (canUseRotationSlotAtTime, applied
+                    //   to synth events in Phase 2.4 + Phase 3) enforces it across grades.
+                    concurrency: _cap,
                     sequence: { targetActivity: grp.adj, position: grp.pos },
                     _isSynthCustom: true,
+                    _shareType: _shareType,
+                    _allowedPairs: _allowedPairs,
+                    _shareGrades: _shareGradeList,
                     _synthGrades: grp.grades.join(',')
                 });
             });
@@ -1183,7 +1215,8 @@
                 log('[STEP 1.5] Synthesized ' + _synthCustomRotEvents.length +
                     ' custom-layer wet-bundle event(s): ' +
                     _synthCustomRotEvents.map(e => '"' + e.name + '"→' + e.sequence.targetActivity +
-                        ' [' + e._synthGrades + '] dur=' + e.durationPerBunk + ' conc=' + e.concurrency).join('; '));
+                        ' [' + e._synthGrades + '] dur=' + e.durationPerBunk + ' cap=' + e.concurrency +
+                        ' share=' + e._shareType + (e._shareGrades && e._shareGrades.length ? '(' + e._shareGrades.join('/') + ')' : '')).join('; '));
             }
         } catch (_eSynth) { try { warn('[STEP 1.5] synth custom-event build error: ' + (_eSynth && _eSynth.message)); } catch (_e2) {} }
 
@@ -1676,9 +1709,11 @@
                 const _dur = _meta.dur;
                 if (_dur > 0 && (startMin - _winStart) % _dur !== 0) return false; // off-boundary
                 if (_dur > 0 && (endMin - startMin) !== _dur) return false; // wrong duration — must equal per-bunk dur
-                // Use 'all' share type: concurrency limit applies across all grades
+                // Sharing: synth custom events carry a shareType + allowedPairs (capacity
+                //   + which grades may co-occupy). Real events have none → legacy 'all'
+                //   (capacity-only across all grades, unchanged behavior).
                 return rtCanUse('rotevt', eventId, grade, startMin, endMin,
-                    'all', concurrency, []);
+                    _meta.shareType || 'all', concurrency, [], _meta.allowedPairs || {});
             }
 
             // Whole-grade mode (default): force grade alignment
@@ -7068,10 +7103,18 @@
                         //   Skip ONLY bunks that already got the adjacent bundle — that block is
                         //   type 'rotation_event', which the alreadyWall guard below can't match,
                         //   so detect it by activity name to avoid a disconnected duplicate.
+                        var _clShareEvtId = null, _clShareConc = null;
                         if (cl.adjacentTo) {
                             var _connAct = String(cl.customActivity || cl.event || 'Custom').toLowerCase();
                             if (template.some(function(w){ return String(w._activity || w.event || '').toLowerCase() === _connAct; })) return;
                             // else: this bunk was deferred by the engine → place non-adjacent.
+                            // Tie the fallback to the synth event's sharing ledger so it respects
+                            //   the same capacity + allowed-grade rule as the adjacent bundles.
+                            var _seMatch = (_synthCustomRotEvents || []).find(function(e){
+                                return String(e.name || '').toLowerCase() === _connAct &&
+                                       e.sequence && String(e.sequence.targetActivity || '').toLowerCase() === String(cl.adjacentTo).toLowerCase();
+                            });
+                            if (_seMatch) { _clShareEvtId = _seMatch.id; _clShareConc = _seMatch.concurrency; }
                         }
                         if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
                         // Skip if already placed as a wall
@@ -7090,7 +7133,8 @@
                             dMin: dur, dMax: cl.durationMax || dur,
                             windowStart: winStart, windowEnd: winEnd,
                             _activityLocked: true, _customActivity: cl.customActivity || null,
-                            _customField: cl.customField || null, _customBunks: cl.customBunks || null, _source: 'need' });
+                            _customField: cl.customField || null, _customBunks: cl.customBunks || null,
+                            _shareEventId: _clShareEvtId, _shareConcurrency: _clShareConc, _source: 'need' });
                     });
 
                     // ══════════════════════════════════════════════════════════
@@ -7202,6 +7246,12 @@
                                 }
                                 if (need.type === 'rotation_event' && need._rotationEventId) {
                                     ok = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, pos, pos + dur);
+                                }
+                                // ★ Custom connect-to fallback shares the synth event's capacity +
+                                //   allowed-grade ledger, so a non-adjacent fallback can't exceed the
+                                //   slide's "bunks at a time" cap or co-occupy with a disallowed grade.
+                                if (ok && need.type === 'custom' && need._shareEventId) {
+                                    ok = canUseRotationSlotAtTime(need._shareEventId, need._shareConcurrency || 1, grade, pos, pos + dur);
                                 }
                                 if (!ok) continue;
                                 // Period containment: if bell-schedule periods are defined, reject any
@@ -7378,6 +7428,7 @@
                                 if (need.type === 'swim') ok2 = canUsePoolAtTime(grade, endAligned, endAligned + dur);
                                 if (need.type === 'special' && need._assignedSpecial) ok2 = canUseSpecialAtTime(need._assignedSpecial, grade, endAligned, endAligned + dur);
                                 if (need.type === 'rotation_event' && need._rotationEventId) ok2 = canUseRotationSlotAtTime(need._rotationEventId, need._rotationEventConcurrency || 1, grade, endAligned, endAligned + dur);
+                                if (ok2 && need.type === 'custom' && need._shareEventId) ok2 = canUseRotationSlotAtTime(need._shareEventId, need._shareConcurrency || 1, grade, endAligned, endAligned + dur);
                                 if (ok2 && window.SchedulingRules) {
                                     ok2 = window.SchedulingRules.isCandidateAllowed(
                                         { startMin: endAligned, endMin: endAligned + dur, type: need.type, event: need.event,
@@ -7854,7 +7905,7 @@
                                 placedSpecialNames.add(need._assignedSpecial);
                             }
                             if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, sol.start, placeEnd, need.event); }
-                            if (need.type === 'custom') { registerCrossGrade(grade, 'custom', sol.start, placeEnd, need._customActivity || need.event); }
+                            if (need.type === 'custom') { registerCrossGrade(grade, 'custom', sol.start, placeEnd, need._customActivity || need.event); if (need._shareEventId) registerRotationEventUsage(need._shareEventId, grade, sol.start, placeEnd); }
                             if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, sol.start, placeEnd); registerCrossGrade(grade, 'rotation_event', sol.start, placeEnd, need.event); }
 
                             var blk = makeBlock({
@@ -7992,7 +8043,7 @@
                                     placedSpecialNames.add(need._assignedSpecial);
                                 }
                                 if (['snacks', 'snack'].includes((need.type || '').toLowerCase())) { registerCrossGrade(grade, need.type, pos.start, placeEnd, need.event); }
-                                if (need.type === 'custom') { registerCrossGrade(grade, 'custom', pos.start, placeEnd, need._customActivity || need.event); }
+                                if (need.type === 'custom') { registerCrossGrade(grade, 'custom', pos.start, placeEnd, need._customActivity || need.event); if (need._shareEventId) registerRotationEventUsage(need._shareEventId, grade, pos.start, placeEnd); }
                                 if (need.type === 'rotation_event' && need._rotationEventId) { registerRotationEventUsage(need._rotationEventId, grade, pos.start, placeEnd); registerCrossGrade(grade, 'rotation_event', pos.start, placeEnd, need.event); }
                                 var blk = makeBlock({
                                     startMin: pos.start, endMin: placeEnd, type: need.type, event: need.event,
@@ -13147,8 +13198,13 @@
                         const winStart = evt.dailyWindow && evt.dailyWindow.startMin;
                         const winEnd = evt.dailyWindow && evt.dailyWindow.endMin;
                         if (winStart == null || winEnd == null || winEnd - winStart < dur) return;
-                        // Populate metadata for canUseRotationSlotAtTime
-                        _rotEventMeta[evt.id] = { gradeMode: evt.gradeMode || 'whole_grade', winStart, dur };
+                        // Populate metadata for canUseRotationSlotAtTime.
+                        //   Synth custom events carry a sharing rule (capacity + allowed
+                        //   grade pairs) so canUseRotationSlotAtTime enforces cross-grade
+                        //   pairing, not just a raw count. Real events have no _shareType
+                        //   → falls back to the legacy 'all' (count-only) behavior.
+                        _rotEventMeta[evt.id] = { gradeMode: evt.gradeMode || 'whole_grade', winStart, dur,
+                            shareType: evt._shareType || null, allowedPairs: evt._allowedPairs || null };
 
                         const excluded = new Set(evt.excludedBunks || []);
                         const completed = new Set();
@@ -13868,6 +13924,11 @@
                                                 if (!isWithinSinglePeriod(grade, _bs.startMin, _bs.endMin)) continue;
                                                 if (wouldCreateSmallGapForBunk(bunk, _bs.startMin, _bs.endMin)) continue;
                                                 if (wouldCreatePeriodBoundaryGap(bunk, grade, _bs.startMin, _bs.endMin)) continue;
+                                                // ★ Custom-layer sharing rule (capacity + allowed grades): for synth
+                                                //   events, reject a slot whose time already holds the cap, or a
+                                                //   different grade not allowed to co-occupy. Enforced across grades
+                                                //   via the rotevt ledger (registerRotationEventUsage in placeWall).
+                                                if (evt._isSynthCustom && !canUseRotationSlotAtTime(evt.id, _evtConcurrency, grade, _bs.startMin, _bs.endMin)) continue;
                                                 _chosenSlot = _bs;
                                                 _bundleDir = _bs.dir;
                                                 break;
@@ -13907,6 +13968,7 @@
                                             const _distB = (s.endMin   <= _tgtS) ? (_tgtS - s.endMin)   : Infinity;
                                             const _dist  = Math.min(_distA, _distB);
                                             if (_dist > _ADJ_TOL_24) continue;
+                                            if (evt._isSynthCustom && !canUseRotationSlotAtTime(evt.id, _evtConcurrency, grade, s.startMin, s.endMin)) continue;
                                             if (isWithinSinglePeriod(grade, s.startMin, s.endMin) &&
                                                 isWindowFreeForBunk(s.startMin, s.endMin, bunk) &&
                                                 !wouldCreateSmallGapForBunk(bunk, s.startMin, s.endMin) &&

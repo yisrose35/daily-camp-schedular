@@ -2686,6 +2686,27 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           </select>
         </div>
       </div>
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Sharing (how many can use it at once)</div>
+      <div class="ms-daw-pop-field">
+        <label>Max bunks at a time</label>
+        <div class="ms-daw-pop-row">
+          <input type="number" id="daw-pop-custom-share-cap" min="1" max="99" value="${(layer.customSharing && layer.customSharing.capacity) ? layer.customSharing.capacity : ''}" placeholder="no limit" style="flex:1;">
+        </div>
+        <div class="ms-daw-pop-hint">The most bunks that can be doing this activity simultaneously (the facility's capacity). Leave blank for no limit.</div>
+      </div>
+      <div class="ms-daw-pop-field">
+        <label>Grades allowed to share it concurrently</label>
+        <div id="daw-pop-custom-share-grades" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
+          ${(() => {
+            const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+            const allG = Object.keys(divs);
+            const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : [];
+            return allG.map(g => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (sel.includes(String(g)) ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-share-grade-cb" value="' + g + '"' + (sel.includes(String(g)) ? ' checked' : '') + ' style="width:13px;height:13px;">' + g + '</label>').join('');
+          })()}
+        </div>
+        <div class="ms-daw-pop-hint">Check the grades that may use this activity at the SAME time (up to the cap above). Grades you leave unchecked still get the activity, but never at the same time as a different grade. Leave all unchecked for no grade restriction.</div>
+      </div>
       ` : ''}
     </div>
     <div class="ms-daw-pop-actions">
@@ -2860,6 +2881,20 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       const adjPosSel = popover.querySelector('#daw-pop-custom-adjacent-pos');
       layer.adjacentTo = (adjSel && adjSel.value) ? adjSel.value : null;
       layer.adjacentPosition = (adjPosSel && adjPosSel.value) ? adjPosSel.value : 'either';
+      // ★ Sharing: how many bunks can do this activity at once + which grades may
+      //   share it concurrently. The generator caps concurrent use accordingly
+      //   (mirrors the Field/Pool sharing model).
+      const shareCapEl = popover.querySelector('#daw-pop-custom-share-cap');
+      const shareGrades = Array.from(popover.querySelectorAll('.daw-share-grade-cb:checked')).map(cb => cb.value);
+      const shareCap = shareCapEl ? parseInt(shareCapEl.value, 10) : NaN;
+      if ((!isNaN(shareCap) && shareCap > 0) || shareGrades.length > 0) {
+        layer.customSharing = {
+          capacity: (!isNaN(shareCap) && shareCap > 0) ? shareCap : null,
+          allowedGrades: shareGrades
+        };
+      } else {
+        layer.customSharing = null;
+      }
     }
     document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
     popover.remove();
