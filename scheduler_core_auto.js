@@ -2628,13 +2628,23 @@
                                     //   so the planner only seats slots Phase 2.4 can actually bundle.
                                     var _adjOk = (dir === 'before') ? (D.endMin === S.startMin) : (D.startMin === sEnd);
                                     if (!_adjOk) { _why.gap = (_why.gap || 0) + 1; return null; }
+                                    // Constraint 7 (full-wrapper): a 'before' bundle (WS→Swim) needs room
+                                    //   for a LEADING Change before the WS. If the WS period is the day's
+                                    //   first period there's no room and the bundle starts unwrapped (the
+                                    //   Quints/Soloists day-start case). Reject → the planner uses swim-first
+                                    //   ('after'), whose swim carries its own pre-change, so the bundle is
+                                    //   fully Change→Swim→WS→Change.
+                                    if (dir === 'before' && periods.length && D.startMin === periods[0].startMin) { _why.daystart = (_why.daystart || 0) + 1; return null; }
                                     if ((D.endMin - D.startMin) < swimDur - 5) return null;
                                     if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) { _why.lunch++; return null; }
                                     if (anchors.some(function (a) { return _ovl(D.startMin, D.endMin, a.s, a.e); })) { _why.anchor++; return null; }
                                     var _slConc = _slideConc(D.startMin, D.endMin);
                                     var _slBunks = _slConc.reduce(function (t, x) { return t + x.bunks; }, 0);
                                     if (_slBunks + bunks > _conc) { _why.slide++; return null; }
-                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 0 : 50) + (D.startMin / 100) + _slBunks * 5 };
+                                    // Prefer swim-first ('after' = Change→Swim→WS→Change): the swim
+                                    //   activity carries its own pre-change, which reliably wraps the front
+                                    //   of the bundle. WS-first is used only where swim-first isn't feasible.
+                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 50 : 0) + (D.startMin / 100) + _slBunks * 5 };
                                 };
                                 var cands = [];
                                 if (_pos === 'before' || _pos === 'either') cands.push(_tryD(periods[i - 1], 'before'));
