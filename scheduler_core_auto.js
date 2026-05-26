@@ -1089,6 +1089,82 @@
             });
         } catch (_eCustTgt) {}
 
+        // ★ SYNTHESIZE rotation events from custom "connect-to" layers.
+        //   A custom pinned layer with adjacentTo='swim' is conceptually identical
+        //   to a Scheduled-Activities wet-bundle rotation event ("Water Slide
+        //   Adjacent-to Swim"): the user wants the full wet package
+        //   (Change → WS → Swim → Change). Rather than reimplement the bundle
+        //   wrapping (which the standalone Phase-0 placement could not do — no
+        //   leading-change reservation, no inner-change removal, wrong order), we
+        //   build a real-shaped rotation-event object per custom-adjacent layer and
+        //   feed it through the PROVEN Phase 2.4 wet-bundle engine via
+        //   _loadRotEventsAug(). Single-day (today only), individual mode, scoped to
+        //   the layer's grade + customBunks, placing layer.customActivity on
+        //   layer.customField. Registry writes are skipped for these synth ids
+        //   (prefix __synthcustom_) so nothing junk is persisted to the cloud.
+        const _synthCustomRotEvents = [];
+        try {
+            (layers || []).forEach(function (l, _li) {
+                if (!l || (l.type || '').toLowerCase() !== 'custom' || !l.adjacentTo) return;
+                const _g = l.grade || l.division;
+                if (!_g) return;
+                if (allowedSet && !allowedSet.has(String(_g))) return;
+                const _dur = Math.max(5, (l.endMin - l.startMin) || l.periodMin || 30);
+                // Use the full division day as the daily window so the engine can
+                //   attach the slide adjacent to swim wherever swim lands (a narrow
+                //   layer band would box the bundle pool out of swim's neighborhood).
+                let _winS = l.startMin, _winE = l.endMin;
+                try {
+                    const _div = getDivisionTimes(_g, divisions) || {};
+                    if (_div.start != null) _winS = _div.start;
+                    if (_div.end != null) _winE = _div.end;
+                } catch (_eDiv) {}
+                const _allB = getBunksForGrade(_g, divisions).map(String);
+                const _custB = (Array.isArray(l.customBunks) && l.customBunks.length > 0)
+                    ? new Set(l.customBunks.map(String)) : null;
+                const _excl = _custB ? _allB.filter(b => !_custB.has(b)) : [];
+                const _conc = _custB ? _custB.size : _allB.length;
+                _synthCustomRotEvents.push({
+                    id: '__synthcustom_' + _g + '_' + _li,
+                    name: l.customActivity || l.name || 'Custom',
+                    location: l.customField || null,
+                    color: l.color || l.customColor || '#06B6D4',
+                    durationPerBunk: _dur,
+                    dailyWindow: { startMin: _winS, endMin: _winE },
+                    dateRange: { start: currentDate, end: currentDate },
+                    grades: [_g],
+                    excludedBunks: _excl,
+                    completedBunks: {},
+                    gradeMode: 'individual',
+                    concurrency: Math.max(1, _conc),
+                    sequence: { targetActivity: String(l.adjacentTo), position: l.adjacentPosition || 'either' },
+                    _isSynthCustom: true,
+                    _synthFromLayerIndex: _li,
+                    _synthGrade: _g
+                });
+            });
+            if (_synthCustomRotEvents.length) {
+                log('[STEP 1.5] Synthesized ' + _synthCustomRotEvents.length +
+                    ' custom-layer wet-bundle event(s): ' +
+                    _synthCustomRotEvents.map(e => '"' + e.name + '"→' + e.sequence.targetActivity +
+                        ' (' + e._synthGrade + ', dur=' + e.durationPerBunk + ')').join(', '));
+            }
+        } catch (_eSynth) { try { warn('[STEP 1.5] synth custom-event build error: ' + (_eSynth && _eSynth.message)); } catch (_e2) {} }
+
+        // Merge real rotation events with the synthesized custom-layer events.
+        //   Used at the wet-bundle placement/alignment read sites (bundle allocator,
+        //   Phase 0 swim room-reservation, Phase 2.4 engine) so the custom layer is
+        //   treated identically to a real Scheduled-Activities wet-bundle event.
+        const _loadRotEventsAug = () => {
+            let _base = [];
+            try {
+                if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                    _base = window.RotationEvents.loadRotationEvents() || [];
+                }
+            } catch (_eLR) {}
+            return _synthCustomRotEvents.length ? _base.concat(_synthCustomRotEvents) : _base;
+        };
+
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
             const lt = (layer.type || '').toLowerCase();
@@ -2520,8 +2596,8 @@
                 try { window._bundleSwimPlan = {}; } catch (_eR) {}
                 if (window._DISABLE_BUNDLE_ALLOCATOR) return;
                 try {
-                    if (!(window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function')) return;
-                    const _rots = window.RotationEvents.loadRotationEvents() || [];
+                    if (!(window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') && !_synthCustomRotEvents.length) return;
+                    const _rots = _loadRotEventsAug();
                     const _wb = _rots.filter(function (e) {
                         return e && e.sequence &&
                             String(e.sequence.targetActivity || '').toLowerCase() === 'swim' &&
@@ -2604,6 +2680,10 @@
                                 if (String(l.grade || l.division || '') !== String(g)) return false;
                                 var t = (l.type || '').toLowerCase();
                                 if (t === 'swim' || t === 'pre-change' || t === 'post-change') return false;
+                                // A custom "connect-to" layer is the very thing being bundled
+                                //   adjacent to swim — its fixed band is NOT a real anchor swim
+                                //   must avoid, so don't let it block the swim-period search.
+                                if (t === 'custom' && l.adjacentTo) return false;
                                 return (l.startMin != null && l.endMin != null);
                             }).map(function (l) { return { s: l.startMin, e: l.endMin, t: (l.type || '').toLowerCase() }; });
                         };
@@ -2676,7 +2756,12 @@
                                 //   is spreading coverage across days; on a single-day event its
                                 //   displacement could only hurt, so leave those on baseline.
                                 var _evtMultiDay = !!(evt.dateRange && evt.dateRange.start && evt.dateRange.end && evt.dateRange.end > evt.dateRange.start);
-                                if (_bundleWireOn && _evtMultiDay) { try { if (!(g in window._bundleSwimPlan)) window._bundleSwimPlan[g] = best.S.startMin; } catch (_eW) {} }
+                                // Synthesized custom-layer events are single-day by nature, but their
+                                //   whole value IS the adjacency — so let them pin swim to a period
+                                //   that has a free adjacent slide slot (the multi-day gate exists to
+                                //   avoid pointless displacement for real single-day events, which
+                                //   doesn't apply here: without the pin the custom slide can't attach).
+                                if (_bundleWireOn && (_evtMultiDay || evt._isSynthCustom)) { try { if (!(g in window._bundleSwimPlan)) window._bundleSwimPlan[g] = best.S.startMin; } catch (_eW) {} }
                             } else {
                                 var _r = Object.keys(_why).filter(function (k) { return _why[k] > 0; }).map(function (k) { return k + ':' + _why[k]; }).join(',');
                                 _deferred.push(g + '(debt' + _debtOf(g) + ',blocked[' + (_r || 'no-adjacent') + '])');
@@ -2731,23 +2816,13 @@
                 }
             } catch (_eReorder) {}
 
-            // ★ Custom "connect-to" adjacency: a custom layer with adjacentTo must be
-            //   placed AFTER its target activity (e.g. Swim) so the target's block is
-            //   already in bunkTimelines when we compute the adjacent slot. Float all
-            //   adjacency-custom layers to the end of the pinned placement order.
-            try {
-                var _hasAdjCustom = orderedPinned.some(function (l) { return (l.type || '').toLowerCase() === 'custom' && l.adjacentTo; });
-                if (_hasAdjCustom) {
-                    var _adjC = [], _restC = [];
-                    orderedPinned.forEach(function (l) {
-                        if ((l.type || '').toLowerCase() === 'custom' && l.adjacentTo) _adjC.push(l);
-                        else _restC.push(l);
-                    });
-                    orderedPinned.length = 0;
-                    _restC.forEach(function (l) { orderedPinned.push(l); });
-                    _adjC.forEach(function (l) { orderedPinned.push(l); });
-                }
-            } catch (_eAdjReorder) {}
+            // ★ Custom "connect-to" adjacency layers are NOT placed here. They are
+            //   routed through the proven Phase 2.4 wet-bundle engine via a synthesized
+            //   rotation event (see _synthCustomRotEvents at STEP 1.5), which supplies
+            //   the full wet package (Change → WS → Swim → Change) with outer-edge change
+            //   wrapping + inner-change removal — exactly like a Scheduled-Activities
+            //   wet-bundle event. Standalone Phase-0 placement (the old code here) could
+            //   not produce that structure, so it is skipped (early-return below).
 
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
@@ -2764,6 +2839,18 @@
                     ? allBunks.filter(b => layer.customBunks.includes(String(b)))
                     : allBunks;
                 const eventName = (isCustom && layer.customActivity) ? layer.customActivity : (layer.event || layer.name || layer.type || 'Pinned');
+
+                // ★ Custom "connect-to" layer → handled by the Phase 2.4 wet-bundle
+                //   engine via a synthesized rotation event. Skip standalone placement
+                //   here so it isn't double-placed (once as a fixed-band wall + once as
+                //   the bundled WS). Swim is still force-pinned (STEP 1.5) so the engine
+                //   sees it; the synth event then attaches this activity adjacent to swim
+                //   with full Change wrapping.
+                if (isCustom && layer.adjacentTo) {
+                    log('[Phase0] Custom "' + eventName + '" connect-to ' + String(layer.adjacentTo).toLowerCase() +
+                        ' → routed through wet-bundle engine (Phase 2.4); skipping fixed-band placement');
+                    return;
+                }
 
                 // ── Pre-detect linked rotation event duration for period scoring ──
                 // Doesn't place anything — just checks if a rotation event targets
@@ -2800,56 +2887,8 @@
                 //   duration 45min), pick the center of the window rather than filling the whole span.
                 let blockStart = layer.startMin;
                 let blockEnd = layer.endMin;
-                // ★ Custom "connect-to" adjacency: place this custom block immediately
-                //   before/after its target activity (e.g. Swim) instead of its fixed band.
-                //   The target was committed earlier (reorder above floats adjacency-custom
-                //   layers last), so read its block — extended through any attached pre/post-
-                //   change — and butt the custom block flush against that span. Grade-wide:
-                //   uses the first target bunk's target block. Falls back to the fixed band
-                //   if the target isn't placed or there's no adjacent room.
-                if (isCustom && layer.adjacentTo) {
-                    try {
-                        const _adjType = String(layer.adjacentTo).toLowerCase();
-                        const _adjPos = layer.adjacentPosition || 'either';
-                        const _custDur = Math.max(5, (layer.endMin - layer.startMin) || layer.periodMin || 30);
-                        const _div = getDivisionTimes(grade, divisions);
-                        let _tgt = null, _tgtTL = null;
-                        for (let _bi = 0; _bi < targetBunks.length && !_tgt; _bi++) {
-                            const _tl = bunkTimelines[targetBunks[_bi]] || [];
-                            for (let _ti = 0; _ti < _tl.length; _ti++) {
-                                const _b = _tl[_ti];
-                                if (_b && !_b.continuation && (_b.type || '').toLowerCase() === _adjType) { _tgt = _b; _tgtTL = _tl; break; }
-                            }
-                        }
-                        if (_tgt) {
-                            let _spanS = _tgt.startMin, _spanE = _tgt.endMin;
-                            _tgtTL.forEach(function (b) {
-                                if (!b) return; const bt = (b.type || '').toLowerCase();
-                                if (bt === 'pre-change' && b.endMin === _spanS) _spanS = b.startMin;
-                                if (bt === 'post-change' && b.startMin === _spanE) _spanE = b.endMin;
-                            });
-                            const _overlaps = (s, e) => _tgtTL.some(b => b && !b.continuation && b.startMin < e && b.endMin > s);
-                            const _after = { s: _spanE, e: _spanE + _custDur };
-                            const _before = { s: _spanS - _custDur, e: _spanS };
-                            const _afterOk = (_after.e <= _div.end) && !_overlaps(_after.s, _after.e);
-                            const _beforeOk = (_before.s >= _div.start) && !_overlaps(_before.s, _before.e);
-                            let _chosen = null;
-                            if (_adjPos === 'before') _chosen = _beforeOk ? _before : (_afterOk ? _after : null);
-                            else if (_adjPos === 'after') _chosen = _afterOk ? _after : (_beforeOk ? _before : null);
-                            else _chosen = _afterOk ? _after : (_beforeOk ? _before : null); // 'either' → prefer after
-                            if (_chosen) {
-                                blockStart = _chosen.s; blockEnd = _chosen.e;
-                                log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connected to ' + _adjType + ' → ' +
-                                    Math.floor(blockStart / 60) + ':' + String(blockStart % 60).padStart(2, '0') + '-' +
-                                    Math.floor(blockEnd / 60) + ':' + String(blockEnd % 60).padStart(2, '0') + ' (' + _adjPos + ')');
-                            } else {
-                                log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connect-to ' + _adjType + ': no adjacent room — using fixed band');
-                            }
-                        } else {
-                            log('[Phase0] Custom "' + (layer.customActivity || eventName) + '" connect-to ' + _adjType + ': target not placed — using fixed band');
-                        }
-                    } catch (_eAdjC) { try { warn('[Phase0] custom adjacency error: ' + (_eAdjC && _eAdjC.message)); } catch (_e2) {} }
-                }
+                // (Custom "connect-to" adjacency is handled earlier by the early-return
+                //  → synthesized rotation event through the Phase 2.4 wet-bundle engine.)
                 if (layer.fullGrade === true && FULL_GRADE_TYPES.has(t)) {
                     const fgC = resolveConstraints(layer, t);
                     const dur = layer.periodMin || fgC.dMin || 30;
@@ -2996,9 +3035,9 @@
                     // alignment we need the WS duration regardless of mode,
                     // so recompute here.
                     let _wetBundleRotDur = 0;
-                    if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+                    if ((window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') || _synthCustomRotEvents.length) {
                         try {
-                            const _allRotsForAlign = window.RotationEvents.loadRotationEvents() || [];
+                            const _allRotsForAlign = _loadRotEventsAug();
                             for (const _rE of _allRotsForAlign) {
                                 if (!_rE || !_rE.sequence) continue;
                                 if ((_rE.sequence.targetActivity || '').toLowerCase() !== t) continue;
@@ -13035,9 +13074,9 @@
             // whole-grade: each grade gets exactly ONE slot, all bunks in that grade
             // go to that slot. No per-bunk spreading (previously caused grades 1-2 to
             // fill all 6 periods and starve grade 3 via not_sharable).
-            if (window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') {
+            if ((window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function') || _synthCustomRotEvents.length) {
                 try {
-                    const _rotEvents = window.RotationEvents.loadRotationEvents() || [];
+                    const _rotEvents = _loadRotEventsAug();
                     let _rotWallCount = 0;
                     const _rotUnplaced = [];
                     // Use the same quota formula as Phase 3 so Phase 2.4 and Phase 3
@@ -20106,7 +20145,7 @@
                             //   bunk re-attempts the event on a future day rather than being
                             //   recorded done for a slide we just dropped.
                             try {
-                                if (blk._rotationEventId && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
+                                if (blk._rotationEventId && String(blk._rotationEventId).indexOf('__synthcustom_') !== 0 && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
                                     window.RotationEvents.removeCompletion(blk._rotationEventId, bunkName);
                                 }
                             } catch (_eRC996) {}
@@ -20234,7 +20273,7 @@
                         if (adj) continue;                 // bundle already tight — leave it
                         // Still disconnected after 2.78-pre → demote to Free (drop the WS).
                         try {
-                            if (slot._rotationEventId && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
+                            if (slot._rotationEventId && String(slot._rotationEventId).indexOf('__synthcustom_') !== 0 && window.RotationEvents && typeof window.RotationEvents.removeCompletion === 'function') {
                                 window.RotationEvents.removeCompletion(slot._rotationEventId, bk);
                             }
                         } catch (_eRC996b) {}
@@ -20302,6 +20341,9 @@
                 });
                 let _totalMC = 0;
                 Object.keys(_byEventMC).forEach(function (eid) {
+                    // Skip synthesized custom-layer events — they are single-day pins that
+                    //   must never write to the persisted RotationEvents registry/cloud.
+                    if (String(eid).indexOf('__synthcustom_') === 0) return;
                     const bunks = Array.from(_byEventMC[eid]);
                     window.RotationEvents.markCompleted(eid, currentDate, bunks);
                     _totalMC += bunks.length;
