@@ -2484,6 +2484,122 @@
             //   grade's Water Slide bundle pool picks the same post-swim
             //   slot → WS double-booked too.
             const _wetBundleSwimRanges = []; // [{startMin, endMin}]
+
+            // ═══════════════════════════════════════════════════════════════
+            // WET-BUNDLE SLOT ALLOCATOR — PHASE 1 (READ-ONLY / INSTRUMENTATION)
+            // ═══════════════════════════════════════════════════════════════
+            // Logs the (swim-period → slide-period) plan it WOULD make, so we can
+            // verify it seats the afternoon-band grades (Quartet/Soloists/Majors)
+            // on slack days without busting pool/slide caps — BEFORE any pin is
+            // wired. CHANGES NOTHING downstream: nothing reads this plan; it only
+            // log()s and exposes window._bundlePlanDiag. Models pool capacity +
+            // slide concurrency + lunch + adjacency + window (Phase 2 will add
+            // own-anchor + pool pair-rules). Deduped so it prints once per
+            // generation, not once per tabu iteration. See
+            // docs/WET_BUNDLE_ALLOCATOR_DESIGN.md. Silence: window._DISABLE_BUNDLE_ALLOCATOR=true.
+            (function _planBundleSlotsReadOnly() {
+                if (window._DISABLE_BUNDLE_ALLOCATOR) return;
+                try {
+                    if (!(window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function')) return;
+                    const _rots = window.RotationEvents.loadRotationEvents() || [];
+                    const _wb = _rots.filter(function (e) {
+                        return e && e.sequence &&
+                            String(e.sequence.targetActivity || '').toLowerCase() === 'swim' &&
+                            e.gradeMode === 'individual' &&
+                            !(currentDate && e.dateRange && (currentDate < e.dateRange.start || currentDate > e.dateRange.end));
+                    });
+                    if (!_wb.length) return;
+
+                    var _poolCap = 999;
+                    try {
+                        var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+                        var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                        var _pf = _flds.find(function (f) { var n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
+                        if (_pf && _pf.sharableWith) {
+                            var _st = _pf.sharableWith.type || _pf.sharableWith.shareType || 'all';
+                            if (_st === 'not_sharable') _poolCap = 1;
+                            else { var _c = parseInt(_pf.sharableWith.capacity); _poolCap = _c > 0 ? _c : 999; }
+                        }
+                    } catch (_eP) {}
+
+                    var _bunksOf = {};
+                    allGrades.forEach(function (g) { _bunksOf[g] = getBunksForGrade(g, divisions).length; });
+                    var _fmt = function (m) { return Math.floor(m / 60) + ':' + String(((m % 60) + 60) % 60).padStart(2, '0'); };
+                    var _diag = { date: currentDate, poolCap: _poolCap, events: [] };
+
+                    _wb.forEach(function (evt) {
+                        var _conc = Math.max(1, parseInt(evt.concurrency) || 1);
+                        var _evtGrades = (Array.isArray(evt.grades) && evt.grades.length)
+                            ? evt.grades.filter(function (g) { return allGrades.indexOf(g) >= 0; })
+                            : allGrades.slice();
+                        var _debtOf = function (g) {
+                            try {
+                                var set = new Set(getBunksForGrade(g, divisions).map(String));
+                                var cb = evt.completedBunks || {}, seen = {};
+                                Object.keys(cb).forEach(function (dk) { (cb[dk] || []).forEach(function (b) { var bs = String(b); if (set.has(bs)) seen[bs] = 1; }); });
+                                return Math.max(0, (_bunksOf[g] || 0) - Object.keys(seen).length);
+                            } catch (_e) { return _bunksOf[g] || 0; }
+                        };
+                        var _elig = _evtGrades.filter(function (g) {
+                            var hasSwim = (layersByGrade[g] || []).some(function (l) { return (l.type || '').toLowerCase() === 'swim'; });
+                            return hasSwim && (_bunksOf[g] > 0) && _debtOf(g) > 0;
+                        });
+                        if (!_elig.length) return;
+                        var _lunchOf = function (g) { var l = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'lunch'; }); return (l && l.startMin != null) ? { s: l.startMin, e: l.endMin } : null; };
+                        var _periodsOf = function (g) { return ((((window.campPeriods || {})[g]) || []).slice()).sort(function (a, b) { return a.startMin - b.startMin; }); };
+                        var _swimDurOf = function (g) { try { var sl = (layersByGrade[g] || []).find(function (x) { return (x.type || '').toLowerCase() === 'swim'; }); if (sl) return sl.periodMin || sl.dMin || 40; } catch (_e) {} return 40; };
+
+                        var _slideLoad = {}, _poolLoadP = {}, _pos = (evt.sequence.position || 'either');
+                        var _ranked = _elig.slice().sort(function (a, b) { return (_debtOf(b) - _debtOf(a)) || (_bunksOf[a] - _bunksOf[b]); });
+                        var _seated = [], _deferred = [];
+                        _ranked.forEach(function (g) {
+                            var periods = _periodsOf(g);
+                            if (periods.length < 2) { _deferred.push(g + '(no-periods)'); return; }
+                            var bunks = _bunksOf[g], lunch = _lunchOf(g), swimDur = _swimDurOf(g), best = null;
+                            for (var i = 0; i < periods.length; i++) {
+                                var S = periods[i];
+                                if ((S.endMin - S.startMin) < swimDur - 5) continue;
+                                if (lunch && S.startMin < lunch.e && S.endMin > lunch.s) continue;
+                                if ((_poolLoadP[S.startMin] || 0) + bunks > _poolCap) continue;
+                                var _tryD = function (D, dir) {
+                                    if (!D) return null;
+                                    if ((D.endMin - D.startMin) < swimDur - 5) return null;
+                                    if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) return null;
+                                    if ((_slideLoad[D.startMin] || 0) + bunks > _conc) return null;
+                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 0 : 50) + (D.startMin / 100) + (_slideLoad[D.startMin] || 0) * 5 };
+                                };
+                                var cands = [];
+                                if (_pos === 'before' || _pos === 'either') cands.push(_tryD(periods[i - 1], 'before'));
+                                if (_pos === 'after' || _pos === 'either') cands.push(_tryD(periods[i + 1], 'after'));
+                                cands.forEach(function (c) { if (c && (!best || c.score < best.score)) best = c; });
+                            }
+                            if (best) {
+                                _poolLoadP[best.S.startMin] = (_poolLoadP[best.S.startMin] || 0) + bunks;
+                                _slideLoad[best.D.startMin] = (_slideLoad[best.D.startMin] || 0) + bunks;
+                                _seated.push(g + ' swim@' + _fmt(best.S.startMin) + '→slide@' + _fmt(best.D.startMin) + '(' + best.dir + ',' + bunks + 'b,debt' + _debtOf(g) + ')');
+                            } else {
+                                _deferred.push(g + '(debt' + _debtOf(g) + ',no-cap-slot)');
+                            }
+                        });
+                        _diag.events.push({ event: evt.name, conc: _conc, seated: _seated, deferred: _deferred });
+                    });
+
+                    // Dedup: only print when the plan changes (≈ once per generation)
+                    var _sig = JSON.stringify(_diag.events);
+                    if (window._bundlePlanLastSig !== _sig) {
+                        window._bundlePlanLastSig = _sig;
+                        _diag.events.forEach(function (ev) {
+                            log('[BundlePlanner] (READ-ONLY, no change) "' + ev.event + '" conc=' + ev.conc + ' would seat ' + ev.seated.length + ' grade(s):');
+                            ev.seated.forEach(function (s) { log('[BundlePlanner]   ✓ ' + s); });
+                            if (ev.deferred.length) log('[BundlePlanner]   ⤵ deferred: ' + ev.deferred.join(', '));
+                        });
+                    }
+                    try { window._bundlePlanDiag = _diag; } catch (_eD) {}
+                } catch (_eAlloc) {
+                    try { warn('[BundlePlanner] read-only planning error: ' + (_eAlloc && _eAlloc.message)); } catch (_e2) {}
+                }
+            })();
+
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
