@@ -2537,10 +2537,14 @@
 
                     // P3 feature flag — when ON, the seated plan is written to
                     //   window._bundleSwimPlan and the Phase-0 placer honors it.
+                    //   window._FORCE_BUNDLE_ALLOCATOR is a live test override (mirror of
+                    //   the _DISABLE_BUNDLE_ALLOCATOR kill-switch) so the flag can be flipped
+                    //   from the console without persisting to globalSettings — the bare
+                    //   globalSettings global isn't assigned until a gen runs.
                     var _bundleWireOn = false;
                     try {
                         var _gsF = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
-                        _bundleWireOn = !!(_gsF.app1 && _gsF.app1.bundleAllocator === true);
+                        _bundleWireOn = !!(_gsF.app1 && _gsF.app1.bundleAllocator === true) || (window._FORCE_BUNDLE_ALLOCATOR === true);
                     } catch (_eF) {}
 
                     var _bunksOf = {};
