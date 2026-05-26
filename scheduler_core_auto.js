@@ -2628,13 +2628,12 @@
                                     //   so the planner only seats slots Phase 2.4 can actually bundle.
                                     var _adjOk = (dir === 'before') ? (D.endMin === S.startMin) : (D.startMin === sEnd);
                                     if (!_adjOk) { _why.gap = (_why.gap || 0) + 1; return null; }
-                                    // Constraint 7 (full-wrapper): a 'before' bundle (WS→Swim) needs room
-                                    //   for a LEADING Change before the WS. If the WS period is the day's
-                                    //   first period there's no room and the bundle starts unwrapped (the
-                                    //   Quints/Soloists day-start case). Reject → the planner uses swim-first
-                                    //   ('after'), whose swim carries its own pre-change, so the bundle is
-                                    //   fully Change→Swim→WS→Change.
-                                    if (dir === 'before' && periods.length && D.startMin === periods[0].startMin) { _why.daystart = (_why.daystart || 0) + 1; return null; }
+                                    // NOTE: a 'before' bundle whose WS sits in the day's first period has
+                                    //   no room for a LEADING change — but a day-start bundle (WS→Swim→Change)
+                                    //   is acceptable (user-confirmed) as long as it has a TRAILING change,
+                                    //   which Phase 2.4 supplies. We do NOT reject it (rejecting cost coverage,
+                                    //   e.g. Quartet's only slot). The swim-first score preference below still
+                                    //   favours the fully-wrapped Change→Swim→WS→Change form where feasible.
                                     if ((D.endMin - D.startMin) < swimDur - 5) return null;
                                     if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) { _why.lunch++; return null; }
                                     if (anchors.some(function (a) { return _ovl(D.startMin, D.endMin, a.s, a.e); })) { _why.anchor++; return null; }
