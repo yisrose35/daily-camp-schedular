@@ -1104,7 +1104,16 @@
         //   (prefix __synthcustom_) so nothing junk is persisted to the cloud.
         const _synthCustomRotEvents = [];
         try {
-            (layers || []).forEach(function (l, _li) {
+            // GROUP custom-adjacent layers by bundle signature (activity+field+target+
+            //   position+duration) and emit ONE multi-grade event per group. The bundle
+            //   allocator only coordinates swim placement — pool capacity + cross-grade
+            //   stagger so each grade lands in a period that HAS a clean adjacent slide
+            //   slot — WITHIN a single event. One-event-per-grade loses that coordination
+            //   (every grade independently plans swim@day-start, then pool cap scatters
+            //   them to periods with no adjacent room → most defer). One combined event
+            //   reproduces the proven Water Slide rotation-event behavior (35/35).
+            const _groups = {};
+            (layers || []).forEach(function (l) {
                 if (!l || (l.type || '').toLowerCase() !== 'custom' || !l.adjacentTo) return;
                 const _g = l.grade || l.division;
                 if (!_g) return;
@@ -1119,44 +1128,62 @@
                     _dur = (_band > 0 && _band <= 90) ? _band : 30;
                 }
                 _dur = Math.max(5, _dur);
-                // Use the full division day as the daily window so the engine can
-                //   attach the slide adjacent to swim wherever swim lands (a narrow
-                //   layer band would box the bundle pool out of swim's neighborhood).
-                let _winS = l.startMin, _winE = l.endMin;
+                const _act = l.customActivity || l.name || 'Custom';
+                const _field = l.customField || null;
+                const _adj = String(l.adjacentTo).toLowerCase();
+                const _pos = l.adjacentPosition || 'either';
+                const _key = _act + '||' + (_field || '') + '||' + _adj + '||' + _pos + '||' + _dur;
+                if (!_groups[_key]) {
+                    _groups[_key] = { act: _act, field: _field, adj: _adj, pos: _pos, dur: _dur,
+                        grades: [], excluded: [], color: l.color || l.customColor || '#06B6D4',
+                        winS: null, winE: null, totalBunks: 0 };
+                }
+                const grp = _groups[_key];
+                if (grp.grades.indexOf(_g) < 0) grp.grades.push(_g);
+                // Full division day as the window so the engine can attach the slide
+                //   adjacent to swim wherever swim lands.
                 try {
                     const _div = getDivisionTimes(_g, divisions) || {};
-                    if (_div.start != null) _winS = _div.start;
-                    if (_div.end != null) _winE = _div.end;
+                    if (_div.start != null) grp.winS = (grp.winS == null) ? _div.start : Math.min(grp.winS, _div.start);
+                    if (_div.end != null) grp.winE = (grp.winE == null) ? _div.end : Math.max(grp.winE, _div.end);
                 } catch (_eDiv) {}
+                // Only the layer's customBunks participate; exclude the rest of the grade.
                 const _allB = getBunksForGrade(_g, divisions).map(String);
                 const _custB = (Array.isArray(l.customBunks) && l.customBunks.length > 0)
                     ? new Set(l.customBunks.map(String)) : null;
-                const _excl = _custB ? _allB.filter(b => !_custB.has(b)) : [];
-                const _conc = _custB ? _custB.size : _allB.length;
+                if (_custB) _allB.forEach(function (b) { if (!_custB.has(b)) grp.excluded.push(b); });
+                grp.totalBunks += (_custB ? _custB.size : _allB.length);
+            });
+            Object.keys(_groups).forEach(function (_key, _gi) {
+                const grp = _groups[_key];
+                if (!grp.grades.length) return;
                 _synthCustomRotEvents.push({
-                    id: '__synthcustom_' + _g + '_' + _li,
-                    name: l.customActivity || l.name || 'Custom',
-                    location: l.customField || null,
-                    color: l.color || l.customColor || '#06B6D4',
-                    durationPerBunk: _dur,
-                    dailyWindow: { startMin: _winS, endMin: _winE },
+                    id: '__synthcustom_' + _gi,
+                    name: grp.act,
+                    location: grp.field,
+                    color: grp.color,
+                    durationPerBunk: grp.dur,
+                    dailyWindow: { startMin: (grp.winS != null ? grp.winS : 0), endMin: (grp.winE != null ? grp.winE : 1440) },
                     dateRange: { start: currentDate, end: currentDate },
-                    grades: [_g],
-                    excludedBunks: _excl,
+                    grades: grp.grades,
+                    excludedBunks: grp.excluded,
                     completedBunks: {},
                     gradeMode: 'individual',
-                    concurrency: Math.max(1, _conc),
-                    sequence: { targetActivity: String(l.adjacentTo), position: l.adjacentPosition || 'either' },
+                    // No configured "bunks at a time" on a custom layer → let pool capacity
+                    //   (the real shared-facility constraint on swim) drive the cross-grade
+                    //   stagger; any real slide-field cap is still enforced by facility
+                    //   checks (4.5/4.95/4.995). Generous so slide planning never blocks.
+                    concurrency: Math.max(1, grp.totalBunks),
+                    sequence: { targetActivity: grp.adj, position: grp.pos },
                     _isSynthCustom: true,
-                    _synthFromLayerIndex: _li,
-                    _synthGrade: _g
+                    _synthGrades: grp.grades.join(',')
                 });
             });
             if (_synthCustomRotEvents.length) {
                 log('[STEP 1.5] Synthesized ' + _synthCustomRotEvents.length +
                     ' custom-layer wet-bundle event(s): ' +
                     _synthCustomRotEvents.map(e => '"' + e.name + '"→' + e.sequence.targetActivity +
-                        ' (' + e._synthGrade + ', dur=' + e.durationPerBunk + ')').join(', '));
+                        ' [' + e._synthGrades + '] dur=' + e.durationPerBunk + ' conc=' + e.concurrency).join('; '));
             }
         } catch (_eSynth) { try { warn('[STEP 1.5] synth custom-event build error: ' + (_eSynth && _eSynth.message)); } catch (_e2) {} }
 
