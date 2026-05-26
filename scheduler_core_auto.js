@@ -13352,6 +13352,35 @@
                             }
                             const _stagLimitedBunks = _interleavedBunks.slice(0, _evtMaxBunksToday);
 
+                            // ── Wet-bundle grade completion ("get it over with") ──
+                            // The daily quota (_evtMaxBunksToday) round-robins across grades and
+                            // then slices, which can orphan a bundling grade's later bunks (e.g.
+                            // Duetos 4/5 fall past the slice while Duetos 1-3 make the cut). For a
+                            // wet bundle that's wrong: the bundle is gated by swim, and a grade only
+                            // swims on certain days (same-grade pool floor), so an orphaned bunk may
+                            // not get another swim day for a while. If a grade is swimming TODAY and
+                            // has an active bundle pool, complete ALL its eligible bunks now rather
+                            // than defer one to a future day. The per-slot usedCount cap
+                            // (_evtConcurrency) still bounds the facility, so this can never exceed
+                            // the configured "Bunks at a Time".
+                            if (_isBundleEvent && _interleavedBunks.length > _stagLimitedBunks.length) {
+                                const _inLimited = new Set(_stagLimitedBunks.map(x => x.bunk));
+                                let _addedBack = 0;
+                                for (const _ib of _interleavedBunks) {
+                                    if (_inLimited.has(_ib.bunk)) continue;
+                                    if (_bundlePoolByGrade[_ib.grade]) {
+                                        _stagLimitedBunks.push(_ib);
+                                        _inLimited.add(_ib.bunk);
+                                        _addedBack++;
+                                    }
+                                }
+                                if (_verbose && _addedBack > 0) {
+                                    log('[Phase2.4-bundle] Grade-completion: added back ' + _addedBack +
+                                        ' orphaned bunk(s) of swimming grade(s) past daily quota (' +
+                                        _evtMaxBunksToday + ') so bundling grades finish in one swim day.');
+                                }
+                            }
+
                             for (const { bunk, grade } of _stagLimitedBunks) {
                                 let _chosenSlot = null;
                                 let _bundleDir = null; // 'after'|'before' when wet-bundle path claimed the slot
