@@ -1109,7 +1109,16 @@
                 const _g = l.grade || l.division;
                 if (!_g) return;
                 if (allowedSet && !allowedSet.has(String(_g))) return;
-                const _dur = Math.max(5, (l.endMin - l.startMin) || l.periodMin || 30);
+                // Duration is the layer's slot length (periodMin/durationMin), NOT the
+                //   [startMin,endMin] band — that band is the WINDOW the slide may sit in
+                //   (often the whole day, e.g. 650-930 = 280 min). Using the band as the
+                //   duration would request a 280-min slide that can never fit adjacent.
+                let _dur = l.periodMin || l.durationMin || l.durationMax || 0;
+                if (!_dur) {
+                    const _band = (l.endMin != null && l.startMin != null) ? (l.endMin - l.startMin) : 0;
+                    _dur = (_band > 0 && _band <= 90) ? _band : 30;
+                }
+                _dur = Math.max(5, _dur);
                 // Use the full division day as the daily window so the engine can
                 //   attach the slide adjacent to swim wherever swim lands (a narrow
                 //   layer band would box the bundle pool out of swim's neighborhood).
