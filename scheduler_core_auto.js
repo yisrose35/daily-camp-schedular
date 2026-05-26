@@ -4790,7 +4790,16 @@
                 function findExactSubsets(target, items) {
                     var results = [];
                     var seenKeys = {};
-                    function recurse(idx, picked, sum) {
+                    // ★ Per-subcategory cap WITHIN a subset. getAvailableSpecials() gates
+                    //   each candidate against the bunk's already-placed tally, but a
+                    //   single subset can combine several specials to fill the slot — and
+                    //   without this guard it would pick e.g. two "Food" specials when the
+                    //   layer asked for one (the F2/F3/R2 over-placement). Track a running
+                    //   per-subcategory count and skip a candidate once its subcategory's
+                    //   demand (already-placed + already-in-this-subset) is met.
+                    var _subEnforced = !!(sl && sl.specials && sl.specials.subcategoryEnforced);
+                    var _subCaps = (sl && sl.specials && sl.specials.subcategoryCap) || {};
+                    function recurse(idx, picked, sum, subCount) {
                         if (results.length >= 30) return;
                         if (sum === target && picked.length > 0) {
                             var key = picked.map(function (p) { return p.name; }).sort().join('|');
@@ -4800,12 +4809,24 @@
                         if (sum > target || picked.length >= 4) return;
                         for (var i = idx; i < items.length; i++) {
                             if (sum + items[i].duration > target) continue;
+                            var _sk = null;
+                            if (_subEnforced) {
+                                _sk = _gpCanonSub(items[i].item ? items[i].item.subcategory : items[i].subcategory);
+                                var _capV = _subCaps[_sk];
+                                if (_capV == null) continue; // subcategory not demanded by any layer
+                                if (_capV !== Infinity) {
+                                    var _already = (result.subcategoryAssigned && result.subcategoryAssigned[_sk]) || 0;
+                                    if (_already + (subCount[_sk] || 0) >= _capV) continue;
+                                }
+                            }
                             picked.push(items[i]);
-                            recurse(i + 1, picked, sum + items[i].duration);
+                            if (_sk) subCount[_sk] = (subCount[_sk] || 0) + 1;
+                            recurse(i + 1, picked, sum + items[i].duration, subCount);
+                            if (_sk) subCount[_sk]--;
                             picked.pop();
                         }
                     }
-                    recurse(0, [], 0);
+                    recurse(0, [], 0, {});
                     return results;
                 }
 
