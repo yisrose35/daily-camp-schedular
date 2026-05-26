@@ -2822,7 +2822,7 @@
                                 return b.startMin < q.endMin && b.endMin > q.startMin;
                             }));
                         };
-                        let _bestP = null, _bestScore = Infinity, _bestDist = Infinity;
+                        let _bestP = null, _bestScore = Infinity, _bestDist = Infinity, _bestHasNeighbor = false;
                         for (const p of _fitS) {
                             const _pi = _gpS.findIndex(q => q.startMin === p.startMin);
                             // WS prefers the period BEFORE swim (canonical order); the
@@ -2844,16 +2844,51 @@
                             if (!_fullBundleOk)  _score += 80;  // no room for a leading Change
                             const _dist = Math.abs(p.startMin - blockStart);
                             if (_score < _bestScore || (_score === _bestScore && _dist < _bestDist)) {
-                                _bestP = p; _bestScore = _score; _bestDist = _dist;
+                                _bestP = p; _bestScore = _score; _bestDist = _dist; _bestHasNeighbor = _hasWSNeighbor;
                             }
                         }
+
+                        // ★ BAND ESCAPE — swim is not locked to its matrix band.
+                        // If NO period inside the band can host the bundle (the best
+                        // in-band pick has no free neighbour for the Water Slide — e.g.
+                        // this grade's band is a tight end-of-day window), the day must
+                        // be reshaped so the bundle CAN form: search the WHOLE day for
+                        // the EARLIEST period that (a) the shared pool admits right now
+                        // and (b) has a free neighbour for the slide, and move swim
+                        // there. Earliest-first deliberately pushes the swim toward the
+                        // start of the day (e.g. 10:50 → slide "after" at 11:30), which
+                        // is exactly how the always-bundling grades (Trios) sit — so a
+                        // late-band grade (Quartet) stops being permanently un-bundleable
+                        // instead of waiting on luck. If nothing qualifies (pool genuinely
+                        // full on every bundle-friendly period today), we keep the in-band
+                        // pick and the slide defers for this grade today.
+                        if (!_bestHasNeighbor) {
+                            const _escFit = _gpS.filter(p =>
+                                (p.endMin - p.startMin) >= _swimDurS &&
+                                p.startMin >= layer.startMin &&
+                                p.startMin + _swimDurS <= layer.endMin);
+                            for (const p of _escFit) { // _gpS is ascending → earliest-first
+                                if (_isLunchEdge(p)) continue;
+                                const _pi = _gpS.findIndex(q => q.startMin === p.startMin);
+                                if (!(_periodFreeForWS(_pi - 1) || _periodFreeForWS(_pi + 1))) continue;
+                                let _poolOk = true;
+                                try {
+                                    _poolOk = (typeof canUsePoolAtTime !== 'function') ||
+                                              canUsePoolAtTime(grade, p.startMin, p.startMin + _swimDurS);
+                                } catch (_ePoolEsc) { _poolOk = true; }
+                                if (!_poolOk) continue;
+                                _bestP = p; _bestScore = -1; _bestHasNeighbor = true; // bundle-rescued
+                                break;
+                            }
+                        }
+
                         if (_bestP && _bestP.startMin !== blockStart) {
                             blockStart = _bestP.startMin;
                             blockEnd = _bestP.startMin + _swimDurS;
                             log('[Phase0] Wet-bundle swim period-spread for ' + grade + ' → ' +
                                 Math.floor(blockStart/60) + ':' + String(blockStart%60).padStart(2,'0') +
                                 '-' + Math.floor(blockEnd/60) + ':' + String(blockEnd%60).padStart(2,'0') +
-                                ' (score ' + _bestScore + (_bestScore >= 1000 ? ', lunch-edge — only option' : '') + ')');
+                                ' (score ' + _bestScore + (_bestScore === -1 ? ', band-escape → early bundle slot' : (_bestScore >= 1000 ? ', lunch-edge — only option' : '')) + ')');
                         }
                     }
                 }
