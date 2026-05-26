@@ -2602,7 +2602,7 @@
                             var periods = _periodsOf(g);
                             if (periods.length < 2) { _deferred.push(g + '(no-periods)'); return; }
                             var bunks = _bunksOf[g], lunch = _lunchOf(g), swimDur = _swimDurOf(g), anchors = _anchorsOf(g), best = null;
-                            var _why = { lunch: 0, anchor: 0, cap: 0, pair: 0, slide: 0 };
+                            var _why = { lunch: 0, anchor: 0, cap: 0, pair: 0, slide: 0, gap: 0 };
                             for (var i = 0; i < periods.length; i++) {
                                 var S = periods[i], sEnd = S.startMin + swimDur;
                                 if ((S.endMin - S.startMin) < swimDur - 5) continue;
@@ -2617,6 +2617,14 @@
                                 if (_poolShareType === 'not_sharable' && _swConc.length > 0) { _why.pair++; continue; }
                                 var _tryD = function (D, dir) {
                                     if (!D) return null;
+                                    // True time-adjacency: the wet bundle needs the slide period flush
+                                    //   against the swim period (no clock gap). periods[i±1] are merely
+                                    //   array-consecutive; a grade's grid can carry a passing-time gap —
+                                    //   that stranded Soloists (swim@735 vs prior period ending 730 → a
+                                    //   5-min gap, so the slide could never attach). Require exact adjacency
+                                    //   so the planner only seats slots Phase 2.4 can actually bundle.
+                                    var _adjOk = (dir === 'before') ? (D.endMin === S.startMin) : (D.startMin === sEnd);
+                                    if (!_adjOk) { _why.gap = (_why.gap || 0) + 1; return null; }
                                     if ((D.endMin - D.startMin) < swimDur - 5) return null;
                                     if (lunch && D.startMin < lunch.e && D.endMin > lunch.s) { _why.lunch++; return null; }
                                     if (anchors.some(function (a) { return _ovl(D.startMin, D.endMin, a.s, a.e); })) { _why.anchor++; return null; }
