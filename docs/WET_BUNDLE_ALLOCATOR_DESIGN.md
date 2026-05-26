@@ -207,3 +207,50 @@ After regenerating the full date range **in order**, run the coverage snippet
 - **Feasibility:** if a week is genuinely capacity-maxed, 35/35 may be impossible;
   the planner must then guarantee the *fairest* rotation (cover as many as capacity
   allows, rotate who misses) rather than the same grades always losing.
+
+---
+
+## 9. Build log & P4 findings (2026-05-26)
+
+**Shipped:** P1 (`682f2235`), P2 own-anchor+allowedPairs (`2bfdcfee`), P3 flag-gated
+pin (`b1203ecb`) + `window._FORCE_BUNDLE_ALLOCATOR` test override (`c8c92fbf`).
+Flag default OFF; deployed code is inert until enabled.
+
+**Test harness (reliable A/B):** the auto-regen loop (two tabs on the same realtime
+camp) + completion-ledger accumulation made naive measurement non-deterministic
+(same day gave 11 and 16). Clean protocol: close the 2nd tab; before EACH gen
+`RotationEvents.clearCompletedForDate('<date>')` to reset debt; trigger via DOM
+(`[...buttons].find(b=>/generate schedule/i.test(b.textContent)).click()` — works
+even when the editor is hidden behind the view); read coverage from
+`window.scheduleAssignments`. With this, baseline is reproducibly **16** on 05-26.
+
+**Clean A/B on 05-26 (cleared ledger, Majors already done on 05-28):**
+- Flag OFF (baseline): **16** — Quints 8, Trios 6, Minors 2 (the morning-band grades).
+- Flag ON: **12** — Quints 8, Minors 2, **Quartet 2** (rescued ✓), Soloists 0, Trios 0.
+- → **REGRESSION −4.** Flag stays OFF.
+
+**Root causes (confirmed via 116 `[Phase0][P3]` pin logs + per-grade swim/slide dump):**
+1. **Adjacency infidelity.** Planner pinned Soloists swim@735 (12:15) with slide
+   "before" — but Soloists' period grid has a gap so the slide period ends at 730,
+   not 735 → not flush → Phase 2.4 can't attach it → Soloists 0. The planner treats
+   array-consecutive periods as time-adjacent; it must require `D.endMin===S.startMin`
+   (before) / `S.endMin===D.startMin` (after) on the grade's REAL grid.
+2. **Baseline displacement (the −6).** Planner pinned Quartet swim@650 (10:50) — the
+   SAME slot Trios uses to bundle at baseline. Trios wasn't planned, so its slot
+   wasn't reserved; the pinned Quartet (placed first via Edit C) stole 10:50 and
+   Trios fell out. Classic "per-grade greedy robs another grade" (§2a/2b).
+
+**Fix plan — make the planner ADDITIVE (only touch grades it can improve):**
+- The spreader already bundles MORNING-band grades fine (Quints/Trios/Minors). The
+  planner must (a) detect those natural bundlers (matrix swim band has a truly-adjacent
+  free slide period) and NOT pin them, only RESERVE their pool/slide usage; (b) pin
+  ONLY the stranded afternoon-band grades (Soloists/Duetos/Quartet/Majors) into
+  leftover feasible slots; (c) require true time-adjacency (fix #1) so it never
+  seats a grade whose slide can't attach. Net target: baseline 16 + afternoon
+  rescues, never < baseline.
+- Needs: confirm `staggerPlan[grade].typeBands.swim` (matrix band) is in scope at the
+  planner (~L2500); replicate the spreader's "band has a bundleable neighbour" test;
+  reserve natural-bundler (swim,slide) intervals in `_seatedSwims/_seatedSlides`
+  BEFORE seating stranded grades.
+- Verify each iteration against the harness: coverage ≥ 16 on 05-26 AND cumulative
+  35/35 across 05-26→28, 0 disconnected, before flipping the flag default (P5).
