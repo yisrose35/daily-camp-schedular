@@ -18673,6 +18673,28 @@
                 try { return new Date(_p49Today + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' }); } catch (_) { return ''; }
             })();
 
+            // ★ Per-subcategory cap gate for recapture. The draft + Phase 3 honor the
+            //   layer's per-subcategory demand (e.g. exactly 1 Food + 1 Regular), but
+            //   recapture re-adds Phase-2.5-deferred specials WITHOUT that check — so it
+            //   can push a bunk to 2+ of one subcategory (observed F1_R2 / F0_R3). Build
+            //   a name→canonical-subcategory map + a per-bunk counter so we can skip a
+            //   recapture whose subcategory is already satisfied for that bunk.
+            const _p49CanonSub = (s) => { const v = (typeof s === 'string') ? s.trim().toLowerCase() : ''; return v || 'regular'; };
+            const _p49SpecSub = {};
+            try {
+                const _p49Specs = (globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || [];
+                _p49Specs.forEach(s => { if (s && s.name) _p49SpecSub[String(s.name).toLowerCase()] = _p49CanonSub(s.subcategory); });
+            } catch (_eMap) {}
+            const _p49BunkSubCount = (bunk, subKey) => {
+                let n = 0;
+                (recaptureSA[bunk] || []).forEach(s => {
+                    if (!s || s.continuation) return;
+                    const anm = String(s._assignedSpecial || s._activity || s.event || '').toLowerCase();
+                    if (anm && _p49SpecSub[anm] === subKey) n++;
+                });
+                return n;
+            };
+
             for (let _di = 0; _di < dedupedDeferred.length; _di++) {
                 const def = dedupedDeferred[_di];
                 const slots = recaptureSA[def.bunk];
@@ -18687,6 +18709,25 @@
                 if (slots.some(s => s && !s.continuation && (s._activity === def.name || s._assignedSpecial === def.name))) {
                     continue;
                 }
+
+                // ★ Per-subcategory cap gate — don't recapture a special whose
+                //   subcategory is already satisfied for this bunk (or not demanded).
+                try {
+                    const _sl49 = (typeof shoppingLists !== 'undefined' && shoppingLists) ? shoppingLists[def.bunk] : null;
+                    if (_sl49 && _sl49.specials && _sl49.specials.subcategoryEnforced) {
+                        const _caps49 = _sl49.specials.subcategoryCap || {};
+                        const _sk49 = _p49SpecSub[String(def.name).toLowerCase()] || 'regular';
+                        const _cap49 = _caps49[_sk49];
+                        if (_cap49 == null) {
+                            log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — subcategory "' + _sk49 + '" not demanded by any layer');
+                            unrecapturable.push(def); continue;
+                        }
+                        if (_cap49 !== Infinity && _p49BunkSubCount(def.bunk, _sk49) >= _cap49) {
+                            log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — subcategory "' + _sk49 + '" already at cap ' + _cap49);
+                            unrecapturable.push(def); continue;
+                        }
+                    }
+                } catch (_eSub49) {}
 
                 // ★★★ ROTATION CONSTRAINT GATES (must match Phase 2.5) ★★★
                 const _p49Props = (activityProperties && activityProperties[def.name]) || def.special || {};
