@@ -2655,6 +2655,37 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           })()}
         </div>
       </div>
+      <div class="ms-daw-pop-divider"></div>
+      <div class="ms-daw-pop-section">Connect To (adjacency)</div>
+      <div class="ms-daw-pop-field">
+        <label>Must be adjacent to</label>
+        <div class="ms-daw-pop-row">
+          <select id="daw-pop-custom-adjacent" style="flex:1;">
+            ${(() => {
+              const cur = (layer.adjacentTo || '').toString().toLowerCase();
+              const opts = [
+                { v: '', l: '-- None (use fixed time) --' },
+                { v: 'swim', l: 'Swim' },
+                { v: 'lunch', l: 'Lunch' },
+                { v: 'snacks', l: 'Snacks' },
+                { v: 'dismissal', l: 'Dismissal' }
+              ];
+              return opts.map(o => '<option value="' + o.v + '"' + (o.v === cur ? ' selected' : '') + '>' + o.l + '</option>').join('');
+            })()}
+          </select>
+        </div>
+        <div class="ms-daw-pop-hint">Pin this block next to another activity (e.g. a one-day Water Slide next to Swim) instead of a fixed time. The generator places it immediately before/after that activity.</div>
+      </div>
+      <div class="ms-daw-pop-field" id="daw-pop-custom-adjacent-pos-wrap" style="display:${(layer.adjacentTo || '') ? 'block' : 'none'};">
+        <label>Position</label>
+        <div class="ms-daw-pop-row">
+          <select id="daw-pop-custom-adjacent-pos" style="flex:1;">
+            <option value="either"${(layer.adjacentPosition || 'either') === 'either' ? ' selected' : ''}>Before or after (scheduler decides)</option>
+            <option value="after"${(layer.adjacentPosition || '') === 'after' ? ' selected' : ''}>Immediately after</option>
+            <option value="before"${(layer.adjacentPosition || '') === 'before' ? ' selected' : ''}>Immediately before</option>
+          </select>
+        </div>
+      </div>
       ` : ''}
     </div>
     <div class="ms-daw-pop-actions">
@@ -2715,6 +2746,14 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     customFieldSelect.onchange = function() {
       const wrap = popover.querySelector('#daw-pop-custom-field-text-wrap');
       if (wrap) wrap.style.display = this.value === '_custom' ? 'block' : 'none';
+    };
+  }
+  // Connect-to (adjacency): show the Position picker only when a target is chosen.
+  const customAdjSelect = popover.querySelector('#daw-pop-custom-adjacent');
+  if (customAdjSelect) {
+    customAdjSelect.onchange = function() {
+      const wrap = popover.querySelector('#daw-pop-custom-adjacent-pos-wrap');
+      if (wrap) wrap.style.display = this.value ? 'block' : 'none';
     };
   }
   const bunkAllBtn = popover.querySelector('#daw-pop-bunk-all');
@@ -2815,6 +2854,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
       const allBunks = (divs[grade]?.bunks || []).map(String);
       layer.customBunks = checkedBunks.length === allBunks.length ? null : checkedBunks; // null = all
+      // ★ Connect-to (adjacency): pin this custom block next to another activity
+      //   (e.g. a one-day Water Slide next to Swim) instead of a fixed time.
+      const adjSel = popover.querySelector('#daw-pop-custom-adjacent');
+      const adjPosSel = popover.querySelector('#daw-pop-custom-adjacent-pos');
+      layer.adjacentTo = (adjSel && adjSel.value) ? adjSel.value : null;
+      layer.adjacentPosition = (adjPosSel && adjPosSel.value) ? adjPosSel.value : 'either';
     }
     document.querySelectorAll('.ms-daw-popover-overlay').forEach(o => o.remove());
     popover.remove();
