@@ -12913,6 +12913,18 @@
             // Phase 1: Shopping lists
             const shoppingLists = {};
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
+            // ★ Stash per-bunk subcategory caps where the STEP 4.9 recapture can read
+            //   them (shoppingLists is block-scoped to here and not visible there).
+            //   Rebuilt every iteration; recapture reads the current iteration's caps.
+            try {
+                window._subcatCapsByBunk = {};
+                Object.keys(shoppingLists).forEach(function (b) {
+                    var sp = shoppingLists[b] && shoppingLists[b].specials;
+                    if (sp && sp.subcategoryEnforced && sp.subcategoryCap) {
+                        window._subcatCapsByBunk[b] = { enforced: true, caps: sp.subcategoryCap };
+                    }
+                });
+            } catch (_eStashSub) {}
 
             // Phase 2: Draft
             const draftResults = runGlobalPlanner(shoppingLists);
@@ -18712,10 +18724,12 @@
 
                 // ★ Per-subcategory cap gate — don't recapture a special whose
                 //   subcategory is already satisfied for this bunk (or not demanded).
+                //   Caps come from window._subcatCapsByBunk (stashed at shopping-list
+                //   build time; shoppingLists itself is out of scope here).
                 try {
-                    const _sl49 = (typeof shoppingLists !== 'undefined' && shoppingLists) ? shoppingLists[def.bunk] : null;
-                    if (_sl49 && _sl49.specials && _sl49.specials.subcategoryEnforced) {
-                        const _caps49 = _sl49.specials.subcategoryCap || {};
+                    const _scEntry = (window._subcatCapsByBunk || {})[def.bunk];
+                    if (_scEntry && _scEntry.enforced) {
+                        const _caps49 = _scEntry.caps || {};
                         const _sk49 = _p49SpecSub[String(def.name).toLowerCase()] || 'regular';
                         const _cap49 = _caps49[_sk49];
                         if (_cap49 == null) {
