@@ -15186,35 +15186,16 @@
         window._bunkTimelines = JSON.parse(JSON.stringify(bunkTimelines));
         window._autoBuildTimelines = JSON.parse(JSON.stringify(bunkTimelines));
 
-        // ─── Mark rotation event completions (so tomorrow's build skips these bunks) ───
-        // Read directly from bunkTimelines because scheduleAssignments hasn't been written yet.
-        // Any block where _source === 'rotation_event' (from timeSweepFillAll needs) means a
-        // rotation event was successfully placed for that bunk.
-        try {
-            if (window.RotationEvents && typeof window.RotationEvents.markCompleted === 'function' && currentDate) {
-                const byEvent = {}; // { eventId: Set<bunk> }
-                allGrades.forEach(grade => {
-                    getBunksForGrade(grade, divisions).forEach(bunk => {
-                        const tl = bunkTimelines[bunk] || [];
-                        tl.forEach(b => {
-                            if (b && b._rotationEventId) {
-                                if (!byEvent[b._rotationEventId]) byEvent[b._rotationEventId] = new Set();
-                                byEvent[b._rotationEventId].add(String(bunk));
-                            }
-                        });
-                    });
-                });
-                let totalMarked = 0;
-                Object.entries(byEvent).forEach(([eid, bunkSet]) => {
-                    const bunks = Array.from(bunkSet);
-                    window.RotationEvents.markCompleted(eid, currentDate, bunks);
-                    totalMarked += bunks.length;
-                });
-                if (totalMarked > 0) log('[2.5+] ✅ Rotation events: marked ' + totalMarked + ' bunk completions');
-            }
-        } catch (e) {
-            console.warn('[scheduler_core_auto] Rotation event completion tracking failed:', e);
-        }
+        // ─── Rotation event completions: marked LATER, at STEP 4.996c ───
+        // (Moved out of STEP 2.5+.) Marking here read the pre-demotion seed
+        // (bunkTimelines), so any rotation event later DROPPED by the adjacency
+        // sweeps (STEP 4.996 / 4.996b) was still recorded "done". Those bunks
+        // were then permanently excluded from future days and the multi-day
+        // rotation never finished (e.g. Water Slide stuck ~31/35). The un-mark
+        // on demote (removeCompletion) didn't reliably stick, so the over-count
+        // persisted. Completions are now marked from the FINAL grid AFTER every
+        // demotion — see STEP 4.996c below — so "recorded done" == "actually has
+        // the surviving, adjacency-verified placement".
 
 
         // =====================================================================
@@ -19947,6 +19928,47 @@
                 else log('[STEP 4.996b] Rendered-schedule safety net: clean');
             } catch (e996b) {
                 warn('[STEP 4.996b] rendered sweep error: ' + e996b.message);
+            }
+        })();
+
+        // =====================================================================
+        // STEP 4.996c — MARK ROTATION-EVENT COMPLETIONS FROM THE FINAL GRID
+        // =====================================================================
+        // Completions used to be marked at STEP 2.5+ from the pre-demotion seed,
+        // which over-counted every rotation event that the adjacency sweeps
+        // (4.996 / 4.996b) later DROPPED — permanently locking those bunks out
+        // of future days so the multi-day rotation never finished (Water Slide
+        // stuck ~31/35). Mark here instead, AFTER every demotion, reading the
+        // authoritative window.scheduleAssignments: a bunk is recorded "done"
+        // for an event IFF its block actually survived (the sweeps clear
+        // _rotationEventId on anything they demote, so only adjacency-verified
+        // placements still carry the id). Today's entries were already wiped at
+        // STEP 0, so this is the single source of truth for today's completions.
+        (function _markCompletionsFromFinalGrid() {
+            try {
+                if (!(window.RotationEvents && typeof window.RotationEvents.markCompleted === 'function' && currentDate)) return;
+                const _saMC = window.scheduleAssignments || {};
+                const _byEventMC = {}; // { eventId: Set<bunk> }
+                Object.keys(_saMC).forEach(function (bk) {
+                    const arr = _saMC[bk];
+                    if (!Array.isArray(arr)) return;
+                    arr.forEach(function (s) {
+                        if (s && s._rotationEventId) {
+                            if (!_byEventMC[s._rotationEventId]) _byEventMC[s._rotationEventId] = new Set();
+                            _byEventMC[s._rotationEventId].add(String(bk));
+                        }
+                    });
+                });
+                let _totalMC = 0;
+                Object.keys(_byEventMC).forEach(function (eid) {
+                    const bunks = Array.from(_byEventMC[eid]);
+                    window.RotationEvents.markCompleted(eid, currentDate, bunks);
+                    _totalMC += bunks.length;
+                });
+                log('[4.996c] ✅ Rotation completions marked from FINAL grid: ' + _totalMC +
+                    ' surviving (adjacency-verified) placement(s) — no phantom credit for dropped events.');
+            } catch (eMC) {
+                warn('[4.996c] completion marking error: ' + (eMC && eMC.message));
             }
         })();
 
