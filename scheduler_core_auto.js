@@ -7058,13 +7058,21 @@
                     (layersByGrade[grade] || []).filter(function(l) {
                         return (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned';
                     }).forEach(function(cl) {
-                        // ★ Custom "connect-to" layers are placed by the Phase 2.4 wet-bundle
-                        //   engine (as a synthesized rotation_event adjacent to swim). Do NOT
-                        //   also build a standalone fill-need for them here — the synth block is
-                        //   type 'rotation_event' (not 'custom'), so the alreadyWall guard below
-                        //   misses it and would place a DISCONNECTED duplicate. Defer-not-place
-                        //   is intentional when the bundle can't fit (adjacency > coverage).
-                        if (cl.adjacentTo) return;
+                        // ★ Custom "connect-to" layers are PRIMARILY placed by the Phase 2.4
+                        //   wet-bundle engine (synthesized rotation_event, adjacent to swim with
+                        //   full Change wrapping). Overflow policy for a single-day layer: the
+                        //   engine fits as many bunks adjacent as pool capacity / period grid
+                        //   allow, then DEFERS the rest. For the deferred bunks we fall through
+                        //   here to place the activity NON-adjacent so every selected bunk still
+                        //   gets it (coverage fallback once adjacent slots are exhausted).
+                        //   Skip ONLY bunks that already got the adjacent bundle — that block is
+                        //   type 'rotation_event', which the alreadyWall guard below can't match,
+                        //   so detect it by activity name to avoid a disconnected duplicate.
+                        if (cl.adjacentTo) {
+                            var _connAct = String(cl.customActivity || cl.event || 'Custom').toLowerCase();
+                            if (template.some(function(w){ return String(w._activity || w.event || '').toLowerCase() === _connAct; })) return;
+                            // else: this bunk was deferred by the engine → place non-adjacent.
+                        }
                         if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
                         // Skip if already placed as a wall
                         var alreadyWall = template.some(function(w) {
