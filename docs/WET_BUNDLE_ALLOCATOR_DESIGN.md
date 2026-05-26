@@ -254,3 +254,27 @@ even when the editor is hidden behind the view); read coverage from
   BEFORE seating stranded grades.
 - Verify each iteration against the harness: coverage ≥ 16 on 05-26 AND cumulative
   35/35 across 05-26→28, 0 disconnected, before flipping the flag default (P5).
+
+### Outcome — adjacency fix (`d4b12294`): GOAL MET ✅
+
+Only ONE of the two planned fixes was needed. The **true-time-adjacency** fix
+(`_tryD` now requires `D.endMin===S.startMin` before / `D.startMin===S.startMin+swimDur`
+after) both eliminated the regression AND unlocked the stranded grades:
+- Day 05-26 flag-ON went 12 → **16** (= baseline) — Soloists now bundles (swim@10:50
+  → slide@11:30, the truly-adjacent after-slot) where before it was pinned uselessly.
+- **Full 3-day range, flag ON, 0 disconnected:** 05-26 = 16 (Quints/Soloists/Minors),
+  05-27 = 11 (Trios/Duetos), 05-28 = 8 (Majors/Quartet) = **35/35 cumulative.** Every
+  bunk bundled on the day with capacity; cross-day debt spread them automatically.
+
+The **additive / reserve-baseline-bundlers** refinement (§9 fix #2) proved
+**UNNECESSARY for the range goal** — single-day "displacement" (e.g. Trios bumped
+off 05-26) is harmless because the bumped grade lands on another day. Keep it as an
+*optional* robustness item only for **single-day** wet-bundle events or capacity-tight
+ranges, where a single day's coverage dipping below baseline would matter.
+
+**P5 (flip default) gating:** verified on ONE config (35 bunks / this camp) over one
+clean range pass. Before flipping the global code default, either (a) confirm a fresh
+clean range pass reproduces 35/35, and (b) sanity-check a 2nd config + a single-day
+event (where the additive refinement may be needed). Kill-switch
+`_DISABLE_BUNDLE_ALLOCATOR` stays for instant rollback. Enable mechanism today:
+`globalSettings.app1.bundleAllocator===true` OR `window._FORCE_BUNDLE_ALLOCATOR===true`.
