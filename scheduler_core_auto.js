@@ -7058,6 +7058,13 @@
                     (layersByGrade[grade] || []).filter(function(l) {
                         return (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned';
                     }).forEach(function(cl) {
+                        // ★ Custom "connect-to" layers are placed by the Phase 2.4 wet-bundle
+                        //   engine (as a synthesized rotation_event adjacent to swim). Do NOT
+                        //   also build a standalone fill-need for them here — the synth block is
+                        //   type 'rotation_event' (not 'custom'), so the alreadyWall guard below
+                        //   misses it and would place a DISCONNECTED duplicate. Defer-not-place
+                        //   is intentional when the bundle can't fit (adjacency > coverage).
+                        if (cl.adjacentTo) return;
                         if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
                         // Skip if already placed as a wall
                         var alreadyWall = template.some(function(w) {
