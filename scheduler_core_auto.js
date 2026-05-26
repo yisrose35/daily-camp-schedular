@@ -2535,16 +2535,19 @@
                         }
                     } catch (_eP) {}
 
-                    // P3 feature flag — when ON, the seated plan is written to
-                    //   window._bundleSwimPlan and the Phase-0 placer honors it.
-                    //   window._FORCE_BUNDLE_ALLOCATOR is a live test override (mirror of
-                    //   the _DISABLE_BUNDLE_ALLOCATOR kill-switch) so the flag can be flipped
-                    //   from the console without persisting to globalSettings — the bare
-                    //   globalSettings global isn't assigned until a gen runs.
-                    var _bundleWireOn = false;
+                    // ── P5: the bundle allocator is ON BY DEFAULT. Verified to deliver
+                    //   full range coverage (every eligible bunk bundled across the event's
+                    //   date range, 0 disconnected) on the 35-bunk config over two clean
+                    //   passes. Opt-out per camp via globalSettings.app1.bundleAllocator===false.
+                    //   Instant kill-switch: window._DISABLE_BUNDLE_ALLOCATOR (handled by the
+                    //   early return at the top of this IIFE). window._FORCE_BUNDLE_ALLOCATOR
+                    //   forces on. The pin is ADDITIONALLY scoped to MULTI-DAY range events at
+                    //   the populate site below, so single-day events keep baseline behaviour.
+                    var _bundleWireOn = true;
                     try {
                         var _gsF = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
-                        _bundleWireOn = !!(_gsF.app1 && _gsF.app1.bundleAllocator === true) || (window._FORCE_BUNDLE_ALLOCATOR === true);
+                        if (_gsF.app1 && _gsF.app1.bundleAllocator === false) _bundleWireOn = false;
+                        if (window._FORCE_BUNDLE_ALLOCATOR === true) _bundleWireOn = true;
                     } catch (_eF) {}
 
                     var _bunksOf = {};
@@ -2642,9 +2645,13 @@
                                 _seatedSwims.push({ s: best.S.startMin, e: best.S.startMin + swimDur, grade: g, bunks: bunks });
                                 _seatedSlides.push({ s: best.D.startMin, e: best.D.endMin, grade: g, bunks: bunks });
                                 _seated.push(g + ' swim@' + _fmt(best.S.startMin) + '→slide@' + _fmt(best.D.startMin) + '(' + best.dir + ',' + bunks + 'b,debt' + _debtOf(g) + ')');
-                                // P3: pin this grade's swim to the planned period (flag only).
+                                // P3: pin this grade's swim to the planned period.
                                 //   First-seated wins if a grade appears in multiple wet events.
-                                if (_bundleWireOn) { try { if (!(g in window._bundleSwimPlan)) window._bundleSwimPlan[g] = best.S.startMin; } catch (_eW) {} }
+                                // P5: scope to MULTI-DAY range events only — the allocator's value
+                                //   is spreading coverage across days; on a single-day event its
+                                //   displacement could only hurt, so leave those on baseline.
+                                var _evtMultiDay = !!(evt.dateRange && evt.dateRange.start && evt.dateRange.end && evt.dateRange.end > evt.dateRange.start);
+                                if (_bundleWireOn && _evtMultiDay) { try { if (!(g in window._bundleSwimPlan)) window._bundleSwimPlan[g] = best.S.startMin; } catch (_eW) {} }
                             } else {
                                 var _r = Object.keys(_why).filter(function (k) { return _why[k] > 0; }).map(function (k) { return k + ':' + _why[k]; }).join(',');
                                 _deferred.push(g + '(debt' + _debtOf(g) + ',blocked[' + (_r || 'no-adjacent') + '])');
