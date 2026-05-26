@@ -2498,6 +2498,10 @@
             // generation, not once per tabu iteration. See
             // docs/WET_BUNDLE_ALLOCATOR_DESIGN.md. Silence: window._DISABLE_BUNDLE_ALLOCATOR=true.
             (function _planBundleSlotsReadOnly() {
+                // P3: reset the swim plan every generation. Populated below ONLY when
+                //   globalSettings.app1.bundleAllocator===true, so default (flag off or
+                //   kill-switch on) leaves it empty → downstream wiring is a no-op.
+                try { window._bundleSwimPlan = {}; } catch (_eR) {}
                 if (window._DISABLE_BUNDLE_ALLOCATOR) return;
                 try {
                     if (!(window.RotationEvents && typeof window.RotationEvents.loadRotationEvents === 'function')) return;
@@ -2530,6 +2534,14 @@
                             _poolCap = _gs.app1.poolLaneCapacity;
                         }
                     } catch (_eP) {}
+
+                    // P3 feature flag — when ON, the seated plan is written to
+                    //   window._bundleSwimPlan and the Phase-0 placer honors it.
+                    var _bundleWireOn = false;
+                    try {
+                        var _gsF = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+                        _bundleWireOn = !!(_gsF.app1 && _gsF.app1.bundleAllocator === true);
+                    } catch (_eF) {}
 
                     var _bunksOf = {};
                     allGrades.forEach(function (g) { _bunksOf[g] = getBunksForGrade(g, divisions).length; });
@@ -2618,6 +2630,9 @@
                                 _seatedSwims.push({ s: best.S.startMin, e: best.S.startMin + swimDur, grade: g, bunks: bunks });
                                 _seatedSlides.push({ s: best.D.startMin, e: best.D.endMin, grade: g, bunks: bunks });
                                 _seated.push(g + ' swim@' + _fmt(best.S.startMin) + '→slide@' + _fmt(best.D.startMin) + '(' + best.dir + ',' + bunks + 'b,debt' + _debtOf(g) + ')');
+                                // P3: pin this grade's swim to the planned period (flag only).
+                                //   First-seated wins if a grade appears in multiple wet events.
+                                if (_bundleWireOn) { try { if (!(g in window._bundleSwimPlan)) window._bundleSwimPlan[g] = best.S.startMin; } catch (_eW) {} }
                             } else {
                                 var _r = Object.keys(_why).filter(function (k) { return _why[k] > 0; }).map(function (k) { return k + ':' + _why[k]; }).join(',');
                                 _deferred.push(g + '(debt' + _debtOf(g) + ',blocked[' + (_r || 'no-adjacent') + '])');
@@ -2641,6 +2656,36 @@
                     try { warn('[BundlePlanner] read-only planning error: ' + (_eAlloc && _eAlloc.message)); } catch (_e2) {}
                 }
             })();
+
+            // ── P3: if the bundle allocator planned swim periods (flag ON), float
+            //    those grades' swim layers to the FRONT of the swim group. All
+            //    non-swim anchors still place first (kept intact); planned swims then
+            //    claim their validated periods BEFORE fallback swims. Because the
+            //    planner only seats a mutually-compatible set, placing them first in
+            //    any order keeps every canUsePoolAtTime check satisfied (monotonic).
+            //    Non-planned grades keep today's exact behaviour (the v1-regression
+            //    mistake was overriding ALL grades; this overrides none of them).
+            try {
+                var _bsp = window._bundleSwimPlan || {};
+                if (Object.keys(_bsp).length) {
+                    var _plannedSwims = [], _restPinned = [];
+                    orderedPinned.forEach(function (l) {
+                        var lt = (l.type || '').toLowerCase();
+                        if (lt === 'swim' && (String(l.grade || l.division || '') in _bsp)) _plannedSwims.push(l);
+                        else _restPinned.push(l);
+                    });
+                    if (_plannedSwims.length) {
+                        var _outP = [], _insP = false;
+                        _restPinned.forEach(function (l) {
+                            if (!_insP && (l.type || '').toLowerCase() === 'swim') { _plannedSwims.forEach(function (p) { _outP.push(p); }); _insP = true; }
+                            _outP.push(l);
+                        });
+                        if (!_insP) _plannedSwims.forEach(function (p) { _outP.push(p); });
+                        orderedPinned.length = 0;
+                        _outP.forEach(function (l) { orderedPinned.push(l); });
+                    }
+                }
+            } catch (_eReorder) {}
 
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
@@ -2902,6 +2947,32 @@
                     blockEnd = blockStart + _trueDur;
                 }
 
+                // ── P3: BUNDLE-ALLOCATOR SWIM PIN. If the planner assigned this grade
+                //    a swim period (flag ON), place the swim there directly and SKIP the
+                //    matrix-band spreader below — the matrix band is precisely what
+                //    strands afternoon-band grades (Soloists/Quartet/Majors) with no
+                //    bundleable adjacent period. The planner already validated this period
+                //    against pool cap + allowedPairs + slide concurrency + own-anchors, and
+                //    Edit C placed this grade's swim ahead of fallback swims.
+                var _p3Pinned = false;
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods) {
+                    try {
+                        var _p3Start = (window._bundleSwimPlan || {})[grade];
+                        if (_p3Start != null && window.campPeriods && window.campPeriods[grade]) {
+                            var _p3Dur = blockEnd - blockStart;
+                            var _p3P = window.campPeriods[grade].find(function (p) { return p.startMin === _p3Start; });
+                            if (_p3P) {
+                                blockStart = _p3P.startMin;
+                                blockEnd = _p3P.startMin + _p3Dur;
+                                _p3Pinned = true;
+                                log('[Phase0][P3] Bundle-allocator pinned ' + grade + ' swim → ' +
+                                    Math.floor(blockStart / 60) + ':' + String(blockStart % 60).padStart(2, '0') +
+                                    '-' + Math.floor(blockEnd / 60) + ':' + String(blockEnd % 60).padStart(2, '0'));
+                            }
+                        }
+                    } catch (_eP3) {}
+                }
+
                 // ★ PERIODS CASE — spread grades' swims across distinct periods.
                 //   When Bell Schedule periods exist, the no-periods stagger is
                 //   gated off (it knocks swim off the period grid). But without
@@ -2914,7 +2985,7 @@
                 //   already swimming there), staying period-aligned so the wet
                 //   bundle still builds. Pool capacity is still enforced later by
                 //   canUsePoolAtTime; this just stops the everyone-at-once pileup.
-                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0) {
+                if (t === 'swim' && _wetBundleTargets.has(t) && _gradeHasPeriods && _wetBundleSwimRanges.length > 0 && !_p3Pinned) {
                     const _swimDurS = blockEnd - blockStart;
                     const _gpS = window.campPeriods[grade].slice().sort((a, b) => a.startMin - b.startMin);
                     // ★ Constrain the spread to this grade's SWIM BAND (from the
