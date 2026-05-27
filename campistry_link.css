@@ -721,6 +721,19 @@ body { font-family: var(--font-body); background: var(--bg-primary); color: var(
 .lk-hist-label { font-size: .84rem; font-weight: 600; color: var(--slate-800); }
 .lk-hist-time { font-size: .71rem; color: var(--text-muted); }
 
+/* DATE NAV BUTTON */
+.lk-date-nav-btn {
+    width: 28px; height: 28px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--slate-200);
+    background: #fff;
+    display: flex; align-items: center; justify-content: center;
+    cursor: pointer; color: var(--slate-500);
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+.lk-date-nav-btn:hover { border-color: var(--link-border); background: var(--link-tint); color: var(--link-color); }
+
 /* UPLOAD ZONE */
 .lk-upload-zone {
     border: 2px dashed var(--slate-200);

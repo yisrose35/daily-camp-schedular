@@ -166,9 +166,12 @@
         <div class="progress"><div class="progress-fill" style="width:75%"></div></div>
         <div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--text-muted);margin-top:6px;"><span>$4,200 of $5,600</span><span>$1,400 remaining</span></div>
     </div>
+    <!-- TODO: Wire to Stripe payment integration -->
     <div class="lk-card" style="text-align:center;padding:28px;">
         <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:14px;">Next: <strong style="color:var(--text-primary);">$1,400</strong> due <strong>July 1</strong></p>
-        <button class="btn btn-primary" onclick="toast('Payment modal opening...')">Make a Payment</button>
+        <div style="background:var(--slate-50);border:1px dashed var(--slate-300);border-radius:var(--radius-md);padding:14px;font-size:.8rem;color:var(--slate-400);line-height:1.6;">
+            Online payments coming soon. To make a payment, contact your camp office directly.
+        </div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Payment History</h2></div>
         <table class="lk-table"><thead><tr><th>Date</th><th>Description</th><th>Amount</th><th>Status</th></tr></thead><tbody id="payTable"></tbody></table>
@@ -213,7 +216,29 @@
     <div><h1>Messages</h1><p>Communication with camp</p></div>
 </div>
     <div id="msgListView">
-        <div class="lk-tabs"><button class="lk-tab active" onclick="fMsg('all',this)">All</button><button class="lk-tab" onclick="fMsg('unread',this)">Unread</button><button class="lk-tab" onclick="fMsg('announcements',this)">Announcements</button></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;"><button class="lk-tab active" onclick="fMsg('all',this)">All</button><button class="lk-tab" onclick="fMsg('unread',this)">Unread</button><button class="lk-tab" onclick="fMsg('announcements',this)">Announcements</button></div>
+            <button class="btn btn-primary btn-sm" onclick="toggleCompose(true)" style="flex-shrink:0;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Message
+            </button>
+        </div>
+        <div id="msgComposeView" style="display:none;margin-bottom:16px;">
+            <div class="lk-card">
+                <div class="lk-card-head"><h2>New Message</h2><button class="btn btn-ghost btn-sm" onclick="toggleCompose(false)">Cancel</button></div>
+                <div class="lk-field"><label>To</label>
+                    <select class="lk-select" id="composeTO">
+                        <option>Camp Director</option>
+                        <option>Camp Office</option>
+                        <option>Head Counselor</option>
+                        <option>Nurse Station</option>
+                    </select>
+                </div>
+                <div class="lk-field"><label>Subject</label><input type="text" class="lk-input" id="composeSubject" placeholder="What's this about?"></div>
+                <div class="lk-field"><label>Message</label><textarea class="lk-textarea" id="composeBody" placeholder="Write your message..." style="min-height:100px;"></textarea></div>
+                <button class="btn btn-primary" onclick="sendComposedMsg()">Send Message</button>
+            </div>
+        </div>
         <div class="lk-card" style="padding:0;overflow:hidden;"><div id="msgList"></div></div>
     </div>
     <div id="msgDetailView" style="display:none;">
@@ -229,7 +254,17 @@
     <div><h1>Schedule</h1><p>See what your children are doing today</p></div>
 </div>
     <div class="lk-tabs" id="schedTabs"></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Today's Schedule</h2><span style="font-size:.8rem;color:var(--text-muted);">Monday, July 7</span></div><div id="schedList"></div></div>
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Daily Schedule</h2>
+            <div style="display:flex;align-items:center;gap:6px;">
+                <button class="lk-date-nav-btn" onclick="changeSchedDate(-1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span id="schedDateLabel" style="font-size:.82rem;font-weight:600;color:var(--slate-700);min-width:130px;text-align:center;">Monday, July 7</span>
+                <button class="lk-date-nav-btn" onclick="changeSchedDate(1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
+            </div>
+        </div>
+        <div id="schedList"></div>
+    </div>
 </div>
 
 <!-- FORMS -->
@@ -357,7 +392,13 @@
     </div>
 
     <!-- SUBMITTED REQUESTS -->
-    <div class="lk-card" style="margin-top:6px;"><div class="lk-card-head"><h2>Today's Submitted Requests</h2></div><div id="pickupHistory"><div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div></div></div>
+    <div class="lk-card" style="margin-top:6px;">
+        <div class="lk-card-head">
+            <h2>Today's Submitted Requests</h2>
+            <span style="font-size:.72rem;color:var(--slate-400);">Status updates from Campistry Live</span>
+        </div>
+        <div id="pickupHistory"><div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div></div>
+    </div>
 </div>
 
 <!-- EMERGENCY -->
@@ -545,11 +586,17 @@ var payments = [
     {date:'Jun 20',desc:'Canteen Deposit — Eli',amt:'$50',status:'Paid'},{date:'Jun 20',desc:'Canteen Deposit — Mia',amt:'$25',status:'Paid'}
 ];
 
-var canteenTx = [
-    {name:'Ices',date:'Today 2:30 PM',amt:-1.50},{name:'Candy Bar',date:'Today 12:15 PM',amt:-2.00},
-    {name:'Chips',date:'Yesterday',amt:-1.50},{name:'Deposit',date:'Jun 20',amt:50.00},
-    {name:'Gatorade',date:'Jun 28',amt:-2.50},{name:'Pretzels',date:'Jun 27',amt:-1.00}
-];
+var canteenTxByChild = {
+    eli: [
+        {name:'Ices',date:'Today 2:30 PM',amt:-1.50},{name:'Candy Bar',date:'Today 12:15 PM',amt:-2.00},
+        {name:'Chips',date:'Yesterday',amt:-1.50},{name:'Deposit',date:'Jun 20',amt:50.00},
+        {name:'Gatorade',date:'Jun 28',amt:-2.50},{name:'Pretzels',date:'Jun 27',amt:-1.00}
+    ],
+    mia: [
+        {name:'Ices',date:'Today 1:15 PM',amt:-1.50},{name:'Fruit Snacks',date:'Yesterday',amt:-1.00},
+        {name:'Lemonade',date:'Jun 29',amt:-2.00},{name:'Deposit',date:'Jun 20',amt:25.00}
+    ]
+};
 
 var schedule = [
     {time:'8:30',event:'Lineup',loc:'Main Field',color:'#94A3B8'},{time:'9:00',event:'Baseball',loc:'Diamond 2',color:'#EF4444'},
@@ -598,15 +645,10 @@ function init(){
     var pt=document.getElementById('payTable');pt.innerHTML='';
     payments.forEach(function(p){pt.innerHTML+='<tr><td>'+p.date+'</td><td>'+p.desc+'</td><td style="font-weight:700;">'+p.amt+'</td><td><span class="badge badge-ok">'+p.status+'</span></td></tr>';});
 
-    // Canteen tabs
+    // Canteen tabs — tx rendering is handled inside switchCanteen
     var ct=document.getElementById('canteenTabs');ct.innerHTML='';
     children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});
     switchCanteen(children[0].id);
-
-    var txSvg='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>';
-    var txSvgUp='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
-    var tl=document.getElementById('txList');tl.innerHTML='';
-    canteenTx.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvg:txSvgUp)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 
     // Schedule tabs
     var st=document.getElementById('schedTabs');st.innerHTML='';
@@ -640,10 +682,18 @@ function init(){
     renderMsgs();
 }
 
+var txSvgDebit='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>';
+var txSvgCredit='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
+
 function switchCanteen(id,btn){
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
     var c=children.find(function(k){return k.id===id});
-    if(c)document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    if(!c)return;
+    document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    var tl=document.getElementById('txList');tl.innerHTML='';
+    var txs=canteenTxByChild[id]||[];
+    if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3></div>';return;}
+    txs.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 }
 
 function switchHealth(id,btn){
@@ -709,6 +759,33 @@ function openMsg(id){
     document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;"><span>From: <strong>'+m.from+'</strong></span><span>'+m.date+'</span><span class="badge '+(m.type==='announcement'?'badge-warn':'badge-info')+'">'+(m.type==='announcement'?'Announcement':'Direct')+'</span></div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+(m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent!\')">Send Reply</button></div></div>':'');
 }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
+function toggleCompose(show){
+    document.getElementById('msgComposeView').style.display=show?'block':'none';
+    if(show){document.getElementById('composeSubject').value='';document.getElementById('composeBody').value='';}
+}
+function sendComposedMsg(){
+    var to=document.getElementById('composeTO').value;
+    var subj=document.getElementById('composeSubject').value.trim();
+    var body=document.getElementById('composeBody').value.trim();
+    if(!subj||!body){toast('Please fill in subject and message.');return;}
+    var now=new Date();
+    var timeStr=(now.getHours()%12||12)+':'+(now.getMinutes()<10?'0':'')+now.getMinutes()+(now.getHours()<12?' AM':' PM');
+    messages.unshift({id:Date.now(),type:'direct',from:'You → '+to,subject:subj,preview:body.slice(0,60)+'...',body:'<p>'+body.replace(/\n/g,'</p><p>')+'</p>',date:'Just now',read:true});
+    toggleCompose(false);
+    renderMsgs();
+    toast('Message sent to '+to+'!');
+}
+
+// Schedule date navigation
+var schedDateOffset=0;
+var schedBaseDateMs=new Date(2026,6,7).getTime();
+var schedDays=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+var schedMonths=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function changeSchedDate(delta){
+    schedDateOffset+=delta;
+    var d=new Date(schedBaseDateMs+schedDateOffset*86400000);
+    document.getElementById('schedDateLabel').textContent=schedDays[d.getDay()]+', '+schedMonths[d.getMonth()]+' '+d.getDate();
+}
 
 // PICKUP & ARRIVAL
 var pickupRequests = [];
@@ -722,7 +799,7 @@ function submitPickup(type) {
     var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
     var icons = {early:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',change:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>',friend:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',late:'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>'};
     var now = new Date();
-    pickupRequests.unshift({type:type,label:labels[type],icon:icons[type],time:now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes(),status:'Sent'});
+    pickupRequests.unshift({type:type,label:labels[type],icon:icons[type],time:now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes(),status:'Pending'});
     renderPickupHistory();
     toast(labels[type]+' request sent to camp office!');
 }
@@ -730,8 +807,9 @@ function renderPickupHistory() {
     var el = document.getElementById('pickupHistory');
     if (!pickupRequests.length) { el.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div>'; return; }
     el.innerHTML = '';
+    var statusBadge={Pending:'badge-warn',Confirmed:'badge-info',Released:'badge-ok'};
     pickupRequests.forEach(function(r){
-        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div></div><span class="badge badge-ok">'+r.status+'</span></div>';
+        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div></div><span class="badge '+(statusBadge[r.status]||'badge-neutral')+'">'+r.status+'</span></div>';
     });
 }
 
