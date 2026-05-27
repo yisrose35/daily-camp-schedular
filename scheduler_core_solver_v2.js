@@ -239,7 +239,8 @@
         if (s.field === 'Free' || !s._activity) return;
         if (s._activity === 'Change' || s.type === 'pre-change' || s.type === 'post-change') return;
         flat.push({ bunk, grade, idx, field: s.field, activity: s._activity,
-                    start: s._startMin, end: s._endMin });
+                    start: s._startMin, end: s._endMin,
+                    type: s.type, special: s._assignedSpecial, loc: (s.location || s._specialLocation) });
       });
     }
 
@@ -418,6 +419,49 @@
         if (n > maxUse) out.push({ bunk: b, idx: -1, reason: 'special-maxUsage:' + spec.name + ' bunk=' + n + ' max=' + maxUse });
       });
     });
+
+    // === 7. Cooldown / spacing rules (rules.js → window.SchedulingRules) ===
+    // The v1 seed already respects these (it calls rulesAllow at placement
+    // time), but v2's SA moves can shuffle a block into a forbidden range with
+    // no check. Treat a spacing violation as a HARD violation so the cost
+    // function (1e9 each) rejects any move that introduces one — and since the
+    // seed starts clean, SA just maintains 0. Fully guarded: a complete no-op
+    // when the user has no auto-mode spacing rules (zero overhead in the common
+    // case). The O(n^2)-per-bunk cost applies only when spacing rules exist,
+    // where correctness outweighs the extra SA time.
+    try {
+      const SR = (typeof window !== 'undefined') ? window.SchedulingRules : null;
+      const cdRules = (SR && typeof SR.getCooldownRules === 'function') ? (SR.getCooldownRules() || []) : [];
+      const hasAutoCd = SR && typeof SR.isCandidateAllowed === 'function' && cdRules.some(r => {
+        const m = (r && r.mode) || 'both';
+        return (m === 'both' || m === 'auto') && r.target && r.reference && (parseInt(r.minutes) || 0) > 0;
+      });
+      if (hasAutoCd) {
+        const _mkBlk = (c) => {
+          // Build a rules-engine descriptor. Prefer name-inferred type
+          // (reliably yields sport/special/swim/lunch/snack/dismissal from the
+          // activity name); fall back to the slot's explicit type (e.g. custom).
+          const infer = (typeof SR.inferTypeFromActivity === 'function') ? SR.inferTypeFromActivity(c.activity) : 'activity';
+          const type = (infer && infer !== 'activity') ? infer : (String(c.type || '').toLowerCase() || infer);
+          return { startMin: c.start, endMin: c.end, type, event: c.activity,
+                   field: c.field, _assignedSpecial: c.special || null, _specialLocation: c.loc || null };
+        };
+        const byBunkCd = {};
+        flat.forEach(c => { (byBunkCd[c.bunk] = byBunkCd[c.bunk] || []).push(c); });
+        Object.keys(byBunkCd).forEach(bk => {
+          const arr = byBunkCd[bk];
+          const blks = arr.map(_mkBlk);
+          for (let i = 0; i < blks.length; i++) {
+            const cand = blks[i];
+            const tmpl = blks.slice(0, i).concat(blks.slice(i + 1));
+            if (!SR.isCandidateAllowed(cand, tmpl, { mode: 'auto' })) {
+              out.push({ bunk: bk, idx: arr[i].idx,
+                         reason: 'cooldown:"' + (cand.event || '?') + '" violates a spacing rule' });
+            }
+          }
+        });
+      }
+    } catch (_eCd) { /* never let rule-checking break the solver */ }
 
     return out;
   }
