@@ -2313,6 +2313,87 @@
     //   SA finds a good neighborhood; repair polishes specific violations.
     smartRepair(window.scheduleAssignments, ctx);
 
+    // ★ FIELD QUALITY GROUPS re-optimization (rules.js) — runs AFTER SA + repair,
+    //   because v2 rebuilds the schedule and would otherwise discard the v1 seed's
+    //   field-quality moves. Pull each grouped-field sport block to a strictly
+    //   better-ranked field in its group when that field hosts the sport, can be
+    //   shared (same activity + same grade, within capacity), and the move adds NO
+    //   hard violation (validated via detectHardViolations → access/time/capacity/
+    //   sharing/cooldown/sport-cap). No-op when no field groups are configured.
+    try {
+      (function _fqReoptV2() {
+        const flds = ctx.fields || [];
+        const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
+        flds.forEach(function (f) {
+          if (!f || !f.name) return;
+          (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
+          capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+            || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+          if (f.fieldGroup && f.qualityRank) {
+            fgMap[f.name] = { group: f.fieldGroup, rank: parseInt(f.qualityRank) || 999 };
+            (fgGroups[f.fieldGroup] = fgGroups[f.fieldGroup] || []).push({ name: f.name, rank: parseInt(f.qualityRank) || 999 });
+          }
+        });
+        if (Object.keys(fgGroups).length === 0) return;
+        Object.keys(fgGroups).forEach(function (gn) { fgGroups[gn].sort(function (a, b) { return a.rank - b.rank; }); });
+
+        const sched = window.scheduleAssignments || {};
+        const bunkGrade = {};
+        for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGrade[String(b)] = g; }); }
+        const occ = {};
+        Object.keys(sched).forEach(function (b) {
+          (sched[b] || []).forEach(function (s) {
+            if (!s || s.continuation || !s.field || s.field === 'Free') return;
+            const st = s._startMin, en = s._endMin; if (st == null || en == null) return;
+            (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b), act: s._activity });
+          });
+        });
+        function canUse(field, s, e, exclBunk, myGrade, myAct) {
+          const list = occ[field] || []; let n = 0, ok = true;
+          for (let i = 0; i < list.length; i++) {
+            const iv = list[i];
+            if (iv.bunk === exclBunk) continue;
+            if (iv.s >= e || iv.e <= s) continue;
+            n++; if (bunkGrade[iv.bunk] !== myGrade || iv.act !== myAct) ok = false;
+          }
+          if (n === 0) return true;
+          return ok && n < (capMap[field] || 2);
+        }
+
+        let baseline = detectHardViolations(sched, ctx).length;
+        let moved = 0;
+        for (const bunk of Object.keys(sched)) {
+          const slots = sched[bunk]; if (!Array.isArray(slots)) continue;
+          const bs = String(bunk), grade = bunkGrade[bs];
+          for (const s of slots) {
+            if (!s || s.continuation || !s.field || s.field === 'Free') continue;
+            const cur = fgMap[s.field]; if (!cur) continue;
+            const sport = s._activity; if (!sport) continue;
+            const st = s._startMin, en = s._endMin; if (st == null || en == null) continue;
+            const members = fgGroups[cur.group];
+            for (let i = 0; i < members.length; i++) {
+              const m = members[i];
+              if (m.rank >= cur.rank) break;
+              if (m.name === s.field) continue;
+              if ((hostsBySport[sport] || []).indexOf(m.name) < 0) continue;
+              if (!canUse(m.name, st, en, bs, grade, sport)) continue;
+              const from = s.field;
+              s.field = m.name;
+              const v = detectHardViolations(sched, ctx).length;
+              if (v <= baseline) {
+                baseline = v; s._fqMoved = true;
+                const fl = occ[from]; if (fl) { for (let k = 0; k < fl.length; k++) { if (fl[k].bunk === bs && fl[k].s === st && fl[k].e === en) { fl.splice(k, 1); break; } } }
+                (occ[m.name] = occ[m.name] || []).push({ s: st, e: en, bunk: bs, act: sport });
+                moved++; break;
+              }
+              s.field = from; // would add a hard violation → revert
+            }
+          }
+        }
+        try { console.log('[FQ-REOPT-v2] groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_e) {}
+      })();
+    } catch (_eFQ2) {}
+
     // ★ Day 22.5+ FINAL NULL BACKFILL — guarantee 100% fill rate.
     //   smartRepair's Pass 3 tries to fill nulls with real activities, but
     //   gives up if no top-5 activity has a valid field for the slot. That
