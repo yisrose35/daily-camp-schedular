@@ -1137,16 +1137,22 @@
                     _groups[_key] = { act: _act, field: _field, adj: _adj, pos: _pos, dur: _dur,
                         grades: [], excluded: [], color: l.color || l.customColor || '#06B6D4',
                         winS: null, winE: null, totalBunks: 0,
-                        shareCap: null, shareGrades: {} };
+                        shareCap: null, gradeAllow: {}, anyShareGrades: false };
                 }
                 const grp = _groups[_key];
                 if (grp.grades.indexOf(_g) < 0) grp.grades.push(_g);
-                // ★ Sharing config (capacity + which grades may co-occupy). It's a
-                //   facility-level property but stored per-layer; merge across the group:
-                //   capacity = first non-null, allowedGrades = union.
+                // ★ Sharing config (capacity + which grades may co-occupy). It is a
+                //   facility-level rule but stored per grade-layer. Keep EACH grade's OWN
+                //   allowed-grades list — do NOT union them, or grades from different
+                //   sharing groups (e.g. {Duetos,Trios} vs {Minors,Soloists}) would all
+                //   become mutually shareable. capacity = MAX stated (facility size).
                 if (l.customSharing) {
-                    if (grp.shareCap == null && l.customSharing.capacity > 0) grp.shareCap = parseInt(l.customSharing.capacity) || null;
-                    (l.customSharing.allowedGrades || []).forEach(function (ag) { grp.shareGrades[String(ag)] = true; });
+                    const _csCap = parseInt(l.customSharing.capacity) || 0;
+                    if (_csCap > 0 && _csCap > (grp.shareCap || 0)) grp.shareCap = _csCap;
+                    if (Array.isArray(l.customSharing.allowedGrades) && l.customSharing.allowedGrades.length) {
+                        grp.gradeAllow[_g] = l.customSharing.allowedGrades.map(String);
+                        grp.anyShareGrades = true;
+                    }
                 }
                 // Full division day as the window so the engine can attach the slide
                 //   adjacent to swim wherever swim lands.
@@ -1165,26 +1171,25 @@
             Object.keys(_groups).forEach(function (_key, _gi) {
                 const grp = _groups[_key];
                 if (!grp.grades.length) return;
-                // ── Derive sharing enforcement from the user's config ──
+                // ── Derive sharing enforcement from the user's per-grade config ──
                 //   • capacity = "max bunks at a time" (blank → all bunks = no cap).
-                //   • allowedGrades non-empty → cross_division: only those grades may
-                //     co-occupy with a DIFFERENT grade; same-grade always co-shares
-                //     (g|g pairs), unlisted grades get the slot to themselves.
-                //   • allowedGrades empty → shareType 'all' (any grades, capped only).
-                const _shareGradeList = Object.keys(grp.shareGrades);
+                //   • any grade has an allowed list → cross_division. allowedPairs are
+                //     built from EACH grade's OWN list (so per-group sharing is honored,
+                //     not flattened): a grade may co-occupy only with the grades IT lists
+                //     (symmetric via sorted pair keys) + always with its own bunks.
+                //   • no grade lists anyone → shareType 'all' (any grades, capped only).
                 const _cap = (grp.shareCap && grp.shareCap > 0) ? grp.shareCap : Math.max(1, grp.totalBunks);
-                let _shareType = 'all', _allowedPairs = null;
-                if (_shareGradeList.length > 0) {
+                let _shareType = 'all', _allowedPairs = null, _shareDesc = [];
+                if (grp.anyShareGrades) {
                     _shareType = 'cross_division';
                     _allowedPairs = {};
-                    // every same-grade pair (a grade always shares with itself, up to cap)
+                    // same-grade always shares (a grade's own bunks), up to capacity
                     grp.grades.forEach(function (g) { _allowedPairs[[g, g].sort().join('|')] = true; });
-                    // every cross pair among the listed grades
-                    for (let _i = 0; _i < _shareGradeList.length; _i++) {
-                        for (let _j = _i; _j < _shareGradeList.length; _j++) {
-                            _allowedPairs[[_shareGradeList[_i], _shareGradeList[_j]].sort().join('|')] = true;
-                        }
-                    }
+                    // each grade's OWN stated co-occupants (directed list → symmetric keys)
+                    Object.keys(grp.gradeAllow).forEach(function (g) {
+                        grp.gradeAllow[g].forEach(function (x) { _allowedPairs[[g, x].sort().join('|')] = true; });
+                        _shareDesc.push(g + '↔[' + grp.gradeAllow[g].join(',') + ']');
+                    });
                 }
                 _synthCustomRotEvents.push({
                     id: '__synthcustom_' + _gi,
@@ -1207,7 +1212,7 @@
                     _isSynthCustom: true,
                     _shareType: _shareType,
                     _allowedPairs: _allowedPairs,
-                    _shareGrades: _shareGradeList,
+                    _shareDesc: _shareDesc,
                     _synthGrades: grp.grades.join(',')
                 });
             });
@@ -1216,7 +1221,7 @@
                     ' custom-layer wet-bundle event(s): ' +
                     _synthCustomRotEvents.map(e => '"' + e.name + '"→' + e.sequence.targetActivity +
                         ' [' + e._synthGrades + '] dur=' + e.durationPerBunk + ' cap=' + e.concurrency +
-                        ' share=' + e._shareType + (e._shareGrades && e._shareGrades.length ? '(' + e._shareGrades.join('/') + ')' : '')).join('; '));
+                        ' share=' + e._shareType + (e._shareDesc && e._shareDesc.length ? ' {' + e._shareDesc.join(' ') + '}' : '')).join('; '));
             }
         } catch (_eSynth) { try { warn('[STEP 1.5] synth custom-event build error: ' + (_eSynth && _eSynth.message)); } catch (_e2) {} }
 
