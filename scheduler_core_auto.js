@@ -21311,8 +21311,12 @@
         (function() {
             try {
                 const _sa = window.scheduleAssignments || {};
-                const _hints = window._coverageReasonHints || {}; // optional per-bunk hints (future)
                 const _norm = function (s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); };
+                // Canonical "Me-page" bunk order: grade order from the divisions config,
+                //   bunk order within each grade. Used to sort the gap list so the UI lists
+                //   bunks exactly as they appear on the Me page.
+                const _bunkOrder = {};
+                (function () { let _oi = 0; Object.keys(divisions).forEach(function (g) { (((divisions[g] || {}).bunks) || []).forEach(function (b) { if (_bunkOrder[String(b)] == null) _bunkOrder[String(b)] = _oi++; }); }); })();
 
                 // Group custom layers by activity → the set of bunks that SHOULD get it.
                 const _byAct = {}; // actName → { activity, adjacentTo, targets:[{bunk,grade}] }
@@ -21333,7 +21337,7 @@
                     });
                 });
 
-                const _gaps = []; // [{bunk, grade, activity, reason}]
+                const _gaps = []; // [{bunk, grade, activity, suggestions, order}]
                 Object.keys(_byAct).forEach(function (actName) {
                     const rec = _byAct[actName];
                     const _actN = _norm(rec.activity);
@@ -21345,26 +21349,42 @@
                                 .some(function (v) { const n = _norm(v); return n && n === _actN; });
                         });
                         if (_got) return;
-                        // ── derive a human-readable reason ──
-                        let _reason = _hints[_norm(t.bunk + '|' + rec.activity)] || '';
-                        if (!_reason) {
-                            if (rec.adjacentTo) {
-                                const _adj = _norm(rec.adjacentTo) || 'swim';
-                                const _hasAdj = Array.isArray(_slots) && _slots.some(function (s) {
-                                    if (!s) return false;
-                                    return [s._activity, s.event, s.sport, s.type]
-                                        .some(function (v) { const n = _norm(v); return n && n.indexOf(_adj) >= 0; });
-                                });
-                                _reason = _hasAdj
-                                    ? ('The only ' + _adj + '-adjacent slot was already full (sharing capacity reached) or taken by another grade. Raise the sharing capacity, widen the sharing group, or add another ' + _adj + '-adjacent period.')
-                                    : ('No ' + _adj + ' was scheduled for this bunk today, so "' + rec.activity + '" had nothing to attach to.');
-                            } else {
-                                _reason = 'No open slot or field was available for "' + rec.activity + '" in this bunk’s day.';
-                            }
+                        // ── 2-3 actionable suggestions (situation-aware) ──
+                        let _suggestions;
+                        if (rec.adjacentTo) {
+                            const _adj = _norm(rec.adjacentTo) || 'swim';
+                            const _hasAdj = Array.isArray(_slots) && _slots.some(function (s) {
+                                if (!s) return false;
+                                return [s._activity, s.event, s.sport, s.type]
+                                    .some(function (v) { const n = _norm(v); return n && n.indexOf(_adj) >= 0; });
+                            });
+                            _suggestions = _hasAdj
+                                ? [
+                                    'Raise the sharing capacity for “' + rec.activity + '” so more bunks fit the same slot.',
+                                    'Merge or widen its sharing group so more grades can share the ' + _adj + '-adjacent slot.',
+                                    'Add another ' + _adj + '-adjacent period to the bell schedule for a second slot.'
+                                  ]
+                                : [
+                                    'Schedule ' + _adj + ' for this bunk today — “' + rec.activity + '” attaches to ' + _adj + '.',
+                                    'Or turn off the “connect to ' + _adj + '” setting so it can place on its own.'
+                                  ];
+                        } else {
+                            _suggestions = [
+                                'Add field capacity or open a time window for “' + rec.activity + '”.',
+                                'Widen the layer’s allowed time window.',
+                                'Reduce other fixed activities competing in this bunk’s day.'
+                            ];
                         }
-                        _gaps.push({ bunk: t.bunk, grade: t.grade, activity: rec.activity, reason: _reason });
+                        _gaps.push({
+                            bunk: t.bunk, grade: t.grade, activity: rec.activity,
+                            suggestions: _suggestions,
+                            order: (_bunkOrder[String(t.bunk)] != null ? _bunkOrder[String(t.bunk)] : 999999)
+                        });
                     });
                 });
+
+                // Sort by canonical Me-page bunk order so the UI lists them as on the Me page.
+                _gaps.sort(function (a, b) { return a.order - b.order; });
 
                 window._coverageGaps = _gaps;
                 if (_gaps.length > 0) {
