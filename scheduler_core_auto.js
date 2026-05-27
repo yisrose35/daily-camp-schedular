@@ -21320,6 +21320,7 @@
                         }
                     });
                 });
+                try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_eL) {}
                 if (moved > 0) log('  🏟️ Field-quality re-opt: moved ' + moved + ' placement(s) to a better-ranked field.');
             })();
         } catch (_eFQ) { try { warn('[FieldQualityReopt] ' + (_eFQ && _eFQ.message)); } catch (_e2) {} }
