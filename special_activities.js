@@ -347,21 +347,34 @@ function initSpecialActivitiesTab() {
 function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
-        const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
+        // ★ Merge BOTH storage copies (top-level `specialActivities` and
+        //   `app1.specialActivities`). They are written together by
+        //   saveGlobalSpecialActivities but cloud-sync races can leave them
+        //   drifted — reading only one would surface a stale/blank copy and the
+        //   next saveData() would then persist it, WIPING subcategory tags.
+        const _topActs  = Array.isArray(settings.specialActivities) ? settings.specialActivities : [];
+        const _app1Acts = Array.isArray(settings.app1 && settings.app1.specialActivities) ? settings.app1.specialActivities : [];
+        const allActivities = (_topActs.length || _app1Acts.length) ? [..._app1Acts, ..._topActs] : [];
         // ★ Defensive dedupe on load. Cloud-sync races have produced storage
-        //   payloads with thousands of duplicate rows for the same name. Heal
-        //   on read so the rest of the app sees a clean registry; first
-        //   occurrence wins (it's the one users created interactively).
+        //   payloads with duplicate rows for the same name (sometimes one tagged
+        //   with a subcategory and another blank). Heal on read — and when a
+        //   duplicate exists, PREFER the row that carries a subcategory tag so a
+        //   blank copy can never shadow a tagged one (the tag-wipe bug).
+        const _hasSub = (s) => (s && typeof s.subcategory === 'string' && s.subcategory.trim() !== '');
         const _seenNames = new Map();
         for (const s of allActivities) {
             if (!s || !s.name) continue;
-            if (!_seenNames.has(s.name)) _seenNames.set(s.name, s);
+            const ex = _seenNames.get(s.name);
+            if (!ex) { _seenNames.set(s.name, s); continue; }
+            // Upgrade the kept row to a tagged duplicate if the kept one is blank.
+            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(s.name, s);
         }
         const dedupedActivities = [..._seenNames.values()];
-        if (dedupedActivities.length !== allActivities.length) {
-            console.warn(`[SPECIAL_ACTIVITIES] loadData: dropped ${allActivities.length - dedupedActivities.length} duplicate rows (${allActivities.length} → ${dedupedActivities.length})`);
+        const _rawMax = Math.max(_topActs.length, _app1Acts.length);
+        if (dedupedActivities.length < _rawMax) {
+            console.warn(`[SPECIAL_ACTIVITIES] loadData: healed duplicates within a copy (max copy ${_rawMax} → ${dedupedActivities.length} unique)`);
         }
-        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${dedupedActivities.length} unique activities`);
+        console.log(`[SPECIAL_ACTIVITIES] loadData: ${dedupedActivities.length} unique activities (merged top=${_topActs.length}+app1=${_app1Acts.length}, tag-preferring)`);
         specialActivities = []; rainyDayActivities = [];
         dedupedActivities.forEach(s => {
             const validated = validateSpecialActivity(s, s?.name);
