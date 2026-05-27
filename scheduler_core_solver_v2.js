@@ -2676,11 +2676,13 @@
     // globals on every SA evaluation.
     const sportMetaData = g.app1?.sportMetaData || window.sportMetaData || {};
     const _bunkSize = {};
+    const _bmd = (typeof window !== 'undefined' && (window.getBunkMetaData?.() || window.bunkMetaData)) || {};
     Object.keys(divisions).forEach(grade => {
       const dd = divisions[grade] || {};
       const sizes = dd.bunkSizes || {};
       const dflt = parseInt(dd.defaultBunkSize) || parseInt(dd.bunkSize) || 0;
-      (dd.bunks || []).forEach(b => { _bunkSize[String(b)] = parseInt(sizes[b]) || dflt || 0; });
+      // Canonical bunk size = camper count in bunkMetaData; fall back to divisions.bunkSizes.
+      (dd.bunks || []).forEach(b => { _bunkSize[String(b)] = parseInt(_bmd[b] && _bmd[b].size) || parseInt(sizes[b]) || dflt || 0; });
     });
 
     return {

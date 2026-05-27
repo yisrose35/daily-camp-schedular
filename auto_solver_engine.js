@@ -362,7 +362,13 @@
         //   bunk size; summed roster must not exceed the sport's maxPlayers.
         if (candidate?.maxPlayers && candidate.maxPlayers > 0) {
             const divs = window.divisions || {};
+            const _bmd = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
             const bunkSize = (b) => {
+                // Canonical bunk size = camper count in bunkMetaData (same source the
+                // manual solver + scheduler_core_utils use). Fall back to the (usually
+                // empty) divisions.bunkSizes so older configs still work.
+                const _ms = parseInt(_bmd[b] && _bmd[b].size);
+                if (_ms) return _ms;
                 for (const g in divs) {
                     const dd = divs[g];
                     if (!dd || !Array.isArray(dd.bunks)) continue;
@@ -911,14 +917,9 @@
                 //   or a sport it can fill). Only active when bunk sizes are configured
                 //   (size 0 → skip), so it never fires for camps without sizes.
                 if (cand.minPlayers != null && cand.minPlayers > 0) {
-                    var _bs = 0, _dv = window.divisions || {};
-                    for (var _g in _dv) {
-                        var _dd = _dv[_g];
-                        if (_dd && Array.isArray(_dd.bunks) && _dd.bunks.map(String).indexOf(String(bunk)) >= 0) {
-                            _bs = parseInt((_dd.bunkSizes || {})[bunk]) || parseInt(_dd.defaultBunkSize) || parseInt(_dd.bunkSize) || 0;
-                            break;
-                        }
-                    }
+                    var _bmd2 = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
+                    var _bs = parseInt(_bmd2[bunk] && _bmd2[bunk].size) || 0;
+                    if (!_bs) { var _dv = window.divisions || {}; for (var _g in _dv) { var _dd = _dv[_g]; if (_dd && Array.isArray(_dd.bunks) && _dd.bunks.map(String).indexOf(String(bunk)) >= 0) { _bs = parseInt((_dd.bunkSizes || {})[bunk]) || parseInt(_dd.defaultBunkSize) || parseInt(_dd.bunkSize) || 0; break; } } }
                     if (_bs > 0 && _bs < cand.minPlayers) score += (cand.minPlayers - _bs) * 40;
                 }
 
