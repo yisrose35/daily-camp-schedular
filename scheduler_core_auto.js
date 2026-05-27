@@ -21274,19 +21274,23 @@
                         if (!s || s.continuation || !s.field || s.field === 'Free') return;
                         const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
                         if (st == null || en == null) return;
-                        (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b) });
+                        (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b), act: s._activity });
                     });
                 });
-                function canUse(field, s, e, exclBunk, myGrade) {
-                    const list = occ[field] || []; let n = 0, allSame = true;
+                function canUse(field, s, e, exclBunk, myGrade, myAct) {
+                    const list = occ[field] || []; let n = 0, ok = true;
                     for (let i = 0; i < list.length; i++) {
                         const iv = list[i];
                         if (iv.bunk === exclBunk) continue;
                         if (iv.s >= e || iv.e <= s) continue;
-                        n++; if (bunkGrade[iv.bunk] !== myGrade) allSame = false;
+                        n++;
+                        // To share a field, every co-occupant must be the SAME activity AND
+                        // same grade (a field hosts one activity at a time; same_division
+                        // shares by grade). Mixing activities/grades is not a valid share.
+                        if (bunkGrade[iv.bunk] !== myGrade || iv.act !== myAct) ok = false;
                     }
                     if (n === 0) return true;                                   // empty → safe
-                    return n < (capMap[field] || 2) && allSame;                 // same-grade share within cap
+                    return ok && n < (capMap[field] || 2);
                 }
 
                 let moved = 0;
@@ -21304,13 +21308,13 @@
                             if (m.rank >= cur.rank) break;                                       // only strictly better-ranked
                             if (m.name === s.field) continue;
                             if ((hostsBySport[sport] || []).indexOf(m.name) < 0) continue;        // field must host the sport
-                            if (!canUse(m.name, st, en, bs, grade)) continue;                     // capacity/sharing OK
+                            if (!canUse(m.name, st, en, bs, grade, sport)) continue;               // capacity/sharing OK
                             if (_validateWritePlacement(m.name, sport, grade, bs, st, en)) continue; // access/time problem → skip
                             const from = s.field;
                             s.field = m.name; s._fqMoved = true;
                             const fl = occ[from];
                             if (fl) { for (let k = 0; k < fl.length; k++) { if (fl[k].bunk === bs && fl[k].s === st && fl[k].e === en) { fl.splice(k, 1); break; } } }
-                            (occ[m.name] = occ[m.name] || []).push({ s: st, e: en, bunk: bs });
+                            (occ[m.name] = occ[m.name] || []).push({ s: st, e: en, bunk: bs, act: sport });
                             moved++;
                             break;
                         }
