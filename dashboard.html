@@ -76,26 +76,26 @@
                 <img src="Flow_clean.png" alt="Flow" class="dash-ql-logo">
                 <span>Flow</span>
             </a>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--go-color);">
+            <a href="campistry_go.html" class="dash-ql-tile" style="--ql-color: var(--go-color);">
                 <img src="Go_clean.png" alt="Go" class="dash-ql-logo">
                 <span>Go</span>
-            </div>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--health-color);">
+            </a>
+            <a href="campistry_health.html" class="dash-ql-tile" style="--ql-color: var(--health-color);">
                 <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
                 <span>Health</span>
-            </div>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--live-color);">
+            </a>
+            <a href="campistry_live.html" class="dash-ql-tile" style="--ql-color: var(--live-color);">
                 <img src="Live_clean.png" alt="Live" class="dash-ql-logo">
                 <span>Live</span>
-            </div>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--snacks-color);">
+            </a>
+            <a href="campistry_snacks.html" class="dash-ql-tile" style="--ql-color: var(--snacks-color);">
                 <img src="Snacks_clean.png" alt="Snacks" class="dash-ql-logo">
                 <span>Snacks</span>
-            </div>
-            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--link-color);">
+            </a>
+            <a href="campistry_link_admin.html" class="dash-ql-tile" style="--ql-color: var(--link-color);">
                 <img src="Link_clean.png" alt="Link" class="dash-ql-logo">
                 <span>Link</span>
-            </div>
+            </a>
         </section>
 
         <!-- ===== QUICK STATS ROW ===== -->
@@ -447,8 +447,7 @@ if (window.location.protocol === 'file:') {
                 items.push({ type: 'info', icon: 'eye', text: 'You have view-only access. Contact your camp owner to request editing permissions.', time: 'Note' });
             }
 
-            // Coming soon tease
-            items.push({ type: 'coming', icon: 'sparkle', text: 'Campistry Health, Live, Snacks &amp; Link are coming soon — stay tuned for updates!', time: 'New' });
+            items.push({ type: 'tip', icon: 'sparkle', text: 'Campistry Go, Health, Live, Snacks &amp; Link are now accessible from the dashboard.', time: 'New' });
 
             var html = '';
             items.forEach(function(item) {
