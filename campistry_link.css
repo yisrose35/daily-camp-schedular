@@ -19,6 +19,7 @@
     --text-primary: #0F172A;
     --text-secondary: #475569;
     --text-muted: #94A3B8;
+    --border-subtle: #E2E8F0;
     --slate-50: #F8FAFC; --slate-100: #F1F5F9; --slate-200: #E2E8F0; --slate-300: #CBD5E1;
     --slate-400: #94A3B8; --slate-500: #64748B; --slate-600: #475569; --slate-700: #334155;
     --slate-800: #1E293B; --slate-900: #0F172A;
@@ -156,7 +157,7 @@ body { font-family: var(--font-body); background: var(--bg-primary); color: var(
 .lk-main { margin-left: 240px; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
 .lk-page { display: none; }
 .lk-page.active { display: block; }
-.lk-page-header { margin-bottom: 22px; }
+.lk-page-header { margin-bottom: 22px; padding-bottom: 16px; border-bottom: 1px solid var(--slate-100); }
 .lk-page-header h1 { font-family: var(--font-display); font-size: 1.45rem; font-weight: 700; margin-bottom: 2px; color: var(--slate-900); }
 .lk-page-header p { font-size: 0.84rem; color: var(--slate-400); }
 
@@ -627,6 +628,98 @@ body { font-family: var(--font-body); background: var(--bg-primary); color: var(
 .sched-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
 .sched-name { font-size: 0.86rem; font-weight: 600; color: var(--slate-800); }
 .sched-loc { font-size: 0.72rem; color: var(--slate-400); }
+
+/* PAGE HERO (inner pages — compact branded strip) */
+.lk-page-hero {
+    display: flex; align-items: center; gap: 18px;
+    padding: 20px 24px;
+    background: white;
+    border: 1px solid var(--slate-200);
+    border-left: 4px solid var(--link-color);
+    border-radius: var(--radius-lg);
+    margin-bottom: 24px;
+    box-shadow: var(--shadow-sm);
+}
+.lk-page-hero-icon {
+    width: 44px; height: 44px;
+    border-radius: var(--radius-md);
+    background: var(--link-tint);
+    border: 1px solid var(--link-border);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--link-color); flex-shrink: 0;
+}
+.lk-page-hero-icon svg { width: 22px; height: 22px; }
+.lk-page-hero h1 {
+    font-family: var(--font-display);
+    font-size: 1.35rem; font-weight: 700;
+    color: var(--slate-900); margin-bottom: 2px;
+}
+.lk-page-hero p { font-size: 0.8rem; color: var(--slate-400); }
+
+/* CHILD CARDS */
+.lk-child-card {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px;
+    background: #fff;
+    border: 1px solid var(--slate-200);
+    border-radius: var(--radius-lg);
+    margin-bottom: 10px;
+    cursor: pointer;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+    box-shadow: var(--shadow-sm);
+}
+.lk-child-card:hover { border-color: var(--link-border); box-shadow: var(--shadow-md); transform: translateY(-1px); }
+.lk-child-avatar {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: var(--link-tint);
+    border: 1px solid var(--link-border);
+    display: flex; align-items: center; justify-content: center;
+    font-size: .8rem; font-weight: 700; color: var(--link-color);
+    flex-shrink: 0;
+}
+.lk-child-info { flex: 1; min-width: 0; }
+.lk-child-name { font-weight: 700; font-size: .92rem; color: var(--slate-900); }
+.lk-child-meta { font-size: .76rem; color: var(--text-muted); margin-top: 1px; }
+
+/* TX ITEMS */
+.lk-tx-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--slate-100);
+}
+.lk-tx-item:last-child { border-bottom: none; }
+.lk-tx-left { display: flex; align-items: center; gap: 10px; }
+.lk-tx-icon {
+    width: 32px; height: 32px;
+    border-radius: var(--radius-sm);
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+}
+.lk-tx-icon.debit { background: var(--red-50); color: var(--red-500); }
+.lk-tx-icon.credit { background: var(--green-50); color: var(--green-600); }
+.lk-tx-name { font-size: .84rem; font-weight: 600; color: var(--slate-800); }
+.lk-tx-date { font-size: .7rem; color: var(--text-muted); }
+.lk-tx-amt { font-size: .86rem; font-weight: 700; }
+.lk-tx-amt.debit { color: var(--red-500); }
+.lk-tx-amt.credit { color: var(--green-600); }
+
+/* PICKUP HISTORY ITEMS */
+.lk-hist-item {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--slate-100);
+}
+.lk-hist-item:last-child { border-bottom: none; }
+.lk-hist-icon {
+    width: 36px; height: 36px;
+    border-radius: var(--radius-sm);
+    background: var(--slate-50);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--slate-500); flex-shrink: 0;
+}
+.lk-hist-info { flex: 1; }
+.lk-hist-label { font-size: .84rem; font-weight: 600; color: var(--slate-800); }
+.lk-hist-time { font-size: .71rem; color: var(--text-muted); }
 
 /* RESPONSIVE */
 @media (max-width: 768px) {
