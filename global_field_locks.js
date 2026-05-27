@@ -59,8 +59,8 @@
      */
     GlobalFieldLocks.lockField = function(fieldName, slots, lockInfo) {
         if (!this._initialized) this.reset();
-        if (!fieldName || !slots || slots.length === 0) return false;
-        
+        if (!fieldName || typeof fieldName !== 'string' || !slots || slots.length === 0) return false;
+
         const normalizedField = fieldName.toLowerCase().trim();
         
         for (const slotIdx of slots) {
@@ -81,10 +81,17 @@
     fieldName: fieldName,
     timestamp: Date.now()
 };
-            
+
             // console.log(`[GLOBAL_LOCKS] 🔒 LOCKED: "${fieldName}" at slot ${slotIdx} by ${lockInfo.lockedBy} (${lockInfo.leagueName || lockInfo.activity})`);
         }
-        
+
+        // ★ Propagate the lock to combo partners (e.g. locking Full Gym also
+        //   locks Gym 1 / Gym 2). Skip when already inside a combo propagation
+        //   to prevent infinite recursion (lockComboPartners → lockField → ...).
+        if (!lockInfo || !lockInfo._fromComboPropagation) {
+            this.lockComboPartners(fieldName, slots, lockInfo || {});
+        }
+
         return true;
     };
 
@@ -195,6 +202,40 @@
                         timestamp: Date.now()
                     };
                 }
+                // Lock-table scan — catches league locks etc. that aren't in scheduleAssignments
+                const exclusives = (window.FieldCombos.getExclusiveFields ? window.FieldCombos.getExclusiveFields(fieldName) : []) || [];
+                if (exclusives.length) {
+                    const exSet = new Set(exclusives.map(function (f) { return String(f).toLowerCase().trim(); }));
+                    for (const slotIdx in this._locks) {
+                        const slotLocks = this._locks[slotIdx];
+                        for (const lockedFieldKey in slotLocks) {
+                            if (!exSet.has(lockedFieldKey)) continue;
+                            const lock = slotLocks[lockedFieldKey];
+                            if (lock.lockType === 'division' && lock.allowedDivision &&
+                                divisionContext && divisionContext === lock.allowedDivision) continue;
+                            let lStart = lock.startMin, lEnd = lock.endMin;
+                            if (lStart == null || lEnd == null) {
+                                const lockDiv = lock.division || lock.allowedDivision;
+                                if (lockDiv) {
+                                    const firstDiv = String(lockDiv).split(',')[0].trim();
+                                    const dts = window.divisionTimes?.[firstDiv] || [];
+                                    const slot = dts[parseInt(slotIdx, 10)];
+                                    if (slot) { lStart = slot.startMin; lEnd = slot.endMin; }
+                                }
+                            }
+                            if (lStart == null || lEnd == null) continue;
+                            if (lStart < cEndMin && lEnd > cStartMin) {
+                                return {
+                                    lockedBy: 'combined_field_lock', lockType: 'global', fieldName: fieldName,
+                                    blockedBy: lock.fieldName || lockedFieldKey,
+                                    leagueName: lock.leagueName || lock.activity,
+                                    reason: '"' + fieldName + '" blocked because "' + (lock.fieldName || lockedFieldKey) + '" is locked (combined field)',
+                                    timestamp: Date.now()
+                                };
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -241,10 +282,12 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         // If lock doesn't have explicit times, try to derive from the lock's division slots
         if (lockStartMin == null || lockEndMin == null) {
-            const lockDiv = lock.division;
+            // ★ Division locks (electives, swim+elective hybrids) store allowedDivision,
+            //   not division. Fall back to it so league checks see those locks.
+            const lockDiv = lock.division || lock.allowedDivision;
             if (lockDiv) {
                 // Handle comma-separated division strings (e.g., "Div A, Div B")
-                const firstDiv = lockDiv.split(',')[0].trim();
+                const firstDiv = String(lockDiv).split(',')[0].trim();
                 const divSlots = window.divisionTimes?.[firstDiv] || [];
                 const slot = divSlots[parseInt(slotIdx, 10)];
                 if (slot) {
@@ -259,13 +302,18 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
 
         // Check TIME OVERLAP (not slot index match)
         if (lockStartMin < queryEndMin && lockEndMin > queryStartMin) {
-            console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            // NOTE: This function is called per-candidate inside the solver hot loop —
+            // logging every hit floods devtools and dominates solve time. Gate on a debug flag.
+            if (window.DEBUG_GLOBAL_LOCKS) {
+                console.log(`[GLOBAL_LOCKS] ⏰ TIME-BASED LOCK HIT: "${fieldName}" locked ${lockStartMin}-${lockEndMin} overlaps query ${queryStartMin}-${queryEndMin} (by ${lock.lockedBy}: ${lock.leagueName || lock.activity})`);
+            }
             return lock;
         }
     }
 
    // ★★★ COMBINED FIELD MUTUAL EXCLUSION CHECK ★★★
     if (window.FieldCombos?.isInCombo?.(fieldName)) {
+        // (a) Per-bunk scan (existing): checks scheduleAssignments
         const comboCheck = window.FieldCombos.isBlockedByCombo(fieldName, queryStartMin, queryEndMin, null);
         if (comboCheck.blocked) {
             return {
@@ -274,6 +322,45 @@ GlobalFieldLocks.isFieldLockedByTime = function(fieldName, queryStartMin, queryE
                 reason: '"' + fieldName + '" blocked because "' + comboCheck.blocker + '" is in use (combined field)',
                 timestamp: Date.now()
             };
+        }
+        // (b) Lock-table scan (new): catches combo conflicts that live in
+        // _locks but NOT in scheduleAssignments — e.g. leagues that lock
+        // "Full Gym" but write team matchups to leagueAssignments instead
+        // of per-bunk slots, so the (a) scan can't see them.
+        const exclusives = (window.FieldCombos.getExclusiveFields ? window.FieldCombos.getExclusiveFields(fieldName) : []) || [];
+        if (exclusives.length) {
+            const exSet = new Set(exclusives.map(function (f) { return String(f).toLowerCase().trim(); }));
+            for (const slotIdx in this._locks) {
+                const slotLocks = this._locks[slotIdx];
+                for (const lockedFieldKey in slotLocks) {
+                    if (!exSet.has(lockedFieldKey)) continue;
+                    const lock = slotLocks[lockedFieldKey];
+                    // Skip division locks the caller is allowed for
+                    if (lock.lockType === 'division' && lock.allowedDivision &&
+                        divisionContext && divisionContext === lock.allowedDivision) continue;
+                    // Resolve lock time range
+                    let lStart = lock.startMin, lEnd = lock.endMin;
+                    if (lStart == null || lEnd == null) {
+                        const lockDiv = lock.division || lock.allowedDivision;
+                        if (lockDiv) {
+                            const firstDiv = String(lockDiv).split(',')[0].trim();
+                            const dts = window.divisionTimes?.[firstDiv] || [];
+                            const slot = dts[parseInt(slotIdx, 10)];
+                            if (slot) { lStart = slot.startMin; lEnd = slot.endMin; }
+                        }
+                    }
+                    if (lStart == null || lEnd == null) continue;
+                    if (lStart < queryEndMin && lEnd > queryStartMin) {
+                        return {
+                            lockedBy: 'combined_field_lock', lockType: 'global', fieldName: fieldName,
+                            blockedBy: lock.fieldName || lockedFieldKey,
+                            leagueName: lock.leagueName || lock.activity,
+                            reason: '"' + fieldName + '" blocked because "' + (lock.fieldName || lockedFieldKey) + '" is locked (combined field)',
+                            timestamp: Date.now()
+                        };
+                    }
+                }
+            }
         }
     }
 
@@ -386,7 +473,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
             this.lockField(partner, slots, {
                 ...lockInfo,
                 lockedBy: 'combined_field',
-                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)'
+                reason: '"' + partner + '" blocked because "' + fieldName + '" is locked (combined field)',
+                _fromComboPropagation: true
             });
         }
     };
@@ -510,9 +598,9 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         
         const role = window.AccessControl?.getCurrentRole?.() || 'viewer';
         
-        // Owners/Admins don't need to see "other" schedulers - they see everything
-        if (role === 'owner' || role === 'admin') {
-            console.log('[GLOBAL_LOCKS] Owner/Admin mode - no field restrictions from other schedulers');
+        // Owners/Admins/Schedulers don't need to see "other" schedulers - they have full access
+        if (role === 'owner' || role === 'admin' || role === 'scheduler') {
+            console.log('[GLOBAL_LOCKS] Owner/Admin/Scheduler mode - no field restrictions from other schedulers');
             this._otherSchedulerLoaded = true;
             return { success: true, fieldCount: 0 };
         }

@@ -213,11 +213,11 @@
                 allowedFields: null,
                 transition: null,
                 preferences: null,
-                limitUsage: null,
+                accessRestrictions: null,
                 timeRules: [],
                 minDurationMin: 0,
                 maxUsage: 0,
-                frequencyWeeks: 0,
+                frequencyDays: 0,
                 rainyDayAvailable: false,
                 activities: [],
                 type: 'activity',
@@ -226,16 +226,28 @@
         }
 
         masterActivities.forEach(a => {
-            props[a.name] = base({
+            // ★★★ FIX v2.4: Normalize sharableWith for specials (not just fields) ★★★
+            // Empty {} from special_activities.js overwrites base default without this.
+            const rawSW = a.sharableWith;
+            const normalizedActivitySW = (rawSW && typeof rawSW === 'object' && rawSW.type)
+                ? {
+                    type: rawSW.type,
+                    divisions: Array.isArray(rawSW.divisions) ? rawSW.divisions : [],
+                    capacity: parseInt(rawSW.capacity) || (rawSW.type === 'all' ? 999 : (rawSW.type === 'not_sharable' ? 1 : 2))
+                }
+                : null; // null lets base() default take over
+
+            // Store under BOTH original case and lowercase so solver's normName() lookups work
+            const propEntry = base({
                 available: a.available !== false,
                 sharable: a.sharable || false,
-                sharableWith: a.sharableWith || null,
+                sharableWith: normalizedActivitySW,
                 preferredDivisions: a.divisions || [],
                 allowedDivisions: a.divisions || [],
                 allowedFields: a.allowedFields || null,
                 transition: a.transition || null,
                 preferences: a.preferences || null,
-                limitUsage: a.limitUsage || null,
+                accessRestrictions: a.accessRestrictions || null,
                 timeRules: a.timeRules || [],
                 minDurationMin: a.minDurationMin || 0,
                 maxUsage: a.maxUsage || 0,
@@ -246,6 +258,9 @@
                 rainyDayExclusive: a.rainyDayExclusive === true,
                 fullGrade: a.fullGrade === true
             });
+            props[a.name] = propEntry;
+            const lowerKey = a.name.toLowerCase().trim();
+            if (lowerKey !== a.name) props[lowerKey] = propEntry;
         });
 
         // ★★★ ENHANCED: Include ALL field properties ★★★
@@ -257,23 +272,27 @@
                 capacity: parseInt(f.sharableWith?.capacity) || (f.sharableWith?.type === 'all' ? 999 : 1)
             };
             
-            // ★ Normalize limitUsage with complete structure
-            const normalizedLimitUsage = f.limitUsage ? {
-                enabled: f.limitUsage.enabled === true,
-                divisions: typeof f.limitUsage.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage.priorityList) ? f.limitUsage.priorityList : []
+            // ★ Normalize accessRestrictions with complete structure
+            const normalizedLimitUsage = f.accessRestrictions ? {
+                enabled: f.accessRestrictions.enabled === true,
+                divisions: typeof f.accessRestrictions.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions.usePriority === true
             } : null;
             
-            // ★ Parse timeRules to include startMin/endMin
+            // ★ Parse timeRules to include startMin/endMin AND preserve
+            // per-grade `divisions` so the scheduler can scope rules
+            // ("Available 11-12 for grade 1") to the matching division.
             const parsedTimeRules = Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
                 end: r.end || '',
                 startMin: r.startMin ?? parseTimeString(r.start),
-                endMin: r.endMin ?? parseTimeString(r.end)
+                endMin: r.endMin ?? parseTimeString(r.end),
+                divisions: Array.isArray(r.divisions) ? [...r.divisions] : []
             })) : [];
 
-            props[f.name] = base({
+            const fieldEntry = base({
                 type: 'field',
                 available: f.available !== false,
                 sharable: normalizedSharable.type !== 'not_sharable',
@@ -281,13 +300,15 @@
                 allowedDivisions: normalizedSharable.type === 'custom' ? normalizedSharable.divisions : [],
                 transition: f.transition || null,
                 preferences: f.preferences || null,
-                limitUsage: normalizedLimitUsage,
+                accessRestrictions: normalizedLimitUsage,
                 timeRules: parsedTimeRules,
-                // ★★★ v2.2: Include rainyDayAvailable for fields ★★★
                 rainyDayAvailable: f.rainyDayAvailable === true,
-                // ★★★ Include activities array (sports this field supports) ★★★
-                activities: Array.isArray(f.activities) ? f.activities : []
+                activities: Array.isArray(f.activities) ? f.activities : [],
+                gradeShareRules: (f.gradeShareRules && typeof f.gradeShareRules === 'object') ? f.gradeShareRules : {}
             });
+            props[f.name] = fieldEntry;
+            const fLower = f.name.toLowerCase().trim();
+            if (fLower !== f.name) props[fLower] = fieldEntry;
         });
 
         return props;
@@ -385,7 +406,22 @@
         // -----------------------------------------------------------------
         // STEP 1: Disable outdoor fields during rainy day
         // -----------------------------------------------------------------
-        let effectiveDisabledFields = [...(dailyOverrides.disabledFields || [])];
+        // ★ v7.0: Read from correct path — overrides are nested under dailyData.overrides
+        let dailyOvNested = dailyOverrides.overrides || {};
+        // Fallback: dedicated localStorage key (survives cloud overwrites)
+        if (!dailyOvNested.disabledFields?.length && !dailyOvNested.disabledSpecials?.length) {
+            try {
+                const dateKey = window.currentScheduleDate || '';
+                const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+                if (stored) {
+                    const parsed = JSON.parse(stored);
+                    if (parsed?.overrides) dailyOvNested = parsed.overrides;
+                    if (parsed?.dailyFieldAvailability) dailyOverrides.dailyFieldAvailability = parsed.dailyFieldAvailability;
+                    if (parsed?.dailyDisabledSportsByField) dailyOverrides.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+                }
+            } catch(e) {}
+        }
+        let effectiveDisabledFields = [...(dailyOvNested.disabledFields || dailyOverrides.disabledFields || [])];
         
         if (isRainyMode) {
             // Get all outdoor fields (those without rainyDayAvailable === true)
@@ -486,8 +522,8 @@
             masterLeagues: window.masterLeagues || {},
             masterSpecialtyLeagues: window.masterSpecialtyLeagues || {},
             disabledFields: effectiveDisabledFields,
-            disabledSpecials: dailyOverrides.disabledSpecials || [],
-            disabledLeagues: dailyOverrides.disabledLeagues || [],
+            disabledSpecials: dailyOvNested.disabledSpecials || dailyOverrides.disabledSpecials || [],
+            disabledLeagues: dailyOvNested.leagues || dailyOverrides.disabledLeagues || [],
             disabledSpecialtyLeagues: dailyOverrides.disabledSpecialtyLeagues || [],
             historicalCounts: window.loadHistoricalCounts?.() || {},
             yesterdayHistory: window.loadYesterdayHistory?.() || {},
@@ -495,8 +531,8 @@
             specialActivityNames: effectiveSpecialActivityNames,
             dailyFieldAvailability: dailyOverrides.dailyFieldAvailability || {},
             masterZones: window.loadZones?.() || {},
-            bunkMetaData: window.bunkMetaData || {},
-            sportMetaData: window.sportMetaData || {},
+            bunkMetaData: window.getBunkMetaData?.() || window.bunkMetaData || {},
+            sportMetaData: window.getSportMetaData?.() || window.sportMetaData || {},
             isRainyDayMode: isRainyMode
         };
     }

@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Campistry Go Neighborhoods — Phase 1 test harness</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  body { margin:0; font-family: system-ui, sans-serif; display:flex; height:100vh; }
+  #side { width: 360px; padding: 12px; background:#f5f5f5; overflow-y:auto; border-right:1px solid #ddd; }
+  #map { flex:1; }
+  textarea { width:100%; height: 220px; font-family: monospace; font-size:11px; }
+  button { width:100%; padding:8px; margin-top:6px; font-size:14px; cursor:pointer; }
+  #log { white-space: pre-wrap; font-family: monospace; font-size:11px; background:#fff; padding:6px; margin-top:8px; max-height: 300px; overflow-y:auto; border:1px solid #ccc; }
+  h3 { margin:6px 0; }
+  .stat { display:flex; justify-content:space-between; font-size:12px; padding:2px 0; }
+</style>
+</head>
+<body>
+<div id="side">
+  <h3>Campistry Go Neighborhoods — Phase 1 test</h3>
+  <p style="font-size:12px;">Paste camper JSON: <code>[{name, lat, lng, address, zip}]</code></p>
+  <textarea id="campersJson">[]</textarea>
+  <button id="runBtn">Detect neighborhoods</button>
+  <button id="packBtn">Pack into buses (50-seat × 10)</button>
+  <div id="stats"></div>
+  <div id="log"></div>
+</div>
+<div id="map"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="campistry_go_neighborhoods.js"></script>
+<script>
+  const map = L.map('map').setView([40.67, -73.97], 12);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
+  const logEl = document.getElementById('log');
+  const statsEl = document.getElementById('stats');
+  const origLog = console.log, origWarn = console.warn;
+  function teeLog(...args) { origLog(...args); logEl.textContent += args.join(' ') + '\n'; logEl.scrollTop = logEl.scrollHeight; }
+  console.log = teeLog; console.warn = (...a) => { teeLog('⚠', ...a); };
+
+  let overlay = L.layerGroup().addTo(map);
+  let lastResult = null;
+
+  const palette = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#e11d48','#84cc16','#0ea5e9','#d946ef'];
+
+  function colorFor(i) { return palette[i % palette.length]; }
+
+  function renderResult(result) {
+    overlay.clearLayers();
+    if (!result) return;
+    // Draw each neighborhood's segments in its color, plus homes as dots
+    const nhColor = {};
+    result.neighborhoods.forEach((nh, i) => nhColor[nh.id] = colorFor(i));
+    for (const seg of result.segments) {
+      const a = result.nodes[seg.fromNodeId], b = result.nodes[seg.toNodeId];
+      if (!a || !b) continue;
+      L.polyline([[a.lat, a.lng], [b.lat, b.lng]], {
+        color: nhColor[seg.neighborhoodId] || '#888',
+        weight: 4, opacity: 0.8,
+      }).bindTooltip(seg.name + ' (' + seg.homes.length + ' homes)').addTo(overlay);
+    }
+    for (const h of result.homes) {
+      L.circleMarker([h.lat, h.lng], {
+        radius: 4, color: nhColor[h.neighborhoodId] || '#333', fillOpacity: 0.9,
+      }).bindTooltip(h.camperName + ' — ' + h.address).addTo(overlay);
+    }
+    if (result.homes.length) {
+      const lats = result.homes.map(h => h.lat), lngs = result.homes.map(h => h.lng);
+      map.fitBounds([[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]], { padding: [20, 20] });
+    }
+    statsEl.innerHTML =
+      '<div class="stat"><span>Regions</span><b>' + result.regions.length + '</b></div>' +
+      '<div class="stat"><span>Neighborhoods</span><b>' + result.neighborhoods.length + '</b></div>' +
+      '<div class="stat"><span>Segments</span><b>' + result.segments.length + '</b></div>' +
+      '<div class="stat"><span>Homes</span><b>' + result.homes.length + '</b></div>' +
+      '<div class="stat"><span>Unattached</span><b>' + result.unattachedCampers.length + '</b></div>';
+  }
+
+  document.getElementById('runBtn').addEventListener('click', async () => {
+    logEl.textContent = '';
+    let campers;
+    try { campers = JSON.parse(document.getElementById('campersJson').value); }
+    catch (e) { alert('Invalid JSON: ' + e.message); return; }
+    console.log('[test] Running with ' + campers.length + ' campers...');
+    lastResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({ campers, options: { verbose: true } });
+    renderResult(lastResult);
+  });
+
+  document.getElementById('packBtn').addEventListener('click', () => {
+    if (!lastResult) { alert('Run neighborhood detection first.'); return; }
+    const buses = Array.from({ length: 10 }, (_, i) => ({ id: 'bus' + i, name: 'Bus ' + i, capacity: 50, reserveSeats: 2 }));
+    const assignment = window.CampistryGoNeighborhoods.packIntoBuses({ result: lastResult, buses });
+    overlay.clearLayers();
+    assignment.forEach((bus, i) => {
+      const color = colorFor(i);
+      for (const sid of bus.segmentIds) {
+        const seg = lastResult.segments.find(s => s.id === sid);
+        if (!seg) continue;
+        const a = lastResult.nodes[seg.fromNodeId], b = lastResult.nodes[seg.toNodeId];
+        if (!a || !b) continue;
+        L.polyline([[a.lat, a.lng], [b.lat, b.lng]], {
+          color, weight: 5, opacity: 0.85,
+        }).bindTooltip(bus.name + ' — ' + seg.name).addTo(overlay);
+        for (const h of seg.homes) {
+          L.circleMarker([h.lat, h.lng], { radius: 4, color, fillOpacity: 0.9 })
+            .bindTooltip(h.camperName + ' (' + bus.name + ')').addTo(overlay);
+        }
+      }
+    });
+    const physical = window.CampistryGoNeighborhoods.expandToPhysicalStops({ assignment, result: lastResult });
+    console.log('[test] Bus assignments:');
+    for (const b of physical) console.log('  ' + b.name + ' — ' + b.camperCount + ' campers, ' + b.stops.length + ' drops, ' + b.neighborhoodIds.length + ' neighborhoods');
+  });
+</script>
+</body>
+</html>

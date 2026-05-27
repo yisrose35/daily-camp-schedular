@@ -165,11 +165,12 @@
         console.log(`[SpecialtyLeagues] Found ${futureDates.length} future date(s) to check: ${futureDates.join(', ')}`);
         
         let updatedAny = false;
-        
+        const modifiedDates = new Set(); // ★ Track which dates actually changed
+
         for (const futureDate of futureDates) {
             const dayData = allDailyData[futureDate];
             if (!dayData) continue;
-            
+
             const assignments = dayData.scheduleAssignments || {};
             const leagueAssignments = dayData.leagueAssignments || {};
             let dayUpdated = false;
@@ -297,27 +298,25 @@
                 allDailyData[futureDate].scheduleAssignments = assignments;
                 allDailyData[futureDate].leagueAssignments = leagueAssignments;
                 updatedAny = true;
+                modifiedDates.add(futureDate); // ★ Only track actually-changed dates
                 console.log(`[SpecialtyLeagues] ✅ Updated schedule for ${futureDate}`);
             }
         }
-        
+
         // Save all updated daily data
         if (updatedAny) {
             try {
                 const DAILY_DATA_KEY = "campDailyData_v1";
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
-                
-                // Also sync to cloud
-                if (typeof window.saveGlobalSettings === 'function') {
-                  // ★★★ FIX: Cloud-sync EACH modified future date individually ★★★
-for (const futureDate of Object.keys(allDailyData)) {
-    if (futureDate.match(/^\d{4}-\d{2}-\d{2}$/) && allDailyData[futureDate]?.scheduleAssignments) {
-        window.ScheduleDB?.saveSchedule?.(futureDate, allDailyData[futureDate], { skipFilter: true });
-    }
-}
+
+                // ★★★ FIX: Cloud-sync ONLY the dates that actually changed ★★★
+                for (const changedDate of modifiedDates) {
+                    if (allDailyData[changedDate]?.scheduleAssignments) {
+                        window.ScheduleDB?.saveSchedule?.(changedDate, allDailyData[changedDate], { skipFilter: true });
+                    }
                 }
-                
-                console.log(`[SpecialtyLeagues] ✅ Saved updated future schedules to storage`);
+
+                console.log(`[SpecialtyLeagues] ✅ Saved ${modifiedDates.size} updated future schedule(s) to storage`);
             } catch (e) {
                 console.error("[SpecialtyLeagues] Failed to save updated future schedules:", e);
             }
@@ -512,14 +511,47 @@ for (const futureDate of Object.keys(allDailyData)) {
             return [];
         }
 
-        // ★★★ FILTER OUT ALREADY-LOCKED FIELDS ★★★
-        let availableFields = [...fields];
+        // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
+        const _disabledSet = new Set(window.currentDisabledFields || []);
+        let availableFields = fields.filter(f => !_disabledSet.has(f));
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
-            availableFields = window.GlobalFieldLocks.filterAvailableFields(fields, slots);
+            availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots);
 
             const lockedFields = fields.filter(f => !availableFields.includes(f));
             if (lockedFields.length > 0) {
                 console.log(`[SpecialtyLeagues] ⚠️ Fields already locked: ${lockedFields.join(', ')}`);
+            }
+        }
+
+        // ★★★ FILTER OUT FIELDS BLOCKED BY TIME RULES ★★★
+        // Per-grade scoping: skip rules whose `divisions` list doesn't
+        // intersect this league's active divisions. Empty/missing list = all.
+        if (slots && slots.length > 0) {
+            const _divSlots = window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
+            const _slotStart = _divSlots[slots[0]]?.startMin;
+            const _slotEnd = _divSlots[slots[slots.length - 1]]?.endMin;
+            if (_slotStart != null && _slotEnd != null) {
+                const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _curDivs = (Array.isArray(league.divisions) ? league.divisions : []).map(String);
+                availableFields = availableFields.filter(fName => {
+                    const rules = window.activityProperties?.[fName]?.timeRules;
+                    if (!rules || rules.length === 0) return true;
+                    let hasAvail = false, inAvail = false;
+                    for (const r of rules) {
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && _curDivs.length > 0 && !rDivs.some(d => _curDivs.includes(d))) continue;
+                        const rS = r.startMin ?? (_parseMin ? _parseMin(r.start || r.startTime) : null);
+                        const rE = r.endMin ?? (_parseMin ? _parseMin(r.end || r.endTime) : null);
+                        if (rS == null || rE == null) continue;
+                        const rType = (r.type || '').toLowerCase();
+                        if ((rType === 'unavailable' || r.available === false) && rS < _slotEnd && rE > _slotStart) return false;
+                        if (rType === 'available' || r.available === true) {
+                            hasAvail = true;
+                            if (_slotStart >= rS && _slotEnd <= rE) inAvail = true;
+                        }
+                    }
+                    return !hasAvail || inAvail;
+                });
             }
         }
 
@@ -550,6 +582,20 @@ for (const futureDate of Object.keys(allDailyData)) {
         const fieldGamesCount = {};
         availableFields.forEach(f => fieldGamesCount[f] = 0);
 
+        // Combo-aware "effective games count": at slotOrder N, all of
+        // {Full Gym, Gym 1, Gym 2} share capacity — a game on any one of them
+        // consumes that slot for the others. Compute the effective count as
+        // the max of the field's own count and its combo partners' counts.
+        const _effectiveGames = (field) => {
+            let v = fieldGamesCount[field] || 0;
+            const partners = window.FieldCombos?.getExclusiveFields?.(field) || [];
+            for (const p of partners) {
+                const pv = fieldGamesCount[p];
+                if (pv != null && pv > v) v = pv;
+            }
+            return v;
+        };
+
         workingMatchups = workingMatchups.map(m => ({
             ...m,
             waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
@@ -563,8 +609,19 @@ for (const futureDate of Object.keys(allDailyData)) {
             let bestField = null;
             let minGames = Infinity;
 
-            for (const field of availableFields) {
-                const currentGames = fieldGamesCount[field];
+            // ★ Playoff: if this matchup has a user-chosen field, prefer it
+            //   when still under the per-field game cap. Falls through to
+            //   the normal rotation-aware pick if it's not available.
+            if (matchup._playoffField && availableFields.includes(matchup._playoffField)) {
+                const cur = _effectiveGames(matchup._playoffField);
+                if (cur < (gamesPerFieldSlot || 3)) {
+                    bestField = matchup._playoffField;
+                    minGames = cur;
+                }
+            }
+
+            if (!bestField) for (const field of availableFields) {
+                const currentGames = _effectiveGames(field);
                 const maxGames = gamesPerFieldSlot || 3;
 
                 if (currentGames < maxGames && currentGames < minGames) {
@@ -578,7 +635,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             }
 
             if (bestField) {
-                const slotOrder = fieldGamesCount[bestField] + 1;
+                const slotOrder = _effectiveGames(bestField) + 1;
                 assignments.push({
                     teamA: matchup.teamA,
                     teamB: matchup.teamB,
@@ -588,7 +645,15 @@ for (const futureDate of Object.keys(allDailyData)) {
                     isInterConference: matchup.isInterConference
                 });
 
-                fieldGamesCount[bestField]++;
+                fieldGamesCount[bestField] = slotOrder;
+                // Bump combo partners to the same slotOrder so a future game
+                // can't be assigned to a partner at the slot we just consumed.
+                const partners = window.FieldCombos?.getExclusiveFields?.(bestField) || [];
+                for (const p of partners) {
+                    if (fieldGamesCount[p] != null && fieldGamesCount[p] < slotOrder) {
+                        fieldGamesCount[p] = slotOrder;
+                    }
+                }
                 assignedMatchups.add(matchupKey);
                 console.log(`[SpecialtyLeagues] ✅ Assigned ${matchup.teamA} vs ${matchup.teamB} to ${bestField} (slot ${slotOrder})`);
             }
@@ -726,8 +791,58 @@ for (const futureDate of Object.keys(allDailyData)) {
             const todayGameIndex = leagueGameCounters[league.id];
             const gameNumber = baseGameNumber + todayGameIndex + 1;
 
-            // Get today's matchups using the game number
-            const matchups = getLeagueMatchupsForToday(league, history, gameNumber);
+            // ★★★ Get matchups — playoff > regular ★★★
+            let matchups;
+            let _playoffRoundNum = null;
+            let _playoffIsTBD = false;
+            const _PM_S = window.PlayoffMode;
+            if (_PM_S && _PM_S.isLeagueInPlayoff(league)) {
+                const liveMatchups = _PM_S.getActiveMatchups(league);
+                if (liveMatchups.length > 0) {
+                    if (todayGameIndex === 0) {
+                        _playoffRoundNum = league.playoff.currentRound;
+                        matchups = liveMatchups.map(function (m) {
+                            return {
+                                teamA: m.teamA,
+                                teamB: m.teamB,
+                                conference: null,
+                                isInterConference: false,
+                                _playoffSport: m.sport || null,
+                                _playoffField: m.field || null
+                            };
+                        });
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + _playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                    } else {
+                        // Game 2+ same day: emit TBD placeholders for forecast next round.
+                        const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
+                        const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                        const sportsPool = liveMatchups
+                            .map(function (m) { return m.sport || null; })
+                            .filter(Boolean);
+                        const fallbackSport = league.sport || null;
+                        _playoffRoundNum = tbdRoundNum;
+                        _playoffIsTBD = true;
+                        matchups = [];
+                        for (let k = 0; k < tbdCount; k++) {
+                            matchups.push({
+                                teamA: 'TBD',
+                                teamB: 'TBD',
+                                conference: null,
+                                isInterConference: false,
+                                _playoffSport: sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport,
+                                _playoffField: null,
+                                _playoffTBD: true
+                            });
+                        }
+                        console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                    }
+                } else {
+                    console.log('[SpecialtyLeagues] 🏆 PLAYOFF: no active matchups in current round — skipping');
+                    continue;
+                }
+            } else {
+                matchups = getLeagueMatchupsForToday(league, history, gameNumber);
+            }
 
             if (matchups.length === 0) {
                 console.log(`[SpecialtyLeagues] No matchups generated`);
@@ -739,6 +854,18 @@ for (const futureDate of Object.keys(allDailyData)) {
 
             // ★★★ ASSIGN MATCHUPS - RESPECTING GLOBAL LOCKS ★★★
             const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, uniqueSlots);
+
+            // Carry playoff sport through to assignments for display/downstream
+            if (_playoffRoundNum && assignments.length > 0) {
+                const _muSportMap = {};
+                matchups.forEach(function (m) {
+                    if (m._playoffSport) _muSportMap[m.teamA + '|' + m.teamB] = m._playoffSport;
+                });
+                assignments.forEach(function (a) {
+                    var _ps = _muSportMap[a.teamA + '|' + a.teamB];
+                    if (_ps) a._playoffSport = _ps;
+                });
+            }
 
             if (assignments.length === 0) {
                 console.log(`[SpecialtyLeagues] ❌ No assignments made`);
@@ -753,16 +880,6 @@ for (const futureDate of Object.keys(allDailyData)) {
             console.log(`\n[SpecialtyLeagues] 🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
             if (window.GlobalFieldLocks) {
-    // ★★★ FIX: Include time range for cross-division lock detection ★★★
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let lockStartMin = null, lockEndMin = null;
-    if (uniqueSlots.length > 0 && divSlots[uniqueSlots[0]]) {
-        lockStartMin = divSlots[uniqueSlots[0]].startMin;
-        const lastSlot = divSlots[uniqueSlots[uniqueSlots.length - 1]];
-        lockEndMin = lastSlot?.endMin || (lockStartMin + 40);
-    }
-    
-   // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
 var _specDivSlots = window.divisionTimes?.[divName] || [];
 var _specLockStart = null, _specLockEnd = null;
 if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
@@ -770,13 +887,28 @@ if (uniqueSlots.length > 0 && _specDivSlots[uniqueSlots[0]]) {
     _specLockEnd = _specDivSlots[uniqueSlots[uniqueSlots.length - 1]]?.endMin || (_specLockStart + 40);
 }
 window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
-    lockedBy: 'specialty_league',
+    lockedBy: _playoffRoundNum ? 'playoff_specialty' : 'specialty_league',
     leagueName: league.name,
     division: divName,
-    activity: `${league.name} (${league.sport})`,
+    activity: _playoffRoundNum
+        ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
+        : `${league.name} (${league.sport})`,
     startMin: _specLockStart,
     endMin: _specLockEnd
 });
+
+// ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
+if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+    const reservedReason = `Playoff reserve (${league.name} R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD)' : ')');
+    league.playoff.reservedActivities.forEach(function (act) {
+        try {
+            window.GlobalFieldLocks.lockFieldForDivision(act, uniqueSlots, divName, reservedReason);
+        } catch (e) {
+            console.warn('[PLAYOFF specialty] failed to reserve "' + act + '" for ' + divName + ':', e);
+        }
+    });
+    console.log('[SpecialtyLeagues] 🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for ' + divName);
+}
 }
 
             // Also lock in fieldUsageBySlot for compatibility
@@ -804,7 +936,9 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
                 `${a.teamA} vs ${a.teamB} — ${a.field}`
             );
 
-            const gameLabel = `${league.name} Game ${gameNumber}`;
+            const gameLabel = _playoffRoundNum
+                ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
+                : `${league.name} Game ${gameNumber}`;
 
             // Fill all blocks
             blocks.forEach(block => {
@@ -818,7 +952,8 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
                     _gameLabel: gameLabel,
                     _leagueName: league.name,
                     _isSpecialtyLeague: true,
-                    _assignments: assignments
+                    _assignments: assignments,
+                    _playoffRound: _playoffRoundNum || null
                 };
 
                 fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
@@ -980,6 +1115,55 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, uniqueSlots, {
     // =========================================================================
     // EXPOSE GLOBALLY
     // =========================================================================
+
+    /**
+     * Remove a date's game counts from specialty league history and propagate
+     * corrected game numbers to future dates still in localStorage.
+     * Called by eraseCurrentDailyData after a single day is deleted.
+     */
+    SpecialtyLeagues.cleanupDateFromHistory = function(dateKey) {
+        try {
+            const history = loadSpecialtyHistory();
+            if (!history.gamesPerDate) return;
+
+            let changed = false;
+            for (const leagueId of Object.keys(history.gamesPerDate)) {
+                if (history.gamesPerDate[leagueId][dateKey] !== undefined) {
+                    delete history.gamesPerDate[leagueId][dateKey];
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] 🗑️ Removed gamesPerDate entries for', dateKey);
+
+            updateFutureSchedules(dateKey, history);
+        } catch (e) {
+            console.error('[SpecialtyLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
+    /**
+     * Wipe all gamesPerDate entries across every specialty league.
+     * Called by eraseAllDailyData when every schedule is deleted at once.
+     */
+    SpecialtyLeagues.clearAllGamesPerDate = function() {
+        try {
+            const history = loadSpecialtyHistory();
+            if (!history.gamesPerDate || Object.keys(history.gamesPerDate).length === 0) return;
+
+            for (const leagueId of Object.keys(history.gamesPerDate)) {
+                history.gamesPerDate[leagueId] = {};
+            }
+
+            saveSpecialtyHistory(history);
+            console.log('[SpecialtyLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
+        } catch (e) {
+            console.error('[SpecialtyLeagues] clearAllGamesPerDate error:', e);
+        }
+    };
 
     window.SchedulerCoreSpecialtyLeagues = SpecialtyLeagues;
 

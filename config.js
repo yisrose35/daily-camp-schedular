@@ -1,5 +1,14 @@
 // =============================================================================
-// Campistry Supabase config (gitignored — do not commit)
+// Campistry Supabase config — anon key + project URL.
+//
+// The anon key is designed to be public; it is shipped to every browser
+// that loads this app, and Supabase RLS is the actual authorization
+// boundary. So this file is intentionally checked into the repo.
+//
+// DO NOT add the service_role key, JWT secret, or any other privileged
+// credential to this file — those keys bypass RLS entirely and would
+// be a critical leak. Service-role access belongs server-side (Edge
+// Functions / dedicated backend), never in client code.
 // =============================================================================
 
 (function() {
@@ -8,9 +17,4 @@
         url: 'https://bzqmhcumuarrbueqttfh.supabase.co',
         anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJ6cW1oY3VtdWFycmJ1ZXF0dGZoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY1NDg3NDAsImV4cCI6MjA4MjEyNDc0MH0.5WpFBj1s1937XNZ0yxLdlBWO7xolPtf7oB10LDLONsI'
     };
-    // Campistry Go — routing API keys (platform defaults)
-    // Keys stored as base64 to avoid secret scanner false positives on public tokens
-    window.__CAMPISTRY_ORS_KEY__ = atob('ZXlKdmNtY2lPaUkxWWpOalpUTTFPVGM0TlRFeE1UQXdNREZqWmpZeU5EZ2lMQ0pwWkNJNkltSTBaR0V4TXpJek1UazBPVFJtTUdZNVpERmlaRE0xWlRSbE5qYzJaR0V5SWl3aWFDSTZJbTExY20xMWNqWTBJbjA9');
-    window.__CAMPISTRY_GH_KEY__ = atob('ZmM4YzdjMjgtZDljZC00NzYxLThmNjMtYzJmMzc4M2JlYjEw');
-    window.__CAMPISTRY_MAPBOX_TOKEN__ = atob('cGsuZXlKMUlqb2lZMkZ0Y0dsemRISjVJaXdpWVNJNkltTnRiamN6YjNGdE5qQmthbTh5YzNFek5IZGpkSGgwTW1FaWZRLmFNSjF0QUg2U1Z4Njl3bG56VldKN3c=');
 })();

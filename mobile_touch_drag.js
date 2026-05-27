@@ -41,7 +41,7 @@ let isRepositioning = false;
 let repositionState = null;
 
 // Constants (must match both MS and DA)
-const PIXELS_PER_MINUTE = 2;
+const PIXELS_PER_MINUTE = 2.5;
 const SNAP_MINS = 5;
 
 // =================================================================

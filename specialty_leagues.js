@@ -287,8 +287,7 @@
      */
     function getValidDivisionNames() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            const divisions = settings.divisions || settings.app1?.divisions || {};
+            const divisions = window.divisions || window.getGlobalDivisions?.() || {};
             return new Set(Object.keys(divisions));
         } catch (e) {
             return null;
@@ -300,8 +299,7 @@
      */
     function getAvailableDivisions() {
         try {
-            const settings = window.loadGlobalSettings?.() || {};
-            return settings.app1?.availableDivisions || Object.keys(settings.divisions || {}) || [];
+            return window.availableDivisions || Object.keys(window.divisions || window.getGlobalDivisions?.() || {}) || [];
         } catch (e) {
             return window.availableDivisions || [];
         }
@@ -455,7 +453,9 @@
             teams: Array.isArray(league.teams) ? league.teams.filter(t => typeof t === 'string') : [],
             enabled: league.enabled !== false,
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
-            games: Array.isArray(league.games) ? league.games : []
+            games: Array.isArray(league.games) ? league.games : [],
+            // ★ Preserve playoff sub-object — see leagues.js for the same fix.
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
         };
 
         // ★ Filter out orphaned divisions (divisions that no longer exist)
@@ -502,11 +502,31 @@
                 return; // Don't wipe existing data
             }
             
+            // ★ Snapshot in-memory playoff state before clearing so a stale
+            //   cloud echo (loaded copy has rounds=[]) can't wipe a freshly
+            //   generated bracket that hasn't synced yet.
+            const _playoffBackup = {};
+            Object.keys(specialtyLeagues).forEach(k => {
+                const p = specialtyLeagues[k] && specialtyLeagues[k].playoff;
+                if (p && Array.isArray(p.rounds) && p.rounds.length > 0) {
+                    _playoffBackup[k] = p;
+                }
+            });
+
             // Clear and fill with validated data
             Object.keys(specialtyLeagues).forEach(k => delete specialtyLeagues[k]);
-            
+
             Object.keys(loaded).forEach(leagueId => {
-                specialtyLeagues[leagueId] = validateLeague(loaded[leagueId], leagueId);
+                const validated = validateLeague(loaded[leagueId], leagueId);
+                const backup = _playoffBackup[leagueId];
+                const loadedRoundsEmpty = !validated.playoff
+                    || !Array.isArray(validated.playoff.rounds)
+                    || validated.playoff.rounds.length === 0;
+                if (backup && loadedRoundsEmpty) {
+                    validated.playoff = backup;
+                    console.log('[SPECIALTY_LEAGUES] Preserved in-memory playoff bracket for "' + leagueId + '" (loaded copy had empty rounds)');
+                }
+                specialtyLeagues[leagueId] = validated;
             });
 
             console.log("[SPECIALTY_LEAGUES] Data loaded:", {
@@ -863,11 +883,21 @@
             editConfigBtn.textContent = 'Edit Setup';
             editConfigBtn.className = 'league-btn-neutral';
 
+            // PLAYOFF BTN
+            const playoffBtn = document.createElement('button');
+            const _playoffActive = !!(league.playoff && league.playoff.enabled);
+            playoffBtn.textContent = _playoffActive ? 'Playoff: ON' : 'Playoff Mode';
+            playoffBtn.className = 'league-btn-neutral' + (_playoffActive ? ' active' : '');
+
             // DELETE BTN
             const delBtn = document.createElement('button');
             delBtn.textContent = 'Delete';
             delBtn.className = 'league-btn-delete';           delBtn.onclick = () => {
-                if (!window.AccessControl?.checkSetupAccess('delete specialty leagues')) return;
+                // Delete is destructive camp-wide — require canEraseData (owner/admin only)
+                if (!window.AccessControl?.canEraseData?.()) {
+                    window.AccessControl?.showPermissionDenied?.('delete specialty leagues');
+                    return;
+                }
                 // ★ v2.2.7 FIX: confirm() renders plain text; escapeHtml produces HTML entities
                 // that show as literal "&amp;" etc. Use raw name since confirm() is XSS-safe.
                 if (confirm(`Delete "${league.name}"?`)) {
@@ -879,7 +909,7 @@
                 }
             };
 
-            btnGroup.append(editConfigBtn, delBtn);
+            btnGroup.append(editConfigBtn, playoffBtn, delBtn);
             header.append(title, btnGroup);
             detailPaneEl.appendChild(header);
 
@@ -902,6 +932,17 @@
                     editConfigBtn.classList.add('active');
                 }
             };
+
+            // ★ Specialty league playoff button now opens the per-league
+            //   PlayoffHub overlay — same shared UI as regular leagues.
+            playoffBtn.onclick = function () {
+                if (window.PlayoffHub && typeof window.PlayoffHub.open === 'function') {
+                    window.PlayoffHub.open(league, 'specialty');
+                } else {
+                    alert('Playoff Hub module not loaded.');
+                }
+            };
+
             // --- MAIN CONTENT ---
             const mainContent = document.createElement('div');
             renderGameResultsUI(league, mainContent);
@@ -909,6 +950,26 @@
         } catch (e) {
             console.error("[SPECIALTY_LEAGUES] Error rendering detail pane:", e);
         }
+    }
+
+    function mountSpecialtyPlayoffUI(mountEl, league) {
+        if (!window.PlayoffMode) {
+            mountEl.innerHTML = '<div style="padding:12px;color:#9CA3AF;font-size:0.82rem;">Playoff module unavailable.</div>';
+            return;
+        }
+        window.PlayoffMode.render(league, mountEl, {
+            onSave: function () { saveData(); },
+            getSports: function () { return league.sports || (league.sport ? [league.sport] : []); },
+            getActivities: function () {
+                var settings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+                var fields = settings.fields || (settings.app1 && settings.app1.fields) || [];
+                var acts = new Set();
+                fields.forEach(function (f) { if (f && f.name) acts.add(f.name); });
+                (window.getAllGlobalSports ? window.getAllGlobalSports() : []).forEach(function (s) { acts.add(s); });
+                return Array.from(acts).sort();
+            },
+            readOnly: !!(window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup())
+        });
     }
 
     // =============================================================

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-product="dashboard">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -9,7 +9,6 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body { opacity: 0; } html.css-ready body { transition: opacity 0.15s ease; }</style>
-    <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="dashboard.css" onload="document.documentElement.classList.add('css-ready')">
     <link rel="stylesheet" href="mobile-responsive.css">
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
@@ -77,27 +76,26 @@
                 <img src="Flow_clean.png" alt="Flow" class="dash-ql-logo">
                 <span>Flow</span>
             </a>
-            <a href="campistry_go.html" class="dash-ql-tile" style="--ql-color: var(--go-color);">
-    <img src="Go_clean.png" alt="Go" class="dash-ql-logo">
-    <span>Go</span>
-</a>
-            <a href="campistry_health.html" class="dash-ql-tile" style="--ql-color: var(--health-color);">
-    <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
-    <span>Health</span>
-</a>
-            <a href="campistry_live.html" class="dash-ql-tile" style="--ql-color: var(--live-color);">
+            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--go-color);">
+                <img src="Go_clean.png" alt="Go" class="dash-ql-logo">
+                <span>Go</span>
+            </div>
+            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--health-color);">
+                <img src="Health_clean.png" alt="Health" class="dash-ql-logo">
+                <span>Health</span>
+            </div>
+            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--live-color);">
                 <img src="Live_clean.png" alt="Live" class="dash-ql-logo">
                 <span>Live</span>
-            </a>
-            <a href="campistry_snacks.html" class="dash-ql-tile" style="--ql-color: var(--snacks-color);">
+            </div>
+            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--snacks-color);">
                 <img src="Snacks_clean.png" alt="Snacks" class="dash-ql-logo">
                 <span>Snacks</span>
-            </a>
-            <!-- ★ LINK: Now ACTIVE (was disabled) -->
-            <a href="campistry_link_admin.html" class="dash-ql-tile" style="--ql-color: var(--link-color);">
+            </div>
+            <div class="dash-ql-tile dash-ql-disabled" style="--ql-color: var(--link-color);">
                 <img src="Link_clean.png" alt="Link" class="dash-ql-logo">
                 <span>Link</span>
-            </a>
+            </div>
         </section>
 
         <!-- ===== QUICK STATS ROW ===== -->
@@ -226,6 +224,47 @@
             </section>
         </div>
 
+        <!-- ===== CAMP DATES ===== -->
+        <section id="camp-dates-section" class="dashboard-section" style="display: none;">
+            <h2 class="section-title-bar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                Camp Dates
+            </h2>
+            <div class="dashboard-card" style="max-width:700px;">
+                <div class="card-header">
+                    <h2>Summer Schedule</h2>
+                </div>
+                <div id="campDatesForm" style="display:flex; flex-direction:column; gap:14px;">
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="campStartDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of Summer</label>
+                            <input type="date" id="campStartDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="campHalf1End" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of 1st Half</label>
+                            <input type="date" id="campHalf1End" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px;">
+                        <div class="form-group">
+                            <label for="campHalf2Start" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">Start of 2nd Half</label>
+                            <input type="date" id="campHalf2Start" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                        <div class="form-group">
+                            <label for="campEndDate" style="font-size:0.82rem; font-weight:600; color:var(--slate-600); margin-bottom:4px; display:block;">End of Summer</label>
+                            <input type="date" id="campEndDate" style="width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--slate-200); font-size:0.88rem;">
+                        </div>
+                    </div>
+                    <div id="campDatesWeekPreview" style="display:none; background:var(--slate-50); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--slate-600); line-height:1.6;"></div>
+                    <div id="campDatesActions" style="display:flex; gap:10px; align-items:center;">
+                        <button type="button" id="saveCampDatesBtn" onclick="saveCampDates()" class="btn-primary" style="padding:8px 20px; font-size:0.85rem;">Save Dates</button>
+                        <button type="button" id="clearCampDatesBtn" onclick="clearCampDates()" class="btn-secondary" style="padding:8px 16px; font-size:0.85rem;">Clear</button>
+                        <span id="campDatesStatus" style="font-size:0.82rem; color:var(--slate-400);"></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <!-- ===== RBAC TEAM & ACCESS (Owners only) ===== -->
         <section id="team-access-section" class="dashboard-section" style="display: none;">
             <h2 class="section-title-bar">
@@ -246,156 +285,14 @@
                 <div id="team-card" class="dashboard-card">
                     <div class="card-header"><h2>Team Members</h2></div>
                     <p class="card-desc">Manage who can access and edit your camp schedules.</p>
-                    <div id="team-placeholder" style="text-align:center; color: var(--slate-400); padding: 20px;">
-                        Loading…
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- ===== PRODUCTS SECTION ===== -->
-        <section class="products-section">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"/>
-                    <rect x="14" y="3" width="7" height="7"/>
-                    <rect x="14" y="14" width="7" height="7"/>
-                    <rect x="3" y="14" width="7" height="7"/>
-                </svg>
-                Your Products
-            </h2>
-            <div class="products-grid">
-                <!-- ME -->
-                <a href="campistry_me.html" class="product-tile product-me">
-                    <img src="Me_clean.png" alt="Campistry Me" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Me</h3>
-                        <p>Camper management &amp; profiles</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                    </div>
-                </a>
-                <!-- FLOW -->
-                <a href="flow.html" class="product-tile product-flow">
-                    <img src="Flow_clean.png" alt="Campistry Flow" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Flow</h3>
-                        <p>Daily scheduling &amp; activity management</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                    </div>
-                </a>
-                <!-- GO -->
-                <a href="campistry_go.html" class="product-tile product-go">
-                    <img src="Go_clean.png" alt="Campistry Go" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Go</h3>
-                        <p>Bus routing &amp; transportation</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M5 12h14M12 5l7 7-7 7"/>
-                        </svg>
-                    </div>
-                </a>       
                     <div id="team-placeholder" style="text-align:center; color: var(--slate-400); padding: 20px;">Loading…</div>
                 </div>
             </div>
         </section>
 
-        <!-- ===== PRODUCTS SECTION ===== -->
-        <section class="products-section">
-            <h2 class="section-title-bar">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <rect x="3" y="3" width="7" height="7"/>
-                    <rect x="14" y="3" width="7" height="7"/>
-                    <rect x="14" y="14" width="7" height="7"/>
-                    <rect x="3" y="14" width="7" height="7"/>
-                </svg>
-                Your Products
-            </h2>
-            <div class="products-grid">
-                <!-- ME -->
-                <a href="campistry_me.html" class="product-tile product-me">
-                    <img src="Me_clean.png" alt="Campistry Me" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Me</h3>
-                        <p>Camper management &amp; profiles</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                    </div>
-                </a>
-                <!-- FLOW -->
-                <a href="flow.html" class="product-tile product-flow">
-                    <img src="Flow_clean.png" alt="Campistry Flow" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Flow</h3>
-                        <p>Daily scheduling &amp; activity management</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                    </div>
-                </a>
-                <!-- GO -->
-                <a href="campistry_go.html" class="product-tile product-go">
-                    <img src="Go_clean.png" alt="Campistry Go" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Go</h3>
-                        <p>Bus routing &amp; transportation</p>
-                    </div>
-                    <span class="product-status active">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                    </div>
-                </a>
-                <!-- HEALTH -->
-                <a href="campistry_health.html" class="product-tile product-health">
-                    <div style="display:flex;align-items:center;justify-content:center;width:48px;height:48px;background:var(--health-color);border-radius:12px;flex-shrink:0;">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M12 21C12 21 4 14.5 4 9.5C4 7 6 5 8.5 5C10 5 11.2 5.8 12 7C12.8 5.8 14 5 15.5 5C18 5 20 7 20 9.5C20 14.5 12 21 12 21Z"/>
-                            <line x1="12" y1="9" x2="12" y2="14"/>
-                            <line x1="9.5" y1="11.5" x2="14.5" y2="11.5"/>
-                        </svg>
-                    </div>
-                    <div class="product-info">
-                        <h3>Campistry Health</h3>
-                        <p>Medical records &amp; camper wellness</p>
-                    </div>
-                    <span class="product-status" style="background:rgba(107,33,168,0.08);color:#7C3AED;">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                    </div>
-                </a>
-                <!-- ★ LINK: NEW ACTIVE PRODUCT TILE -->
-                <a href="campistry_link_admin.html" class="product-tile product-link">
-                    <img src="Link_clean.png" alt="Campistry Link" class="product-tile-logo">
-                    <div class="product-info">
-                        <h3>Campistry Link</h3>
-                        <p>Parent portal &amp; communication hub</p>
-                    </div>
-                    <span class="product-status" style="background:rgba(42,122,53,0.08);color:#2A7A35;">Active</span>
-                    <div class="product-arrow">
-                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-                    </div>
-                </a>
-            </div>
-        </section>
-
         <!-- ===== QUICK LINKS ===== -->
         <section class="quick-links">
-            <a href="mailto:campistryoffice@gmail.com" class="quick-link">
+            <a href="/cdn-cgi/l/email-protection#2142404c5148525553584e474748424461464c40484d0f424e4c" class="quick-link">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
                 Contact Support
             </a>
@@ -409,7 +306,7 @@
     <!-- ========================================= -->
     <!-- SCRIPTS -->
     <!-- ========================================= -->
-    <script src="offline_data.js" onerror=""></script>
+    <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script>
     <script src="demo_mode.js"></script>
     <script src="config.js"></script>
     <script>
@@ -428,6 +325,7 @@ if (window.location.protocol === 'file:') {
 
     <!-- ===== DASHBOARD WIDGETS (clock, weather, notifications, greeting) ===== -->
     <script>
+    // Notification collapse/expand toggle (global so onclick can reach it)
     function toggleNotifications() {
         var list = document.getElementById('dashNotifList');
         var btn = document.getElementById('dashNotifToggle');
@@ -456,6 +354,8 @@ if (window.location.protocol === 'file:') {
             var elD = document.getElementById('dashClockDate');
             if (el) el.textContent = timeStr;
             if (elD) elD.textContent = dateStr;
+
+            // Dynamic greeting
             var greetEl = document.getElementById('dashGreeting');
             if (greetEl) {
                 if (h < 12) greetEl.textContent = 'Good morning,';
@@ -466,8 +366,9 @@ if (window.location.protocol === 'file:') {
         updateClock();
         setInterval(updateClock, 10000);
 
-        // ── WEATHER ──
+        // ── WEATHER (uses free Open-Meteo API, no key needed) ──
         function loadWeather() {
+            // file:// protocol blocks fetch — show friendly fallback
             if (window.location.protocol === 'file:') {
                 var tempEl = document.getElementById('dashWeatherTemp');
                 var descEl = document.getElementById('dashWeatherDesc');
@@ -475,6 +376,7 @@ if (window.location.protocol === 'file:') {
                 if (descEl) descEl.textContent = 'Deploy to see live weather';
                 return;
             }
+
             var lat = 40.7128, lon = -74.006;
             fetch('https://api.open-meteo.com/v1/forecast?latitude=' + lat + '&longitude=' + lon + '&current_weather=true&temperature_unit=fahrenheit')
                 .then(function(r) { return r.json(); })
@@ -485,7 +387,8 @@ if (window.location.protocol === 'file:') {
                         var descEl = document.getElementById('dashWeatherDesc');
                         var iconEl = document.getElementById('dashWeatherIcon');
                         if (tempEl) tempEl.textContent = Math.round(w.temperature) + '°F';
-                        if (descEl) descEl.textContent = weatherCodeToDesc(w.weathercode);
+                        var desc = weatherCodeToDesc(w.weathercode);
+                        if (descEl) descEl.textContent = desc;
                         if (iconEl) iconEl.innerHTML = weatherCodeToSVG(w.weathercode);
                     }
                 })
@@ -496,11 +399,20 @@ if (window.location.protocol === 'file:') {
                     if (descEl) descEl.textContent = 'Check back later';
                 });
         }
+
         function weatherCodeToDesc(code) {
-            if (code === 0) return 'Clear sky'; if (code <= 3) return 'Partly cloudy'; if (code <= 49) return 'Foggy';
-            if (code <= 59) return 'Drizzle'; if (code <= 69) return 'Rain'; if (code <= 79) return 'Snow';
-            if (code <= 82) return 'Rain showers'; if (code <= 86) return 'Snow showers'; if (code >= 95) return 'Thunderstorm'; return 'Mixed';
+            if (code === 0) return 'Clear sky';
+            if (code <= 3) return 'Partly cloudy';
+            if (code <= 49) return 'Foggy';
+            if (code <= 59) return 'Drizzle';
+            if (code <= 69) return 'Rain';
+            if (code <= 79) return 'Snow';
+            if (code <= 82) return 'Rain showers';
+            if (code <= 86) return 'Snow showers';
+            if (code >= 95) return 'Thunderstorm';
+            return 'Mixed';
         }
+
         function weatherCodeToSVG(code) {
             if (code === 0) return '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>';
             if (code <= 3) return '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/></svg>';
@@ -508,37 +420,49 @@ if (window.location.protocol === 'file:') {
             if (code <= 79) return '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20 17.58A5 5 0 0 0 18 8h-1.26A8 8 0 1 0 4 16.25"/><line x1="8" y1="16" x2="8.01" y2="16"/><line x1="8" y1="20" x2="8.01" y2="20"/><line x1="12" y1="18" x2="12.01" y2="18"/><line x1="12" y1="22" x2="12.01" y2="22"/><line x1="16" y1="16" x2="16.01" y2="16"/><line x1="16" y1="20" x2="16.01" y2="20"/></svg>';
             return '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9"/><polyline points="13 11 9 17 15 17 11 23"/></svg>';
         }
+
         loadWeather();
 
         // ── NOTIFICATIONS ──
         function buildNotifications() {
             var list = document.getElementById('dashNotifList');
             if (!list) return;
+
             var role = localStorage.getItem('campistry_role') || 'viewer';
             var items = [];
+
+            // Universal notifications
             items.push({ type: 'info', icon: 'calendar', text: 'Summer 2026 is approaching — make sure your camp structure is set up in <a href="campistry_me.html">Campistry Me</a>.', time: 'Reminder' });
+
             if (role === 'owner' || role === 'admin') {
                 items.push({ type: 'action', icon: 'users', text: 'Invite your team members to Campistry so they can access schedules and rosters.', time: 'Action needed' });
                 items.push({ type: 'tip', icon: 'zap', text: 'Tip: Set up your divisions and bunks first in Me — they sync automatically to Flow for scheduling.', time: 'Getting started' });
-                items.push({ type: 'info', icon: 'link', text: '<strong>Campistry Link is live!</strong> Open the <a href="campistry_link_admin.html">Parent Portal</a> to send bus stops, bunk assignments, daily schedules, and photos to parents — all personalized per child.', time: 'New' });
             }
+
             if (role === 'scheduler') {
                 items.push({ type: 'info', icon: 'grid', text: 'You have scheduling access. Open <a href="flow.html">Campistry Flow</a> to start building daily schedules.', time: 'Quick start' });
             }
+
             if (role === 'viewer') {
                 items.push({ type: 'info', icon: 'eye', text: 'You have view-only access. Contact your camp owner to request editing permissions.', time: 'Note' });
             }
-            items.push({ type: 'coming', icon: 'sparkle', text: 'Campistry Live is here! Track attendance and see your whole camp in real time.', time: 'New' });
+
+            // Coming soon tease
+            items.push({ type: 'coming', icon: 'sparkle', text: 'Campistry Health, Live, Snacks &amp; Link are coming soon — stay tuned for updates!', time: 'New' });
 
             var html = '';
             items.forEach(function(item) {
                 html += '<div class="dash-notif-item dash-notif-' + item.type + '">';
                 html += '<div class="dash-notif-icon">' + getNotifIcon(item.icon) + '</div>';
-                html += '<div class="dash-notif-body"><p>' + item.text + '</p><span class="dash-notif-time">' + item.time + '</span></div>';
+                html += '<div class="dash-notif-body">';
+                html += '<p>' + item.text + '</p>';
+                html += '<span class="dash-notif-time">' + item.time + '</span>';
+                html += '</div>';
                 html += '</div>';
             });
             list.innerHTML = html;
         }
+
         function getNotifIcon(name) {
             var icons = {
                 calendar: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>',
@@ -546,15 +470,17 @@ if (window.location.protocol === 'file:') {
                 zap: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>',
                 grid: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>',
                 eye: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>',
-                sparkle: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>',
-                link: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>'
+                sparkle: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>'
             };
             return icons[name] || icons.zap;
         }
+
+        // Build notifications after a short delay so role is cached
         setTimeout(buildNotifications, 1500);
 
         // ── TEAM STAT COUNT ──
         function countTeamMembers() {
+            // Try to count from camp_users
             setTimeout(function() {
                 try {
                     if (window.supabase) {
@@ -570,6 +496,7 @@ if (window.location.protocol === 'file:') {
             }, 2000);
         }
         countTeamMembers();
+
     })();
     </script>
 
@@ -589,6 +516,7 @@ if (window.location.protocol === 'file:') {
         }
     })();
     </script>
+    <script src="plan_limits.js"></script>
     <script src="trial_guard.js"></script>
     <script>
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };

@@ -45,23 +45,22 @@
                 teamSports: {},
                 matchupHistory: {},
                 gamesPerDate: {},
-                offCampusCounts: {},
-                _awayState: {}
+                offCampusCounts: {}
             };
 
             const history = JSON.parse(raw);
-            // Migrate old format to new
-            history.teamSports = history.teamSports || {};
-            history.matchupHistory = history.matchupHistory || {};
-            history.gamesPerDate = history.gamesPerDate || {};
-            history.offCampusCounts = history.offCampusCounts || {};
-            
-            
-            // Migrate from old roundCounters/dayStartRound if present
+
+            // Migrate from old roundCounters/dayStartRound if present (must run before defaults)
             if (history.roundCounters && !history.gamesPerDate) {
                 console.log("[RegularLeagues] Migrating old history format...");
                 history.gamesPerDate = {};
             }
+
+            // Fill defaults for missing fields
+            history.teamSports = history.teamSports || {};
+            history.matchupHistory = history.matchupHistory || {};
+            history.gamesPerDate = history.gamesPerDate || {};
+            history.offCampusCounts = history.offCampusCounts || {};
             
             return history;
         } catch (e) {
@@ -70,8 +69,7 @@
                 teamSports: {},
                 matchupHistory: {},
                 gamesPerDate: {},
-                offCampusCounts: {},
-                _awayState: {}
+                offCampusCounts: {}
             };
         }
     }
@@ -164,11 +162,12 @@
         console.log(`[RegularLeagues] Found ${futureDates.length} future date(s) to check: ${futureDates.join(', ')}`);
         
         let updatedAny = false;
-        
+        const modifiedDates = new Set(); // ★ Track which dates actually changed
+
         for (const futureDate of futureDates) {
             const dayData = allDailyData[futureDate];
             if (!dayData) continue;
-            
+
             const assignments = dayData.scheduleAssignments || {};
             const leagueAssignments = dayData.leagueAssignments || {};
             let dayUpdated = false;
@@ -319,27 +318,25 @@
                 allDailyData[futureDate].scheduleAssignments = assignments;
                 allDailyData[futureDate].leagueAssignments = leagueAssignments;
                 updatedAny = true;
+                modifiedDates.add(futureDate); // ★ Only track actually-changed dates
                 console.log(`[RegularLeagues] ✅ Updated schedule for ${futureDate}`);
             }
         }
-        
+
         // Save all updated daily data
         if (updatedAny) {
             try {
                 const DAILY_DATA_KEY = "campDailyData_v1";
                 localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDailyData));
-                
-                // Also sync to cloud
-                if (typeof window.saveGlobalSettings === 'function') {
-                    // ★★★ FIX: Cloud-sync EACH modified future date individually ★★★
-for (const futureDate of Object.keys(allDailyData)) {
-    if (futureDate.match(/^\d{4}-\d{2}-\d{2}$/) && allDailyData[futureDate]?.scheduleAssignments) {
-        window.ScheduleDB?.saveSchedule?.(futureDate, allDailyData[futureDate], { skipFilter: true });
-    }
-}
+
+                // ★★★ FIX: Cloud-sync ONLY the dates that actually changed ★★★
+                for (const changedDate of modifiedDates) {
+                    if (allDailyData[changedDate]?.scheduleAssignments) {
+                        window.ScheduleDB?.saveSchedule?.(changedDate, allDailyData[changedDate], { skipFilter: true });
+                    }
                 }
-                
-                console.log(`[RegularLeagues] ✅ Saved updated future schedules to storage`);
+
+                console.log(`[RegularLeagues] ✅ Saved ${modifiedDates.size} updated future schedule(s) to storage`);
             } catch (e) {
                 console.error("[RegularLeagues] Failed to save updated future schedules:", e);
             }
@@ -380,68 +377,6 @@ for (const futureDate of Object.keys(allDailyData)) {
     // ROUND-ROBIN MATCHUP GENERATION
     // =========================================================================
 // =========================================================================
-    // ★★★ AWAY DOUBLEHEADER ENGINE ★★★
-    // =========================================================================
-    function getAwayDoubleheaderMatchups(league, gameNumber, history) {
-        var teams = league.teams || [];
-        var config = league.awayDoubleheader || {};
-        var groupSize = config.groupSize || 4;
-        var gamesPerVisit = config.gamesPerVisit || 2;
-
-        if (teams.length < 4) return null;
-
-        // Build stable groups
-        var groups = [];
-        for (var i = 0; i < teams.length; i += groupSize) {
-            var group = teams.slice(i, i + groupSize);
-            if (group.length >= 2) groups.push(group);
-        }
-        if (groups.length < 2) return null;
-
-        // Which group travels today
-        var visitIndex = Math.floor((gameNumber - 1) / gamesPerVisit);
-        var gameWithinVisit = (gameNumber - 1) % gamesPerVisit;
-        var groupIndex = visitIndex % groups.length;
-        var groupTeams = groups[groupIndex];
-
-        // Group's own round-robin
-        var groupRR = generateRoundRobinSchedule(groupTeams);
-        var totalRounds = groupRR.length;
-        if (totalRounds === 0) return null;
-
-        // Track each group's pointer independently
-        if (!history._awayState) history._awayState = {};
-        var stateKey = league.name + '_group' + groupIndex;
-        if (history._awayState[stateKey] === undefined) {
-            history._awayState[stateKey] = 0;
-        }
-
-        var roundPointer = history._awayState[stateKey];
-        var roundIdx = (roundPointer + gameWithinVisit) % totalRounds;
-        var matchups = groupRR[roundIdx];
-
-        console.log('[AwayDoubleheader] Game #' + gameNumber + ': Visit ' + (visitIndex + 1) + ', Group ' + (groupIndex + 1) + '/' + groups.length);
-        console.log('[AwayDoubleheader]   Teams: [' + groupTeams.join(', ') + ']');
-        console.log('[AwayDoubleheader]   Game ' + (gameWithinVisit + 1) + '/' + gamesPerVisit + ' | Round ' + (roundIdx + 1) + '/' + totalRounds + ' (pointer=' + roundPointer + ')');
-        matchups.forEach(function(m) { console.log('   \uD83C\uDFDF\uFE0F ' + m[0] + ' vs ' + m[1]); });
-
-        // Advance pointer after LAST game of this visit
-        if (gameWithinVisit === gamesPerVisit - 1) {
-            history._awayState[stateKey] = (roundPointer + gamesPerVisit) % totalRounds;
-            console.log('[AwayDoubleheader]   \u2705 Pointer advanced \u2192 ' + history._awayState[stateKey]);
-        }
-
-        return {
-            groupIndex: groupIndex,
-            groupTeams: groupTeams,
-            matchups: matchups,
-            gameWithinVisit: gameWithinVisit,
-            gamesPerVisit: gamesPerVisit,
-            isAwayDoubleheader: true,
-            roundIndex: roundIdx,
-            totalRounds: totalRounds
-        };
-    }
     function generateRoundRobinSchedule(teams) {
         if (teams.length < 2) return [];
 
@@ -482,6 +417,10 @@ for (const futureDate of Object.keys(allDailyData)) {
 
         const allFields = fields || [];
 
+        const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
+        const _poolStartMin = (slots && slots.length > 0) ? _poolDivSlots[slots[0]]?.startMin : undefined;
+        const _poolEndMin = (slots && slots.length > 0) ? _poolDivSlots[slots[slots.length - 1]]?.endMin : undefined;
+
         for (const field of allFields) {
             if (!field || !field.name) continue;
             if (field.available === false) continue;
@@ -489,9 +428,6 @@ for (const futureDate of Object.keys(allDailyData)) {
 
            // ★★★ CHECK GLOBAL LOCKS FIRST (TIME-BASED to avoid cross-division false positives) ★★★
             if (window.GlobalFieldLocks && slots && slots.length > 0) {
-                const _poolDivSlots = window.divisionTimes?.[divisionNames[0]] || [];
-                const _poolStartMin = _poolDivSlots[slots[0]]?.startMin;
-                const _poolEndMin = _poolDivSlots[slots[slots.length - 1]]?.endMin;
                 const lockInfo = (_poolStartMin != null && _poolEndMin != null)
                     ? window.GlobalFieldLocks.isFieldLockedByTime(field.name, _poolStartMin, _poolEndMin, divisionNames[0])
                     : window.GlobalFieldLocks.isFieldLocked(field.name, slots);
@@ -501,9 +437,43 @@ for (const futureDate of Object.keys(allDailyData)) {
                 }
             }
 
+            // ★★★ CHECK FIELD TIME RULES (available/unavailable windows) ★★★
+            // ★ Per-grade scoping: a rule with `divisions: ['1']` only applies
+            //   when the current league touches grade 1. Rules with empty/missing
+            //   `divisions` apply to all grades.
+            const _fieldTimeRules = activityProperties?.[field.name]?.timeRules;
+            if (_fieldTimeRules && _fieldTimeRules.length > 0 && _poolStartMin != null && _poolEndMin != null) {
+                const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
+                const _curDivs = (divisionNames || []).map(String);
+                let _blocked = false;
+                let _hasAvailRules = false;
+                let _inAvailWindow = false;
+                for (const _tr of _fieldTimeRules) {
+                    // Skip rules scoped to grades we're not currently scheduling for
+                    const _trDivs = Array.isArray(_tr.divisions) ? _tr.divisions.map(String) : [];
+                    if (_trDivs.length > 0 && !_trDivs.some(d => _curDivs.includes(d))) continue;
+
+                    const _trStart = _tr.startMin ?? (_parseMin ? _parseMin(_tr.start || _tr.startTime) : null);
+                    const _trEnd = _tr.endMin ?? (_parseMin ? _parseMin(_tr.end || _tr.endTime) : null);
+                    if (_trStart == null || _trEnd == null) continue;
+                    const _trType = (_tr.type || '').toLowerCase();
+                    const _isUnavail = _trType === 'unavailable' || _tr.available === false;
+                    const _isAvail = _trType === 'available' || _tr.available === true;
+                    if (_isUnavail && _trStart < _poolEndMin && _trEnd > _poolStartMin) { _blocked = true; break; }
+                    if (_isAvail) {
+                        _hasAvailRules = true;
+                        if (_poolStartMin >= _trStart && _poolEndMin <= _trEnd) _inAvailWindow = true;
+                    }
+                }
+                if (_blocked || (_hasAvailRules && !_inAvailWindow)) {
+                    console.log(`[RegularLeagues] ⚠️ Field "${field.name}" blocked by time rules (${_poolStartMin}-${_poolEndMin}) for divisions [${_curDivs.join(',')}]`);
+                    continue;
+                }
+            }
+
             // Check division restrictions
-            if (field.limitUsage?.enabled) {
-                const allowedDivs = Object.keys(field.limitUsage.divisions || {});
+            if (field.accessRestrictions?.enabled) {
+                const allowedDivs = Object.keys(field.accessRestrictions.divisions || {});
                 const hasAllowed = divisionNames.some(d => allowedDivs.includes(d));
                 if (!hasAllowed) continue;
             }
@@ -522,6 +492,27 @@ for (const futureDate of Object.keys(allDailyData)) {
         }
 
         return pool;
+    }
+
+    // Mark a field as used within this round AND mark its combo partners as used,
+    // so a single round can't hand out e.g. Full Gym to one matchup and Gym 1
+    // to another. Always lower-cases entries so .has() matches regardless of
+    // candidate-pool casing.
+    function _markFieldUsedWithCombos(usedFieldsSet, fieldName) {
+        if (!fieldName) return;
+        usedFieldsSet.add(fieldName);
+        usedFieldsSet.add(String(fieldName).toLowerCase().trim());
+        const partners = window.FieldCombos?.getExclusiveFields?.(fieldName) || [];
+        for (const p of partners) {
+            usedFieldsSet.add(p);
+            usedFieldsSet.add(String(p).toLowerCase().trim());
+        }
+    }
+    function _isFieldUsedConsideringCombos(usedFieldsSet, fieldName) {
+        if (!fieldName) return false;
+        if (usedFieldsSet.has(fieldName)) return true;
+        const norm = String(fieldName).toLowerCase().trim();
+        return usedFieldsSet.has(norm);
     }
 
     // =========================================================================
@@ -557,7 +548,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let bestScore = -Infinity;
 
             for (const option of availablePool) {
-                if (usedFields.has(option.field)) continue;
+                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
 
                 let score = 0;
 
@@ -591,7 +582,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                     sport: bestOption.sport
                 });
 
-                usedFields.add(bestOption.field);
+                _markFieldUsedWithCombos(usedFields, bestOption.field);
                 usedSportsThisSlot[bestOption.sport] = (usedSportsThisSlot[bestOption.sport] || 0) + 1;
 
                 console.log(`   ✅ [SportVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
@@ -630,7 +621,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             let bestScore = -Infinity;
 
             for (const option of availablePool) {
-                if (usedFields.has(option.field)) continue;
+                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
 
                 let score = 0;
 
@@ -662,7 +653,7 @@ for (const futureDate of Object.keys(allDailyData)) {
                     sport: bestOption.sport
                 });
 
-                usedFields.add(bestOption.field);
+                _markFieldUsedWithCombos(usedFields, bestOption.field);
 
                 console.log(`   ✅ [MatchupVariety] ${t1} vs ${t2} → ${bestOption.sport} @ ${bestOption.field}`);
             } else {
@@ -736,7 +727,7 @@ for (const futureDate of Object.keys(allDailyData)) {
             var score = 0;
             for (var mi = 0; mi < repairings[ri].length; mi++) {
                 var pair = repairings[ri][mi];
-                score += (history.matchupHistory || {})[leagueName + ':' + [pair[0], pair[1]].sort().join('-vs-')] || 0;
+                score += (history.matchupHistory || {})[leagueName + ':' + [pair[0], pair[1]].sort().join('|')] || 0;
             }
             if (score < bestScore) { bestScore = score; best = repairings[ri]; }
         }
@@ -883,21 +874,26 @@ for (const futureDate of Object.keys(allDailyData)) {
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
-        // ★★★ OFF-CAMPUS: Propagate _doubleHeaderPairId from skeleton to league blocks ★★★
-        const manualSkeleton = window.dailyOverrideSkeleton || window.loadCurrentDailyData?.()?.manualSkeleton || [];
-        manualSkeleton.forEach(function(skelItem) {
-            if (!skelItem._doubleHeaderPairId || skelItem.type !== 'league') return;
-            var skelStart = window.SchedulerCoreUtils?.parseTimeToMinutes?.(skelItem.startTime);
-            sortedTimeKeys.forEach(function(tk) {
-                if (Math.abs(Number(tk) - skelStart) > 5) return;
-                blocksByTime[tk].allBlocks.forEach(function(b) {
-                    if (b.type !== 'league' && !/league/i.test(b.event)) return;
-                    if (skelItem.leagueName && b.leagueName && skelItem.leagueName !== b.leagueName) return;
-                    if (skelItem.division && b.divName && String(skelItem.division) !== String(b.divName)) return;
-                    b._doubleHeaderPairId = skelItem._doubleHeaderPairId;
+        // ★★★ OFF-CAMPUS: Auto-detect consecutive league slots as back-to-back pairs ★★★
+        for (var i = 0; i < sortedTimeKeys.length - 1; i++) {
+            var tk1 = sortedTimeKeys[i], tk2 = sortedTimeKeys[i + 1];
+            var blocks1 = blocksByTime[tk1].allBlocks.filter(function(b) { return b.type === 'league' || /league/i.test(b.event); });
+            var blocks2 = blocksByTime[tk2].allBlocks.filter(function(b) { return b.type === 'league' || /league/i.test(b.event); });
+            if (!blocks1.length || !blocks2.length) continue;
+            blocks1.forEach(function(b1) {
+                var lName = b1.leagueName || '';
+                var league = lName && masterLeagues[lName];
+                if (!league || !league.offCampus?.enabled) return;
+                var matched = blocks2.filter(function(b2) {
+                    return (b2.leagueName === lName) || (!b2.leagueName && !lName);
                 });
+                if (!matched.length) return;
+                if (b1._doubleHeaderPairId) return;
+                var pairId = 'auto_' + lName + '_' + tk1;
+                b1._doubleHeaderPairId = pairId;
+                matched.forEach(function(b2) { b2._doubleHeaderPairId = pairId; });
             });
-        });
+        }
 
         // ★★★ OFF-CAMPUS DOUBLE-HEADER PRE-PROCESSING ★★★
         const offCampusScheduled = {};
@@ -1107,19 +1103,47 @@ for (const futureDate of Object.keys(allDailyData)) {
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
-                // ★★★ Get matchups — check for Away Doubleheader mode ★★★
+                // ★★★ Get matchups — playoff > round-robin ★★★
                 let matchups;
-                let awayInfo = null;
-                
-                if (league.awayDoubleheader?.enabled) {
-                    awayInfo = getAwayDoubleheaderMatchups(league, gameNumber, history);
-                    if (awayInfo) {
-                        matchups = awayInfo.matchups;
-                        console.log('   \uD83D\uDE8C Away DH: Group ' + (awayInfo.groupIndex + 1) + ' [' + awayInfo.groupTeams.join(', ') + ']');
-                        console.log('   \uD83C\uDFAE Game ' + (awayInfo.gameWithinVisit + 1) + '/' + awayInfo.gamesPerVisit + ' (Round ' + (awayInfo.roundIndex + 1) + '/' + awayInfo.totalRounds + ')');
+                let playoffMatchupSports = null;     // null when not in playoff mode
+                let playoffMatchupFields = null;     // user-chosen field per matchup ('' = auto)
+                let playoffRoundNum = null;
+                let playoffIsTBD = false;            // true when emitting placeholder for an undecided future round
+                const _PM = window.PlayoffMode;
+
+                if (_PM && _PM.isLeagueInPlayoff(league)) {
+                    const liveMatchups = _PM.getActiveMatchups(league);
+                    if (liveMatchups.length > 0) {
+                        if (todayGameIndex === 0) {
+                            playoffRoundNum = league.playoff.currentRound;
+                            matchups = liveMatchups.map(function (m) { return [m.teamA, m.teamB]; });
+                            playoffMatchupSports = liveMatchups.map(function (m) { return m.sport || null; });
+                            playoffMatchupFields = liveMatchups.map(function (m) { return m.field || ''; });
+                            console.log('   🏆 PLAYOFF Round ' + playoffRoundNum + ': ' + liveMatchups.length + ' active matchup(s)');
+                        } else {
+                            // Game 2+ same day: winners not yet known — emit
+                            // placeholder TBD matchups for the forecast next round.
+                            const tbdRoundNum = league.playoff.currentRound + todayGameIndex;
+                            const tbdCount = Math.max(1, Math.ceil(liveMatchups.length / Math.pow(2, todayGameIndex)));
+                            const sportsPool = liveMatchups
+                                .map(function (m) { return m.sport || null; })
+                                .filter(Boolean);
+                            const fallbackSport = (league.sports && league.sports[0]) || null;
+                            playoffRoundNum = tbdRoundNum;
+                            playoffIsTBD = true;
+                            matchups = [];
+                            playoffMatchupSports = [];
+                            playoffMatchupFields = [];
+                            for (let k = 0; k < tbdCount; k++) {
+                                matchups.push(['TBD', 'TBD']);
+                                playoffMatchupSports.push(sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport);
+                                playoffMatchupFields.push('');
+                            }
+                            console.log('   🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');
+                        }
                     } else {
-                        console.log('   \u26A0\uFE0F Away doubleheader: no matchups generated');
-                        matchups = [];
+                        console.log('   🏆 PLAYOFF: no active matchups in current round (all decided or all byes) — skipping');
+                        continue;
                     }
                 } else {
                     const fullSchedule = generateRoundRobinSchedule(leagueTeams);
@@ -1139,13 +1163,31 @@ for (const futureDate of Object.keys(allDailyData)) {
 
                 // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
                 const leagueSports = league.sports || ["General Sport"];
-                const availablePool = buildAvailableFieldSportPool(
+                var availablePool = buildAvailableFieldSportPool(
                     leagueSports,
                     context,
                     leagueDivisions,
                     timeKey,
                     slots
                 );
+                // ★ Multi-game-per-day: exclude sports already used by this
+                // league EARLIER today so games get distinct sports even when
+                // the matchup is identical (e.g., 2-team league).
+                if (todayGameIndex > 0 && availablePool.length > 1) {
+                    var _prevSports = new Set();
+                    var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
+                    _leagueTeamKeys.forEach(function(k) {
+                        var hist = history.teamSports[k] || [];
+                        if (hist.length > 0) _prevSports.add(hist[hist.length - 1]);
+                    });
+                    if (_prevSports.size > 0) {
+                        var filtered = availablePool.filter(function(p) { return !_prevSports.has(p.sport); });
+                        if (filtered.length > 0) {
+                            console.log('   ★ Multi-game: excluding sports from earlier game(s): [' + [..._prevSports].join(', ') + ']');
+                            availablePool = filtered;
+                        }
+                    }
+                }
 
                 console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
                 availablePool.slice(0, 10).forEach(p =>
@@ -1157,15 +1199,135 @@ for (const futureDate of Object.keys(allDailyData)) {
                     continue;
                 }
 
+                // ★★★ PLAYOFF TBD: information-only mode ★★★
+                // For game 2+ in playoff mode, winners aren't decided yet so we
+                // don't pick fields automatically — just list the open fields at
+                // this time so the user can assign them once results are in.
+                // No field locks, no per-matchup assignments.
+                if (playoffIsTBD) {
+                    leagueGameCounters[league.name]++;
+                    const _seenFields = new Set();
+                    const _openList = [];
+                    availablePool.forEach(function (p) {
+                        if (_seenFields.has(p.field)) return;
+                        _seenFields.add(p.field);
+                        _openList.push(p.field);
+                    });
+                    const _tbdLabel = 'Playoff R' + playoffRoundNum + ' TBD';
+                    const _tbdRows = ['Round ' + playoffRoundNum + ' — winners TBD']
+                        .concat(_openList.length > 0
+                            ? ['Open fields:'].concat(_openList.map(function (s) { return '  • ' + s; }))
+                            : ['(no open fields at this time)']);
+                    console.log('   🏆 PLAYOFF TBD info-only: ' + _openList.length + ' open field(s) listed');
+                    leagueDivisions.forEach(function (divName) {
+                        const blocksForDiv = timeData.byDivision[divName];
+                        if (!blocksForDiv) return;
+                        blocksForDiv.forEach(function (block) {
+                            const _Utils = window.SchedulerCoreUtils;
+                            const _blockKey = (typeof block.startTime === 'number')
+                                ? block.startTime
+                                : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+                            if (Number(_blockKey) !== Number(timeKey)) return;
+                            const pick = {
+                                field: 'League: ' + league.name,
+                                sport: _tbdLabel,
+                                _activity: 'League: ' + league.name,
+                                _leagueName: league.name,
+                                _h2h: true,
+                                _fixed: true,
+                                _allMatchups: _tbdRows,
+                                _gameLabel: _tbdLabel,
+                                _playoffRound: playoffRoundNum,
+                                _playoffTBD: true
+                            };
+                            fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                            block.processed = true;
+                        });
+                    });
+                    // Reserved-activity locks still apply so non-playing bunks
+                    // get routed away from these activities even though we don't
+                    // know which kids will be playing yet.
+                    if (window.GlobalFieldLocks && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+                        const reservedReason = 'Playoff reserve (' + league.name + ' R' + playoffRoundNum + ' TBD)';
+                        leagueDivisions.forEach(function (divName) {
+                            league.playoff.reservedActivities.forEach(function (act) {
+                                try {
+                                    window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+                                } catch (e) {
+                                    console.warn('[PLAYOFF TBD] failed to reserve "' + act + '" for ' + divName + ':', e);
+                                }
+                            });
+                        });
+                    }
+                    console.log('   📈 Game #' + gameNumber + ' (TBD info) complete for "' + league.name + '"');
+                    continue;
+                }
+
                 // ★★★ PASS SCHEDULING PRIORITY TO ASSIGNMENT FUNCTION ★★★
-                const assignments = assignMatchupsToFieldsAndSports(
-                    matchups,
-                    availablePool,
-                    league.name,
-                    history,
-                    slots,
-                    league.schedulingPriority || 'sport_variety'
-                );
+                // For playoff mode: each matchup has its own fixed sport — bypass
+                // the variety logic and assign per-matchup directly.
+                let assignments;
+                if (playoffMatchupSports) {
+                    assignments = [];
+                    const _poolUsed = new Set();
+                    matchups.forEach(function (mu, i) {
+                        const teamA = Array.isArray(mu) ? mu[0] : mu;
+                        const teamB = Array.isArray(mu) ? mu[1] : null;
+                        const wantedSport = playoffMatchupSports[i];
+                        const wantedField = (playoffMatchupFields && playoffMatchupFields[i]) || '';
+                        if (!teamA || !teamB) return;
+                        if (!wantedSport) {
+                            console.log('   ⚠️ PLAYOFF: matchup ' + teamA + ' vs ' + teamB + ' has no sport set — skipping');
+                            return;
+                        }
+                        // Filter the pool to (sport-matching, field not yet used).
+                        let candidates = availablePool.filter(function (p) {
+                            return p.sport === wantedSport && !_poolUsed.has(p.field);
+                        });
+                        // ★ If the user chose a specific field for this matchup, prefer it.
+                        //   Fall back to any compatible field if the chosen one is unavailable.
+                        if (wantedField) {
+                            const chosen = candidates.find(function (p) { return p.field === wantedField; });
+                            if (chosen) {
+                                _poolUsed.add(chosen.field);
+                                assignments.push({ team1: teamA, team2: teamB, field: chosen.field, sport: chosen.sport });
+                                return;
+                            }
+                            console.log('   ⚠️ PLAYOFF: chosen field "' + wantedField + '" for ' + teamA + ' vs ' + teamB +
+                                ' is unavailable (in use or doesn\'t support ' + wantedSport + ') — falling back to auto-pick');
+                        }
+                        if (candidates.length === 0) {
+                            // For TBD placeholders, the "wanted" sport is just a
+                            // forecast — the actual round 2 sport isn't known yet.
+                            // Fall back to any available pool entry so the slot
+                            // still gets reserved with a TBD label.
+                            if (playoffIsTBD) {
+                                const fallback = availablePool.filter(function (p) { return !_poolUsed.has(p.field); });
+                                if (fallback.length > 0) {
+                                    const pickF = fallback[0];
+                                    _poolUsed.add(pickF.field);
+                                    assignments.push({ team1: teamA, team2: teamB, field: pickF.field, sport: pickF.sport });
+                                    console.log('   🏆 PLAYOFF TBD: using fallback ' + pickF.sport + ' @ ' + pickF.field + ' (preferred sport "' + wantedSport + '" unavailable)');
+                                    return;
+                                }
+                            }
+                            console.log('   🚨 PLAYOFF: no field for sport "' + wantedSport + '" (matchup ' + teamA + ' vs ' + teamB + ')');
+                            return;
+                        }
+                        const pick = candidates[0];
+                        _poolUsed.add(pick.field);
+                        assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
+                    });
+                } else {
+                    assignments = assignMatchupsToFieldsAndSports(
+                        matchups,
+                        availablePool,
+                        league.name,
+                        history,
+                        slots,
+                        league.schedulingPriority || 'sport_variety'
+                    );
+                }
 
                 if (assignments.length === 0) {
                     console.log(`   ❌ No assignments possible`);
@@ -1180,17 +1342,6 @@ for (const futureDate of Object.keys(allDailyData)) {
                 console.log(`\n   🔒 LOCKING FIELDS: ${usedFields.join(', ')}`);
 
                if (window.GlobalFieldLocks && slots.length > 0) {
-    // ★★★ FIX: Include time range for cross-division lock detection ★★★
-    const sampleBlock = timeData.allBlocks[0];
-    const leagueDivName = leagueDivisions[0];
-    const leagueDivSlots = window.divisionTimes?.[leagueDivName] || [];
-    let lockStartMin = null, lockEndMin = null;
-    if (slots.length > 0 && leagueDivSlots[slots[0]]) {
-        lockStartMin = leagueDivSlots[slots[0]].startMin;
-        lockEndMin = leagueDivSlots[slots[slots.length - 1]]?.endMin || lockStartMin + 40;
-    }
-    
-    // ★★★ FIX v13.1: Include time range for cross-division lock detection ★★★
 var _leagueDivSlots = window.divisionTimes?.[leagueDivisions[0]] || [];
 var _lockStartMin = null, _lockEndMin = null;
 if (slots.length > 0 && _leagueDivSlots[slots[0]]) {
@@ -1198,13 +1349,33 @@ if (slots.length > 0 && _leagueDivSlots[slots[0]]) {
     _lockEndMin = _leagueDivSlots[slots[slots.length - 1]]?.endMin || (_lockStartMin + 40);
 }
 window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
-    lockedBy: 'regular_league',
+    lockedBy: playoffRoundNum ? 'playoff' : 'regular_league',
     leagueName: league.name,
     division: leagueDivisions.join(', '),
-    activity: `${league.name} League Game`,
+    activity: playoffRoundNum
+        ? (`${league.name} Playoff R${playoffRoundNum}` + (playoffIsTBD ? ' TBD' : ''))
+        : (`${league.name} League Game`),
     startMin: _lockStartMin,
     endMin: _lockEndMin
 });
+
+// ★★★ PLAYOFF: lock reserved activities for non-playoff kids ★★★
+// User-configured list of facilities/activities that should be reserved
+// exclusively for this league's divisions during the playoff slot, so the
+// auto-scheduler routes the not-playing bunks into them.
+if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedActivities) && league.playoff.reservedActivities.length > 0) {
+    const reservedReason = `Playoff reserve (${league.name} R${playoffRoundNum}` + (playoffIsTBD ? ' TBD)' : ')');
+    leagueDivisions.forEach(function (divName) {
+        league.playoff.reservedActivities.forEach(function (act) {
+            try {
+                window.GlobalFieldLocks.lockFieldForDivision(act, slots, divName, reservedReason);
+            } catch (e) {
+                console.warn('[PLAYOFF] failed to reserve "' + act + '" for ' + divName + ':', e);
+            }
+        });
+    });
+    console.log('   🎯 PLAYOFF: reserved [' + league.playoff.reservedActivities.join(', ') + '] for [' + leagueDivisions.join(', ') + ']');
+}
 }
 
                 // Also lock in fieldUsageBySlot for compatibility
@@ -1229,15 +1400,46 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                     // Record matchup for matchup_variety tracking
                     recordMatchup(league.name, a.team1, a.team2, history);
                 });
-
-                leagueDivisions.forEach(divName => {
+window._debugLeagueTimeData = timeData;
+                // ★ Day 20 fix #1: iterate filteredLeagueDivisions, not
+                // leagueDivisions. The filter at line ~1071 already determined
+                // which divisions' blocks named THIS league (or had no hint).
+                // Iterating leagueDivisions wrote matchups to divisions whose
+                // block named a DIFFERENT league, overwriting that league's
+                // intended placement.
+                filteredLeagueDivisions.forEach(divName => {
                     const blocksForDiv = timeData.byDivision[divName];
                     if (!blocksForDiv) return;
-
-                    blocksForDiv.forEach(block => {
-                        const pick = {
+                    // Within the division, only fill blocks that named THIS
+                    // league or had no hint (extra safety if a division has
+                    // multiple league blocks).
+                    blocksForDiv.filter(b => !b.leagueName || b.leagueName === league.name).forEach(block => {
+        // ★ FIX: Manual-mode blocks have only `startTime`; auto-mode blocks have both
+        // `startTime` (string) and `startMin` (number). Normalize from `startTime` so
+        // the check works in both modes. Previously checked `block.startMin`, which is
+        // undefined in manual mode → NaN !== timeKey → every block skipped, matchups
+        // never reached fillBlock, leagueAssignments stayed empty, and the renderer
+        // fell back to generic "1 vs 2, 3 vs 4" pairings.
+        const _Utils = window.SchedulerCoreUtils;
+        const _blockKey = (typeof block.startTime === 'number')
+            ? block.startTime
+            : (_Utils?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+        if (Number(_blockKey) !== Number(timeKey)) return;
+        const _gameLbl = playoffRoundNum
+            ? (`Playoff R${playoffRoundNum}`)
+            : (`Game ${gameNumber}`);
+        // ★ Day 20 fix #2: separate sport from gameLabel. Previously
+        // pick.sport = gameLbl (e.g. "Game 1") which then leaked into the
+        // slot's sport field and field display. Use the first actual
+        // sport from the assignments list (every matchup has its own sport
+        // already in the matchup string), falling back to the league's
+        // primary sport.
+        const _firstSport = (assignments.find(a => a && a.sport) || {}).sport
+            || (league.sports && league.sports[0])
+            || '';
+        const pick = {
                             field: `League: ${league.name}`,
-                            sport: `Game ${gameNumber}`,
+                            sport: _firstSport,
                             _activity: `League: ${league.name}`,
                             _leagueName: league.name,
                             _h2h: true,
@@ -1245,7 +1447,8 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
                             ),
-                            _gameLabel: `Game ${gameNumber}`
+                            _gameLabel: _gameLbl,
+                            _playoffRound: playoffRoundNum || null
                         };
 
                         fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
@@ -1394,6 +1597,57 @@ window.GlobalFieldLocks.lockMultipleFields(usedFields, slots, {
         });
         
         return history.gamesPerDate[leagueName];
+    };
+
+    /**
+     * Remove a date's game counts from league history and propagate updated
+     * game numbers to any future dates still in localStorage.
+     * Called by eraseCurrentDailyData after a day is deleted.
+     */
+    Leagues.cleanupDateFromHistory = function(dateKey) {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate) return;
+
+            let changed = false;
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                if (history.gamesPerDate[leagueName][dateKey] !== undefined) {
+                    delete history.gamesPerDate[leagueName][dateKey];
+                    changed = true;
+                }
+            }
+
+            if (!changed) return;
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Removed gamesPerDate entries for', dateKey);
+
+            // Propagate corrected game numbers to future schedules in localStorage
+            updateFutureSchedules(dateKey, history);
+        } catch (e) {
+            console.error('[RegularLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
+    /**
+     * Wipe all gamesPerDate entries across every league.
+     * Called by eraseAllDailyData when every schedule is deleted at once.
+     * No future-schedule propagation needed because all schedules are gone.
+     */
+    Leagues.clearAllGamesPerDate = function() {
+        try {
+            const history = loadLeagueHistory();
+            if (!history.gamesPerDate || Object.keys(history.gamesPerDate).length === 0) return;
+
+            for (const leagueName of Object.keys(history.gamesPerDate)) {
+                history.gamesPerDate[leagueName] = {};
+            }
+
+            saveLeagueHistory(history);
+            console.log('[RegularLeagues] 🗑️ Cleared all gamesPerDate entries (all schedules deleted)');
+        } catch (e) {
+            console.error('[RegularLeagues] clearAllGamesPerDate error:', e);
+        }
     };
 
     window.SchedulerCoreLeagues = Leagues;

@@ -53,7 +53,7 @@
         },
 
         // Debug mode - set to true to see detailed logs
-        DEBUG: true
+        DEBUG: false
     };
 
     // =========================================================================
@@ -216,12 +216,19 @@
             // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
             // This ensures invited users get their correct assigned role
             // =================================================================
-            const { data: membership, error: memberError } = await _client
+            // Multi-camp users: .maybeSingle() throws on >1 rows, so a user
+            // who belongs to two camps would crash through to STEP 4 (viewer
+            // with own UUID as campId) and write to the wrong camp_id.
+            // Pick the most-recently-joined camp deterministically. The
+            // server-side get_user_camp_id() helper uses the same rule.
+            const { data: memberships, error: memberError } = await _client
                 .from('camp_users')
-                .select('camp_id, role, name, subdivision_ids, assigned_divisions')
+                .select('camp_id, role, name, subdivision_ids, assigned_divisions, accepted_at')
                 .eq('user_id', _userId)
                 .not('accepted_at', 'is', null)
-                .maybeSingle();
+                .order('accepted_at', { ascending: false })
+                .limit(1);
+            const membership = (Array.isArray(memberships) && memberships.length > 0) ? memberships[0] : null;
 
             if (!memberError && membership) {
                 _campId = membership.camp_id;
@@ -230,8 +237,11 @@
                 _roleVerifiedFromDB = true;  // ★★★ V-002: Now DB-verified ★★★
                 cacheValues();
                 
-                // Store membership details for permissions module
-                window._campistryMembership = membership;
+                // Store membership details for permissions module. Frozen
+                // so an XSS payload can't replace it with a synthetic
+                // {role:'owner', camp_id:victimCamp} before the next
+                // DB verify catches up.
+                window._campistryMembership = Object.freeze(membership);
                 
                 log('✅ User IS a team member (DB-verified):', { campId: _campId, role: _role });
                 return; // ⭐ IMPORTANT: Exit here - don't check camp ownership
@@ -268,8 +278,8 @@
                         _roleVerifiedFromDB = true;  // ★★★ V-002: DB-verified ★★★
                         cacheValues();
                         
-                        // Store membership for permissions
-                        window._campistryMembership = pendingInvite;
+                        // Store membership for permissions (frozen — see above).
+                        window._campistryMembership = Object.freeze(pendingInvite);
                         
                         log('✅ Invite auto-accepted, user is now:', _role);
                         return;
@@ -380,17 +390,16 @@
 
     function getCampId() {
         if (_campId) return _campId;
-        
-        // Fallback chain for edge cases
+        // Cached value from a verified detection round.
         const cached = localStorage.getItem(CONFIG.CACHE_KEYS.CAMP_ID);
         if (cached) return cached;
-        
-        // Legacy fallback
-        const legacy = localStorage.getItem('currentCampId') || 
-                      localStorage.getItem('campistry_user_id') ||
-                      localStorage.getItem('camp_id');
-        if (legacy) return legacy;
-        
+        // Slice 2 audit fix: removed the unauthenticated legacy localStorage
+        // chain (currentCampId / campistry_user_id / camp_id). Anyone with
+        // DOM access could write any camp_id and the client would honor
+        // it without verifying membership. RLS still blocks server reads,
+        // but the client UI rendered empty-but-suggestive states for
+        // foreign camps. Return null and force callers to wait for
+        // verified detection.
         return null;
     }
 
@@ -446,12 +455,46 @@
     // SESSION TOKEN (for direct REST API calls)
     // =========================================================================
 
+    // Slice 2 audit fix: do NOT silently fall back to the anon key when a
+    // session token isn't available. Earlier, a logged-in user whose JWT
+    // had expired would keep "saving" — the writes hit the REST endpoint
+    // with the anon key, which RLS treats as unauthenticated. Saves
+    // returned 401, the client surfaced "permission denied" toasts, and
+    // the user had no UI affordance to re-auth — data drifted off cloud
+    // while local cache filled up.
+    //
+    // Now: refresh the session if we have a refresh token; if we still
+    // can't get an access token, return null and surface a re-auth
+    // event. Callers who need a token must check for null.
     async function getAccessToken() {
-        if (!_session) {
-            const { data: { session } } = await _client.auth.getSession();
-            _session = session;
+        if (!_session?.access_token) {
+            try {
+                const { data: { session } } = await _client.auth.getSession();
+                _session = session;
+            } catch (_) {}
         }
-        return _session?.access_token || CONFIG.SUPABASE_ANON_KEY;
+        // Treat tokens within 60s of expiry as already-stale and refresh.
+        const expIso = _session?.expires_at ? _session.expires_at * 1000 : 0;
+        if (_session?.access_token && expIso > 0 && expIso - Date.now() < 60000) {
+            try {
+                const { data: { session } } = await _client.auth.refreshSession();
+                if (session?.access_token) _session = session;
+            } catch (_) {}
+        }
+        if (!_session?.access_token) {
+            // Surface a re-auth signal exactly once per missing-token episode.
+            if (!window._campistryAuthExpiredFired) {
+                window._campistryAuthExpiredFired = true;
+                try {
+                    window.dispatchEvent(new CustomEvent('campistry-auth-expired'));
+                } catch (_) {}
+                console.warn('[CampistryDB] No access token — user must re-authenticate.');
+            }
+            return null;
+        }
+        // Reset the latched signal once we have a valid token again.
+        window._campistryAuthExpiredFired = false;
+        return _session.access_token;
     }
 
     // =========================================================================
@@ -460,8 +503,14 @@
 
     async function rawQuery(endpoint, options = {}) {
         const token = await getAccessToken();
+        if (!token) {
+            // No session — fail fast rather than send the anon key and
+            // pretend things are fine (the previous behavior). Callers
+            // get a clear "no auth" signal and can route to login.
+            return { error: { message: 'Not authenticated', code: 'NO_AUTH' } };
+        }
         const url = `${CONFIG.SUPABASE_URL}/rest/v1/${endpoint}`;
-        
+
         const headers = {
             'apikey': CONFIG.SUPABASE_ANON_KEY,
             'Authorization': `Bearer ${token}`,

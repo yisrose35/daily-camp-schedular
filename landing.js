@@ -446,30 +446,43 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                         } else {
                             // No invite — create camp (camp ID = user ID for owners)
                             
-                            // ★★★ PROMO CODE DETECTION ★★★
-                            // Check if the access code is a promo code (trial) or regular (full access)
-                            let planStatus = 'active';
+                            // ★★★ ACCESS CODE VALIDATION — ALL SERVER-SIDE ★★★
+                            if (!accessCode) {
+                                throw new Error('An access code is required to create a camp. Contact campistryoffice@gmail.com for access.');
+                            }
+
+                            let planStatus = null;
                             let trialStartedAt = null;
                             let trialHours = null;
 
-                            if (accessCode) {
-                                try {
-                                    const { data: promoResult, error: promoError } = await supabase
-                                        .rpc('validate_promo_code', { input_code: accessCode });
-                                    
-                                    console.log('[Landing] Promo code check result:', promoResult, 'error:', promoError);
-                                    
-                                    if (!promoError && promoResult && promoResult.valid) {
-                                        planStatus = 'trial';
-                                        trialStartedAt = new Date().toISOString();
-                                        trialHours = promoResult.trial_hours || 48;
-                                        console.log('[Landing] ✅ Promo code accepted:', accessCode, '→ trial for', trialHours, 'hours');
-                                    } else {
-                                        console.log('[Landing] Not a promo code, using as regular access code');
-                                    }
-                                } catch (promoErr) {
-                                    console.warn('[Landing] Promo check failed, proceeding with normal flow:', promoErr);
+                            // Validate via Supabase RPC — codes stored in promo_codes table
+                            try {
+                                const { data: codeResult, error: codeError } = await supabase
+                                    .rpc('validate_access_code', { input_code: accessCode });
+
+                                console.log('[Landing] Access code check:', codeResult, 'error:', codeError);
+
+                                if (codeError) {
+                                    console.error('[Landing] Access code RPC error:', codeError);
+                                    throw new Error('Could not verify access code. Please try again.');
                                 }
+
+                                if (!codeResult || !codeResult.valid) {
+                                    throw new Error('Invalid access code. Contact campistryoffice@gmail.com for access.');
+                                }
+
+                                planStatus = codeResult.plan_status || 'active';
+                                if (codeResult.trial_hours) {
+                                    trialStartedAt = new Date().toISOString();
+                                    trialHours = codeResult.trial_hours;
+                                }
+                                console.log('[Landing] ✅ Code accepted →', planStatus, trialHours ? '(' + trialHours + 'h)' : '(no time limit)');
+                            } catch (codeErr) {
+                                if (codeErr.message.includes('access code') || codeErr.message.includes('Contact')) {
+                                    throw codeErr; // Re-throw our own errors
+                                }
+                                console.error('[Landing] Code validation failed:', codeErr);
+                                throw new Error('Could not verify access code. Please try again.');
                             }
 
                             const { data: campData, error: campError } = await supabase

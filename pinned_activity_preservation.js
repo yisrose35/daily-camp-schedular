@@ -63,23 +63,197 @@
             }
             
             if (!slots || !Array.isArray(slots)) continue;
-            
+
+            // ★ Build a set of every name that's currently a real activity in
+            //   the camp's registries. Anything pinned that doesn't appear in
+            //   this set is a ghost left behind by deleted-but-not-cleaned
+            //   data; we drop those pins so each generation can place fresh.
+            //   Without this, a special you removed from the registry months
+            //   ago can still be carried forward via _pinned indefinitely.
+            const _validNames = new Set();
+            const _addNames = (arr, key) => {
+                if (!Array.isArray(arr)) return;
+                arr.forEach(o => { if (o && o[key]) _validNames.add(String(o[key])); });
+            };
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                _addNames(window.getAllSpecialActivities?.() || [], 'name');
+                _addNames(_gs.app1?.specialActivities, 'name');
+                _addNames(_gs.app1?.allSports, 'name');
+                if (Array.isArray(_gs.app1?.allSports)) {
+                    _gs.app1.allSports.forEach(s => { if (typeof s === 'string') _validNames.add(s); });
+                }
+                _addNames(_gs.app1?.fields, 'name');
+                _addNames(_gs.app1?.facilities, 'name');
+                // Always-OK names: structural slots that aren't user-managed
+                ['lunch','Swim','Change','Lineup','Snacks','Snack','Dismissal','Free'].forEach(n => _validNames.add(n));
+            } catch (_) {}
+
+            // Grade for this bunk — used to check the field/special
+            // accessRestrictions below. If we can't determine the grade we
+            // fall through to the ghost-only checks (no accessRestrictions
+            // gate applied) rather than risk dropping a valid pin.
+            const _bunkGrade = Object.keys(divisions).find(d =>
+                (divisions[d]?.bunks || []).map(String).includes(String(bunkName))
+            ) || null;
+            const _gsForCheck = (typeof window.loadGlobalSettings === 'function')
+                ? (window.loadGlobalSettings() || {})
+                : (window.globalSettings || {});
+            const _allFields = _gsForCheck.app1?.fields || [];
+            const _allSpecials = _gsForCheck.app1?.specialActivities
+                || (window.getAllSpecialActivities ? window.getAllSpecialActivities() : []);
+
+            // Returns true if this pinned entry is still legal under the
+            // current field/special accessRestrictions for this bunk. The
+            // gate mirrors AutoSolverEngine's grade-access check and the
+            // smart-logic-adapter's canBunkAccessSpecial check, so a
+            // schedule-time edit pinned BEFORE you tightened a restriction
+            // does not get carried forward into the new build.
+            // Slice 3 audit fix (N6): every divisions lookup tries both the
+            // string and raw forms of the bunk's grade key. Earlier this used
+            // single-key access only, which silently dropped pins when the
+            // type-mismatch occurred between the access-restrictions store
+            // (often string keys) and the divisions resolution (sometimes
+            // numeric). Mirrors the dual-key pattern in commitWriteIfLegal.
+            const _gradeKey = String(_bunkGrade);
+            const _accessAllowsBunk = (rules) => {
+                const divRules = rules.divisions || {};
+                if (!(_gradeKey in divRules) && !(_bunkGrade in divRules)) return false;
+                const bunkList = divRules[_gradeKey] || divRules[_bunkGrade];
+                if (Array.isArray(bunkList) && bunkList.length > 0
+                    && !bunkList.map(String).includes(String(bunkName))) return false;
+                return true;
+            };
+
+            const _isPinnedEntryStillAllowed = (entry) => {
+                if (!_bunkGrade) return true;
+                const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
+                const actName = entry._activity || entry.event || '';
+                const sMin = entry._startMin;
+                const eMin = entry._endMin;
+
+                // 1. Field-level access restriction
+                let fld = null;
+                if (fieldName && fieldName !== 'Free') {
+                    fld = _allFields.find(f => f && f.name === fieldName);
+                    if (fld?.accessRestrictions?.enabled && !_accessAllowsBunk(fld.accessRestrictions)) {
+                        return false;
+                    }
+                }
+
+                // 2. Special-level access restriction (when the pinned
+                //    activity is a configured special)
+                if (actName) {
+                    const sp = _allSpecials.find(s => s && s.name === actName);
+                    if (sp?.accessRestrictions?.enabled && !_accessAllowsBunk(sp.accessRestrictions)) {
+                        return false;
+                    }
+                }
+
+                // 3. Slice 3 audit fix (N7): also drop pins that violate the
+                //    field's per-grade timeRules, today's disabledFields, or
+                //    today's per-field disabledSports. Earlier the gate
+                //    checked access only; a pin set yesterday would survive
+                //    even after the user explicitly added a rule that
+                //    blocks it for today.
+                if (fld && Array.isArray(fld.timeRules) && fld.timeRules.length > 0
+                    && sMin != null && eMin != null) {
+                    const myG = _gradeKey;
+                    let hasGradeAvail = false, insideAvail = false;
+                    for (const r of fld.timeRules) {
+                        const t = String(r.type || '').toLowerCase();
+                        const isUnavail = t === 'unavailable' || r.available === false;
+                        const isAvail = t === 'available' || r.available === true;
+                        const rs = r.startMin;
+                        const re = r.endMin;
+                        if (rs == null || re == null || (!isAvail && !isUnavail)) continue;
+                        const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                        if (rDivs.length > 0 && !rDivs.includes(myG)) continue;
+                        if (isUnavail && rs < eMin && re > sMin) return false;
+                        if (isAvail) {
+                            hasGradeAvail = true;
+                            if (sMin >= rs && eMin <= re) insideAvail = true;
+                        }
+                    }
+                    if (hasGradeAvail && !insideAvail) return false;
+                }
+
+                if (fieldName) {
+                    const dailyDisabled = window.dailyDisabledFields || window.currentDayOverrides?.disabledFields || [];
+                    if (Array.isArray(dailyDisabled) && dailyDisabled.map(String).includes(String(fieldName))) return false;
+                    const dsByField = window.dailyDisabledSportsByField || {};
+                    const ds = dsByField[fieldName];
+                    if (ds && actName && (ds.has?.(actName) || (Array.isArray(ds) && ds.includes(actName)))) return false;
+                }
+
+                // 4. Slice 4 audit fix — also check cooldown / FieldCombos
+                // rules. Earlier the gate stopped at access + timeRules +
+                // disabledFields/Sports. A pin could survive even if a
+                // newly-added cooldown made the placement illegal — the
+                // pin then resurrected the violation on the next auto-gen.
+                if (window.SchedulingRules?.isCandidateAllowed
+                    && sMin != null && eMin != null && actName) {
+                    try {
+                        const sp = _allSpecials.find(s => s && s.name === actName);
+                        const cand = {
+                            startMin: sMin, endMin: eMin,
+                            type: sp ? 'special' : 'sport',
+                            event: actName,
+                            field: fieldName
+                        };
+                        const template = [];
+                        for (let ti = 0; ti < slots.length; ti++) {
+                            const w = slots[ti];
+                            if (!w || w === entry || w.continuation) continue;
+                            if (w._startMin == null || w._endMin == null) continue;
+                            template.push({
+                                startMin: w._startMin, endMin: w._endMin,
+                                type: w.type || (w._assignedSpecial ? 'special' : (w.field === 'Free' ? 'free' : 'sport')),
+                                event: w.event || w._activity || w.sport || '',
+                                field: w.field
+                            });
+                        }
+                        if (!window.SchedulingRules.isCandidateAllowed(cand, template, { mode: 'auto' })) return false;
+                    } catch (_) { /* rule-engine error never blocks a legal pin */ }
+                }
+
+                return true;
+            };
+
+            let droppedGhosts = 0;
+            let droppedDisallowed = 0;
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
-                
+
                 // Check if this is a pinned entry
                 if (entry && entry._pinned === true) {
+                    // Drop pin if its activity isn't in any current registry.
+                    const actName = entry._activity || entry.field || entry.event;
+                    if (actName && _validNames.size > 0 && !_validNames.has(String(actName))) {
+                        droppedGhosts++;
+                        continue;
+                    }
+
+                    // Drop pin if the field/special no longer allows this
+                    // bunk's grade. Without this gate, a sport pinned to a
+                    // field BEFORE the user tightened the field's
+                    // accessRestrictions would survive every regen.
+                    if (!_isPinnedEntryStillAllowed(entry)) {
+                        droppedDisallowed++;
+                        continue;
+                    }
+
                     if (!_pinnedSnapshot[bunkName]) {
                         _pinnedSnapshot[bunkName] = {};
                     }
-                    
+
                     _pinnedSnapshot[bunkName][slotIdx] = {
                         ...entry,
                         _preservedAt: Date.now()
                     };
-                    
+
                     capturedCount++;
-                    
+
                     // Track field lock info
                     const fieldName = typeof entry.field === 'object' ? entry.field?.name : entry.field;
                     if (fieldName && fieldName !== 'Free') {
@@ -91,6 +265,12 @@
                         });
                     }
                 }
+            }
+            if (droppedGhosts > 0) {
+                console.warn('[PinnedPreserve] 👻 Dropped ' + droppedGhosts + ' pinned ghost slot(s) for bunk ' + bunkName + ' (activity not in current registry)');
+            }
+            if (droppedDisallowed > 0) {
+                console.warn('[PinnedPreserve] 🚫 Dropped ' + droppedDisallowed + ' pinned slot(s) for bunk ' + bunkName + ' (field/special no longer allows this grade)');
             }
         }
         

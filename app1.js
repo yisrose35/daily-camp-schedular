@@ -1,3 +1,4 @@
+
 // =================================================================
 // app1.js — v5.2: Grades Are The Scheduling Units (Clean UI)
 //
@@ -117,6 +118,60 @@
         if (!Array.isArray(arr)) return;
         arr.sort(compareBunks);
     }
+
+    // Globally-available helper: return division keys ordered by the user's
+    // drag-and-drop preferences in Campistry Me / flow.html.
+    //   1) gs.app1.manualColumnOrder (set by drag-reorder of grade columns)
+    //   2) gs.campStructure key order via parentDivision lookup
+    //   3) Numeric-then-alphabetic fallback
+    // Use this everywhere a list of division/grade keys is rendered to keep
+    // the order consistent across the entire site.
+    window.getUserDivisionOrder = function (keys) {
+        if (!Array.isArray(keys) || keys.length === 0) return keys || [];
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
+        var structureOrder = Object.keys(gs.campStructure || {});
+        var cs = gs.campStructure || {};
+        var divs = window.divisions || {};
+
+        // Build a flat grade order from campStructure gradeOrder arrays
+        // This preserves the user's drag-reorder on the Me page
+        var _csGradeOrder = [];
+        structureOrder.forEach(function (divName) {
+            var go = cs[divName] && Array.isArray(cs[divName].gradeOrder) ? cs[divName].gradeOrder : Object.keys((cs[divName] && cs[divName].grades) || {});
+            go.forEach(function (g) { _csGradeOrder.push(g); });
+        });
+
+        return keys.slice().sort(function (a, b) {
+            // Primary: campStructure gradeOrder (user's Me page drag order)
+            if (_csGradeOrder.length > 0) {
+                var agi = _csGradeOrder.indexOf(a);
+                var bgi = _csGradeOrder.indexOf(b);
+                if (agi >= 0 && bgi >= 0) return agi - bgi;
+                if (agi >= 0) return -1;
+                if (bgi >= 0) return 1;
+            }
+            // Fallback: manualColumnOrder (Flow page column reorder)
+            if (manualOrder) {
+                var ai = manualOrder.indexOf(a);
+                var bi = manualOrder.indexOf(b);
+                if (ai >= 0 && bi >= 0) return ai - bi;
+                if (ai >= 0) return -1;
+                if (bi >= 0) return 1;
+            }
+            if (structureOrder.length > 0) {
+                var aParent = (divs[a] && divs[a].parentDivision) || a;
+                var bParent = (divs[b] && divs[b].parentDivision) || b;
+                var ai2 = structureOrder.indexOf(aParent);
+                var bi2 = structureOrder.indexOf(bParent);
+                if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+            }
+            var na = parseInt(String(a).match(/(\d+)/) ? String(a).match(/(\d+)/)[1] : '');
+            var nb = parseInt(String(b).match(/(\d+)/) ? String(b).match(/(\d+)/)[1] : '');
+            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            return String(a).localeCompare(String(b));
+        });
+    };
     
     function escapeHtml(str) {
         if (!str) return "";
@@ -394,15 +449,140 @@
                 25% { transform: translateX(-2px); }
                 75% { transform: translateX(2px); }
             }
+
+            /* ===== Builder Mode Slider ===== */
+            .builder-mode-wrapper {
+                display: flex;
+                justify-content: center;
+                margin: 10px 0 24px 0;
+            }
+            .builder-mode-slider {
+                display: flex;
+                background: #E2E8F0;
+                border-radius: 999px;
+                padding: 4px;
+                position: relative;
+                width: 380px;
+                box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.05);
+            }
+            .builder-mode-option {
+                flex: 1;
+                text-align: center;
+                padding: 10px 0;
+                font-size: 0.95rem;
+                font-weight: 600;
+                color: #64748B;
+                cursor: pointer;
+                z-index: 2;
+                transition: color 0.3s;
+            }
+            .builder-mode-option.active {
+                color: #0D7C5C;
+            }
+            .builder-mode-indicator {
+                position: absolute;
+                top: 4px;
+                bottom: 4px;
+                width: calc(50% - 4px);
+                background: #FFFFFF;
+                border-radius: 999px;
+                box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+                transition: transform 0.3s cubic-bezier(0.4, 0.0, 0.2, 1);
+                z-index: 1;
+            }
+            .builder-mode-slider[data-mode="manual"] .builder-mode-indicator {
+                transform: translateX(0);
+            }
+            .builder-mode-slider[data-mode="auto"] .builder-mode-indicator {
+                transform: translateX(100%);
+            }
         `;
-        document.head.appendChild(style);
-    }
+        document.head.appendChild(style);    }
 
     // ==================== CAMPISTRY ME LINK BANNER ====================
 
     // Campistry Me link is now in the header (index.html)
 
-    // ==================== UI RENDERING ====================
+   // ==================== UI RENDERING ====================
+    
+    function renderBuilderModeSlider() {
+        if (document.getElementById('builder-mode-container')) return;
+
+        const globalData = window.loadGlobalSettings?.() || {};
+        const currentMode = globalData.app1?.builderMode || 'manual';
+
+        const wrapper = document.createElement('div');
+        wrapper.id = 'builder-mode-container';
+        wrapper.className = 'builder-mode-wrapper';
+
+        wrapper.innerHTML = `
+            <div class="builder-mode-slider" id="builderModeSlider" data-mode="${currentMode}">
+                <div class="builder-mode-indicator"></div>
+                <div class="builder-mode-option ${currentMode === 'manual' ? 'active' : ''}" data-target="manual">Manual Builder</div>
+                <div class="builder-mode-option ${currentMode === 'auto' ? 'active' : ''}" data-target="auto">Auto Builder</div>
+            </div>
+        `;
+
+        wrapper.querySelectorAll('.builder-mode-option').forEach(opt => {
+            opt.addEventListener('click', (e) => {
+                const targetMode = e.currentTarget.dataset.target;
+                const slider = document.getElementById('builderModeSlider');
+                
+                // Update UI visually
+                slider.dataset.mode = targetMode;
+                wrapper.querySelectorAll('.builder-mode-option').forEach(o => o.classList.remove('active'));
+                e.currentTarget.classList.add('active');
+
+               // Save setting globally
+                const g = window.loadGlobalSettings?.() || {};
+                if (!g.app1) g.app1 = {};
+                g.app1.builderMode = targetMode;
+                window.saveGlobalSettings?.('app1', g.app1);
+                window.forceSyncToCloud?.();
+                
+                // ★ Notify loaded modules so they re-init with the new mode
+                // This clears stale window._daBuilderMode and forces proper data loading
+                window.dispatchEvent(new CustomEvent('campistry-builder-mode-changed', { 
+                    detail: { mode: targetMode } 
+                }));
+            });
+        });
+
+        // ★ Sync slider UI if cloud hydration arrives after initial render
+        window.addEventListener('campistry-cloud-hydrated', () => {
+            const slider = document.getElementById('builderModeSlider');
+            if (!slider) return;
+            const freshMode = window.loadGlobalSettings?.()?.app1?.builderMode || 'manual';
+            if (slider.dataset.mode !== freshMode) {
+                slider.dataset.mode = freshMode;
+                slider.querySelectorAll('.builder-mode-option').forEach(o => {
+                    o.classList.toggle('active', o.dataset.target === freshMode);
+                });
+                window.dispatchEvent(new CustomEvent('campistry-builder-mode-changed', {
+                    detail: { mode: freshMode }
+                }));
+            }
+        });
+
+        // Safely inject it above the main setup grid layout
+        const divBtns = document.getElementById("divisionButtons");
+        if (divBtns) {
+            let layoutContainer = divBtns.parentElement;
+            // Traverse up to find the main flex container holding the sidebar and right pane
+            while (layoutContainer && layoutContainer.tagName !== 'BODY') {
+                const style = window.getComputedStyle(layoutContainer);
+                if (style.display === 'flex' || style.display === 'grid') {
+                    break;
+                }
+                layoutContainer = layoutContainer.parentElement;
+            }
+            if (layoutContainer && layoutContainer.tagName !== 'BODY') {
+                layoutContainer.parentNode.insertBefore(wrapper, layoutContainer);
+            } else {
+                divBtns.parentNode.insertBefore(wrapper, divBtns);
+            }
+        }
+    }
     
     /**
      * Render grade cards in the left panel, grouped by parent division
@@ -448,13 +628,9 @@
                 fragment.appendChild(groupHeader);
             }
             
-           // Grade cards within this parent division (sorted numerically)
-            const sortedGrades = [...group.grades].sort((a, b) => {
-                const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                if (numA !== numB) return numA - numB;
-                return String(a).localeCompare(String(b));
-            });
+           // Grade cards within this parent division — preserve user-defined
+           // order from campStructure (set via drag-and-drop in Campistry Me).
+            const sortedGrades = [...group.grades];
             sortedGrades.forEach(gradeName => {
                 const divObj = state.divisions[gradeName];
                 if (!divObj) return;
@@ -527,9 +703,9 @@
                     <div class="division-mini-header"><span>Grade Times</span></div>
                     <p class="division-mini-help">Set the daily time window for this grade.</p>
                     <div style="display:flex; align-items:center; gap:8px; margin-top:4px; flex-wrap:wrap;">
-                        <input id="time-start-input" value="${escapeHtml(divObj.startTime || "")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                        <input id="time-start-input" value="${escapeHtml(divObj.startTime || "9:00am")}" placeholder="9:00am" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
                         <span style="color:#9CA3AF;">to</span>
-                        <input id="time-end-input" value="${escapeHtml(divObj.endTime || "")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
+                        <input id="time-end-input" value="${escapeHtml(divObj.endTime || "4:00pm")}" placeholder="4:00pm" style="width:80px; padding:4px 8px; border-radius:8px; border:1px solid #D1D5DB; font-size:0.85rem;">
                         <button id="save-times-btn" style="background:#111827; color:white; border:none; padding:5px 14px; border-radius:8px; font-size:0.8rem; cursor:pointer; font-weight:500;">Save Times</button>
                         ${parentDiv ? `<button id="apply-times-all-btn" style="background:#F3F4F6; color:#374151; border:1px solid #D1D5DB; padding:5px 14px; border-radius:8px; font-size:0.78rem; cursor:pointer; font-weight:500;" title="Apply these times to all grades in ${escapeHtml(parentDiv)}">Apply to All in ${escapeHtml(parentDiv)}</button>` : ''}
                     </div>
@@ -655,7 +831,8 @@
             if (!divObj.bunks?.length) {
                 bunkList.innerHTML = '<p class="muted">No bunks assigned yet.</p>';
             } else {
-                const sorted = [...divObj.bunks].sort(compareBunks);
+                // Preserve user-defined bunk order (drag-and-drop in Campistry Me)
+                const sorted = [...divObj.bunks];
                 sorted.forEach(bunkName => {
                     const meta = state.bunkMetaData[bunkName] || { size: 0 };
                     const pill = document.createElement("span");
@@ -675,7 +852,7 @@
     
     function saveData() {
         const app1Data = window.loadGlobalSettings?.()?.app1 || {};
-        
+
         const data = {
             ...app1Data,
             bunks: state.bunks,
@@ -687,16 +864,28 @@
             skeletonAssignments: state.skeletonAssignments,
             specialActivities: state.specialActivities,
             bunkMetaData: state.bunkMetaData,
-            sportMetaData: state.sportMetaData,
+            // sportMetaData is written by facilities.js — prefer the fresh storage
+            // value so that app1 saves don't overwrite facilities.js changes.
+            sportMetaData: app1Data.sportMetaData || state.sportMetaData,
             divisionGroups: state.divisionGroups
         };
-        
+        // ★ camperRoster is owned exclusively by Campistry Me. If Flow ever loads
+        //   before Me's CSV-import sync arrives (or before hydrateFromCloud
+        //   completes), app1Data.camperRoster is empty/missing and the spread
+        //   above silently propagates that. The downstream cloud merge replaces
+        //   app1 wholesale, so Flow's stale-empty camperRoster wipes the
+        //   freshly imported 480-camper roster from cloud. Drop the key here so
+        //   the cloud-side merge in executeBatchSync preserves whatever Me last
+        //   wrote.
+        delete data.camperRoster;
+
         window.saveGlobalSettings?.("app1", data);
-        
+
         updateWindowApp1();
     }
     
-    function loadData() {
+    function loadData(opts) {
+        var _opts = opts || {};
         const globalData = window.loadGlobalSettings?.() || {};
         const data = globalData.app1 || {};
         const campStructure = globalData.campStructure || {};
@@ -727,55 +916,71 @@
                         gradeNameCounts[gradeName] = (gradeNameCounts[gradeName] || 0) + 1;
                     });
                 });
-                
+
+                // Count bunk name occurrences across ALL grades to detect cross-grade collisions
+                const bunkNameCounts = {};
                 Object.entries(campStructure).forEach(([divName, divData]) => {
                     if (typeof divData !== 'object' || divData === null) return;
-                    
+                    Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
+                        (gradeData.bunks || []).forEach(b => {
+                            bunkNameCounts[b] = (bunkNameCounts[b] || 0) + 1;
+                        });
+                    });
+                });
+
+                Object.entries(campStructure).forEach(([divName, divData]) => {
+                    if (typeof divData !== 'object' || divData === null) return;
+
                     const parentColor = divData.color || getNextUniqueDivisionColor(gradeBasedDivisions);
-                    const gradeNames = Object.keys(divData.grades || {});
-                    
+                    const allGrades = Object.keys(divData.grades || {});
+                    const ord = divData.gradeOrder;
+                    const gradeNames = Array.isArray(ord) && ord.length
+                        ? ord.filter(g => g in (divData.grades || {})).concat(allGrades.filter(g => !ord.includes(g)))
+                        : allGrades;
+
                     divGroups[divName] = { color: parentColor, grades: [] };
-                    
+
                     gradeNames.forEach(gradeName => {
                         const gradeData = divData.grades[gradeName];
-                        const bunks = gradeData.bunks || [];
-                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
-                        
+                        const rawBunks = gradeData.bunks || [];
+
                         const key = gradeNameCounts[gradeName] > 1
                             ? `${divName} > ${gradeName}`
                             : gradeName;
-                        
+
                         if (gradeNameCounts[gradeName] > 1) {
                             console.warn(`[app1 v5.2] Grade "${gradeName}" exists in multiple divisions — using "${key}"`);
                         }
-                        
+
+                        // Qualify bunk names that appear in more than one grade to prevent
+                        // key collisions in scheduleAssignments (e.g. Grade 1 "Bunk 1" vs Grade 2 "Bunk 1")
+                        const bunks = rawBunks.map(b => bunkNameCounts[b] > 1 ? `${key}:${b}` : b);
+                        if (bunks.some((b, i) => b !== rawBunks[i])) {
+                            console.warn(`[app1 v5.2] Grade "${key}" has bunk name conflicts — qualified:`, bunks);
+                        }
+
+                        bunks.forEach(b => { if (!allBunks.includes(b)) allBunks.push(b); });
+
                         const times = existingTimes[key] || existingTimes[gradeName] || existingTimes[divName] || {};
-                        
+
                         gradeBasedDivisions[key] = {
                             startTime: times.startTime || "",
                             endTime: times.endTime || "",
-                            bunks: [...bunks].sort(compareBunks),
+                            // Honor the user-defined bunk order from campStructure
+                            // (set via drag-and-drop in Campistry Me) verbatim.
+                            bunks: [...bunks],
                             color: parentColor,
                             parentDivision: divName
                         };
-                        
+
                         divGroups[divName].grades.push(key);
                     });
                 });
                 
                 state.divisions = gradeBasedDivisions;
                 state.bunks = allBunks;
-                // Sort grades numerically within each group so rendering is always consistent
-                for (const groupName in divGroups) {
-                    if (divGroups[groupName].grades) {
-                        divGroups[groupName].grades.sort((a, b) => {
-                            const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
-                            const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
-                            if (numA !== numB) return numA - numB;
-                            return String(a).localeCompare(String(b));
-                        });
-                    }
-                }
+                // Preserve user-defined grade order from campStructure
+                // (set via drag-and-drop in Campistry Me).
                 state.divisionGroups = divGroups;
                 
             } else {
@@ -805,18 +1010,58 @@
                     validDivisions[divName] = {
                         startTime: div.startTime || "",
                         endTime: div.endTime || "",
-                        bunks: Array.isArray(div.bunks) ? div.bunks : [],
-                        color: div.color || getNextUniqueDivisionColor(validDivisions)
+                        bunks: Array.isArray(div.bunks) ? div.bunks.slice() : [],
+                        color: div.color || getNextUniqueDivisionColor(validDivisions),
+                        // Preserve legacy grouping fields so divisionGroups stays intact.
+                        parentDivision: div.parentDivision || null
                     };
-                    sortBunksInPlace(validDivisions[divName].bunks);
                 });
                 state.divisions = validDivisions;
-                
-                state.divisionGroups = { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+
+                // Preserve the user's existing groupings if present in the cloud
+                // payload (legacy app1.divisionGroups). Otherwise reconstruct
+                // groups from parentDivision references, and finally fall back
+                // to a single "All" bucket.
+                if (data.divisionGroups && typeof data.divisionGroups === 'object' && Object.keys(data.divisionGroups).length > 0) {
+                    state.divisionGroups = deepClone(data.divisionGroups);
+                } else {
+                    const reconstructedGroups = {};
+                    Object.entries(state.divisions).forEach(([divName, div]) => {
+                        const parent = div.parentDivision || 'All';
+                        if (!reconstructedGroups[parent]) {
+                            reconstructedGroups[parent] = { color: div.color || '#6B7280', grades: [] };
+                        }
+                        reconstructedGroups[parent].grades.push(divName);
+                    });
+                    state.divisionGroups = Object.keys(reconstructedGroups).length > 0
+                        ? reconstructedGroups
+                        : { "All": { color: "#6B7280", grades: Object.keys(state.divisions) } };
+                }
             }
             
-           // Rebuild divisions object with numerically sorted keys
-            const sortedDivKeys = Object.keys(state.divisions).sort((a, b) => {
+           // Rebuild divisions object honoring user-defined order:
+            //   1) gs.app1.manualColumnOrder if present (set via drag in Campistry Me)
+            //   2) Otherwise, the natural campStructure key order (also user-defined)
+            //   3) Numeric/alphabetic sort only for keys not in either source
+            const _gs2 = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+            const _manualOrder = (_gs2.app1 && Array.isArray(_gs2.app1.manualColumnOrder)) ? _gs2.app1.manualColumnOrder : null;
+            const _structureOrder = Object.keys(_gs2.campStructure || {});
+            const sortedDivKeys = Object.keys(state.divisions).slice().sort((a, b) => {
+                if (_manualOrder) {
+                    const ai = _manualOrder.indexOf(a);
+                    const bi = _manualOrder.indexOf(b);
+                    if (ai >= 0 && bi >= 0) return ai - bi;
+                    if (ai >= 0) return -1;
+                    if (bi >= 0) return 1;
+                }
+                if (_structureOrder.length > 0) {
+                    // Try matching the parentDivision in structure order
+                    const aParent = (state.divisions[a] && state.divisions[a].parentDivision) || a;
+                    const bParent = (state.divisions[b] && state.divisions[b].parentDivision) || b;
+                    const ai2 = _structureOrder.indexOf(aParent);
+                    const bi2 = _structureOrder.indexOf(bParent);
+                    if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
+                }
                 const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
                 const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
                 if (numA !== numB) return numA - numB;
@@ -834,6 +1079,13 @@
             state.savedSkeletons = data.savedSkeletons || {};
             state.skeletonAssignments = data.skeletonAssignments || {};
             
+            // Recompute bunk sizes from the live camperRoster every load.
+            // This is the bridge from Campistry Me's roster → Flow's
+            // bunkMetaData[bunk].size, which the sport player-count rules
+            // and shared-field capacity checks consume. It runs on every
+            // app1.loadData (cloud-hydrate, page reload, cross-tab storage
+            // event), so Flow always gets fresh counts even when Me was
+            // never opened in the current session.
             const camperRoster = data.camperRoster || {};
             const bunkCounts = {};
             Object.values(camperRoster).forEach(camper => {
@@ -841,17 +1093,43 @@
                     bunkCounts[camper.bunk] = (bunkCounts[camper.bunk] || 0) + 1;
                 }
             });
+            const rosterIsPopulated = Object.keys(camperRoster).length > 0;
+            // Set size for bunks that have campers
             Object.entries(bunkCounts).forEach(([bunk, count]) => {
                 if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
-                if (!state.bunkMetaData[bunk].size) {
-                    state.bunkMetaData[bunk].size = count;
-                }
+                state.bunkMetaData[bunk].size = count;
             });
+            // Zero out sizes for known bunks with no campers — but ONLY when
+            // the roster is actually populated. If roster is totally empty
+            // (e.g. cloud not yet hydrated, or new camp with no CSV imported
+            // yet), preserve any manually-configured sizes instead of
+            // wiping them.
+            if (rosterIsPopulated) {
+                (state.bunks || []).forEach(b => {
+                    if (!(b in bunkCounts)) {
+                        if (!state.bunkMetaData[b]) state.bunkMetaData[b] = {};
+                        state.bunkMetaData[b].size = 0;
+                    }
+                });
+            }
+
+            const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
+            if (orphanedBunks.length > 0) {
+                console.warn('[app1] Campers assigned to bunks not found in any grade:', orphanedBunks);
+            }
             
             updateWindowApp1();
-            
+
+            // Only sync back to global store on initial / user-driven loads.
+            // When refreshing from storage/cloud, the data just came FROM
+            // the store — writing it back creates a cloud-sync feedback loop
+            // (saveGlobalSettings → cloud sync → hydrated event → refresh → repeat).
+            if (!_opts.skipSync) {
+                syncSpine();
+            }
+
             console.log(`[app1 v5.2] Loaded ${state.availableDivisions.length} grades as scheduling units:`, state.availableDivisions);
-            
+
         } catch (e) {
             console.error("Error loading app1 data:", e);
         }
@@ -882,9 +1160,12 @@
 
     // ==================== INITIALIZATION ====================
     
-    function initApp1() {
+   function initApp1() {
         ensureSharedSetupStyles();
         loadData();
+        
+        // Render the top builder mode slider
+        renderBuilderModeSlider();
         
         // Style detail pane
         const detailPane = document.getElementById("division-detail-pane");
@@ -900,7 +1181,7 @@
             eraseAllBtn.parentNode.replaceChild(newBtn, eraseAllBtn);
             
             newBtn.addEventListener("click", async () => {
-                if (!window.AccessControl?.canEraseData?.()) {
+                if (!window.AccessControl?.canEraseAllCampData?.()) {
                     window.AccessControl?.showPermissionDenied?.('erase all camp data');
                     return;
                 }
@@ -932,20 +1213,63 @@
             });
         }
         
-        // Initial render
+       // Initial render
         setupDivisionButtons();
         renderDivisionDetailPane();
         
+        const modeToggleEl = document.getElementById('schedule-mode-toggle');
+        if (modeToggleEl) window.renderAutoModeToggle?.(modeToggleEl);
         console.log(`[app1] v${VERSION} initialized — grades are scheduling units`);
     }
 
+    // Refresh primitive — re-reads divisions/grades/bunks/campers from the
+    // shared store (populated by Campistry Me) and re-renders the setup UI.
+    // Debounced so bursts of storage events collapse into a single render.
+    let _app1RefreshTimer = null;
+    function refreshApp1FromStorage(reason) {
+        try {
+            // When refreshing FROM storage/cloud, skip syncSpine() —
+            // data was just read from the shared store so writing it
+            // back triggers a cloud-sync → hydrated → refresh loop.
+            loadData({ skipSync: true });
+            setupDivisionButtons();
+            renderDivisionDetailPane();
+            console.log('[app1] refreshed (' + (reason || 'unknown') + ')');
+        } catch (e) {
+            console.warn('[app1] refresh failed:', e);
+        }
+    }
+    function scheduleApp1Refresh(reason) {
+        if (_app1RefreshTimer) clearTimeout(_app1RefreshTimer);
+        _app1RefreshTimer = setTimeout(function () {
+            _app1RefreshTimer = null;
+            refreshApp1FromStorage(reason);
+        }, 200);
+    }
+    window.refreshApp1FromStorage = refreshApp1FromStorage;
+
+    // Layer A — cross-tab: Me in tab 1, Flow in tab 2, same browser.
+    window.addEventListener('storage', function (e) {
+        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {
+            scheduleApp1Refresh('storage:' + e.key);
+        }
+    });
+    // Layer B bridge — cloud hydration (including realtime-triggered re-hydrate)
+    // updates globals; re-render the setup UI to match.
+    window.addEventListener('campistry-cloud-hydrated', function () {
+        scheduleApp1Refresh('cloud-hydrated');
+    });
+
     // ==================== WINDOW EXPORTS ====================
-    
     window.initApp1 = initApp1;
     
     window.getDivisions = () => state.divisions;
     window.getBunkMetaData = () => state.bunkMetaData;
-    window.getSportMetaData = () => state.sportMetaData;
+    // Read fresh from storage so facilities.js changes are always visible
+    window.getSportMetaData = () => {
+        const fresh = window.loadGlobalSettings?.()?.app1?.sportMetaData;
+        return fresh || state.sportMetaData;
+    };
     window.getGlobalSpecialActivities = () => state.specialActivities;
     window.getAllGlobalSports = () => [...state.allSports].sort();
     window.getSavedSkeletons = () => state.savedSkeletons || {};
@@ -971,13 +1295,16 @@
 
     window.removeGlobalSport = (sportName) => {
         if (!sportName) return;
-        const idx = state.allSports.findIndex(sp => 
+        const idx = state.allSports.findIndex(sp =>
             sp.toLowerCase() === sportName.toLowerCase()
         );
         if (idx !== -1) {
             state.allSports.splice(idx, 1);
             saveData();
             window.forceSyncToCloud?.();
+            if (typeof window.cleanupDeletedSport === 'function') {
+                window.cleanupDeletedSport(sportName);
+            }
         }
     };
     
@@ -1005,8 +1332,32 @@
     };
     
     window.saveGlobalSpecialActivities = (updatedActivities) => {
-        state.specialActivities = updatedActivities;
+        // ★ Defensive dedupe. Previously cloud-sync races could produce
+        //   thousands of duplicate rows for the same special (one user hit
+        //   216× per rainy-only entry). De-dup by name here so corruption
+        //   can't survive a save round-trip. First occurrence wins.
+        const _input = Array.isArray(updatedActivities) ? updatedActivities : [];
+        const _seen = new Map();
+        for (const a of _input) {
+            if (!a || !a.name) continue;
+            if (!_seen.has(a.name)) _seen.set(a.name, a);
+        }
+        const cleaned = [..._seen.values()];
+        if (cleaned.length !== _input.length) {
+            console.warn('[saveGlobalSpecialActivities] de-duplicated', _input.length - cleaned.length, 'rows');
+        }
+
+        state.specialActivities = cleaned;
         saveData();
+        // Also write the root-level key that all readers check first —
+        // without this, the cloud_sync_helpers version's dual-write is lost
+        // once app1 initialises and replaces that function.
+        window.saveGlobalSettings?.('specialActivities', cleaned);
+        // Sync special_activities.js in-memory cache so getAllSpecialActivities()
+        // returns the fresh list immediately without needing a storage reload.
+        // The setter defined in special_activities.js accepts an array directly.
+        try { window.specialActivities = cleaned; } catch(_) {}
+        window.refreshSpecialActivitiesFromStorage?.();
     };
     
     window.addDivisionBunk = (divName, bunkName) => {

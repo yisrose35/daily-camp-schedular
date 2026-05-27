@@ -10,17 +10,65 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_me.css">
+    <!-- Loading overlay — inline styles so it appears instantly with zero
+         FOUC, before any external CSS loads. Hidden by campistry_me.js
+         only after cloud hydration completes and the UI has populated. -->
+    <style>
+        .me-loading-overlay {
+            position: fixed; inset: 0; z-index: 999999;
+            background: #ffffff;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            transition: opacity 0.4s ease;
+        }
+        .me-loading-overlay.hide { opacity: 0; pointer-events: none; }
+        .me-loading-logo {
+            width: 220px; height: 220px;
+            object-fit: contain;
+            opacity: 0.15;
+        }
+    </style>
 </head>
 <body>
+<div id="meLoadingOverlay" class="me-loading-overlay" role="status" aria-live="polite">
+    <img src="Me_clean.png" alt="" class="me-loading-logo" id="me-logo-draw">
+    <script>
+    (function() {
+        var img = document.getElementById('me-logo-draw');
+        if (!img) return;
+        window._meAnimStart = Date.now();
+        var steps = 60;
+        var totalMs = 2000;
+        var stepMs = totalMs / steps;
+        var i = 0;
+        function tick() {
+            i++;
+            var pct = Math.min(i / steps, 1);
+            var ease = pct < 0.5 ? 2 * pct * pct : 1 - Math.pow(-2 * pct + 2, 2) / 2;
+            img.style.opacity = 0.15 + ease * 0.85;
+            if (i < steps) setTimeout(tick, stepMs);
+        }
+        tick();
+    })();
+    </script>
+</div>
 
 <!-- HEADER (matches Flow) -->
 <header class="app-header">
     <div class="header-left">
         <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
         <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu"><span></span><span></span><span></span></button>
-        <div class="app-title"><img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img"></div>
-        <a href="flow.html" class="header-app-switch" title="Campistry Flow"><img src="Flow_clean.png" alt="Flow" class="app-logo-full app-logo-flow-img"></a>
-        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go"><img src="Go_clean.png" alt="Go" class="app-logo-full app-logo-go-img"></a>
+        <div class="quick-switch-bar">
+            <div class="quick-switch-active" data-app="me">
+                <img src="Me_clean.png" alt="Campistry Me">
+            </div>
+            <a href="flow.html" class="quick-switch-link" data-app="flow" title="Open Campistry Flow — Scheduling">
+                <img src="Flow_clean.png" alt="Campistry Flow">
+            </a>
+            <span class="quick-switch-link" data-app="go" title="Campistry Go — Coming Soon" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                <img src="Go_clean.png" alt="Campistry Go">
+            </span>
+        </div>
     </div>
     <div class="header-right">
         <div class="me-search-wrap">
@@ -72,7 +120,7 @@
 <div id="camperViewModal" class="me-overlay" style="display:none"><div class="me-modal me-modal--lg">
     <div class="me-modal-header" id="cvHead"></div>
     <div class="me-modal-body me-scroll" id="cvBody"></div>
-    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('camperViewModal')">Close</button><button class="me-btn me-btn--pri" id="cvEditBtn">Edit Camper</button></div>
+    <div class="me-modal-footer"><button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal('camperViewModal')">Close</button><button class="me-btn me-btn--sm" id="cvDeleteBtn" style="background:var(--err);color:#fff;border:none">Delete</button><button class="me-btn me-btn--pri" id="cvEditBtn">Edit Camper</button></div>
 </div></div>
 
 <!-- CAMPER EDIT -->
@@ -122,13 +170,18 @@
 
 <div id="meToast" class="me-toast"><span id="tI">✓</span> <span id="tM">Done</span></div>
 
-<script src="offline_data.js" onerror=""></script>
+
 <script src="demo_mode.js"></script>
 <script src="config.js"></script>
 <script>if(window.location.protocol==='file:')document.write('<script src="supabase-js-local.js"><\/script>');else document.write('<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"><\/script>');</script>
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
+<script src="access_control.js"></script>
+<script src="local_cache_idb.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="cloud_sync_helpers.js"></script>
 <script src="campistry_me.js"></script>
+<script src="plan_limits.js"></script>
 <script src="trial_guard.js"></script>
 </body>
 </html>

@@ -87,6 +87,7 @@
     let _initialHydrationDone = false;
     let _reconnectAttempts = 0;  // ★ NEW: Track reconnection attempts
     let _reconnectTimeout = null;  // ★ NEW: Reconnect timer
+    let _lastSeenUpdatedAt = {};  // ★ Track last seen updated_at per record to skip spurious events
 
     // =========================================================================
     // LOGGING
@@ -181,11 +182,54 @@
             if (dateData.scheduleAssignments) {
                 const localBunkCount = Object.keys(dateData.scheduleAssignments).length;
                 const windowBunkCount = Object.keys(window.scheduleAssignments || {}).length;
-                
+
                 if (forceOverwrite || windowBunkCount === 0) {
-                    window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
-                    hydrated = true;
-                    log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks');
+                    // Smart merge: protect the LOCAL user's in-flight generation
+                    // (bunks whose grade has _isPerBunk); sync everything else
+                    // from cloud immediately — no delay window.
+                    var myBunks = new Set();
+                    var localDT = window.divisionTimes || {};
+                    Object.keys(localDT).forEach(function(grade) {
+                        if (localDT[grade] && localDT[grade]._isPerBunk && localDT[grade]._perBunkSlots) {
+                            var divInfo = (window.divisions || {})[grade];
+                            if (divInfo && divInfo.bunks) {
+                                divInfo.bunks.forEach(function(b) { myBunks.add(b); });
+                            }
+                        }
+                    });
+
+                    if (myBunks.size === 0) {
+                        // No live generation — full replace is safe
+                        window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
+                        hydrated = true;
+                        log('✅ Hydrated scheduleAssignments:', localBunkCount, 'bunks (full replace)');
+                    } else {
+                        var addedBunks = 0;
+                        var updatedBunks = 0;
+                        var removedBunks = 0;
+                        var cloudAssign = dateData.scheduleAssignments;
+                        if (!window.scheduleAssignments) window.scheduleAssignments = {};
+                        // Add/update remote bunks
+                        Object.keys(cloudAssign).forEach(function(bunk) {
+                            if (myBunks.has(bunk)) return;
+                            if (!window.scheduleAssignments[bunk]) {
+                                addedBunks++;
+                            } else {
+                                updatedBunks++;
+                            }
+                            window.scheduleAssignments[bunk] = JSON.parse(JSON.stringify(cloudAssign[bunk]));
+                        });
+                        // Remove local bunks NOT in cloud AND NOT ours (DELETE propagation)
+                        Object.keys(window.scheduleAssignments).forEach(function(bunk) {
+                            if (myBunks.has(bunk)) return;
+                            if (!cloudAssign[bunk]) {
+                                delete window.scheduleAssignments[bunk];
+                                removedBunks++;
+                            }
+                        });
+                        hydrated = (addedBunks + updatedBunks + removedBunks) > 0;
+                        log('✅ Smart merge: +' + addedBunks + ' added, ~' + updatedBunks + ' updated, -' + removedBunks + ' removed (protected ' + myBunks.size + ' local bunks)');
+                    }
                 }
             } else {
                 window.scheduleAssignments = window.scheduleAssignments || {};
@@ -211,10 +255,58 @@
                 }
             }
             
-            // Hydrate divisionTimes if present
+            // Hydrate divisionTimes — smart merge protects grades with live
+            // _isPerBunk (local user's in-flight generation) while syncing
+            // everything else from cloud immediately.
             if (dateData.divisionTimes && window.DivisionTimesSystem?.deserialize) {
-                window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
-                log('✅ Hydrated divisionTimes');
+                var hasLivePerBunk = window.divisionTimes && Object.keys(window.divisionTimes).some(function(g) {
+                    return window.divisionTimes[g] && window.divisionTimes[g]._isPerBunk;
+                });
+
+                if ((forceOverwrite || !window.divisionTimes || Object.keys(window.divisionTimes).length === 0) && !hasLivePerBunk) {
+                    // No live generation — full replace is safe
+                    window.divisionTimes = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
+                    if (dateData._perBunkSlotsData) {
+                        Object.keys(dateData._perBunkSlotsData).forEach(function(g) {
+                            if (window.divisionTimes[g]) {
+                                window.divisionTimes[g]._isPerBunk = true;
+                                window.divisionTimes[g]._perBunkSlots = dateData._perBunkSlotsData[g];
+                            }
+                        });
+                    }
+                    log('✅ Hydrated divisionTimes from cloud (full replace)');
+                } else if (forceOverwrite) {
+                    // Smart merge: protect _isPerBunk grades, sync everything else
+                    var cloudDT = window.DivisionTimesSystem.deserialize(dateData.divisionTimes);
+                    var addedGrades = 0;
+                    var updatedGrades = 0;
+                    var removedGrades = 0;
+                    Object.keys(cloudDT).forEach(function(grade) {
+                        if (window.divisionTimes[grade] && window.divisionTimes[grade]._isPerBunk) return;
+                        if (!window.divisionTimes[grade]) {
+                            addedGrades++;
+                        } else {
+                            updatedGrades++;
+                        }
+                        window.divisionTimes[grade] = cloudDT[grade];
+                        if (dateData._perBunkSlotsData && dateData._perBunkSlotsData[grade]) {
+                            window.divisionTimes[grade]._isPerBunk = true;
+                            window.divisionTimes[grade]._perBunkSlots = dateData._perBunkSlotsData[grade];
+                        }
+                    });
+                    Object.keys(window.divisionTimes).forEach(function(grade) {
+                        if (window.divisionTimes[grade] && window.divisionTimes[grade]._isPerBunk) return;
+                        if (!cloudDT[grade]) {
+                            delete window.divisionTimes[grade];
+                            removedGrades++;
+                        }
+                    });
+                    if (addedGrades > 0 || updatedGrades > 0 || removedGrades > 0) {
+                        log('✅ Smart merge divisionTimes: +' + addedGrades + ' added, ~' + updatedGrades + ' updated, -' + removedGrades + ' removed');
+                    } else {
+                        log('⏭️ Smart merge: no remote divisionTimes changes');
+                    }
+                }
             }
             
             return hydrated;
@@ -269,30 +361,60 @@
         log('Refreshing Multi-Scheduler view for:', dateKey);
         
         // ★★★ v6.2 FIX: Load from CLOUD first so we get all schedulers' data ★★★
+        var _cloudEmpty = false;
         try {
             if (window.ScheduleDB?.loadSchedule && navigator.onLine) {
                 const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
                 if (cloudResult?.success && cloudResult.data) {
-                    const DAILY_KEY = 'campDailyData_v1';
-                    const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-                    allData[dateKey] = {
-                        ...allData[dateKey],
-                        scheduleAssignments: cloudResult.data.scheduleAssignments || {},
-                        leagueAssignments: cloudResult.data.leagueAssignments || {},
-                        unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
-                        divisionTimes: cloudResult.data.divisionTimes || allData[dateKey]?.divisionTimes || {}
-                    };
-                    localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-                    log('☁️ Updated localStorage from cloud:', 
-                        Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
+                    // If cloud returned 0 records, everything was deleted —
+                    // clear all local state unconditionally (no smart-merge protection).
+                    if (cloudResult.recordCount === 0) {
+                        _cloudEmpty = true;
+                        log('☁️ Cloud has 0 records — full clear');
+                        window.scheduleAssignments = {};
+                        window.leagueAssignments = {};
+                        window.divisionTimes = {};
+                        window.unifiedTimes = [];
+                        window._localGenerationTimestamp = 0;
+                        const DAILY_KEY = 'campDailyData_v1';
+                        const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                        delete allData[dateKey];
+                        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                    } else {
+                        const DAILY_KEY = 'campDailyData_v1';
+                        const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+                        var _cloudDT = cloudResult.data.divisionTimes;
+                        var _cloudPbs = {};
+                        if (_cloudDT && typeof _cloudDT === 'object') {
+                            Object.keys(_cloudDT).forEach(function(g) {
+                                if (_cloudDT[g] && _cloudDT[g]._perBunkSlots) _cloudPbs[g] = _cloudDT[g]._perBunkSlots;
+                            });
+                        }
+                        allData[dateKey] = {
+                            ...allData[dateKey],
+                            scheduleAssignments: cloudResult.data.scheduleAssignments || {},
+                            leagueAssignments: cloudResult.data.leagueAssignments || {},
+                            unifiedTimes: cloudResult.data.unifiedTimes || allData[dateKey]?.unifiedTimes || [],
+                            divisionTimes: _cloudDT || allData[dateKey]?.divisionTimes || {}
+                        };
+                        if (Object.keys(_cloudPbs).length > 0) {
+                            allData[dateKey]._perBunkSlotsData = _cloudPbs;
+                        }
+                        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+                        log('☁️ Updated localStorage from cloud:',
+                            Object.keys(cloudResult.data.scheduleAssignments || {}).length, 'bunks');
+                    }
                 }
             }
         } catch (e) {
             log('Cloud refresh failed, using localStorage:', e.message);
         }
-        
+
         // Step 1: Force hydrate from localStorage (now contains cloud data)
-        forceHydrateFromLocalStorage(dateKey, forceOverwrite);
+        // Skip if cloud was empty — we already cleared everything above.
+        if (!_cloudEmpty) {
+            forceHydrateFromLocalStorage(dateKey, forceOverwrite);
+        }
         
         // Step 2: Ensure empty state for unscheduled divisions
         ensureEmptyStateForUnscheduledDivisions();
@@ -318,6 +440,93 @@
         if (window.updateTable) {
             window.updateTable();
             log('✅ Table updated');
+        }
+    }
+
+    // =========================================================================
+    // ADDITIVE MERGE — safe to call while _perBunkSlots are live
+    // Pulls cloud data and adds NEW bunks/divisionTimes without touching existing ones.
+    // =========================================================================
+
+    async function syncMergeFromCloud(dateKey) {
+        if (!dateKey) dateKey = getCurrentDateKey();
+        try {
+            if (!window.ScheduleDB?.loadSchedule || !navigator.onLine) return;
+
+            const cloudResult = await window.ScheduleDB.loadSchedule(dateKey);
+            if (!cloudResult?.success || !cloudResult.data) return;
+
+            const cloudAssignments = cloudResult.data.scheduleAssignments || {};
+            const localAssignments = window.scheduleAssignments || {};
+
+            // Identify which bunks belong to the LOCAL user's live generation
+            // (they have _perBunkSlots). Those bunks are protected from overwrite.
+            var myBunks = new Set();
+            var localDT = window.divisionTimes || {};
+            Object.keys(localDT).forEach(function(grade) {
+                if (localDT[grade] && localDT[grade]._isPerBunk && localDT[grade]._perBunkSlots) {
+                    var divInfo = (window.divisions || {})[grade];
+                    if (divInfo && divInfo.bunks) {
+                        divInfo.bunks.forEach(function(b) { myBunks.add(b); });
+                    }
+                }
+            });
+
+            var changed = false;
+
+            // Add or update remote bunks (skip our own live bunks)
+            Object.keys(cloudAssignments).forEach(function(bunk) {
+                if (myBunks.has(bunk)) return;
+                if (!localAssignments[bunk] || JSON.stringify(localAssignments[bunk]) !== JSON.stringify(cloudAssignments[bunk])) {
+                    localAssignments[bunk] = cloudAssignments[bunk];
+                    changed = true;
+                }
+            });
+
+            // Remove bunks that exist locally but NOT in cloud and are NOT ours
+            Object.keys(localAssignments).forEach(function(bunk) {
+                if (!myBunks.has(bunk) && !cloudAssignments[bunk]) {
+                    delete localAssignments[bunk];
+                    changed = true;
+                }
+            });
+
+            window.scheduleAssignments = localAssignments;
+
+            // Merge divisionTimes — add/update grades that aren't ours
+            var cloudDT = cloudResult.data.divisionTimes || {};
+            Object.keys(cloudDT).forEach(function(grade) {
+                if (!localDT[grade] || !localDT[grade]._isPerBunk) {
+                    localDT[grade] = cloudDT[grade];
+                }
+            });
+            window.divisionTimes = localDT;
+
+            // Merge unifiedTimes — use longest array
+            if (cloudResult.data.unifiedTimes && Array.isArray(cloudResult.data.unifiedTimes)) {
+                if (!window.unifiedTimes || cloudResult.data.unifiedTimes.length > window.unifiedTimes.length) {
+                    window.unifiedTimes = cloudResult.data.unifiedTimes;
+                }
+            }
+
+            // Update localStorage with the merged state
+            var DAILY_KEY = 'campDailyData_v1';
+            var allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+            allData[dateKey] = allData[dateKey] || {};
+            allData[dateKey].scheduleAssignments = window.scheduleAssignments;
+            allData[dateKey].divisionTimes = window.divisionTimes;
+            if (window.unifiedTimes) allData[dateKey].unifiedTimes = window.unifiedTimes;
+            localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+
+            if (changed) {
+                log('Sync merge: schedule updated from remote');
+                ensureEmptyStateForUnscheduledDivisions();
+                if (window.updateTable) window.updateTable();
+            } else {
+                log('Sync merge: no changes from remote');
+            }
+        } catch (e) {
+            logError('Sync merge failed:', e.message);
         }
     }
 
@@ -551,12 +760,11 @@
             _subscriptionChannel = client.channel(channelName);
             
             _subscription = _subscriptionChannel
-                .on('postgres_changes', 
+                .on('postgres_changes',
                     {
                         event: '*',
                         schema: 'public',
-                        table: 'daily_schedules',
-                        filter: `camp_id=eq.${campId}`
+                        table: 'daily_schedules'
                     },
                     handleRealtimeChange
                 )
@@ -641,18 +849,14 @@
             
             if (success) {
                 log('✅ Reconnection successful');
-                showSyncToast('🔄 Reconnected to sync');
                 
                 // Process any queued saves
                 await processOfflineQueue();
-                
-                // Refresh data from cloud
-                if (window.ScheduleDB?.loadSchedule) {
-                    const result = await window.ScheduleDB.loadSchedule(dateKey);
-                    if (result?.success && result.data) {
-                        refreshMultiSchedulerView(dateKey, true);
-                    }
-                }
+
+                // Always refresh from cloud on reconnect — the smart merge
+                // in forceHydrateFromLocalStorage protects local-gen bunks
+                // while syncing remote changes.
+                refreshMultiSchedulerView(dateKey, true);
             } else if (_reconnectAttempts < CONFIG.MAX_RETRY_ATTEMPTS) {
                 scheduleReconnect();
             } else {
@@ -665,34 +869,69 @@
 
     function handleRealtimeChange(payload) {
         const myUserId = window.CampistryDB?.getUserId?.();
-        
-        if (payload.new?.scheduler_id === myUserId) {
+        const myCampId = window.CampistryDB?.getCampId?.();
+        const record = payload.new || payload.old || {};
+        const eventType = payload.eventType;
+
+        // Client-side camp_id filter (server-side filter removed because
+        // DELETE events with default REPLICA IDENTITY lack camp_id in
+        // payload.old, causing them to be silently dropped).
+        if (record.camp_id && myCampId && record.camp_id !== myCampId) {
+            return;
+        }
+
+        // For INSERT/UPDATE, skip if this is our own save bouncing back.
+        // For DELETE, always process — scheduler_id on a deleted record
+        // identifies who OWNED the record, not who deleted it. The owner
+        // may have deleted the scheduler's record.
+        if (eventType !== 'DELETE' && record.scheduler_id === myUserId) {
             log('Ignoring own change');
             return;
         }
 
-        if (payload.new?.date_key !== _currentDateKey) {
-            log('Ignoring change for different date:', payload.new?.date_key);
+        // For DELETE events, payload.old may only have the primary key (id)
+        // if REPLICA IDENTITY is default. Treat unknown-date deletes as
+        // potentially affecting the current date.
+        var recordDateKey = record.date_key;
+        if (eventType === 'DELETE' && !recordDateKey) {
+            log('DELETE with unknown date_key — treating as current date');
+            recordDateKey = _currentDateKey;
+        }
+
+        if (recordDateKey !== _currentDateKey) {
+            log('Ignoring change for different date:', recordDateKey);
             return;
         }
 
-        log('Remote change received:', payload.eventType, 'from', payload.new?.scheduler_name);
+        log('Remote change received:', eventType, 'from', record.scheduler_name);
 
         _lastSyncTime = Date.now();
 
         notifyRemoteChange({
-            type: payload.eventType,
-            scheduler: payload.new?.scheduler_name || 'Unknown',
-            schedulerId: payload.new?.scheduler_id,
-            dateKey: payload.new?.date_key,
+            type: eventType,
+            scheduler: record.scheduler_name || 'Unknown',
+            schedulerId: record.scheduler_id,
+            dateKey: recordDateKey,
             data: payload.new?.schedule_data,
             divisions: payload.new?.divisions
         });
 
-        showSyncToast(`📥 Update from ${payload.new?.scheduler_name || 'another scheduler'}`);
-        
-        // Auto-refresh after remote change
-        setTimeout(() => {
+        // ★ Skip spurious events: only refresh if the record actually changed.
+        //   Compare updated_at timestamp — if we've already seen this exact
+        //   version, it's a duplicate/heartbeat event, not a real edit.
+        var recordId = record.id || 'unknown';
+        var incomingTs = record.updated_at || '';
+        if (eventType !== 'DELETE' && incomingTs && _lastSeenUpdatedAt[recordId] === incomingTs) {
+            log('Skipping duplicate event for record', recordId, '(same updated_at)');
+            return;
+        }
+        _lastSeenUpdatedAt[recordId] = incomingTs;
+
+        var label = eventType === 'DELETE' ? 'Deletion' : 'Update';
+        showSyncToast('📥 ' + label + ' from ' + (record.scheduler_name || 'another scheduler'));
+
+        // Real change — refresh immediately
+        setTimeout(function() {
             refreshMultiSchedulerView(_currentDateKey, true);
         }, 500);
     }
@@ -766,19 +1005,19 @@
     // ★★★ FIXED: OFFLINE QUEUE PROCESSING WITH PERSISTENCE ★★★
     // =========================================================================
 
-    function handleOnline() {
+    async function handleOnline() {
         log('Back online');
         _isOnline = true;
         updateStatus('idle');
-        
-        // Re-subscribe to realtime
+
+        // Re-subscribe to realtime before processing queue
         const dateKey = _currentDateKey || getCurrentDateKey();
         if (dateKey) {
-            subscribe(dateKey);
+            await subscribe(dateKey);
         }
-        
+
         // Process any queued saves
-        processOfflineQueue();
+        await processOfflineQueue();
     }
 
     function handleOffline() {
@@ -973,12 +1212,20 @@
     });
 
     // After date change, ensure proper hydration
+    // ★ Day 24 fix: REMOVED the 100ms-delayed forceHydrateFromLocalStorage call
+    //   that was racing with integration_hooks' cloud load. integration_hooks
+    //   already awaits the cloud load and writes to scheduleAssignments AND
+    //   localStorage. This redundant hydrate was reading localStorage BEFORE
+    //   the cloud load finished and replacing the in-flight fresh data with
+    //   whatever stale snapshot localStorage still held — observed as
+    //   "schedule disappears after switching dates and coming back". We only
+    //   keep the unscheduled-divisions reset + multi-scheduler view refresh,
+    //   which are non-destructive.
     window.addEventListener('campistry-date-changed', (e) => {
         const dateKey = e.detail?.dateKey || getCurrentDateKey();
         console.log('[Sync] Date changed to:', dateKey);
-        
+
         setTimeout(() => {
-            forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();
             refreshMultiSchedulerView(dateKey, true);
         }, 100);

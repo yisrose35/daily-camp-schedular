@@ -180,7 +180,8 @@
         // Tab init functions
         const tabInits = {
             'initApp1 (Setup)':             () => typeof window.initApp1 === 'function',
-            'initLocationsTab':             () => typeof window.initLocationsTab === 'function',
+            'initFacilitiesTab':            () => typeof window.initFacilitiesTab === 'function',
+            'initZonesTab':                 () => typeof window.initZonesTab === 'function',
             'initFieldsTab':                () => typeof window.initFieldsTab === 'function',
             'initSpecialActivitiesTab':     () => typeof window.initSpecialActivitiesTab === 'function',
             'initLeagues':                  () => typeof window.initLeagues === 'function',
@@ -678,7 +679,8 @@
 
         const tabs = [
             ['setup', 'initApp1'],
-            ['locations', 'initLocationsTab'],
+            ['facilities', 'initFacilitiesTab'],
+            ['zones', 'initZonesTab'],
             ['fields', 'initFieldsTab'],
             ['special_activities', 'initSpecialActivitiesTab'],
             ['leagues', 'initLeagues'],
@@ -1036,7 +1038,7 @@
         }
 
         // Division-limited fields
-        const limitedFields = fields.filter(f => f.limitUsage?.enabled === true);
+        const limitedFields = fields.filter(f => f.accessRestrictions?.enabled === true);
         if (limitedFields.length > 0) {
             pass(CAT, 'Division-Limited Fields', `${limitedFields.length} field(s) with priority/restriction rules`);
         }

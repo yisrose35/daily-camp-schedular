@@ -47,6 +47,24 @@
     const RotationEngine = {};
 
     // =========================================================================
+    // PERF: Cached lookups for special-activity names and all-activity names.
+    // Rebuilt once per solver run via RotationEngine.invalidateMetaCaches().
+    // =========================================================================
+    let _specialNamesCache = null;   // Set of lowercase-trimmed special names
+    let _allActivityNamesCache = null; // Array of all activity names
+
+    function _ensureSpecialNamesCache() {
+        if (_specialNamesCache) return _specialNamesCache;
+        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
+        _specialNamesCache = new Set();
+        specials.forEach(function(s) {
+            if (s.name) _specialNamesCache.add(s.name.toLowerCase().trim());
+        });
+        return _specialNamesCache;
+    }
+
+    // =========================================================================
     // ★★★ SUPERCHARGED CONFIGURATION ★★★
     // =========================================================================
 
@@ -59,21 +77,21 @@
         // =====================================================================
         // RECENCY PENALTIES - MUCH STRONGER
         // =====================================================================
-        YESTERDAY_PENALTY: 12000,                // Did it yesterday - EXTREMELY BAD
-        TWO_DAYS_AGO_PENALTY: 8000,              // 2 days ago - VERY BAD
-        THREE_DAYS_AGO_PENALTY: 5000,            // 3 days ago - BAD
-        FOUR_DAYS_AGO_PENALTY: 3000,             // 4 days ago - moderate
-        FIVE_DAYS_AGO_PENALTY: 1500,             // 5 days ago - slight concern
-        SIX_SEVEN_DAYS_PENALTY: 800,             // 6-7 days ago - mild
-        FOUR_TO_SEVEN_DAYS_PENALTY: 800,         // Alias for compatibility
-        WEEK_PLUS_PENALTY: 0,                  // 8+ days ago - minimal
+        YESTERDAY_PENALTY: 50000,                // Did it yesterday - MUST NOT REPEAT
+        TWO_DAYS_AGO_PENALTY: 25000,             // 2 days ago - VERY BAD
+        THREE_DAYS_AGO_PENALTY: 12000,           // 3 days ago - BAD
+        FOUR_DAYS_AGO_PENALTY: 6000,             // 4 days ago - moderate
+        FIVE_DAYS_AGO_PENALTY: 2500,             // 5 days ago - slight concern
+        SIX_SEVEN_DAYS_PENALTY: 1200,            // 6-7 days ago - mild
+        FOUR_TO_SEVEN_DAYS_PENALTY: 1200,        // Alias for compatibility
+        WEEK_PLUS_PENALTY: 600,                  // 8+ days ago - decaying baseline
 
         // =====================================================================
         // ★★★ STREAK PENALTIES - Escalating for patterns ★★★
         // =====================================================================
-        STREAK_TWO_DAYS_MULTIPLIER: 2.0,         // Did it 2 of last 3 days
-        STREAK_THREE_DAYS_MULTIPLIER: 4.0,       // Did it 3 of last 5 days
-        STREAK_FOUR_PLUS_MULTIPLIER: 8.0,        // Did it 4+ of last 7 days
+        STREAK_TWO_DAYS_MULTIPLIER: 1.5,         // Did it 2 of last 3 days
+        STREAK_THREE_DAYS_MULTIPLIER: 2.5,       // Did it 3 of last 5 days
+        STREAK_FOUR_PLUS_MULTIPLIER: 4.0,        // Did it 4+ of last 7 days
 
         // =====================================================================
         // FREQUENCY PENALTIES - Compared to other activities
@@ -178,15 +196,17 @@ var _todayCacheGeneration = 0;
             const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
             
             // Get sorted dates (most recent first), excluding today
+            const _dateRe = /^\d{4}-\d{2}-\d{2}$/;
             const sortedDates = Object.keys(allDaily)
-                .filter(function(d) { return d < today; })
+                .filter(function(d) { return _dateRe.test(d) && d < today; })
                 .sort(function(a, b) { return b.localeCompare(a); });
             
             // Process last 14 days
             const datesToProcess = sortedDates.slice(0, 14);
             
-            datesToProcess.forEach(function(dateKey, daysAgo) {
-                const actualDaysAgo = daysAgo + 1;  // +1 because we excluded today
+            const _todayMs = new Date(today + 'T12:00:00').getTime();
+            datesToProcess.forEach(function(dateKey) {
+                const actualDaysAgo = Math.max(1, Math.round((_todayMs - new Date(dateKey + 'T12:00:00').getTime()) / 86400000));
                 const dayData = allDaily[dateKey];
                 
                 // ★★★ FIX: Defensive checks for day data ★★★
@@ -198,19 +218,22 @@ var _todayCacheGeneration = 0;
                     if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
                         const actName = entry._activity;
                         const actLower = (actName || '').toLowerCase().trim();
-                        
+
                         if (actLower === 'free' || actLower === 'free play' || actLower.indexOf('transition') !== -1) return;
-                        
+
+                        // Use normalized key for case-insensitive matching
+                        const historyKey = actLower;
+
                         // Initialize if needed
-                        if (!history.byActivity[actName]) {
-                            history.byActivity[actName] = {
+                        if (!history.byActivity[historyKey]) {
+                            history.byActivity[historyKey] = {
                                 dates: [],
                                 count: 0,
                                 daysSinceLast: null
                             };
                         }
-                        
-                        const actHistory = history.byActivity[actName];
+
+                        const actHistory = history.byActivity[historyKey];
                         actHistory.dates.push({ dateKey: dateKey, daysAgo: actualDaysAgo });
                         actHistory.count++;
                         
@@ -221,11 +244,11 @@ var _todayCacheGeneration = 0;
                         
                         // Track last 7 days
                         if (actualDaysAgo <= 7) {
-                            history.recentWeek[actName] = (history.recentWeek[actName] || 0) + 1;
+                            history.recentWeek[historyKey] = (history.recentWeek[historyKey] || 0) + 1;
                         }
                         
                         history.totalActivities++;
-                        history.uniqueActivities.add(actName);
+                        history.uniqueActivities.add(historyKey);
                     }
                 });
             });
@@ -474,10 +497,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return 0;
         }
         
-        // Use history scanner (primary source)
+        // Use history scanner (primary source, keys are normalized lowercase)
         var history = RotationEngine.getBunkHistory(bunkName);
-        var actHistory = history.byActivity[activityName];
-        
+        var actHistory = history.byActivity[actLower];
+
         if (actHistory && actHistory.daysSinceLast !== null) {
             return actHistory.daysSinceLast;
         }
@@ -514,12 +537,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         if (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getActivityCount) {
             return window.SchedulerCoreUtils.getActivityCount(bunkName, activityName);
         }
-        // Fallback
+        // Fallback — case-insensitive lookup
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var historicalCounts = globalSettings.historicalCounts || {};
         var manualOffsets = globalSettings.manualUsageOffsets || {};
-        var baseCount = (historicalCounts[bunkName] && historicalCounts[bunkName][activityName]) || 0;
-        var offset = (manualOffsets[bunkName] && manualOffsets[bunkName][activityName]) || 0;
+        var bunkCounts = historicalCounts[bunkName] || {};
+        var baseCount = bunkCounts[activityName] || 0;
+        if (baseCount === 0) {
+            var lower = activityName.toLowerCase();
+            for (var key in bunkCounts) {
+                if (key.toLowerCase() === lower) { baseCount = bunkCounts[key]; break; }
+            }
+        }
+        var bunkOffsets = manualOffsets[bunkName] || {};
+        var offset = bunkOffsets[activityName] || 0;
+        if (offset === 0) {
+            var lower2 = activityName.toLowerCase();
+            for (var key2 in bunkOffsets) {
+                if (key2.toLowerCase() === lower2) { offset = bunkOffsets[key2]; break; }
+            }
+        }
         return Math.max(0, baseCount + offset);
     };
 
@@ -551,6 +588,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * Get all unique activity names from config
      */
     RotationEngine.getAllActivityNames = function() {
+        if (_allActivityNamesCache) return _allActivityNamesCache;
         var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
         var fields = (globalSettings.app1 && globalSettings.app1.fields) || [];
         var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
@@ -567,20 +605,15 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             if (s.name) names.add(s.name);
         });
 
-        return Array.from(names);
+        _allActivityNamesCache = Array.from(names);
+        return _allActivityNamesCache;
     };
 
     /**
      * Check if activity is a "special" type
      */
     RotationEngine.isSpecialActivity = function(activityName) {
-        var globalSettings = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-        var specials = (globalSettings.app1 && globalSettings.app1.specialActivities) || [];
-        var specialNames = new Set();
-        specials.forEach(function(s) {
-            if (s.name) specialNames.add(s.name.toLowerCase().trim());
-        });
-        return specialNames.has((activityName || '').toLowerCase().trim());
+        return _ensureSpecialNamesCache().has((activityName || '').toLowerCase().trim());
     };
 
     // =========================================================================
@@ -605,10 +638,10 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             return CONFIG.SAME_DAY_PENALTY;
         }
         
-        // Get comprehensive history
+        // Get comprehensive history (keys are normalized lowercase)
         var history = RotationEngine.getBunkHistory(bunkName);
-        var actHistory = history.byActivity[activityName];
-        
+        var actHistory = history.byActivity[actLower];
+
         // Never done at all - HUGE bonus! (no recency conflict possible)
         if (!actHistory || actHistory.count === 0) {
             return CONFIG.NEVER_DONE_BONUS;
@@ -638,11 +671,9 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // This prevents "done once yesterday" from getting a bonus instead of a penalty
         if (daysSince >= 4) {
             if (actHistory.count === 1) {
-                // Done only once AND last time was 4+ days ago — safe to give novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_ONCE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_ONCE_BONUS;
             } else if (actHistory.count === 2) {
-                // Done only twice AND last time was 4+ days ago — moderate novelty bonus
-                recencyPenalty = Math.min(recencyPenalty, CONFIG.DONE_TWICE_BONUS);
+                recencyPenalty = recencyPenalty + CONFIG.DONE_TWICE_BONUS;
             }
         }
         
@@ -680,10 +711,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * FIX: Strengthen weekCount penalties to bridge the cliff.
      */
     RotationEngine.calculateStreakScore = function(bunkName, activityName) {
+        var actLower = (activityName || '').toLowerCase().trim();
         var history = RotationEngine.getBunkHistory(bunkName);
-        
-        // Check consecutive day streak
-        var streak = history.recentStreak[activityName] || 0;
+
+        // Check consecutive day streak (keys are normalized)
+        var streak = history.recentStreak[actLower] || 0;
         
         if (streak >= 4) {
             return CONFIG.YESTERDAY_PENALTY * CONFIG.STREAK_FOUR_PLUS_MULTIPLIER;
@@ -696,8 +728,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         }
         
         // ★★★ v2.4 FIX: Stronger weekCount penalties to close the cliff ★★★
-        // Old: weekCount>=2 → ABOVE_AVERAGE_PENALTY (1200). New: escalated properly.
-        var weekCount = history.recentWeek[activityName] || 0;
+        var weekCount = history.recentWeek[actLower] || 0;
         
         if (weekCount >= 4) {
             // 4+ times this week (non-consecutive) — nearly as bad as a 3-day streak
@@ -865,29 +896,26 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      * FIX: Scale the bonus by how much coverage the bunk still needs.
      */
     RotationEngine.calculateCoverageScore = function(bunkName, activityName) {
+        var actLower = (activityName || '').toLowerCase().trim();
         var allActivities = RotationEngine.getAllActivityNames();
         if (allActivities.length === 0) return 0;
-        
+
         var history = RotationEngine.getBunkHistory(bunkName);
         var triedActivities = history.uniqueActivities.size;
         var coverageRatio = triedActivities / allActivities.length;
-        
-        // Has this bunk ever tried this activity?
-        var hasTriedThis = history.byActivity[activityName] && history.byActivity[activityName].count > 0;
-        
+
+        // Has this bunk ever tried this activity? (keys are normalized)
+        var hasTriedThis = history.byActivity[actLower] && history.byActivity[actLower].count > 0;
+
         if (!hasTriedThis) {
-            // ★★★ v2.4 FIX: Scale bonus by how much coverage is still needed ★★★
-            // Low coverage (tried 20% of activities) → full bonus
-            // High coverage (tried 80% of activities) → reduced bonus
-            // This prevents the last untried activity from overpowering recency
-            var needRatio = 1 - coverageRatio;  // 0.0 (tried everything) to 1.0 (tried nothing)
+            var needRatio = 1 - coverageRatio;
             var scaledBonus = CONFIG.MISSING_ACTIVITY_BONUS * Math.max(0.3, needRatio);
             return scaledBonus;
         }
-        
+
         // Low overall coverage - bonus for trying less-used activities
         if (coverageRatio < 0.5) {
-            var actCount = (history.byActivity[activityName] && history.byActivity[activityName].count) || 0;
+            var actCount = (history.byActivity[actLower] && history.byActivity[actLower].count) || 0;
             if (actCount <= 1) {
                 return CONFIG.LOW_COVERAGE_BONUS;
             }
@@ -901,6 +929,8 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
+        var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
@@ -908,20 +938,47 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             maxUsage = props.maxUsagePerGrade[divisionName];
         }
 
-        var currentCount = RotationEngine.getActivityCount(bunkName, activityName);
+        var maxPeriod = props.maxUsagePeriod || 'half';
+        var maxCount = (_getPeriodCount && maxUsage > 0)
+            ? _getPeriodCount(bunkName, activityName, maxPeriod)
+            : RotationEngine.getActivityCount(bunkName, activityName);
 
         // Hard ceiling
         if (maxUsage > 0) {
-            if (currentCount >= maxUsage) return Infinity;
-            if (currentCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
-            if (currentCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+            if (maxCount >= maxUsage) return Infinity;
+            if (maxCount >= maxUsage - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            if (maxCount >= maxUsage - 2) return CONFIG.LIMITED_ACTIVITY_PENALTY;
+        }
+
+        // ★ Exact frequency: acts as both ceiling and floor
+        var exactFreq = parseInt(props.exactFrequency) || 0;
+        if (divisionName && props.exactFrequencyPerGrade && props.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            var exactPeriod = props.exactFrequencyPeriod || '1week';
+            var exactCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, exactPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            if (exactCount >= exactFreq) return Infinity;
+            if (exactCount >= exactFreq - 1) return CONFIG.NEAR_LIMIT_PENALTY;
+            var exactShortage = exactFreq - exactCount;
+            if (exactShortage > 0) {
+                var _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(exactPeriod, exactShortage, undefined, _cdForEsc);
+                return -(_efEsc || (exactShortage * 8000));
+            }
         }
 
         // ★ Min frequency: strong pull when bunk is below the floor
+        // Escalates based on effective remaining days incl. cooldown.
         var minFreq = parseInt(props.minFrequency) || 0;
         if (minFreq > 0) {
-            var shortage = minFreq - currentCount;
-            if (shortage > 0) return -(shortage * 8000);
+            var minPeriod = props.minFrequencyPeriod || 'week';
+            if (minPeriod === 'week') minPeriod = '1week';
+            var minCount = _getPeriodCount ? _getPeriodCount(bunkName, activityName, minPeriod) : RotationEngine.getActivityCount(bunkName, activityName);
+            var shortage = minFreq - minCount;
+            if (shortage > 0) {
+                var _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(minPeriod, shortage, undefined, _cdForEsc);
+                return -(_mfEsc || (shortage * 8000));
+            }
         }
 
         return 0;
@@ -987,7 +1044,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var coverageScore = RotationEngine.calculateCoverageScore(bunkName, activityName);
 
         // LIMIT
-        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties);
+        var limitScore = RotationEngine.calculateLimitScore(bunkName, activityName, activityProperties, divisionName);
 
         if (limitScore === Infinity) {
             return Infinity;
@@ -1060,21 +1117,36 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         // Sort by score (lowest first)
         scored.sort(function(a, b) { return a.score - b.score; });
 
-        // ★★★ TIE-BREAKING: Add controlled randomness when scores are close ★★★
+        // ★★★ TIE-BREAKING: deterministic, not Math.random(). ★★★
+        // Earlier this used Math.random() which made every regenerate
+        // produce a different schedule even with identical inputs —
+        // impossible to reproduce a bad run for debugging, and the
+        // user-visible "regenerate" reshuffled work the user had
+        // implicitly accepted. Now we hash (bunk + activity + day) so
+        // ties resolve identically across runs while still varying
+        // across (bunk, activity) pairs to avoid alphabetic bias.
         if (scored.length >= 2) {
             var bestScore = scored[0].score;
             var tieGroup = scored.filter(function(p) {
                 return p.score <= bestScore + CONFIG.TIE_BREAKER_RANGE && p.allowed;
             });
-            
+
             if (tieGroup.length > 1) {
+                var dayKey = (typeof window !== 'undefined' && window.currentScheduleDate) || '';
+                function _detTieHash(s) {
+                    var h = 5381;
+                    for (var i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+                    // Map to [0, TIE_BREAKER_RANDOMNESS).
+                    var u = (h >>> 0) / 4294967296;
+                    return u * CONFIG.TIE_BREAKER_RANDOMNESS;
+                }
                 tieGroup.forEach(function(p) {
-                    p._tieBreaker = Math.random() * CONFIG.TIE_BREAKER_RANDOMNESS;
+                    p._tieBreaker = _detTieHash(bunkName + '|' + p.activityName + '|' + dayKey);
                     p._finalScore = p.score + p._tieBreaker;
                 });
-                
+
                 tieGroup.sort(function(a, b) { return a._finalScore - b._finalScore; });
-                
+
                 scored.splice(0, tieGroup.length);
                 for (var i = 0; i < tieGroup.length; i++) {
                     scored.unshift(tieGroup[tieGroup.length - 1 - i]);
@@ -1142,7 +1214,7 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 activityProperties: activityProperties
             });
             var streak = RotationEngine.calculateStreakScore(bunkName, act);
-            var weekCount = history.recentWeek[act] || 0;
+            var weekCount = history.recentWeek[(act || '').toLowerCase().trim()] || 0;
             return { activity: act, score: score, streak: streak, weekCount: weekCount };
         }).sort(function(a, b) { return a.score - b.score; });
 
@@ -1203,6 +1275,97 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         });
 
         console.log('\n' + '='.repeat(70));
+    };
+
+    RotationEngine.invalidateMetaCaches = function() {
+        _specialNamesCache = null;
+        _allActivityNamesCache = null;
+    };
+
+    /**
+     * Merge cloud rotation data (from RotationCloud.load()) into the history
+     * cache so recency/count scoring sees cloud-backed history even when
+     * allDailyData in localStorage is incomplete.
+     *
+     * @param {{ counts: Object, lastDone: Object }} cloudData
+     *   counts:   { bunkName: { activityName: totalCount } }
+     *   lastDone: { bunkName: { activityName: "YYYY-MM-DD" } }
+     */
+    RotationEngine.mergeCloudData = function(cloudData) {
+        if (!cloudData) return;
+        var today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+        var todayMs = new Date(today + 'T12:00:00').getTime();
+        var msPerDay = 86400000;
+        var merged = 0;
+
+        // Ensure cache date is current
+        if (_historyCacheDate !== today) {
+            _historyCache.clear();
+            _historyCacheDate = today;
+        }
+
+        var allBunks = new Set();
+        if (cloudData.counts) Object.keys(cloudData.counts).forEach(function(b) { allBunks.add(b); });
+        if (cloudData.lastDone) Object.keys(cloudData.lastDone).forEach(function(b) { allBunks.add(b); });
+
+        // Today's per-bunk cloud contribution. The local 14-day scan
+        // (buildBunkActivityHistory) deliberately excludes today, so cloud
+        // counts must do the same — otherwise a regenerate sees today's stale
+        // draft as "history" and biases scoring against it.
+        var todayCloud = (cloudData.countsByDate && cloudData.countsByDate[today]) || {};
+
+        allBunks.forEach(function(bunk) {
+            // Get or build the history for this bunk
+            var history = _historyCache.has(bunk) ? _historyCache.get(bunk) : buildBunkActivityHistory(bunk);
+
+            var cloudCounts = (cloudData.counts || {})[bunk] || {};
+            var cloudLast = (cloudData.lastDone || {})[bunk] || {};
+            var todayBunk = todayCloud[bunk] || {};
+
+            // For each cloud activity, fill gaps the local scan may have missed
+            var allActs = new Set(Object.keys(cloudCounts).concat(Object.keys(cloudLast)));
+            allActs.forEach(function(act) {
+                var actLower = act.toLowerCase().trim();
+                var local = history.byActivity[actLower];
+                var cloudCount = Math.max(0, (cloudCounts[act] || 0) - (todayBunk[act] || 0));
+                var cloudLastDate = cloudLast[act] || null;
+
+                if (!local) {
+                    // Activity not seen in local 14-day scan — cloud fills the gap
+                    var daysSince = null;
+                    if (cloudLastDate && cloudLastDate < today) {
+                        daysSince = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                    }
+                    history.byActivity[actLower] = {
+                        dates: cloudLastDate ? [{ dateKey: cloudLastDate, daysAgo: daysSince || 14 }] : [],
+                        count: cloudCount,
+                        daysSinceLast: daysSince
+                    };
+                    if (cloudCount > 0) history.uniqueActivities.add(actLower);
+                    history.totalActivities += cloudCount;
+                    merged++;
+                } else {
+                    // Local exists but cloud may have a higher total (covers more dates)
+                    if (cloudCount > local.count) {
+                        history.totalActivities += (cloudCount - local.count);
+                        local.count = cloudCount;
+                    }
+                    // Cloud may have a more recent lastDone than local's 14-day window
+                    if (cloudLastDate && cloudLastDate < today) {
+                        var cloudDays = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                        if (local.daysSinceLast === null || cloudDays < local.daysSinceLast) {
+                            local.daysSinceLast = cloudDays;
+                        }
+                    }
+                }
+            });
+
+            _historyCache.set(bunk, history);
+        });
+
+        if (merged > 0) {
+            console.log('[RotationEngine] Merged ' + merged + ' cloud-only activity records into history cache');
+        }
     };
 
     // =========================================================================

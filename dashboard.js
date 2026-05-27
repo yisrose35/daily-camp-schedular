@@ -259,8 +259,9 @@
                 campName = ownedCamp.name || null;
                 userName = ownedCamp.owner_name || null;
                 
-                // Store camp ID
-                localStorage.setItem('campistry_user_id', currentUser.id);
+                // Store camp ID (use camp's row ID, not auth user ID)
+                localStorage.setItem('campistry_user_id', ownedCamp.id);
+                localStorage.setItem('campistry_camp_id', ownedCamp.id);
                 return;
             }
         } catch (e) {
@@ -292,7 +293,7 @@
             const rbacCache = {
                 userId: currentUser?.id,
                 role: userRole,
-                campId: membership?.camp_id || currentUser?.id,
+                campId: membership?.camp_id || campData?.id || currentUser?.id,
                 campName: campName,
                 userName: userName,
                 isTeamMember: isTeamMember,
@@ -366,18 +367,28 @@
             if (editProfileBtn) {
                 editProfileBtn.style.display = 'none';
             }
-            
+
             // Add "Your Permissions" section for team members
             addPermissionsSection();
-            
+
             // Hide team management section (only for owners)
             if (teamAccessSection) {
                 teamAccessSection.style.display = 'none';
             }
-            
+
+            // Schedulers and admins can see camp dates (read-only)
+            if (userRole === 'scheduler' || userRole === 'admin') {
+                var campDatesSection = document.getElementById('camp-dates-section');
+                if (campDatesSection) campDatesSection.style.display = 'block';
+                loadCampDates(true);
+            }
+
         } else if (userRole === 'owner') {
             // Owner sees everything
             checkAccessControl();
+            var campDatesSection = document.getElementById('camp-dates-section');
+            if (campDatesSection) campDatesSection.style.display = 'block';
+            loadCampDates(false);
         }
     }
     
@@ -411,7 +422,7 @@
         
         welcomeSection.appendChild(roleBadge);
         
-        // For schedulers, update with subdivision names
+        // For schedulers, show assigned generation divisions
         if (userRole === 'scheduler' && membership?.subdivision_ids?.length > 0) {
             loadSubdivisionNamesForBadge(roleBadge);
         }
@@ -427,7 +438,7 @@
             if (subdivisions && subdivisions.length > 0) {
                 const names = subdivisions.map(s => s.name).join(', ');
                 badgeElement.innerHTML = `
-                    <span class="role-text">Scheduler for ${names}</span>
+                    <span class="role-text">Scheduler — generates ${names}</span>
                 `;
             }
         } catch (e) {
@@ -455,7 +466,7 @@
         } else if (userRole === 'viewer') {
             divisionsHtml = '<p style="color: var(--slate-500);">View-only access to all divisions</p>';
         } else if (userRole === 'scheduler') {
-            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — No restrictions</p>';
+            divisionsHtml = '<p style="color: var(--slate-600);"><strong>All divisions</strong> — Full editing access (generate scoped to assigned divisions)</p>';
         }
         
         permissionsCard.innerHTML = `
@@ -759,17 +770,28 @@
     
     async function loadStats() {
         try {
-            const campId = localStorage.getItem('campistry_user_id') || currentUser.id;
+            const campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
 
-            const { data, error } = await window.supabase
-                .from('camp_state')
-                .select('state')
-                .eq('camp_id', campId)
-                .maybeSingle();
+            // Read per-key rows from camp_state_kv, fall back to legacy blob
+            let state = null;
+            const { data: kvRows, error: kvErr } = await window.supabase
+                .from('camp_state_kv')
+                .select('key, value')
+                .eq('camp_id', campId);
 
-            if (data?.state) {
-                const state = data.state;
+            if (!kvErr && kvRows && kvRows.length > 0) {
+                state = {};
+                kvRows.forEach(r => { state[r.key] = r.value; });
+            } else {
+                const { data } = await window.supabase
+                    .from('camp_state')
+                    .select('state')
+                    .eq('camp_id', campId)
+                    .maybeSingle();
+                if (data?.state) state = data.state;
+            }
 
+            if (state) {
                 // ★ Divisions: prefer campStructure (Campistry Me format) over old app1 format
                 const campStructure = state.campStructure || {};
                 const oldDivisions = state.divisions || state.app1?.divisions || {};
@@ -1016,13 +1038,186 @@
     window.handleLogout = window.logout;
 
     // ========================================
+    // CAMP DATES
+    // ========================================
+
+    async function loadCampDates(readOnly) {
+        try {
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || (membership ? membership.camp_id : null) || currentUser.id;
+            var campDates = null;
+
+            var { data: kvRows, error: kvErr } = await window.supabase
+                .from('camp_state_kv')
+                .select('key, value')
+                .eq('camp_id', campId)
+                .eq('key', 'campDates');
+
+            if (!kvErr && kvRows && kvRows.length > 0) {
+                campDates = kvRows[0].value;
+            }
+
+            var startEl = document.getElementById('campStartDate');
+            var h1EndEl = document.getElementById('campHalf1End');
+            var h2StartEl = document.getElementById('campHalf2Start');
+            var endEl = document.getElementById('campEndDate');
+
+            if (campDates) {
+                if (startEl && campDates.startDate) startEl.value = campDates.startDate;
+                if (h1EndEl && campDates.half1End) h1EndEl.value = campDates.half1End;
+                if (h2StartEl && campDates.half2Start) h2StartEl.value = campDates.half2Start;
+                if (endEl && campDates.endDate) endEl.value = campDates.endDate;
+                updateWeekPreview();
+            }
+
+            if (readOnly) {
+                [startEl, h1EndEl, h2StartEl, endEl].forEach(function(el) {
+                    if (el) { el.disabled = true; el.style.backgroundColor = 'var(--slate-50)'; el.style.color = 'var(--slate-500)'; }
+                });
+                var actions = document.getElementById('campDatesActions');
+                if (actions) actions.style.display = 'none';
+            }
+        } catch (e) {
+            console.warn('Could not load camp dates:', e);
+        }
+    }
+
+    function buildWeekMap(startDate, endDate) {
+        if (!startDate) return null;
+        var start = new Date(startDate + 'T00:00:00');
+        var end = endDate ? new Date(endDate + 'T00:00:00') : null;
+        var weeks = [];
+        var weekStart = new Date(start);
+        var weekNum = 1;
+        while (!end || weekStart <= end) {
+            var nextSunday = new Date(weekStart);
+            var dow = nextSunday.getDay();
+            var daysUntilSun = dow === 0 ? 7 : 7 - dow;
+            nextSunday.setDate(nextSunday.getDate() + daysUntilSun);
+            var weekEnd = (end && nextSunday > end) ? new Date(end) : new Date(nextSunday);
+            weekEnd.setDate(weekEnd.getDate() - 1);
+            weeks.push({
+                week: weekNum,
+                start: weekStart.toISOString().slice(0, 10),
+                end: weekEnd.toISOString().slice(0, 10)
+            });
+            weekStart = new Date(nextSunday);
+            weekNum++;
+            if (weekNum > 52) break;
+        }
+        return weeks;
+    }
+
+    function updateWeekPreview() {
+        var startDate = document.getElementById('campStartDate')?.value;
+        var endDate = document.getElementById('campEndDate')?.value;
+        var h1End = document.getElementById('campHalf1End')?.value;
+        var h2Start = document.getElementById('campHalf2Start')?.value;
+        var preview = document.getElementById('campDatesWeekPreview');
+        if (!preview) return;
+
+        if (!startDate) {
+            preview.style.display = 'none';
+            return;
+        }
+
+        var weeks = buildWeekMap(startDate, endDate);
+        if (!weeks || weeks.length === 0) {
+            preview.style.display = 'none';
+            return;
+        }
+
+        var fmt = function(d) {
+            var parts = d.split('-');
+            return parseInt(parts[1]) + '/' + parseInt(parts[2]);
+        };
+        var html = '<strong style="color:var(--slate-700);">Week breakdown:</strong><br>';
+        var transitionShown = false;
+        weeks.forEach(function(w) {
+            var halfTag = '';
+            if (h1End && h2Start) {
+                var isFirstHalf = w.end <= h1End;
+                var containsH2Start = w.start <= h2Start && w.end >= h2Start;
+                if (!transitionShown && containsH2Start) {
+                    html += '<span style="color:#d97706; font-weight:600;">Transition: ' + fmt(h1End) + ' – ' + fmt(h2Start) + '</span><br>';
+                    transitionShown = true;
+                }
+                if (isFirstHalf) halfTag = ' <span style="color:#7C3AED; font-weight:600;">(1st half)</span>';
+                else halfTag = ' <span style="color:#2563EB; font-weight:600;">(2nd half)</span>';
+            }
+            html += 'Week ' + w.week + ': ' + fmt(w.start) + ' – ' + fmt(w.end) + halfTag + '<br>';
+        });
+
+        preview.innerHTML = html;
+        preview.style.display = 'block';
+    }
+
+    window.saveCampDates = async function() {
+        var startDate = document.getElementById('campStartDate')?.value || null;
+        var h1End = document.getElementById('campHalf1End')?.value || null;
+        var h2Start = document.getElementById('campHalf2Start')?.value || null;
+        var endDate = document.getElementById('campEndDate')?.value || null;
+        var status = document.getElementById('campDatesStatus');
+
+        var campDates = {
+            startDate: startDate,
+            half1End: h1End,
+            half2Start: h2Start,
+            endDate: endDate
+        };
+
+        try {
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            var { error } = await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campDates', value: campDates, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+
+            if (error) throw error;
+            // Also update local settings cache so Flow/scheduler pick it up immediately
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', campDates);
+            if (status) { status.textContent = 'Saved!'; status.style.color = '#059669'; setTimeout(function() { status.textContent = ''; }, 3000); }
+            updateWeekPreview();
+        } catch (e) {
+            console.error('Error saving camp dates:', e);
+            if (status) { status.textContent = 'Error saving.'; status.style.color = '#dc2626'; }
+        }
+    };
+
+    window.clearCampDates = async function() {
+        document.getElementById('campStartDate').value = '';
+        document.getElementById('campHalf1End').value = '';
+        document.getElementById('campHalf2Start').value = '';
+        document.getElementById('campEndDate').value = '';
+        document.getElementById('campDatesWeekPreview').style.display = 'none';
+
+        try {
+            var campId = localStorage.getItem('campistry_camp_id') || localStorage.getItem('campistry_user_id') || currentUser.id;
+            await window.supabase
+                .from('camp_state_kv')
+                .upsert({ camp_id: campId, key: 'campDates', value: null, updated_at: new Date().toISOString() },
+                         { onConflict: 'camp_id,key' });
+            if (window.saveGlobalSettings) window.saveGlobalSettings('campDates', null);
+            var status = document.getElementById('campDatesStatus');
+            if (status) { status.textContent = 'Cleared.'; status.style.color = 'var(--slate-400)'; setTimeout(function() { status.textContent = ''; }, 3000); }
+        } catch (e) {
+            console.warn('Error clearing camp dates:', e);
+        }
+    };
+
+    // Live preview on date change
+    ['campStartDate', 'campHalf1End', 'campHalf2Start', 'campEndDate'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', updateWeekPreview);
+    });
+
+    // ========================================
     // INITIALIZE
     // ========================================
-    
+
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', checkAuth);
     } else {
         checkAuth();
     }
-    
+
 })();

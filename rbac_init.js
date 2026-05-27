@@ -155,9 +155,8 @@
         // Apply restrictions based on role
         if (role === 'viewer') {
             applyViewerRestrictions();
-        } else if (role === 'scheduler') {
-            applySchedulerRestrictions();
-        } else if (role === 'admin') {
+        } else if (role === 'scheduler' || role === 'admin') {
+            // ★★★ v3.13: Scheduler has same permissions as admin ★★★
             applyAdminRestrictions();
         }
         // Owner has no restrictions

@@ -46,8 +46,14 @@
     // Synchronous call to loadGlobalSettings
     const settings = window.loadGlobalSettings?.() || {};
     
-    _divisionCache = structuredClone(settings.divisions || {});
-    _bunkCache = structuredClone(settings.bunks || []);
+    // Prefer app1.divisions (grade-based, built from campStructure by app1.loadData)
+    // over the flat root 'divisions' key which may be stale or empty.
+    _divisionCache = structuredClone(
+        settings.app1?.divisions || settings.divisions || {}
+    );
+    _bunkCache = structuredClone(
+        settings.app1?.bunks || settings.bunks || []
+    );
 
     // Also sync to window for legacy compatibility
     window.divisions = _divisionCache;
@@ -88,7 +94,7 @@
       if (window._globalRegistryRefreshTimer) clearTimeout(window._globalRegistryRefreshTimer);
       window._globalRegistryRefreshTimer = setTimeout(() => {
         window._globalRegistryRefreshTimer = null;
-        window.initApp1?.();
+        // app1 refreshes itself via its own campistry-cloud-hydrated listener — no need to call initApp1 here
         window.initLeagues?.();
         window.initScheduleSystem?.();
         window.updateTable?.();
@@ -102,20 +108,24 @@
   // SAVE (Synchronous with background cloud sync)
   // --------------------------------------------------------------
   function saveRegistry(immediate = false) {
-    // Save divisions
-    window.saveGlobalSettings?.("divisions", _divisionCache);
-    
-    // Save bunks
-    window.saveGlobalSettings?.("bunks", _bunkCache);
+    // Save divisions (guard against null during early init)
+    if (_divisionCache !== null) window.saveGlobalSettings?.("divisions", _divisionCache);
 
-    // Update window references
-    window.divisions = _divisionCache;
-    window.globalBunks = _bunkCache;
-    window.availableDivisions = Object.keys(_divisionCache);
+    // Save bunks (guard against null during early init)
+    if (_bunkCache !== null) window.saveGlobalSettings?.("bunks", _bunkCache);
+
+    // Update window references (guard against null during early init)
+    if (_divisionCache !== null) {
+      window.divisions = _divisionCache;
+      window.availableDivisions = Object.keys(_divisionCache);
+    }
+    if (_bunkCache !== null) {
+      window.globalBunks = _bunkCache;
+    }
 
     console.log("🧠 Registry saved:", {
-      divisions: Object.keys(_divisionCache).length,
-      bunks: _bunkCache.length,
+      divisions: _divisionCache ? Object.keys(_divisionCache).length : 0,
+      bunks: _bunkCache ? _bunkCache.length : 0,
       syncMode: immediate ? 'immediate' : 'batched'
     });
 
@@ -143,7 +153,12 @@
   };
 
   window.setGlobalDivisions = function(divs, immediate = false) {
-    _divisionCache = structuredClone(divs || {});
+    const next = structuredClone(divs || {});
+    // Skip save when data is identical — avoids cloud-sync churn
+    if (_divisionCache !== null && JSON.stringify(_divisionCache) === JSON.stringify(next)) {
+      return;
+    }
+    _divisionCache = next;
     saveRegistry(immediate);
   };
 
@@ -154,8 +169,13 @@
       console.warn("⚠️ Prevented bunk wipe - using runtime bunks instead");
       bunks = runtimeBunks;
     }
-    
-    _bunkCache = structuredClone(bunks || []);
+
+    const next = structuredClone(bunks || []);
+    // Skip save when data is identical — avoids cloud-sync churn
+    if (_bunkCache !== null && JSON.stringify(_bunkCache) === JSON.stringify(next)) {
+      return;
+    }
+    _bunkCache = next;
     saveRegistry(immediate);
   };
 

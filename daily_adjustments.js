@@ -1,3 +1,4 @@
+
 // =================================================================
 // daily_adjustments.js  (v5.2 - In-App Modals + Merged: v3.9 Logic + v5.0 UI)
 // =================================================================
@@ -43,6 +44,36 @@ let smartTileHistory = null;
 let dailyOverrideSkeleton = [];
 let selectedTileId = null;
 
+// ★★★ AUTO MODE: DA's own layer state (independent from master builder) ★★★
+let daAutoLayers = {};  // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+
+// ★★★ v3.13: Generation Scope — which divisions to generate ★★★
+// null = all divisions, otherwise Set of division names
+let _generationScope = null;
+// ★ Day 22.5: Per-bunk scope companion to _generationScope.
+//   - null     = no per-bunk constraint (all bunks in scoped divisions)
+//   - Set<bunk>= only these specific bunks (subset of scoped divisions)
+// Only populated when the user partially selects within a division.
+let _generationBunkScope = null;
+
+function _daIsBackToBack(ev) {
+  if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
+  const parseT = window.SchedulerCoreUtils?.parseTimeToMinutes;
+  if (!parseT) return false;
+  const evStart = parseT(ev.startTime);
+  const evEnd = parseT(ev.endTime);
+  for (let i = 0; i < dailyOverrideSkeleton.length; i++) {
+    const other = dailyOverrideSkeleton[i];
+    if (other === ev || other.id === ev.id) continue;
+    if (other.leagueName !== ev.leagueName) continue;
+    if (other.type !== 'league' && other.type !== 'specialty_league') continue;
+    const oStart = parseT(other.startTime);
+    const oEnd = parseT(other.endTime);
+    if (Math.abs(oStart - evEnd) <= 5 || Math.abs(evStart - oEnd) <= 5) return true;
+  }
+  return false;
+}
+
 // DOM References
 let skeletonContainer = null;
 let tripsFormContainer = null;
@@ -51,6 +82,12 @@ let resourceOverridesContainer = null;
 let activeSubTab = 'skeleton';
 let selectedOverrideId = null;
 
+function _escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // Event listener tracking for cleanup
 let _keyHandler = null;
 let _visHandler = null;
@@ -58,10 +95,28 @@ let _rainyToggleDebounce = false;
 
 // Constants
 const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
-const PIXELS_PER_MINUTE = 2;
+const PIXELS_PER_MINUTE = 2.5;
 const INCREMENT_MINS = 30;
 const SNAP_MINS = 5;
-
+ // ★★★ AUTO BUILDER v2: Check if today uses auto layers ★★★
+function checkAutoModeForDay(dateKey) {
+  const g = window.loadGlobalSettings?.() || {};
+  const app1 = g.app1 || {};
+  const assignments = app1.layerAssignments || {};
+  const templates = app1.autoLayerTemplates || {};
+  
+  // Determine day of week
+  const [Y, M, D] = (dateKey || '').split('-').map(Number);
+  if (!Y) return null;
+  const dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  const dayName = dayNames[dow];
+  
+  const templateName = assignments[dayName] || assignments['Default'];
+  if (!templateName || !templates[templateName]) return null;
+  
+  return { templateName, layers: templates[templateName] };
+}
 
 
 // =================================================================
@@ -119,10 +174,17 @@ function daShowModal(config) {
         inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
       }
       else if (field.type === 'checkbox-group') {
+        var _cbDefaults = Array.isArray(field.default) ? field.default : [];
         var checkboxes = (field.options || []).map(function(o) {
-          return '<label class="da-modal-cb-item">' +
-            '<input type="checkbox" value="' + o + '" data-group="' + field.name + '">' +
-            '<span>' + o + '</span></label>';
+          var val = typeof o === 'object' ? o.value : o;
+          var lbl = typeof o === 'object' ? o.label : o;
+          var dis = typeof o === 'object' && o.disabled;
+          var reason = dis && o.disabledReason ? ' title="' + o.disabledReason + '"' : '';
+          var chk = (!dis && _cbDefaults.indexOf(val) !== -1) ? ' checked' : '';
+          return '<label class="da-modal-cb-item' + (dis ? ' da-cb-disabled' : '') + '"' + reason +
+            (dis ? ' style="opacity:0.45;pointer-events:none;"' : '') + '>' +
+            '<input type="checkbox" value="' + val + '" data-group="' + field.name + '"' + chk + (dis ? ' disabled' : '') + '>' +
+            '<span>' + lbl + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
         fieldEl.innerHTML = '<label>' + field.label + '</label>' +
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
@@ -134,6 +196,8 @@ function daShowModal(config) {
 
       fieldsContainer.appendChild(fieldEl);
     });
+
+    if (config.postRender) config.postRender(overlay);
 
     setTimeout(function() {
       var firstInput = overlay.querySelector('.da-modal-focusable');
@@ -149,6 +213,13 @@ function daShowModal(config) {
     overlay.querySelector('.da-modal-confirm-x').onclick = function() {
       var result = {};
       Object.keys(inputs).forEach(function(key) { result[key] = inputs[key](); });
+      // Also collect values from dynamically added fields (e.g. postRender injections)
+      overlay.querySelectorAll('[data-field]').forEach(function(el) {
+        var key = el.getAttribute('data-field');
+        if (!(key in result)) {
+          result[key] = (el.value || '').trim();
+        }
+      });
       close(result);
     };
 
@@ -159,6 +230,83 @@ function daShowModal(config) {
       if (e.key === 'Escape') close(null);
     });
   });
+}
+
+// =========================================================================
+// SWIM + ELECTIVE MERGE HELPERS (DA-side)
+// =========================================================================
+function daIsSwimEvent(ev) {
+  if (!ev) return false;
+  return (ev.type === 'pinned' && /^swim$/i.test(ev.event || ''));
+}
+function daIsElectiveEvent(ev) {
+  return !!ev && ev.type === 'elective';
+}
+function daBuildSwimElectiveHybrid(newEvent, existingEvent, divName) {
+  const swimEv = daIsSwimEvent(newEvent) ? newEvent : existingEvent;
+  const electiveEv = daIsElectiveEvent(newEvent) ? newEvent : existingEvent;
+  const swimLoc = swimEv.location ||
+    (Array.isArray(swimEv.reservedFields) && swimEv.reservedFields[0]) || null;
+  // Prefer electiveActivities; fall back to reservedFields when missing.
+  let electiveActs = electiveEv.electiveActivities;
+  if (!Array.isArray(electiveActs) || !electiveActs.length) electiveActs = electiveEv.reservedFields || [];
+  const electiveFields = electiveEv.reservedFields || electiveActs;
+  const combinedFields = Array.from(new Set([
+    ...(swimLoc ? [swimLoc] : []),
+    ...electiveFields
+  ]));
+  return {
+    id: 'hybrid_' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+    type: 'swim_elective',
+    event: 'Swim + Elective',
+    division: divName,
+    startTime: newEvent.startTime,
+    endTime: newEvent.endTime,
+    _preChangeMin: swimEv._preChangeMin,
+    _postChangeMin: swimEv._postChangeMin,
+    fullGrade: swimEv.fullGrade,
+    swimLocation: swimLoc,
+    electiveActivities: electiveActs,
+    reservedFields: combinedFields,
+    isNightActivity: !!(newEvent.isNightActivity || existingEvent.isNightActivity)
+  };
+}
+async function daTryMergeSwimElective(newEvent, divName, skeleton) {
+  const newIsSwim = daIsSwimEvent(newEvent);
+  const newIsElective = daIsElectiveEvent(newEvent);
+  console.log('[DA-MERGE] check', { newType: newEvent.type, newEvent: newEvent.event, newIsSwim, newIsElective, divName, skelLen: skeleton.length });
+  if (!newIsSwim && !newIsElective) return null;
+  const newStart = parseTimeToMinutes(newEvent.startTime);
+  const newEnd = parseTimeToMinutes(newEvent.endTime);
+  if (newStart === null || newEnd === null) return null;
+  const overlap = skeleton.find(ex => {
+    if (ex.division !== divName) return false;
+    if (ex.id === newEvent.id) return false;
+    const xs = parseTimeToMinutes(ex.startTime);
+    const xe = parseTimeToMinutes(ex.endTime);
+    if (xs === null || xe === null) return false;
+    if (!(xs < newEnd && xe > newStart)) return false;
+    const exIsSwim = daIsSwimEvent(ex);
+    const exIsElective = daIsElectiveEvent(ex);
+    console.log('[DA-MERGE]   overlap candidate', { exType: ex.type, exEvent: ex.event, exIsSwim, exIsElective, xs, xe, newStart, newEnd });
+    if (newIsSwim && exIsElective) return true;
+    if (newIsElective && exIsSwim) return true;
+    return false;
+  });
+  console.log('[DA-MERGE] result', overlap ? 'FOUND match - prompting' : 'no match');
+  if (!overlap) return null;
+  const droppedKind = newIsSwim ? 'Swim' : 'Elective';
+  const existingKind = newIsSwim ? 'Elective' : 'Swim';
+  const ok = await daShowConfirm(
+    `Merge ${droppedKind} with the existing ${existingKind} into one hybrid tile?<br><br>` +
+    `The combined tile will reserve the pool AND the elective activities at the same time.`
+  );
+  if (!ok) return null;
+  return {
+    hybrid: daBuildSwimElectiveHybrid(newEvent, overlap, divName),
+    overlapId: overlap.id,
+    swimEvent: newIsSwim ? newEvent : overlap
+  };
 }
 
 function daShowConfirm(message, opts) {
@@ -222,6 +370,377 @@ function daShowAlert(message) {
 }
 
 // =================================================================
+// COPY GRADE MODAL — Copy skeleton from one division to others
+// =================================================================
+function daShowCopyGradeModal(skeleton, onApply) {
+  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
+
+  var divsWithEvents = {};
+  skeleton.forEach(function(ev) { if (ev.division) divsWithEvents[ev.division] = true; });
+
+  var existing = document.getElementById('da-modal-input-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'da-modal-input-overlay';
+  overlay.className = 'da-modal-overlay';
+
+  var modal = document.createElement('div');
+  modal.className = 'da-modal';
+  modal.style.cssText = 'max-width:440px; width:90%;';
+
+  modal.innerHTML =
+    '<div style="padding:20px 24px 0;">' +
+      '<h3 style="margin:0 0 4px; font-size:1.05rem; color:#1E293B;">Copy Grade Schedule</h3>' +
+      '<p style="margin:0 0 16px; font-size:0.82rem; color:#64748B;">Copy the skeleton from one grade and apply it to one or more other grades.</p>' +
+    '</div>' +
+    '<div style="padding:0 24px 20px;">' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy from:</label>' +
+      '<select id="da-cg-from" style="width:100%; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; margin-bottom:16px;">' +
+        '<option value="">Select source grade...</option>' +
+        divisions.map(function(d) {
+          return '<option value="' + d + '"' + (divsWithEvents[d] ? '' : ' disabled') + '>' + d + (divsWithEvents[d] ? '' : ' (empty)') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy to:</label>' +
+      '<div id="da-cg-targets" style="display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; margin-bottom:16px;"></div>' +
+    '</div>' +
+    '<div class="da-modal-footer" style="display:flex; gap:8px; justify-content:flex-end; padding:12px 24px; border-top:1px solid #E5E7EB;">' +
+      '<button id="da-cg-cancel" class="da-btn da-btn-ghost">Cancel</button>' +
+      '<button id="da-cg-apply" class="da-btn da-btn-primary" disabled>Copy</button>' +
+    '</div>';
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  var fromSelect = modal.querySelector('#da-cg-from');
+  var targetsDiv = modal.querySelector('#da-cg-targets');
+  var applyBtn = modal.querySelector('#da-cg-apply');
+  var selectedTargets = {};
+
+  function renderTargets() {
+    var sourceDiv = fromSelect.value;
+    targetsDiv.innerHTML = '';
+    selectedTargets = {};
+
+    if (!sourceDiv) {
+      targetsDiv.innerHTML = '<div style="color:#9CA3AF; font-size:0.82rem; padding:8px;">Select a source grade first.</div>';
+      applyBtn.disabled = true;
+      return;
+    }
+
+    divisions.filter(function(d) { return d !== sourceDiv; }).forEach(function(d) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; cursor:pointer; user-select:none;';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = d;
+      cb.style.cssText = 'width:16px; height:16px; accent-color:#147D91;';
+      cb.onchange = function() {
+        if (cb.checked) selectedTargets[d] = true;
+        else delete selectedTargets[d];
+        applyBtn.disabled = Object.keys(selectedTargets).length === 0;
+      };
+
+      var label = document.createElement('span');
+      label.style.cssText = 'font-size:0.88rem; color:#1F2937;';
+      label.textContent = d;
+
+      row.appendChild(cb);
+      row.appendChild(label);
+
+      if (divsWithEvents[d]) {
+        var warn = document.createElement('span');
+        warn.style.cssText = 'font-size:0.7rem; color:#D97706; margin-left:auto;';
+        warn.textContent = 'has events (will be replaced)';
+        row.appendChild(warn);
+      }
+
+      targetsDiv.appendChild(row);
+    });
+
+    var selectAllRow = document.createElement('div');
+    selectAllRow.style.cssText = 'display:flex; justify-content:flex-end; margin-top:4px;';
+    var selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.style.cssText = 'font-size:0.78rem; color:#147D91; background:none; border:none; cursor:pointer; text-decoration:underline;';
+    selectAllBtn.onclick = function() {
+      targetsDiv.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+        cb.checked = true;
+        selectedTargets[cb.value] = true;
+      });
+      applyBtn.disabled = false;
+    };
+    selectAllRow.appendChild(selectAllBtn);
+    targetsDiv.appendChild(selectAllRow);
+  }
+
+  fromSelect.onchange = renderTargets;
+  renderTargets();
+
+  modal.querySelector('#da-cg-cancel').onclick = function() { overlay.remove(); };
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  applyBtn.onclick = function() {
+    var sourceDiv = fromSelect.value;
+    var targets = Object.keys(selectedTargets);
+    if (!sourceDiv || targets.length === 0) return;
+
+    var sourceEvents = skeleton.filter(function(ev) { return ev.division === sourceDiv; });
+    if (sourceEvents.length === 0) { overlay.remove(); daShowAlert('Source grade has no events to copy.'); return; }
+
+    // Remove existing events for target divisions
+    var updated = skeleton.filter(function(ev) { return !selectedTargets[ev.division]; });
+
+    // Copy source events to each target. Remap league references so a
+    // league tile copied into a new grade lands on a league assigned to
+    // THAT grade — not the source grade's league.
+    targets.forEach(function(targetDiv) {
+      sourceEvents.forEach(function(ev) {
+        var copy = JSON.parse(JSON.stringify(ev));
+        copy.division = targetDiv;
+        copy.id = 'evt_' + Math.random().toString(36).slice(2, 9);
+        if (typeof window._mbRemapLeagueForGrade === 'function') {
+          window._mbRemapLeagueForGrade(copy, targetDiv);
+        }
+        updated.push(copy);
+      });
+    });
+
+    overlay.remove();
+    onApply(updated);
+  };
+}
+
+// =================================================================
+// COPY GRADE MODAL — AUTO MODE variant
+// =================================================================
+// daAutoLayers shape: { gradeName: [layerObj, ...] }
+// This mirrors daShowCopyGradeModal but operates on the auto-mode
+// layer dictionary instead of the manual-mode skeleton event array.
+// Without this Copy Grade was a no-op in auto mode because the manual
+// path read from an unused dailyOverrideSkeleton.
+function daShowCopyAutoGradeModal(autoLayers, onApply) {
+  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
+
+  var divsWithLayers = {};
+  Object.keys(autoLayers || {}).forEach(function(g) {
+    if (Array.isArray(autoLayers[g]) && autoLayers[g].length > 0) divsWithLayers[g] = true;
+  });
+
+  var existing = document.getElementById('da-modal-input-overlay');
+  if (existing) existing.remove();
+
+  var overlay = document.createElement('div');
+  overlay.id = 'da-modal-input-overlay';
+  overlay.className = 'da-modal-overlay';
+
+  var modal = document.createElement('div');
+  modal.className = 'da-modal';
+  modal.style.cssText = 'max-width:440px; width:90%;';
+
+  modal.innerHTML =
+    '<div style="padding:20px 24px 0;">' +
+      '<h3 style="margin:0 0 4px; font-size:1.05rem; color:#1E293B;">Copy Grade Layers</h3>' +
+      '<p style="margin:0 0 16px; font-size:0.82rem; color:#64748B;">Copy the auto-builder layers from one grade and apply to one or more other grades.</p>' +
+    '</div>' +
+    '<div style="padding:0 24px 20px;">' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy from:</label>' +
+      '<select id="da-cga-from" style="width:100%; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; margin-bottom:16px;">' +
+        '<option value="">Select source grade...</option>' +
+        divisions.map(function(d) {
+          return '<option value="' + d + '"' + (divsWithLayers[d] ? '' : ' disabled') + '>' + d + (divsWithLayers[d] ? '' : ' (empty)') + '</option>';
+        }).join('') +
+      '</select>' +
+      '<label style="font-size:0.85rem; font-weight:600; color:#374151; display:block; margin-bottom:6px;">Copy to:</label>' +
+      '<div id="da-cga-targets" style="display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; margin-bottom:16px;"></div>' +
+    '</div>' +
+    '<div class="da-modal-footer" style="display:flex; gap:8px; justify-content:flex-end; padding:12px 24px; border-top:1px solid #E5E7EB;">' +
+      '<button id="da-cga-cancel" class="da-btn da-btn-ghost">Cancel</button>' +
+      '<button id="da-cga-apply" class="da-btn da-btn-primary" disabled>Copy</button>' +
+    '</div>';
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  var fromSelect = modal.querySelector('#da-cga-from');
+  var targetsDiv = modal.querySelector('#da-cga-targets');
+  var applyBtn = modal.querySelector('#da-cga-apply');
+  var selectedTargets = {};
+
+  function renderTargets() {
+    var sourceDiv = fromSelect.value;
+    targetsDiv.innerHTML = '';
+    selectedTargets = {};
+
+    if (!sourceDiv) {
+      targetsDiv.innerHTML = '<div style="color:#9CA3AF; font-size:0.82rem; padding:8px;">Select a source grade first.</div>';
+      applyBtn.disabled = true;
+      return;
+    }
+
+    divisions.filter(function(d) { return d !== sourceDiv; }).forEach(function(d) {
+      var row = document.createElement('label');
+      row.style.cssText = 'display:flex; align-items:center; gap:10px; padding:8px 12px; background:#F9FAFB; border:1px solid #E5E7EB; border-radius:8px; cursor:pointer; user-select:none;';
+      var cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.value = d;
+      cb.style.cssText = 'width:16px; height:16px; accent-color:#147D91;';
+      cb.onchange = function() {
+        if (cb.checked) selectedTargets[d] = true;
+        else delete selectedTargets[d];
+        applyBtn.disabled = Object.keys(selectedTargets).length === 0;
+      };
+      var label = document.createElement('span');
+      label.style.cssText = 'font-size:0.88rem; color:#1F2937;';
+      label.textContent = d;
+      row.appendChild(cb); row.appendChild(label);
+      if (divsWithLayers[d]) {
+        var warn = document.createElement('span');
+        warn.style.cssText = 'font-size:0.7rem; color:#D97706; margin-left:auto;';
+        warn.textContent = 'has layers (will be replaced)';
+        row.appendChild(warn);
+      }
+      targetsDiv.appendChild(row);
+    });
+
+    var selectAllRow = document.createElement('div');
+    selectAllRow.style.cssText = 'display:flex; justify-content:flex-end; margin-top:4px;';
+    var selectAllBtn = document.createElement('button');
+    selectAllBtn.textContent = 'Select All';
+    selectAllBtn.style.cssText = 'font-size:0.78rem; color:#147D91; background:none; border:none; cursor:pointer; text-decoration:underline;';
+    selectAllBtn.onclick = function() {
+      targetsDiv.querySelectorAll('input[type="checkbox"]').forEach(function(cb) {
+        cb.checked = true; selectedTargets[cb.value] = true;
+      });
+      applyBtn.disabled = false;
+    };
+    selectAllRow.appendChild(selectAllBtn);
+    targetsDiv.appendChild(selectAllRow);
+  }
+
+  fromSelect.onchange = renderTargets;
+  renderTargets();
+
+  modal.querySelector('#da-cga-cancel').onclick = function() { overlay.remove(); };
+  overlay.onclick = function(e) { if (e.target === overlay) overlay.remove(); };
+
+  applyBtn.onclick = function() {
+    var sourceDiv = fromSelect.value;
+    var targets = Object.keys(selectedTargets);
+    if (!sourceDiv || targets.length === 0) return;
+
+    var source = autoLayers[sourceDiv] || [];
+    if (source.length === 0) { overlay.remove(); daShowAlert('Source grade has no layers to copy.'); return; }
+
+    var divisionsObj = window.divisions || {};
+    // Build a new copy of autoLayers to return
+    var updated = JSON.parse(JSON.stringify(autoLayers || {}));
+
+    // ★ ALSO propagate / clear Bell Schedule periods. Periods live in TWO
+    //   storage locations and BOTH must be synced:
+    //     - window.campPeriods                            (runtime, live read by gen)
+    //     - globalSettings.app1.autoLayerTemplatePeriods   (template snapshots)
+    //   Bug discovered during Auto Test walkthrough: a stray Bell Schedule
+    //   click against ONE grade (e.g. Intermediates Period 1 = 9:00-9:40am)
+    //   constrained that grade to a 40-min window forever, producing
+    //   slack=-60min and only 3 slots vs 10 for other grades. Copy Layers
+    //   didn't touch periods, so the constraint survived every "fix".
+    //   Now: target grades inherit the SOURCE grade's periods (or get
+    //   periods cleared if source has none). This makes Copy Grade
+    //   actually idempotent.
+    function _clonePeriods(arr) {
+      return (arr || []).map(function(p) {
+        return Object.assign({}, JSON.parse(JSON.stringify(p)), {
+          id: 'bp_' + Math.random().toString(36).slice(2, 10)
+        });
+      });
+    }
+    var _periodsChanged = false;
+    try {
+      var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+      var app1 = gs.app1 || {};
+
+      // 1. Update the runtime store (window.campPeriods) — this is what the
+      //    auto-scheduler actually reads during generation.
+      if (!window.campPeriods) window.campPeriods = {};
+      var liveSrc = window.campPeriods[sourceDiv] || [];
+      targets.forEach(function(targetDiv) {
+        if (liveSrc.length === 0) {
+          if (window.campPeriods[targetDiv]) {
+            delete window.campPeriods[targetDiv];
+            _periodsChanged = true;
+          }
+        } else {
+          window.campPeriods[targetDiv] = _clonePeriods(liveSrc);
+          _periodsChanged = true;
+        }
+      });
+      if (_periodsChanged) {
+        window.saveGlobalSettings && window.saveGlobalSettings('campPeriods', window.campPeriods);
+        window.dispatchEvent(new CustomEvent('campistry-periods-changed'));
+      }
+
+      // 2. Mirror to template snapshots so reloading a template doesn't
+      //    re-introduce the old period.
+      var periodStore = app1.autoLayerTemplatePeriods || {};
+      Object.keys(periodStore).forEach(function(templateKey) {
+        var perGrade = periodStore[templateKey] || {};
+        var srcPeriods = perGrade[sourceDiv] || [];
+        targets.forEach(function(targetDiv) {
+          if (srcPeriods.length === 0) {
+            if (perGrade[targetDiv]) {
+              delete perGrade[targetDiv];
+              _periodsChanged = true;
+            }
+          } else {
+            perGrade[targetDiv] = _clonePeriods(srcPeriods);
+            _periodsChanged = true;
+          }
+        });
+      });
+      if (_periodsChanged) {
+        app1.autoLayerTemplatePeriods = periodStore;
+        window.saveGlobalSettings && window.saveGlobalSettings('app1', app1);
+        window.forceSyncToCloud && window.forceSyncToCloud();
+      }
+    } catch (_ePeriods) { /* non-fatal — layer copy still succeeds */ }
+
+    targets.forEach(function(targetDiv) {
+      var targetMeta = divisionsObj[targetDiv] || {};
+      var tStart = (typeof window.parseTimeToMinutes === 'function' && targetMeta.startTime) ? window.parseTimeToMinutes(targetMeta.startTime) : 540;
+      var tEnd = (typeof window.parseTimeToMinutes === 'function' && targetMeta.endTime) ? window.parseTimeToMinutes(targetMeta.endTime) : 960;
+      updated[targetDiv] = source.map(function(l) {
+        var copy = Object.assign({}, JSON.parse(JSON.stringify(l)), {
+          id: 'daw_' + Math.random().toString(36).slice(2, 9),
+          startMin: Math.max(tStart, l.startMin),
+          endMin: Math.min(tEnd, l.endMin)
+        });
+        if (typeof window._mbRemapLeagueForGrade === 'function') {
+          window._mbRemapLeagueForGrade(copy, targetDiv);
+        }
+        return copy;
+      });
+      // ★ Same cache-invalidation guard as Master Scheduler's Copy Layers:
+      //   without this the next gen reads the OLD _perBunkSlots grid for
+      //   the target grade and visibly ignores the copy.
+      try {
+        if (window.divisionTimes && window.divisionTimes[targetDiv]) {
+          delete window.divisionTimes[targetDiv]._perBunkSlots;
+          delete window.divisionTimes[targetDiv]._slots;
+          delete window.divisionTimes[targetDiv]._builtAt;
+        }
+      } catch (_e) {}
+    });
+
+    overlay.remove();
+    onApply(updated);
+  };
+}
+
+// =================================================================
 // TILES - From v3.9 (working tile definitions)
 // =================================================================
 const TILES = [
@@ -231,6 +750,7 @@ const TILES = [
   { type: 'smart', name: 'Smart Tile', style: 'background:#7dd3fc;color:#0c4a6e;border:2px dashed #0284c7;', description: 'Balances 2 activities with a fallback.' },
   { type: 'split', name: 'Split Activity', style: 'background:#fdba74;color:#7c2d12;', description: 'Two activities share the block (Switch halfway).' },
   { type: 'elective', name: 'Elective', style: 'background:#f0abfc;color:#701a75;', description: 'Reserve multiple activities for this division only.' },
+  { type: 'swim_elective', name: 'Swim + Elective', style: 'background:linear-gradient(to right, #67e8f9 0%, #67e8f9 50%, #f0abfc 50%, #f0abfc 100%);color:#155e75;', description: 'Hybrid: pool reserved + activities reserved. Drop a Swim onto an Elective (or vice versa) to merge.' },
   { type: 'league', name: 'League Game', style: 'background:#a5b4fc;color:#312e81;', description: 'Regular League slot (Full Buyout).' },
   { type: 'specialty_league', name: 'Specialty League', style: 'background:#d8b4fe;color:#581c87;', description: 'Specialty League slot (Full Buyout).' },
   { type: 'swim', name: 'Swim', style: 'background:#67e8f9;color:#155e75;', description: 'Pinned swim time.' },
@@ -347,8 +867,8 @@ function getAvailableSkeletons() {
 function getRainyDayStats() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
-  
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
+
   // Indoor fields = marked as rainyDayAvailable
   const indoorFields = fields.filter(f => f.rainyDayAvailable === true);
   // Outdoor fields = NOT marked as rainyDayAvailable
@@ -656,9 +1176,7 @@ function bindRainyDayEvents() {
   if (midDayBtn) {
     midDayBtn.onclick = function(e) {
       e.stopPropagation();
-      // TODO: Re-enable when mid-day mode is finalized
-      // showMidDayRainModal();
-      alert('Mid-Day Mode — feature coming soon!');
+      showMidDayRainModal();
     };
   }
   const rainClearsBtn = document.getElementById('da-rain-clears-btn');
@@ -727,7 +1245,7 @@ function activateFullDayRainyMode() {
 function buildRainyDayResourceOverrides() {
   const g = window.loadGlobalSettings?.() || {};
   const fields = g.app1?.fields || [];
-  const specials = g.app1?.specialActivities || [];
+  const specials = window.getGlobalSpecialActivities?.() || g.app1?.specialActivities || [];
   const overrides = {};
   
   // Fields
@@ -852,18 +1370,12 @@ function activateMidDayRainyMode(customStartTime = null) {
   showRainyDayNotification(true, stats.outdoorFieldNames.length, true, skeletonSwitched);
   console.log("[RainyDay] Activated mid-day mode at", minutesToTime(rainStartMin));
   
-  // ★★★ FIX: Trigger generation AFTER all rainy state is configured ★★★
-  // The stacker rebuilt the skeleton but deferred generation because:
-  //   - window.isRainyDay must be true (set above)
-  //   - outdoor fields must be disabled (set above)
-  //   - leagueAssignments must be cleared (set above)
-  // Now all state is ready, so we trigger generation.
+  // Trigger generation now — all rainy state is configured above
+  // (isRainyDay, disabled fields, cleared leagues). No setTimeout
+  // so the optimizer sees the correct state immediately.
   if (window.MidDayRainStacker?.triggerMidDayGeneration) {
-    // Small delay to let saves propagate
-    setTimeout(() => {
-      window.MidDayRainStacker.triggerMidDayGeneration();
-      renderGrid();
-    }, 300);
+    window.MidDayRainStacker.triggerMidDayGeneration();
+    renderGrid();
   }
 }
 
@@ -1272,7 +1784,7 @@ function showRainyDayNotification(activated, disabledCount = 0, isMidDay = false
 // =================================================================
 async function promptForReservedFields(eventName) {
   const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-  const specialActivities = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+  const specialActivities = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
   const allLocations = [...new Set([...allFields, ...specialActivities])].sort();
   if (allLocations.length === 0) return [];
 
@@ -1309,6 +1821,8 @@ function clearDisplacedTiles() {
 function renderDisplacedTilesPanel() {
   const panel = document.getElementById('da-displaced-tiles-panel');
   if (!panel) return;
+  // Auto mode: displaced tiles don't apply (auto uses layers, not individual tiles)
+  if (window._daBuilderMode === 'auto') { panel.style.display = 'none'; return; }
   if (displacedTiles.length === 0) { panel.style.display = 'none'; return; }
   
   panel.style.display = 'block';
@@ -1426,6 +1940,53 @@ function mapEventNameForOptimizer(name) {
 // RENDER PALETTE
 // =================================================================
 function renderPalette() {
+  // AUTO MODE: render DAW layer palette (same layer types as Master Builder)
+  if (window._daBuilderMode === 'auto') {
+    const paletteEl = document.getElementById('da-palette');
+    if (!paletteEl) return;
+    
+    const DAW_TYPES = window.MasterSchedulerInternal?.DAW_LAYER_TYPES || [
+      { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
+      { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
+      { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
+      { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
+      { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
+      { type:'elective', name:'Elective', style:'background:#f0abfc;color:#701a75;' },
+      { type:'swim_elective', name:'Swim + Elective', style:'background:linear-gradient(to right, #67e8f9 0%, #67e8f9 50%, #f0abfc 50%, #f0abfc 100%);color:#155e75;' },
+    ];
+    
+    const getDotColor = (style) => {
+      const m = (style || '').match(/background:([^;]+)/);
+      return m ? m[1].trim() : '#94a3b8';
+    };
+    let html = '';
+    html += '<div class="da-tile-label">Floaters</div>';
+    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+      const dotColor = getDotColor(t.style);
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+    });
+    html += '<div class="da-tile-divider"></div>';
+    html += '<div class="da-tile-label">Anchors</div>';
+    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+      const dotColor = getDotColor(t.style);
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+    });
+    
+    paletteEl.innerHTML = html;
+    
+    // Wire up drag from palette — uses same data format the DAW grid expects
+    paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
+      tile.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+    return;
+  }
   const paletteEl = document.getElementById('da-palette');
   if (!paletteEl) return;
   
@@ -1433,7 +1994,7 @@ function renderPalette() {
   
   const categories = [
     { label: 'Slots', types: ['activity', 'sports', 'special'] },
-    { label: 'Advanced', types: ['smart', 'split', 'elective'] },
+    { label: 'Advanced', types: ['smart', 'split', 'elective', 'swim_elective'] },
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
@@ -1449,11 +2010,21 @@ function renderPalette() {
       if (!tile) return;
       
       const el = document.createElement('div');
-      el.className = 'da-tile';
-      el.textContent = tile.name;
-      el.style.cssText = tile.style;
+      const paletteIsMS = paletteEl.classList.contains('ms-palette');
+      el.className = paletteIsMS ? 'ms-tile' : 'da-tile';
       el.draggable = true;
       el.title = tile.description || '';
+      // Extract background color for dot
+      const bgMatch = (tile.style || '').match(/background:([^;]+)/);
+      const dotColor = bgMatch ? bgMatch[1].trim() : '#94a3b8';
+      const dot = document.createElement('span');
+      dot.className = paletteIsMS ? 'ms-tile-dot' : 'da-tile-dot ms-daw-tile-dot';
+      dot.style.background = dotColor;
+      const nameSpan = document.createElement('span');
+      nameSpan.className = paletteIsMS ? 'ms-tile-name' : 'da-tile-name ms-daw-tile-name';
+      nameSpan.textContent = tile.name;
+      el.appendChild(dot);
+      el.appendChild(nameSpan);
       
       el.onclick = (e) => {
         if (e.detail === 1) {
@@ -1497,16 +2068,74 @@ function renderPalette() {
 }
 
 // =================================================================
+// --- Column Order Persistence ---
+function getColumnOrder() {
+  const all = window.availableDivisions || [];
+  const g = window.loadGlobalSettings?.() || {};
+  const saved = g.app1?.manualColumnOrder;
+  if (!Array.isArray(saved) || saved.length === 0) return [...all];
+  const valid = saved.filter(d => all.includes(d));
+  return [...valid, ...all.filter(d => !valid.includes(d))];
+}
+
+function saveColumnOrder(order) {
+  const g = window.loadGlobalSettings?.() || {};
+  if (!g.app1) g.app1 = {};
+  g.app1.manualColumnOrder = [...order];
+  window.saveGlobalSettings?.('app1', g.app1);
+  window.forceSyncToCloud?.();
+}
+
 // RENDER GRID
 // =================================================================
+// Remove _swimChange skeleton tiles whose adjacent Swim / Swim+Elective is gone.
+// Called from renderGrid so stale Change strips disappear automatically.
+function daCleanupOrphanChangeTiles() {
+  if (!Array.isArray(dailyOverrideSkeleton)) return;
+  const before = dailyOverrideSkeleton.length;
+  dailyOverrideSkeleton = dailyOverrideSkeleton.filter(item => {
+    if (!item || !item._swimChange) return true;
+    const itemStart = parseTimeToMinutes(item.startTime);
+    const itemEnd = parseTimeToMinutes(item.endTime);
+    if (itemStart === null || itemEnd === null) return true;
+    const hasMate = dailyOverrideSkeleton.some(other => {
+      if (!other || other === item) return false;
+      if (other.division !== item.division) return false;
+      const otherIsSwim = (other.type === 'pinned' && /^swim$/i.test(other.event || '')) ||
+                          other.type === 'swim_elective';
+      if (!otherIsSwim) return false;
+      const os = parseTimeToMinutes(other.startTime);
+      const oe = parseTimeToMinutes(other.endTime);
+      if (os === null || oe === null) return false;
+      if (item._swimChange === 'pre' && Math.abs(itemEnd - os) <= 30) return true;
+      if (item._swimChange === 'post' && Math.abs(itemStart - oe) <= 30) return true;
+      return false;
+    });
+    return hasMate;
+  });
+  if (dailyOverrideSkeleton.length !== before) {
+    console.log(`[DA-CLEANUP] Removed ${before - dailyOverrideSkeleton.length} orphan Change tile(s)`);
+    if (typeof saveDailySkeleton === 'function') saveDailySkeleton();
+  }
+}
+
 function renderGrid() {
   const gridEl = document.getElementById('da-skeleton-grid');
   if (!gridEl) return;
-  
+
+  // Drop stale Change tiles before painting
+  daCleanupOrphanChangeTiles();
+
+  // AUTO MODE: render DAW layer timeline instead of stacking grid
+  if (window._daBuilderMode === 'auto') {
+      renderDAWTimeline(gridEl);
+      return;
+  }
+
   const divisions = window.divisions || {};
-  const availableDivisions = window.availableDivisions || [];
+  const availableDivisions = getColumnOrder();
   if (availableDivisions.length === 0) {
-    gridEl.innerHTML = `<div class="da-empty-state">No divisions found. Please go to Setup to create divisions.</div>`;
+    gridEl.innerHTML = `<div class="da-empty-state">No divisions found.</div>`;
     return;
   }
   
@@ -1536,13 +2165,15 @@ function renderGrid() {
   const totalHeight = (latestMin - earliestMin) * PIXELS_PER_MINUTE;
   gridEl.dataset.earliestMin = earliestMin;
   
-  let html = `<div class="da-grid" style="grid-template-columns:60px repeat(${availableDivisions.length}, 1fr);">`;
-  
+ const gridEl_isMS = gridEl.closest('.ms-container') !== null;
+  const G = gridEl_isMS ? 'ms' : 'da';
+  let html = `<div class="${G}-grid" style="grid-template-columns:70px repeat(${availableDivisions.length}, 1fr); column-gap:4px;">`;
+
   // Header row
   html += `<div class="da-grid-header da-time-header">Time</div>`;
   availableDivisions.forEach((divName) => {
     const color = divisions[divName]?.color || '#444';
-    html += `<div class="da-grid-header" style="background:${color};color:#fff;">${divName}</div>`;
+    html += `<div data-col-header="${divName}" draggable="true" class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0; cursor:grab; user-select:none;">${divName}</div>`;
   });
   
   // Time column
@@ -1575,23 +2206,261 @@ function renderGrid() {
         const top = (start - earliestMin) * PIXELS_PER_MINUTE;
         const height = (end - start) * PIXELS_PER_MINUTE;
         html += renderEventTile(ev, top, height);
+        // Override indicator: show a subtle badge if any bunk in this division has an override at this time
+        const _ovForSlot = (currentOverrides.bunkActivityOverrides || []).filter(o => {
+          const bunkDiv = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
+          return bunkDiv === divName && o.startMin === start && o.endMin === end;
+        });
+        if (_ovForSlot.length > 0) {
+          html += `<div title="${_ovForSlot.length} bunk override(s)" style="position:absolute;top:${top + 2}px;right:6px;background:#f59e0b;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;z-index:2;pointer-events:none;">${_ovForSlot.length}</div>`;
+        }
       }
     });
-    
+
     html += `<div class="da-drop-preview"></div>`;
     html += `</div>`;
   });
   
   html += `</div>`;
   gridEl.innerHTML = html;
-  
+
+  addColumnReorderListeners(gridEl);
   addDropListeners(gridEl);
   addDragToRepositionListeners(gridEl);
   addResizeListeners(gridEl);
   addRemoveListeners(gridEl);
   applyConflictHighlighting(gridEl);
-  setTimeout(function() { if (typeof renderDoubleHeaderLinker === 'function') renderDoubleHeaderLinker(); }, 50);
 }
+
+function addColumnReorderListeners(containerEl) {
+  let dragSrc = null;
+  const headers = () => containerEl.querySelectorAll('[data-col-header]');
+
+  headers().forEach(hdr => {
+    hdr.addEventListener('dragstart', e => {
+      dragSrc = hdr.dataset.colHeader;
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(() => { hdr.style.opacity = '0.4'; }, 0);
+    });
+    hdr.addEventListener('dragend', () => {
+      hdr.style.opacity = '';
+      headers().forEach(h => h.style.outline = '');
+    });
+    hdr.addEventListener('dragover', e => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; });
+    hdr.addEventListener('dragenter', e => {
+      e.preventDefault();
+      headers().forEach(h => h.style.outline = '');
+      if (hdr.dataset.colHeader !== dragSrc) hdr.style.outline = '2px dashed #3b82f6';
+    });
+    hdr.addEventListener('dragleave', () => { hdr.style.outline = ''; });
+    hdr.addEventListener('drop', e => {
+      e.preventDefault();
+      hdr.style.outline = '';
+      if (!dragSrc || dragSrc === hdr.dataset.colHeader) return;
+      const order = getColumnOrder();
+      const from = order.indexOf(dragSrc);
+      const to = order.indexOf(hdr.dataset.colHeader);
+      if (from === -1 || to === -1) return;
+      order.splice(from, 1);
+      order.splice(to, 0, dragSrc);
+      saveColumnOrder(order);
+      renderGrid();
+    });
+  });
+}
+
+// --- AUTO MODE: DAW Layer Timeline ---
+function renderDAWTimeline(gridEl) {
+  if (typeof window.MasterSchedulerInternal?.renderDAWGridWith !== 'function') {
+      gridEl.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;">Master Schedule Builder not loaded.</div>';
+      return;
+  }
+
+  window.MasterSchedulerInternal.renderDAWGridWith(gridEl, daAutoLayers, {
+   onLayersChanged: function(updatedLayers) {
+      if (updatedLayers && typeof updatedLayers === 'object') {
+        daAutoLayers = updatedLayers;
+      }
+      saveDAAutoLayers();
+    }
+  });
+
+  // ★ Re-apply our overlays every time the DAW grid finishes rendering.
+  //   Master scheduler rebuilds gridEl.innerHTML on every drag/resize,
+  //   which wipes trip + period overlays. The custom event fires after
+  //   each render (including internal redraws), so we re-add them.
+  //   Using a single listener for the lifetime of this gridEl — innerHTML
+  //   replacement preserves the parent element's listeners.
+  if (!gridEl._campistryDawRenderedHooked) {
+    gridEl._campistryDawRenderedHooked = true;
+    gridEl.addEventListener('campistry-daw-rendered', function() {
+      overlayTripsOnDAW(gridEl);
+      if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+        window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+      }
+    });
+  }
+
+  // ★ Initial overlay — the event-driven re-render handles subsequent
+  //   updates, but the first render also fires the event so this is now
+  //   handled by the listener above. Keep a paint-time fallback for safety.
+  overlayTripsOnDAW(gridEl);
+  requestAnimationFrame(function() { overlayTripsOnDAW(gridEl); });
+  setTimeout(function() { overlayTripsOnDAW(gridEl); }, 200);
+
+  // ★ Overlay period blocks from bell schedule
+  if (typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+    requestAnimationFrame(function() { window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl); });
+  }
+}
+
+function overlayTripsOnDAW(gridEl) {
+  // Remove existing trip overlays to prevent duplicates on re-render
+  gridEl.querySelectorAll('.da-trip-overlay').forEach(el => el.remove());
+  // Banner lives in the parent wrapper now
+  if (gridEl.parentElement) gridEl.parentElement.querySelectorAll('.da-trip-regen-warning').forEach(el => el.remove());
+
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const trips = loadDailyTrips(dateKey);
+  console.log('[TripOverlay] dateKey=' + dateKey + ', trips=' + trips.length + ', tracks=' + gridEl.querySelectorAll('.ms-daw-track').length);
+  if (trips.length === 0) return;
+
+  // Find global start from ruler (same logic as DAW grid)
+  const divisions = window.divisions || {};
+  let globalStart = null;
+  Object.keys(divisions).forEach(d => {
+    if (divisions[d].isParent) return;
+    const s = parseTimeToMinutes(divisions[d]?.startTime);
+    if (s !== null && (globalStart === null || s < globalStart)) globalStart = s;
+  });
+  if (globalStart === null) globalStart = 540;
+  const PX_PER_MIN = 3; // matches DAW_PIXELS_PER_MINUTE in master_schedule_builder
+
+  // Helper: expand parent divisions to their leaf grades (which is what the
+  // DAW grid renders as tracks). Trip popover lets users pick parents, but
+  // the DAW only has tracks for leaves. Without this expansion the overlay
+  // silently fails for any trip targeting a parent division.
+  function _tripExpandToLeafGrades(divList) {
+    var out = [];
+    var seen = {};
+    (divList || []).forEach(function (d) {
+      if (!d) return;
+      var info = divisions[d];
+      if (info && info.isParent) {
+        // Find leaves whose parent is d (or whose key is listed in info.children/grades)
+        var children = Array.isArray(info.children) ? info.children
+                      : Array.isArray(info.grades) ? info.grades
+                      : null;
+        if (children && children.length) {
+          children.forEach(function (c) { if (!seen[c]) { seen[c] = 1; out.push(c); } });
+          return;
+        }
+        // Fallback: scan every division whose parent points back to d
+        Object.keys(divisions).forEach(function (k) {
+          var ki = divisions[k];
+          if (!ki || ki.isParent) return;
+          if (ki.parent === d || ki.parentDivision === d) {
+            if (!seen[k]) { seen[k] = 1; out.push(k); }
+          }
+        });
+        return;
+      }
+      if (!seen[d]) { seen[d] = 1; out.push(d); }
+    });
+    return out;
+  }
+
+  trips.forEach(trip => {
+    // Trips can target one or multiple divisions (parent or leaf)
+    const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
+    const divs = _tripExpandToLeafGrades(rawDivs);
+    const tStart = trip.startMin ?? parseTimeToMinutes(trip.startTime);
+    const tEnd = trip.endMin ?? parseTimeToMinutes(trip.endTime);
+    if (tStart == null || tEnd == null) return;
+
+    const top = (tStart - globalStart) * PX_PER_MIN;
+    const height = (tEnd - tStart) * PX_PER_MIN;
+
+    divs.forEach(div => {
+      const track = gridEl.querySelector('.ms-daw-track[data-grade="' + div + '"]');
+      console.log('[TripOverlay] trip=' + trip.event + ' div=' + div + ' trackFound=' + !!track);
+      if (!track) return;
+
+      const el = document.createElement('div');
+      el.className = 'da-trip-overlay';
+      el.style.cssText = 'position:absolute; top:' + top + 'px; height:' + height + 'px; left:0; right:0;' +
+        'background:repeating-linear-gradient(135deg, rgba(239,68,68,0.10), rgba(239,68,68,0.10) 4px, rgba(239,68,68,0.03) 4px, rgba(239,68,68,0.03) 8px);' +
+        'border:2px solid #ef4444; border-radius:4px; z-index:8; pointer-events:none;' +
+        'display:flex; align-items:flex-start; justify-content:center; padding-top:4px;';
+      el.innerHTML = '<span style="background:#ef4444; color:#fff; padding:2px 8px; border-radius:4px; font-size:9px; font-weight:700; pointer-events:none; white-space:nowrap;">' +
+        (trip.event || 'Trip') + ' ' + minutesToTime(tStart) + '–' + minutesToTime(tEnd) +
+        '</span>';
+      track.appendChild(el);
+    });
+  });
+
+  // ★ Show regen warning banner above the grid
+  if (trips.length > 0) {
+    const parent = gridEl.parentElement;
+    const existing = parent?.querySelector('.da-trip-regen-warning');
+    if (!existing && parent) {
+      const banner = document.createElement('div');
+      banner.className = 'da-trip-regen-warning';
+      banner.style.cssText = 'padding:8px 14px; background:#fef3c7; border:1px solid #fcd34d; border-radius:6px; font-size:12px; color:#92400e; display:flex; align-items:center; gap:8px; flex-shrink:0;';
+      banner.innerHTML = '<span style="font-size:14px;">⚠️</span> <span><strong>' + trips.length + ' trip' + (trips.length > 1 ? 's' : '') + '</strong> added. Press <strong>▶ Generate Schedule</strong> to rebuild around ' + (trips.length > 1 ? 'them' : 'it') + '.</span>';
+      parent.insertBefore(banner, gridEl);
+    }
+  }
+}
+function daConvertSkeletonToLayers(skeleton) {
+  var layers = [];
+  var eventTypeMap = {
+      'swim': 'swim', 'lunch': 'lunch', 'snacks': 'snack', 'snack': 'snack',
+      'dismissal': 'dismissal', 'general activity slot': 'activity',
+      'sports slot': 'sports', 'special activity': 'special',
+      'league game': 'league', 'specialty league': 'specialty_league'
+  };
+  var blockTypeMap = {
+      'slot': 'activity', 'sports': 'sports', 'sport': 'sports',
+      'special': 'special', 'pinned': 'custom', 'league': 'league',
+      'smart': 'activity', 'split': 'split', 'elective': 'elective'
+  };
+
+  skeleton.forEach(function(block) {
+      if (!block || !block.startTime || !block.endTime || !block.division) return;
+      var startMin = parseTimeToMinutes(block.startTime);
+      var endMin = parseTimeToMinutes(block.endTime);
+      if (startMin == null || endMin == null || endMin <= startMin) return;
+
+      var layerType = 'activity';
+      var lowerEvent = (block.event || '').toLowerCase().trim();
+      if (eventTypeMap[lowerEvent]) layerType = eventTypeMap[lowerEvent];
+      else if (blockTypeMap[block.type]) layerType = blockTypeMap[block.type];
+
+      var isPinned = block.type === 'pinned' || ['swim','lunch','snack','snacks','dismissal'].indexOf(layerType) >= 0;
+
+      layers.push({
+          id: 'layer_' + Math.random().toString(36).slice(2, 9),
+          type: layerType,
+          event: block.event || layerType,
+          startMin: startMin,
+          endMin: endMin,
+          periodMin: endMin - startMin,
+          operator: isPinned ? '=' : '\u2265',
+          quantity: 1,
+          grade: block.division,
+          pinExact: isPinned,
+          // \u2605 Pass the block's subcategory tag through so the auto-builder
+          //   can filter the priority list to matching specials.
+          ...(block.subcategory ? { subcategory: String(block.subcategory).trim() } : {})
+      });
+  });
+
+  return layers;
+}
+
+
 
 function renderEventTile(ev, top, height) {
   let tile = TILES.find(t => t.name === ev.event);
@@ -1604,7 +2473,7 @@ function renderEventTile(ev, top, height) {
   }
   
   let style = tile ? tile.style : 'background:#d1d5db;color:#374151;';
-  const adjustedHeight = Math.max(height - 2, 18); // Minimum 18px height
+  const adjustedHeight = Math.max(height - 2, 24); // ★ v14.0: raised minimum from 18→24
   
   // Night activity styling
   const isNight = !!ev.isNightActivity;
@@ -1615,21 +2484,21 @@ function renderEventTile(ev, top, height) {
   const selectedClass = selectedTileId === ev.id ? ' selected' : '';
   const nightClass = isNight ? ' da-night-activity' : '';
   
-  // Better font sizing for small tiles
+  // ★ v14.0: Improved font sizing — shifted breakpoints up for taller tiles (2.5px/min)
   let fontSize, lineHeight, padding;
-  if (adjustedHeight < 24) {
-    fontSize = '9px'; lineHeight = '1.1'; padding = '1px 4px';
-  } else if (adjustedHeight < 35) {
-    fontSize = '10px'; lineHeight = '1.2'; padding = '2px 5px';
-  } else if (adjustedHeight < 50) {
-    fontSize = '11px'; lineHeight = '1.2'; padding = '3px 5px';
+  if (adjustedHeight < 30) {
+    fontSize = '10px'; lineHeight = '1.15'; padding = '2px 5px';
+  } else if (adjustedHeight < 45) {
+    fontSize = '11px'; lineHeight = '1.25'; padding = '3px 6px';
+  } else if (adjustedHeight < 60) {
+    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 7px';
   } else {
-    fontSize = '12px'; lineHeight = '1.3'; padding = '4px 6px';
+    fontSize = '13px'; lineHeight = '1.35'; padding = '5px 8px';
   }
   
   const eventName = ev.event || 'Event';
   const timeStr = `${ev.startTime}-${ev.endTime}`;
-  
+
   // Compact content for very small tiles
   let content;
   if (adjustedHeight < 24) {
@@ -1647,33 +2516,78 @@ function renderEventTile(ev, top, height) {
     if (ev.leagueName) {
       content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
     }
-    if (ev._doubleHeaderPairId) {
-      content += `<div style="font-size:8px;font-weight:700;color:#0F5F6E;background:#E0F2FE;display:inline-block;padding:1px 5px;border-radius:3px;margin-top:2px;letter-spacing:0.5px;">DH</div>`;
+    if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _lObj = (_gs.leaguesByName || {})[ev.leagueName];
+      if (_lObj?.offCampus?.enabled && _daIsBackToBack(ev)) {
+        content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">AWAY PAIR</div>`;
+      }
     }
-    // Location display for larger tiles
-    if (adjustedHeight > 50) {
-      const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
-      if (locationDisplay && ev.type !== 'elective') {
-        content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+    const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+    if (locationDisplay && ev.type !== 'elective') {
+      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+    }
+    if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
+      const actList = ev.electiveActivities.slice(0, 3).join(', ');
+      const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+    }
+    // ★ Swim + Elective hybrid badges
+    if (ev.type === 'swim_elective') {
+      const _seActs = ev.electiveActivities || [];
+      if (_seActs.length > 0) {
+        const _seList = _seActs.slice(0, 3).join(', ');
+        const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
+        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
+      } else {
+        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + Elective</div>`;
       }
-      
-      if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-        const actList = ev.electiveActivities.slice(0, 3).join(', ');
-        const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-        content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+      if (ev._preChangeMin || ev._postChangeMin) {
+        const _sePre = ev._preChangeMin || 0;
+        const _sePost = ev._postChangeMin || 0;
+        const _seLbl = _sePre === _sePost ? _sePre + 'm' : _sePre + 'm / ' + _sePost + 'm';
+        content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_seLbl}</div>`;
       }
-      
-      if (ev.type === 'smart' && ev.smartData) {
-        content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
-      }
+    }
+    if (ev.type === 'smart' && ev.smartData) {
+      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
+    }
+    // Split tile with swim → show change badge
+    if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
+      const _pre = ev._preChangeMin || 0;
+      const _post = ev._postChangeMin || 0;
+      const _lbl = _pre === _post ? _pre + 'm' : _pre + 'm / ' + _post + 'm';
+      content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_lbl}</div>`;
     }
   }
-  
-  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true" 
+
+  // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
+  const _travelStrips = (function() {
+    let pre = parseInt(ev._travelPre) || 0;
+    let post = parseInt(ev._travelPost) || 0;
+    let zone = ev._travelZone || '';
+    if (!pre && !post) {
+      const locName = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+      const info = locName ? (window.getTravelForField?.(locName, true) || window.getTravelForSpecialActivity?.(locName, true)) : null;
+      if (info) { pre = info.preMin; post = info.postMin; zone = info.zoneName; }
+    }
+    let html = '';
+    const stripH = adjustedHeight >= 28 ? 8 : 6;
+    if (pre > 0) {
+      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+    }
+    if (post > 0) {
+      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+    }
+    return html;
+  })();
+
+  return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
           title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
           style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
+          ${_travelStrips}
           <div class="da-resize-handle da-resize-bottom"></div>
           </div>`;
 }
@@ -1921,11 +2835,24 @@ function addDragToRepositionListeners(gridEl) {
         const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
         
         const duration = parseTimeToMinutes(event.endTime) - parseTimeToMinutes(event.startTime);
-        event.division = divName;
-        event.startTime = minutesToTime(cellStartMin + snapMin);
-        event.endTime = minutesToTime(cellStartMin + snapMin + duration);
-        
-        bumpOverlappingTiles(event, divName);
+        const newStart = minutesToTime(cellStartMin + snapMin);
+        const newEnd = minutesToTime(cellStartMin + snapMin + duration);
+
+        if (divName !== event.division) {
+          // Cross-grade drop. Remap league reference so the copy points
+          // at a league assigned to the new grade (not the source's).
+          const copy = { ...event, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: divName, startTime: newStart, endTime: newEnd };
+          if (typeof window._mbRemapLeagueForGrade === 'function') {
+            window._mbRemapLeagueForGrade(copy, divName);
+          }
+          dailyOverrideSkeleton.push(copy);
+          bumpOverlappingTiles(copy, divName);
+        } else {
+          event.startTime = newStart;
+          event.endTime = newEnd;
+          bumpOverlappingTiles(event, divName);
+        }
+
         saveDailySkeleton();
         renderGrid();
         return;
@@ -2036,15 +2963,42 @@ function addDropListeners(gridEl) {
       }
       // ===== SPLIT TILE =====
       else if (tileData.type === 'split') {
+        const splitFields = [
+          { name: 'startTime', label: 'Start Time (full block)', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+          { name: 'endTime', label: 'End Time (full block)', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
+          { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
+          { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
+        ];
         const result = await daShowModal({
           title: 'Split Activity for ' + divName,
           description: 'Splits division into two groups. Group 1 does Main 1 first, Group 2 does Main 2 first. Midway through, they SWAP.',
-          fields: [
-            { name: 'startTime', label: 'Start Time (full block)', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time (full block)', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
-            { name: 'main1', label: 'Main 1 (Group 1 starts here)', type: 'text', placeholder: 'e.g., Swim, Sports, Art' },
-            { name: 'main2', label: 'Main 2 (Group 2 starts here)', type: 'text', placeholder: 'e.g., Sports, Special, Activity' }
-          ]
+          fields: splitFields,
+          postRender: function(overlay) {
+            // Dynamically show pre/post change fields when swim is detected
+            const main1Input = overlay.querySelector('[data-field="main1"]');
+            const main2Input = overlay.querySelector('[data-field="main2"]');
+            const changeWrap = document.createElement('div');
+            changeWrap.id = 'split-change-fields';
+            changeWrap.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;';
+            changeWrap.innerHTML = '<div style="font-size:11px;font-weight:600;color:#155e75;margin-bottom:8px;">Swim Change Time</div>'
+              + '<div style="display:flex;gap:12px;">'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+              + '</div>';
+            // Insert into the fields container
+            const fieldsContainer = overlay.querySelector('.da-modal-fields-container') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+            if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
+
+            function checkSwim() {
+              const v1 = (main1Input?.value || '').toLowerCase().trim();
+              const v2 = (main2Input?.value || '').toLowerCase().trim();
+              const hasSwim = v1 === 'swim' || v2 === 'swim' || v1.includes('swim') || v2.includes('swim');
+              changeWrap.style.display = hasSwim ? 'block' : 'none';
+            }
+            if (main1Input) main1Input.addEventListener('input', checkSwim);
+            if (main2Input) main2Input.addEventListener('input', checkSwim);
+            checkSwim();
+          }
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
@@ -2052,6 +3006,12 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         const event1 = mapEventNameForOptimizer(result.main1);
         const event2 = mapEventNameForOptimizer(result.main2);
+
+        // Detect if either activity is swim → store change times on the tile
+        const splitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
+        const splitPreChange = splitHasSwim ? (parseInt(result.preChangeMin) || 0) : 0;
+        const splitPostChange = splitHasSwim ? (parseInt(result.postChangeMin) || 0) : 0;
+
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: 'split', event: result.main1 + " / " + result.main2, division: divName,
@@ -2060,15 +3020,85 @@ function addDropListeners(gridEl) {
             { ...event1, event: event1.event || result.main1 },
             { ...event2, event: event2.event || result.main2 }
           ],
-          isNightActivity: isNightActivity
+          isNightActivity: isNightActivity,
+          _preChangeMin: splitPreChange || undefined,
+          _postChangeMin: splitPostChange || undefined
         };
-        console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents);
+
+        console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents, (splitPreChange || splitPostChange) ? '(change: ' + splitPreChange + 'pre/' + splitPostChange + 'post)' : '');
+      }
+      // ===== SWIM + ELECTIVE HYBRID — direct drop from palette =====
+      else if (tileData.type === 'swim_elective') {
+        const _seFields = (masterSettings.app1?.fields || []).map(f => f.name);
+        const _seSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _seAllLocs = [...new Set([..._seFields, ..._seSpecials])].sort();
+        let _seDefaultPool = window.getPinnedTileDefaultLocation?.('swim') || null;
+        if (!_seDefaultPool) {
+          const _f = (masterSettings.app1?.fields || []).find(f => /\b(swim|pool)\b/i.test(f.name));
+          if (_f) _seDefaultPool = _f.name;
+        }
+        const _seTaken = daGetConflictingFacilities(startStr, endStr, null);
+        const _seSportMap = daGetSportFacilitiesMap();
+        const _seSportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(_seSportMap).sort().map(s => ({ value: s, label: s }))];
+        const _seLocOptions = _seAllLocs
+          .filter(l => l !== _seDefaultPool)
+          .map(l => _seTaken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+        const result = await daShowModal({
+          title: 'Swim + Elective for ' + divName,
+          description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
+            { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
+            { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', placeholder: 'e.g., 5' },
+            ...(_seSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: _seSportOptions }] : []),
+            { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: _seLocOptions }
+          ],
+          postRender: function(overlay) {
+            var sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', function() {
+              var s = sportSel.value;
+              var matching = s ? (_seSportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+                cb.checked = matching.indexOf(cb.value) !== -1;
+              });
+            });
+          }
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        let _seChosen = result.activities || [];
+        if (result.sport && _seChosen.length === 0) _seChosen = (_seSportMap[result.sport] || []).filter(f => !_seTaken.has(f) && f !== _seDefaultPool);
+        if (_seChosen.length === 0) { await daShowAlert('Pick at least one elective activity to reserve.'); return; }
+        const _seTimes = await validateStartEnd(result.startTime, result.endTime);
+        if (!_seTimes) return;
+        isNightActivity = _seTimes.isNight;
+        const _sePre = parseInt(result.preChangeMin) || 0;
+        const _sePost = parseInt(result.postChangeMin) || 0;
+        newEvent = {
+          id: 'evt_' + Math.random().toString(36).slice(2, 9),
+          type: 'swim_elective',
+          event: 'Swim + Elective',
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime,
+          _preChangeMin: _sePre || undefined,
+          _postChangeMin: _sePost || undefined,
+          swimLocation: _seDefaultPool,
+          electiveActivities: _seChosen,
+          reservedFields: Array.from(new Set([...(_seDefaultPool ? [_seDefaultPool] : []), ..._seChosen])),
+          isNightActivity
+        };
       }
       // ===== ELECTIVE =====
       else if (tileData.type === 'elective') {
         const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
-        const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const allSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
         const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+        const daTaken = daGetConflictingFacilities(startStr, endStr, null);
+        const daSportMap = daGetSportFacilitiesMap();
+        const daSportOptions = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap).sort().map(s => ({ value: s, label: s }))];
+        const daLocOptions = allLocations.map(l => daTaken.has(l) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
         const result = await daShowModal({
           title: 'Elective for ' + divName,
           description: 'Select activities to RESERVE for this division only. Other divisions cannot use these during this time.',
@@ -2076,11 +3106,24 @@ function addDropListeners(gridEl) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr },
-            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: allLocations }
-          ]
+            ...(daSportOptions.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOptions }] : []),
+            { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOptions }
+          ],
+          postRender: function(overlay) {
+            var sportSel = overlay.querySelector('[data-field="sport"]');
+            if (!sportSel) return;
+            sportSel.addEventListener('change', function() {
+              var s = sportSel.value;
+              var matching = s ? (daSportMap[s] || []) : [];
+              overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+                cb.checked = matching.indexOf(cb.value) !== -1;
+              });
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
-        const electiveActivities = result.activities || [];
+        let electiveActivities = result.activities || [];
+        if (result.sport && electiveActivities.length === 0) electiveActivities = (daSportMap[result.sport] || []).filter(f => !daTaken.has(f));
         if (electiveActivities.length === 0) { await daShowAlert("Please select at least one activity."); return; }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
@@ -2094,20 +3137,27 @@ function addDropListeners(gridEl) {
       }
       // ===== CUSTOM PINNED =====
       else if (tileData.type === 'custom') {
+        const _cAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+        const _cAllSpecials = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
+        const _cAllLocations = [...new Set([..._cAllFields, ..._cAllSpecials])].sort();
+        const customModalFields = [
+          { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
+          { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+          { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+        ];
+        if (_cAllLocations.length > 0) {
+          customModalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _cAllLocations });
+        }
         const result = await daShowModal({
           title: 'Custom Pinned Event for ' + divName,
           description: 'Create a fixed event like Assembly, Special Program, etc.',
-          fields: [
-            { name: 'eventName', label: 'Event Name', type: 'text', placeholder: 'e.g., Regroup, Assembly', default: 'Regroup' },
-            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
-            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
-          ]
+          fields: customModalFields
         });
         if (!result || !result.eventName || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
-        const reservedFields = await promptForReservedFields(result.eventName);
+        const reservedFields = result.reservedFields || [];
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
           division: divName, startTime: result.startTime, endTime: result.endTime,
@@ -2143,43 +3193,58 @@ function addDropListeners(gridEl) {
         }
         const result = await daShowModal({
           title: name + ' for ' + divName,
-          description: tileData.type === 'swim' ? 'Change time is carved from the total block. e.g. 3–4 with 10min changes → Change 3:00–3:10, Swim 3:10–3:50, Change 3:50–4:00' : undefined,
+          description: tileData.type === 'swim' ? 'Enter the swim period start/end. Pre-change is added BEFORE swim, post-change AFTER (skipping any bell-schedule gap). e.g. swim 11:30–12:10 with 10min changes and a 12:10–12:15 gap → Change 11:20–11:30, Swim 11:30–12:10, Change 12:15–12:25.' : undefined,
           fields: daSwimFields
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
-        
-        const daTotalStart = parseTimeToMinutes(result.startTime);
-        const daTotalEnd = parseTimeToMinutes(result.endTime);
+
+        // ★ Swim is the (pre, swim, post) bundle. The user enters swim's
+        //   own start/end — pre extends backward, post extends forward.
+        //   Post snaps past period gaps to the next period's start.
+        const daSwimStart = parseTimeToMinutes(result.startTime);
+        const daSwimEnd = parseTimeToMinutes(result.endTime);
         const daPreChange = (tileData.type === 'swim') ? (parseInt(result.preChangeMin) || 0) : 0;
         const daPostChange = (tileData.type === 'swim') ? (parseInt(result.postChangeMin) || 0) : 0;
-        
-        if (daPreChange + daPostChange >= (daTotalEnd - daTotalStart)) {
-          await daShowAlert('Change time (' + (daPreChange + daPostChange) + ' min) must be less than the total block (' + (daTotalEnd - daTotalStart) + ' min).');
-          return;
+
+        // Period-anchor logic for post-change (mirrors master_schedule_builder)
+        const daPeriods = (window.campPeriods && window.campPeriods[divName])
+          ? window.campPeriods[divName].slice().sort((a, b) => a.startMin - b.startMin)
+          : [];
+        const daWithinPeriod = (rs, re) =>
+          daPeriods.some(p => p.startMin <= rs && p.endMin >= re);
+        let daPreAnchor = daSwimStart;
+        let daPostAnchor = daSwimEnd;
+        if (daPeriods.length > 0) {
+          if (daPreChange > 0 && !daWithinPeriod(daSwimStart - daPreChange, daSwimStart)) {
+            for (let i = daPeriods.length - 1; i >= 0; i--) {
+              if (daPeriods[i].endMin <= daSwimStart) { daPreAnchor = daPeriods[i].endMin; break; }
+            }
+          }
+          if (daPostChange > 0 && !daWithinPeriod(daSwimEnd, daSwimEnd + daPostChange)) {
+            const next = daPeriods.find(p => p.startMin >= daSwimEnd);
+            if (next) daPostAnchor = next.startMin;
+          }
         }
-        
-        const daSwimStart = daTotalStart + daPreChange;
-        const daSwimEnd = daTotalEnd - daPostChange;
-        
-        // Pre-Change carved from start of block
+
+        // Pre-Change BEFORE swim
         if (daPreChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: result.startTime,
-            endTime: minutesToTime(daSwimStart),
+            startTime: minutesToTime(daPreAnchor - daPreChange),
+            endTime: minutesToTime(daPreAnchor),
             reservedFields: [],
             location: null,
             _swimChange: 'pre'
           });
         }
-        
-        // Swim tile — narrowed to exclude change time
+
+        // Swim tile — keeps the user-entered window
         newEvent = {
           id: Date.now().toString(), type: 'pinned', event: name, division: divName,
           startTime: minutesToTime(daSwimStart), endTime: minutesToTime(daSwimEnd),
@@ -2189,16 +3254,16 @@ function addDropListeners(gridEl) {
           _postChangeMin: daPostChange || undefined,
           isNightActivity
         };
-        
-        // Post-Change carved from end of block
+
+        // Post-Change AFTER swim (anchored to next period start if there's a gap)
         if (daPostChange > 0) {
           dailyOverrideSkeleton.push({
             id: Date.now().toString() + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
-            startTime: minutesToTime(daSwimEnd),
-            endTime: result.endTime,
+            startTime: minutesToTime(daPostAnchor),
+            endTime: minutesToTime(daPostAnchor + daPostChange),
             reservedFields: [],
             location: null,
             _swimChange: 'post'
@@ -2208,20 +3273,29 @@ function addDropListeners(gridEl) {
       // ===== LEAGUE =====
      else if (tileData.type === 'league') {
         // ★★★ MULTIPLE LEAGUE SUPPORT: Build league picker ★★★
+        // Filter to leagues assigned to THIS grade. Skip the picker
+        // entirely when there's exactly one match (auto-fill silently).
         const globalSettings = window.loadGlobalSettings?.() || {};
         const leaguesByName = globalSettings.leaguesByName || {};
-        const leagueNames = Object.keys(leaguesByName).filter(ln => {
+        const gradeLeagues = Object.keys(leaguesByName).filter(ln => {
           const l = leaguesByName[ln];
-          return l && l.enabled !== false;
+          return l && l.enabled !== false && Array.isArray(l.divisions) && l.divisions.includes(String(divName));
         });
+        if (gradeLeagues.length === 0) {
+          await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+          return;
+        }
+        let _autoLeagueName = null;
         let leaguePickerField = [];
-        if (leagueNames.length > 0) {
+        if (gradeLeagues.length === 1) {
+          _autoLeagueName = gradeLeagues[0];
+        } else {
           leaguePickerField = [{
             name: 'leagueName',
-            label: 'Which League?',
+            label: 'Which League? (required)',
             type: 'select',
-            options: [{ value: '', label: '— Any League (auto) —' }].concat(
-              leagueNames.map(ln => ({ value: ln, label: ln }))
+            options: [{ value: '', label: '— Choose a league —' }].concat(
+              gradeLeagues.map(ln => ({ value: ln, label: ln }))
             ),
             default: ''
           }];
@@ -2236,13 +3310,19 @@ function addDropListeners(gridEl) {
           ]
         });
         if (!result || !result.startTime || !result.endTime) return;
+        if (_autoLeagueName) {
+          result.leagueName = _autoLeagueName;
+        } else if (!result.leagueName) {
+          await daShowAlert('Please choose a league before dropping the tile.');
+          return;
+        }
         const times = await validateStartEnd(result.startTime, result.endTime);
         if (!times) return;
         isNightActivity = times.isNight;
         newEvent = {
           id: 'evt_' + Math.random().toString(36).slice(2, 9),
           type: 'league',
-          event: result.leagueName || 'League Game',
+          event: result.leagueName,
           division: divName,
           startTime: result.startTime,
           endTime: result.endTime,
@@ -2280,12 +3360,48 @@ function addDropListeners(gridEl) {
         else if (tileData.type === 'sports') { name = "Sports Slot"; finalType = 'slot'; }
         else if (tileData.type === 'special') { name = "Special Activity"; finalType = 'slot'; }
         if (!name) return;
+
+        // ★ Subcategory picker for Special Activity blocks
+        let subcategoryField = [];
+        if (tileData.type === 'special') {
+          const _subOptions = (typeof window.getSpecialSubcategories === 'function')
+            ? window.getSpecialSubcategories() : [];
+          subcategoryField = [{
+            name: 'subcategory',
+            label: 'Subcategory',
+            type: 'select',
+            options: [{ value: '', label: '— Any —' }]
+              .concat(_subOptions.map(s => ({ value: s, label: s })))
+              .concat([{ value: '__add_new__', label: '+ New subcategory…' }]),
+            default: ''
+          }];
+        }
+
         const result = await daShowModal({
           title: name + ' for ' + divName,
           fields: [
+            ...subcategoryField,
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr }
-          ]
+          ],
+          postRender: (overlay) => {
+            const sel = overlay.querySelector('select[data-field="subcategory"]');
+            if (!sel) return;
+            sel.addEventListener('change', () => {
+              if (sel.value !== '__add_new__') return;
+              const newName = (window.prompt('New subcategory name (e.g. Food, Theme):') || '').trim();
+              if (!newName) { sel.value = ''; return; }
+              if (typeof window.addSpecialSubcategory === 'function') window.addSpecialSubcategory(newName);
+              const addOpt = sel.querySelector('option[value="__add_new__"]');
+              const exists = Array.from(sel.options).some(o => o.value.toLowerCase() === newName.toLowerCase());
+              if (!exists) {
+                const opt = document.createElement('option');
+                opt.value = newName; opt.textContent = newName;
+                sel.insertBefore(opt, addOpt);
+              }
+              sel.value = newName;
+            });
+          }
         });
         if (!result || !result.startTime || !result.endTime) return;
         const times = await validateStartEnd(result.startTime, result.endTime);
@@ -2295,9 +3411,31 @@ function addDropListeners(gridEl) {
           id: Date.now().toString(), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
+        if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
+          newEvent.subcategory = String(result.subcategory).trim();
+        }
       }
       
       if (newEvent) {
+        // ★ SWIM + ELECTIVE MERGE
+        const _daMergeRes = await daTryMergeSwimElective(newEvent, divName, dailyOverrideSkeleton);
+        if (_daMergeRes) {
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(ev => ev.id !== _daMergeRes.overlapId);
+          const _swimSt = parseTimeToMinutes(_daMergeRes.swimEvent.startTime);
+          const _swimEt = parseTimeToMinutes(_daMergeRes.swimEvent.endTime);
+          dailyOverrideSkeleton = dailyOverrideSkeleton.filter(ev => {
+            if (!ev._swimChange) return true;
+            if (ev.division !== divName) return true;
+            const evS = parseTimeToMinutes(ev.startTime);
+            const evE = parseTimeToMinutes(ev.endTime);
+            if (evS === null || evE === null) return true;
+            if (ev._swimChange === 'pre' && Math.abs(evE - _swimSt) <= 30) return false;
+            if (ev._swimChange === 'post' && Math.abs(evS - _swimEt) <= 30) return false;
+            return true;
+          });
+          newEvent = _daMergeRes.hybrid;
+        }
+
         const newStartVal = parseTimeToMinutes(newEvent.startTime);
         const newEndVal = parseTimeToMinutes(newEvent.endTime);
         dailyOverrideSkeleton = dailyOverrideSkeleton.filter(existing => {
@@ -2308,12 +3446,78 @@ function addDropListeners(gridEl) {
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
           return !overlaps;
         });
+
+        // Stamp travel info for off-campus facilities
+        const _travelLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || '';
+        if (_travelLoc) {
+          const _ti = window.getTravelForField?.(_travelLoc, true) || window.getTravelForSpecialActivity?.(_travelLoc, true);
+          if (_ti) {
+            newEvent._travelPre = _ti.preMin;
+            newEvent._travelPost = _ti.postMin;
+            newEvent._travelZone = _ti.zoneName;
+            newEvent._travelMode = _ti.mode;
+          }
+        }
+
+        // Soft cooldown check for manual-mode rules
+        if (window.SchedulingRules) {
+          const _cdLoc = newEvent.location || (Array.isArray(newEvent.reservedFields) && newEvent.reservedFields[0]) || null;
+          const _cdCandidate = {
+            startMin: newStartVal, endMin: newEndVal,
+            type: window.SchedulingRules.inferTypeFromActivity(newEvent.event || ''),
+            event: newEvent.event || '', field: _cdLoc
+          };
+          const _cdTemplate = dailyOverrideSkeleton
+            .filter(ev => ev.division === divName)
+            .map(ev => {
+              const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+              if (s == null || e == null) return null;
+              const loc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || null;
+              return { startMin: s, endMin: e, type: window.SchedulingRules.inferTypeFromActivity(ev.event || ''), event: ev.event || '', field: loc };
+            })
+            .filter(Boolean);
+          const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
+          if (!_cdResult.allowed) {
+            const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
+            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _cdMsg.replace(/\n/g, '<br>') + '<br><br>Place anyway?');
+            if (!_cdOk) return;
+          }
+        }
+
+        // Sport player count check
+        if (newEvent.type === 'sport' && newEvent.event && window.SchedulerCoreUtils?.checkPlayerCountForSport) {
+          const _pcBunkMeta = window.getBunkMetaData?.() || {};
+          const _pcDivObj   = (window.divisions || {})[divName] || {};
+          const _pcDivBunks = _pcDivObj.bunks || [];
+          const _pcDivPlayers = _pcDivBunks.reduce((s, b) => s + (_pcBunkMeta[b]?.size || 0), 0);
+          const _pcSportName  = (newEvent.event || '').toLowerCase();
+          const _pcConcurrent = dailyOverrideSkeleton
+            .filter(ev => ev.division !== divName && ev.type === 'sport' &&
+              (ev.event || '').toLowerCase() === _pcSportName &&
+              parseTimeToMinutes(ev.startTime) < newEndVal &&
+              parseTimeToMinutes(ev.endTime)   > newStartVal)
+            .reduce((s, ev) => {
+              const d = (window.divisions || {})[ev.division] || {};
+              return s + (d.bunks || []).reduce((ss, b) => ss + (_pcBunkMeta[b]?.size || 0), 0);
+            }, 0);
+          const _pcTotal = _pcDivPlayers + _pcConcurrent;
+          if (_pcTotal > 0) {
+            const _pcResult = window.SchedulerCoreUtils.checkPlayerCountForSport(newEvent.event, _pcTotal);
+            if (!_pcResult.valid && _pcResult.reason) {
+              const _pcNote = _pcConcurrent > 0
+                ? '<br>(Includes ' + _pcConcurrent + ' players from other divisions at the same time)' : '';
+              const _pcOk = await daShowConfirm('Player count warning for "' + newEvent.event + '":<br>' + _pcResult.reason + _pcNote + '<br><br>Place anyway?');
+              if (!_pcOk) return;
+            }
+          }
+        }
+
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
       }
     };
-    
+
     // Mobile touch support — defers to mobile_touch_drag.js when available
     cell.addEventListener('touchend', (e) => {
       if (window.MobileTouchDrag) return;
@@ -2360,24 +3564,23 @@ function addDropListeners(gridEl) {
 // =================================================================
 function addRemoveListeners(gridEl) {
   gridEl.querySelectorAll('.da-event').forEach(tile => {
+    let _downX, _downY, _clickTimer;
+    tile.addEventListener('mousedown', e => { _downX = e.clientX; _downY = e.clientY; });
+
     tile.onclick = (e) => {
       if (e.target.classList.contains('da-resize-handle')) return;
       e.stopPropagation();
-      selectTile(tile.dataset.id);
+      const dist = Math.hypot(e.clientX - (_downX ?? e.clientX), e.clientY - (_downY ?? e.clientY));
+      if (dist > 5) { selectTile(tile.dataset.id); return; }
+      clearTimeout(_clickTimer);
+      _clickTimer = setTimeout(() => { _showTileActionBar(tile); }, 280);
     };
-    
-    tile.ondblclick = async (e) => {
+
+    tile.ondblclick = (e) => {
       e.stopPropagation();
+      clearTimeout(_clickTimer);
       if (e.target.classList.contains('da-resize-handle')) return;
-      const id = tile.dataset.id;
-      if (!id) return;
-      const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
-      if (ok) {
-        dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
-        selectedTileId = null;
-        saveDailySkeleton();
-        renderGrid();
-      }
+      _showTileActionBar(tile);
     };
   });
 }
@@ -2392,12 +3595,399 @@ function selectTile(id) {
 function deselectAllTiles() {
   selectedTileId = null;
   document.querySelectorAll('.da-event.selected').forEach(el => el.classList.remove('selected'));
+  const existing = document.getElementById('da-tile-action-bar');
+  if (existing) existing.remove();
+}
+
+function _showTileActionBar(tileEl) {
+  const existing = document.getElementById('da-tile-action-bar');
+  if (existing) existing.remove();
+
+  const id = tileEl.dataset.id;
+  if (!id) return;
+  selectTile(id);
+
+  const bar = document.createElement('div');
+  bar.id = 'da-tile-action-bar';
+  bar.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:4px;background:#fff;border:1px solid #d1d5db;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px;';
+
+  const rect = tileEl.getBoundingClientRect();
+  bar.style.top = Math.min(rect.bottom + 4, window.innerHeight - 40) + 'px';
+  bar.style.left = Math.max(rect.left, 8) + 'px';
+
+  const btnStyle = 'padding:5px 12px;border:none;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;';
+
+  const editBtn = document.createElement('button');
+  editBtn.textContent = 'Edit';
+  editBtn.style.cssText = btnStyle + 'background:#f1f5f9;color:#374151;';
+  editBtn.onmouseenter = () => { editBtn.style.background = '#e2e8f0'; };
+  editBtn.onmouseleave = () => { editBtn.style.background = '#f1f5f9'; };
+  editBtn.onclick = () => { bar.remove(); editTile(id); };
+
+  const delBtn = document.createElement('button');
+  delBtn.textContent = 'Delete';
+  delBtn.style.cssText = btnStyle + 'background:#fef2f2;color:#dc2626;';
+  delBtn.onmouseenter = () => { delBtn.style.background = '#fee2e2'; };
+  delBtn.onmouseleave = () => { delBtn.style.background = '#fef2f2'; };
+  delBtn.onclick = () => {
+    dailyOverrideSkeleton = dailyOverrideSkeleton.filter(x => x.id !== id);
+    selectedTileId = null;
+    bar.remove();
+    saveDailySkeleton();
+    renderGrid();
+  };
+
+  bar.appendChild(editBtn);
+  bar.appendChild(delBtn);
+
+
+  document.body.appendChild(bar);
+
+  const closeHandler = (e) => {
+    if (!bar.contains(e.target) && e.target !== tileEl && !tileEl.contains(e.target)) {
+      bar.remove();
+      deselectAllTiles();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+
+async function editTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+
+  if (ev.type === 'smart') {
+    const result = await daShowModal({
+      title: 'Edit Smart Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+      ]
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.smartData = { main1: result.main1, main2: result.main2, fallbackFor: result.main1, fallbackActivity: result.fallbackActivity || 'Activity' };
+
+  } else if (ev.type === 'split') {
+    const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const result = await daShowModal({
+      title: 'Edit Split Tile',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
+        { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
+      ],
+      postRender: function(overlay) {
+        const main1Input = overlay.querySelector('[data-field="main1"]');
+        const main2Input = overlay.querySelector('[data-field="main2"]');
+        const changeWrap = document.createElement('div');
+        changeWrap.id = 'split-change-fields';
+        changeWrap.style.cssText = 'display:none;margin-top:12px;padding:12px;background:#ecfeff;border:1px solid #a5f3fc;border-radius:8px;';
+        changeWrap.innerHTML = '<div style="font-size:11px;font-weight:600;color:#155e75;margin-bottom:8px;">Swim Change Time</div>'
+          + '<div style="display:flex;gap:12px;">'
+          + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Pre-Change (minutes)</label><input type="text" data-field="preChangeMin" value="' + (ev._preChangeMin || '') + '" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+          + '<div style="flex:1;"><label style="font-size:11px;color:#64748b;">Post-Change (minutes)</label><input type="text" data-field="postChangeMin" value="' + (ev._postChangeMin || '') + '" placeholder="e.g., 5" style="width:100%;margin-top:4px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;"></div>'
+          + '</div>';
+        const fieldsContainer = overlay.querySelector('.da-modal-fields-container') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+        if (fieldsContainer) fieldsContainer.appendChild(changeWrap);
+
+        function checkSwim() {
+          const v1 = (main1Input?.value || '').toLowerCase().trim();
+          const v2 = (main2Input?.value || '').toLowerCase().trim();
+          const hasSwim = v1 === 'swim' || v2 === 'swim' || v1.includes('swim') || v2.includes('swim');
+          changeWrap.style.display = hasSwim ? 'block' : 'none';
+        }
+        if (main1Input) main1Input.addEventListener('input', checkSwim);
+        if (main2Input) main2Input.addEventListener('input', checkSwim);
+        checkSwim();
+      }
+    });
+    if (!result || !result.main1 || !result.main2) return;
+    const event1 = mapEventNameForOptimizer(result.main1);
+    const event2 = mapEventNameForOptimizer(result.main2);
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = `${result.main1} / ${result.main2}`;
+    ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+
+    // Update swim change for split tiles
+    const editSplitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
+    ev._preChangeMin = editSplitHasSwim ? (parseInt(result.preChangeMin) || 0) || undefined : undefined;
+    ev._postChangeMin = editSplitHasSwim ? (parseInt(result.postChangeMin) || 0) || undefined : undefined;
+
+  } else if (ev.type === 'elective') {
+    const allFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const allLocations = [...new Set([...allFields, ...allSpecials])].sort();
+    const daTaken2 = daGetConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const daSportMap2 = daGetSportFacilitiesMap();
+    const daSportOpts2 = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(daSportMap2).sort().map(s => ({ value: s, label: s }))];
+    const daLocOpts2 = allLocations.map(l => (daTaken2.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await daShowModal({
+      title: 'Edit Elective',
+      wide: true,
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        ...(daSportOpts2.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: daSportOpts2 }] : []),
+        { name: 'activities', label: 'Reserve Activities', type: 'checkbox-group', options: daLocOpts2, default: ev.electiveActivities || [] }
+      ],
+      postRender: function(overlay) {
+        var sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', function() {
+          var s = sportSel.value;
+          var matching = s ? (daSportMap2[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+            cb.checked = matching.indexOf(cb.value) !== -1;
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let chosen2 = result.activities || [];
+    if (result.sport && chosen2.length === 0) chosen2 = (daSportMap2[result.sport] || []).filter(f => !daTaken2.has(f));
+    if (!chosen2.length) return;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Elective'; ev.electiveActivities = chosen2;
+
+  } else if (ev.type === 'swim_elective') {
+    const _seFields3 = (masterSettings.app1?.fields || []).map(f => f.name);
+    const _seSpecials3 = (window.getGlobalSpecialActivities?.() || masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const _seAllLocs3 = [...new Set([..._seFields3, ..._seSpecials3])].sort();
+    let _seDefaultPool3 = ev.swimLocation || window.getPinnedTileDefaultLocation?.('swim') || null;
+    if (!_seDefaultPool3) {
+      const _f = (masterSettings.app1?.fields || []).find(f => /\b(swim|pool)\b/i.test(f.name));
+      if (_f) _seDefaultPool3 = _f.name;
+    }
+    const _seTaken3 = daGetConflictingFacilities(ev.startTime, ev.endTime, ev.id);
+    const _seSportMap3 = daGetSportFacilitiesMap();
+    const _seSportOpts3 = [{ value: '', label: '— Pick a sport to auto-assign facility —' }, ...Object.keys(_seSportMap3).sort().map(s => ({ value: s, label: s }))];
+    const _seLocOpts3 = _seAllLocs3
+      .filter(l => l !== _seDefaultPool3)
+      .map(l => (_seTaken3.has(l) && !(ev.electiveActivities || []).includes(l)) ? { value: l, label: l, disabled: true, disabledReason: 'Already reserved at this time' } : l);
+    const result = await daShowModal({
+      title: 'Edit Swim + Elective',
+      description: 'Hybrid: pool reserved + listed activities reserved at the same time. Campers choose individually.',
+      fields: [
+        { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+        { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
+        { name: 'preChangeMin', label: 'Pre-Change (minutes, optional)', type: 'text', default: ev._preChangeMin || '' },
+        { name: 'postChangeMin', label: 'Post-Change (minutes, optional)', type: 'text', default: ev._postChangeMin || '' },
+        ...(_seSportOpts3.length > 1 ? [{ name: 'sport', label: 'Sport (auto-assign facility)', type: 'select', options: _seSportOpts3 }] : []),
+        { name: 'activities', label: 'Reserve Locations (electives)', type: 'checkbox-group', options: _seLocOpts3, default: ev.electiveActivities || [] }
+      ],
+      postRender: function(overlay) {
+        var sportSel = overlay.querySelector('[data-field="sport"]');
+        if (!sportSel) return;
+        sportSel.addEventListener('change', function() {
+          var s = sportSel.value;
+          var matching = s ? (_seSportMap3[s] || []) : [];
+          overlay.querySelectorAll('input[data-group="activities"]:not(:disabled)').forEach(function(cb) {
+            cb.checked = matching.indexOf(cb.value) !== -1;
+          });
+        });
+      }
+    });
+    if (!result) return;
+    let _seChosen3 = result.activities || [];
+    if (result.sport && _seChosen3.length === 0) _seChosen3 = (_seSportMap3[result.sport] || []).filter(f => !_seTaken3.has(f) && f !== _seDefaultPool3);
+    if (!_seChosen3.length) { await daShowAlert('Pick at least one elective activity to reserve.'); return; }
+    const _sePre3 = parseInt(result.preChangeMin) || 0;
+    const _sePost3 = parseInt(result.postChangeMin) || 0;
+    ev.startTime = result.startTime; ev.endTime = result.endTime;
+    ev.event = 'Swim + Elective';
+    ev._preChangeMin = _sePre3 || undefined;
+    ev._postChangeMin = _sePost3 || undefined;
+    ev.swimLocation = _seDefaultPool3;
+    ev.electiveActivities = _seChosen3;
+    ev.reservedFields = Array.from(new Set([...(_seDefaultPool3 ? [_seDefaultPool3] : []), ..._seChosen3]));
+
+  } else {
+    const _eAllFields = (masterSettings.app1?.fields || []).map(f => f.name);
+    const _eAllSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name);
+    const _eAllLocations = [...new Set([..._eAllFields, ..._eAllSpecials])].sort();
+    const modalFields = [
+      { name: 'eventName', label: 'Event Name', type: 'text', default: ev.event },
+      { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
+      { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime }
+    ];
+    if (_eAllLocations.length > 0 && (ev.type === 'pinned' || ev.type === 'slot')) {
+      modalFields.push({ name: 'reservedFields', label: 'Reserve Locations (optional)', type: 'checkbox-group', options: _eAllLocations, default: ev.reservedFields || [] });
+    }
+    if (ev.type === 'league' || ev.type === 'specialty_league') {
+      const _gs = window.loadGlobalSettings?.() || {};
+      const _lbn = _gs.leaguesByName || {};
+      // Filter to leagues assigned to this event's grade.
+      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
+        _lbn[ln] && _lbn[ln].enabled !== false &&
+        Array.isArray(_lbn[ln].divisions) &&
+        _lbn[ln].divisions.includes(String(ev.division))
+      );
+      if (_gradeLeagues.length === 1) {
+        // Single league for this grade → assign silently, no picker.
+        if (ev.leagueName !== _gradeLeagues[0]) {
+          ev.leagueName = _gradeLeagues[0];
+          if (ev.event && (ev.event === 'League Game' || _lbn[ev.event])) ev.event = _gradeLeagues[0];
+        }
+      } else if (_gradeLeagues.length > 1) {
+        modalFields.splice(1, 0, {
+          name: 'leagueName', label: 'Which League? (required)', type: 'select',
+          options: [{ value: '', label: '— Choose a league —' }].concat(_gradeLeagues.map(ln => ({ value: ln, label: ln }))),
+          default: _gradeLeagues.includes(ev.leagueName) ? ev.leagueName : ''
+        });
+      }
+    }
+    const result = await daShowModal({ title: 'Edit Event', fields: modalFields });
+    if (!result || !result.eventName?.trim()) return;
+    ev.event = result.eventName.trim(); ev.startTime = result.startTime; ev.endTime = result.endTime;
+    if (result.reservedFields !== undefined) {
+      ev.reservedFields = result.reservedFields;
+      ev.location = result.reservedFields.length === 1 ? result.reservedFields[0] : (result.reservedFields.length > 1 ? null : ev.location);
+    }
+    if (result.leagueName !== undefined) { ev.leagueName = result.leagueName; if (result.leagueName) ev.event = result.leagueName; }
+  }
+
+  // Re-stamp travel info since location may have changed
+  const _editTravelLoc = ev.location || (Array.isArray(ev.reservedFields) && ev.reservedFields[0]) || '';
+  if (_editTravelLoc) {
+    const _eti = window.getTravelForField?.(_editTravelLoc, true) || window.getTravelForSpecialActivity?.(_editTravelLoc, true);
+    if (_eti) {
+      ev._travelPre = _eti.preMin;
+      ev._travelPost = _eti.postMin;
+      ev._travelZone = _eti.zoneName;
+      ev._travelMode = _eti.mode;
+    } else {
+      delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+    }
+  } else {
+    delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
+  }
+
+  saveDailySkeleton();
+  renderGrid();
+}
+
+async function copyTile(id) {
+  const ev = dailyOverrideSkeleton.find(e => e.id === id);
+  if (!ev) return;
+  const others = getColumnOrder().filter(d => d !== ev.division);
+  if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
+  const result = await daShowModal({
+    title: 'Copy Tile to Grades',
+    description: `Copy "${ev.event}" (${ev.startTime}–${ev.endTime}) to:`,
+    fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
+  });
+  if (!result || !result.targets?.length) return;
+  result.targets.forEach(div => {
+    dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
+  });
+  saveDailySkeleton();
+  renderGrid();
 }
 
 // =================================================================
 // LOAD/SAVE
 // =================================================================
-function loadDailySkeleton() {
+// =================================================================
+// AUTO MODE: Load layer template for today (independent from MS)
+// =================================================================
+function loadDAAutoLayers() {
+  const g = window.loadGlobalSettings?.() || {};
+  const autoTemplates = g.app1?.autoLayerTemplates || {};
+  // Use live API for assignments so we always get the latest data
+  const assignments = window.getSkeletonAssignments?.() || g.app1?.skeletonAssignments || {};
+  
+  const dateStr = window.currentScheduleDate || '';
+  const [Y, M, D] = dateStr.split('-').map(Number);
+  let dow = 0;
+  if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const today = dayNames[dow];
+  
+let tmpl = assignments[today] || assignments['Default'];
+  console.log('[DailyAdj] Auto mode: loading layer template for', today, '→', tmpl || '(none)');
+  
+  // Priority 1: Day-specific saved layers (localStorage)
+  const dateKey = window.currentScheduleDate || '';
+  const dayLayerKey = `campAutoLayers_${dateKey}`;
+  let loaded = false;
+  try {
+    const stored = localStorage.getItem(dayLayerKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && Object.keys(parsed).length > 0) {
+        daAutoLayers = parsed;
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+      }
+    }
+  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  
+  // Priority 2: Day-specific saved layers (cloud)
+  if (!loaded) {
+    try {
+      const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+      if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+        localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        loaded = true;
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+      }
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
+  }
+  
+  // Priority 3: Template fallback
+  if (!loaded) {
+    if (tmpl && autoTemplates[tmpl]) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+    } else if (autoTemplates['_current']) {
+      daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+    } else {
+      daAutoLayers = {};
+    }
+    console.log('[DailyAdj] Loaded auto layers from template:', tmpl || '_current');
+  }
+  
+  // If empty, seed with division keys
+  if (Object.keys(daAutoLayers).length === 0) {
+    const divisions = window.divisions || {};
+    Object.keys(divisions).forEach(d => {
+      const div = divisions[d];
+      if (div.isParent) return;
+      daAutoLayers[d] = [];
+    });
+  }
+  
+ console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
+}
+
+function saveDAAutoLayers() {
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    return;
+  }
+  if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
+  const dateKey = window.currentScheduleDate;
+  try {
+    localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
+  try {
+    if (!masterSettings.app1) masterSettings.app1 = {};
+    if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
+    window.saveGlobalSettings?.('app1', masterSettings.app1);
+    window.forceSyncToCloud?.();
+  } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
+}
+
+  function loadDailySkeleton() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
@@ -2410,6 +4000,8 @@ function loadDailySkeleton() {
       if (parsed && parsed.length > 0) {
         dailyOverrideSkeleton = parsed;
         window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+        const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
+        if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
         console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
         return;
       }
@@ -2417,7 +4009,7 @@ function loadDailySkeleton() {
   } catch (e) {
     console.warn('[DailyAdj] Failed to load from localStorage:', e);
   }
-  
+
   // Priority 2: Cloud
   try {
     const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
@@ -2426,6 +4018,11 @@ function loadDailySkeleton() {
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
+        saveColumnOrder(cloudOrder);
+        localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
+      }
       console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from CLOUD`);
       return;
     }
@@ -2442,16 +4039,17 @@ function loadDailySkeleton() {
     return;
   }
   
-  // Priority 4: Template
+  // Priority 4: Template — use LIVE API functions so we always get the latest data
+  // (masterSettings.app1 is a snapshot from init and can be stale)
   console.log('[DailyAdj] No saved skeleton found, loading from template...');
-  const assignments = masterSettings.app1?.skeletonAssignments || {};
-  const skeletons = masterSettings.app1?.savedSkeletons || {};
+  const assignments = window.getSkeletonAssignments?.() || masterSettings.app1?.skeletonAssignments || {};
+  const skeletons = window.getSavedSkeletons?.() || masterSettings.app1?.savedSkeletons || {};
   const [Y, M, D] = dateKey.split('-').map(Number);
   let dow = 0;
   if (Y && M && D) dow = new Date(Y, M - 1, D).getDay();
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   let tmpl = assignments[dayNames[dow]] || assignments["Default"];
-  console.log('[DailyAdj] Loading template:', tmpl || '(none)');
+  console.log('[DailyAdj] Loading template:', tmpl || '(none)', '| assignments:', JSON.stringify(assignments), '| skeletons available:', Object.keys(skeletons));
   dailyOverrideSkeleton = (tmpl && skeletons[tmpl]) ? JSON.parse(JSON.stringify(skeletons[tmpl])) : [];
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
 }
@@ -2469,16 +4067,19 @@ function saveDailySkeleton() {
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
     localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+    localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(getColumnOrder()));
   } catch (e) {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
   }
-  
+
   // Save to cloud
   try {
     if (!masterSettings.app1.dailySkeletons) {
       masterSettings.app1.dailySkeletons = {};
     }
     masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
+    masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }
@@ -2488,6 +4089,32 @@ function saveDailySkeleton() {
   
   window.dailyOverrideSkeleton = dailyOverrideSkeleton;
   window.forceSyncToCloud?.();
+}
+
+function daGetConflictingFacilities(startTime, endTime, excludeId) {
+  var s = parseTimeToMinutes(startTime), e = parseTimeToMinutes(endTime);
+  if (s === null || e === null) return new Set();
+  var taken = new Set();
+  (dailyOverrideSkeleton || []).forEach(function(ev) {
+    if (ev.id === excludeId || ev.type !== 'elective') return;
+    var es = parseTimeToMinutes(ev.startTime), ee = parseTimeToMinutes(ev.endTime);
+    if (es === null || ee === null) return;
+    if (s < ee && e > es) (ev.electiveActivities || []).forEach(function(a) { taken.add(a); });
+  });
+  return taken;
+}
+
+function daGetSportFacilitiesMap() {
+  var gs = window.loadGlobalSettings?.() || {};
+  var map = {};
+  (gs.app1?.fields || []).forEach(function(f) {
+    (f.activities || []).forEach(function(act) {
+      var key = typeof act === 'string' ? act : (act.name || String(act));
+      if (!map[key]) map[key] = [];
+      if (f.name && map[key].indexOf(f.name) === -1) map[key].push(f.name);
+    });
+  });
+  return map;
 }
 
 function parseTimeToMinutes(str) {
@@ -2525,6 +4152,216 @@ function uid() {
 // =================================================================
 // TOOLBAR
 // =================================================================
+// =========================================================================
+// ★★★ v3.13: GENERATION SCOPE PICKER ★★★
+// =========================================================================
+
+function _getGenScopeBtnLabel() {
+  // ★ Day 22.5: Reflect per-bunk scope when partial.
+  if (_generationBunkScope && _generationBunkScope.size > 0) {
+    return '⚙ ' + _generationBunkScope.size + ' Bunks';
+  }
+  if (!_generationScope) return '⚙ All Divisions';
+  const count = _generationScope.size;
+  const total = Object.keys(window.divisions || {}).length;
+  if (count === 0) return '⚙ None Selected';
+  if (count === total) return '⚙ All Divisions';
+  return '⚙ ' + count + '/' + total + ' Divisions';
+}
+
+function _showGenScopePopover(anchorBtn) {
+  const existing = document.getElementById('da-gen-scope-popover');
+  if (existing) { existing.remove(); return; }
+
+  const divisions = window.divisions || {};
+  const divNames = Object.keys(divisions);
+  if (divNames.length === 0) return;
+
+  const popover = document.createElement('div');
+  popover.id = 'da-gen-scope-popover';
+  popover.style.cssText = 'position:absolute;z-index:10000;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 8px 30px rgba(0,0,0,0.15);width:320px;max-height:70vh;display:flex;flex-direction:column;';
+
+  // Header
+  let html = '<div style="padding:12px 16px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">';
+  html += '<span style="font-weight:600;font-size:14px;color:#1e293b;">Generation Scope</span>';
+  html += '<button id="da-gen-scope-close" style="background:none;border:none;font-size:18px;color:#94a3b8;cursor:pointer;padding:0;line-height:1;">&times;</button>';
+  html += '</div>';
+
+  // Quick actions
+  html += '<div style="padding:8px 16px;display:flex;gap:8px;border-bottom:1px solid #f1f5f9;">';
+  html += '<button id="da-gen-scope-all" class="da-btn da-btn-sm da-btn-ghost">Select All</button>';
+  html += '<button id="da-gen-scope-none" class="da-btn da-btn-sm da-btn-ghost">Clear All</button>';
+  html += '</div>';
+
+  // Division list with bunks
+  html += '<div style="padding:8px 16px;overflow-y:auto;flex:1;">';
+  divNames.forEach(divName => {
+    const div = divisions[divName];
+    const bunks = div.bunks || [];
+    const divInScope = !_generationScope || _generationScope.has(divName);
+    // ★ Day 22.5: per-bunk preselection — if a bunk scope exists, only the
+    //   checked bunks are pre-checked. Otherwise division checkbox drives all.
+    const bunksInDiv = _generationBunkScope
+      ? bunks.filter(b => _generationBunkScope.has(b)).length
+      : (divInScope ? bunks.length : 0);
+    const divChecked = bunksInDiv === bunks.length && bunks.length > 0;
+    const divPartial = bunksInDiv > 0 && bunksInDiv < bunks.length;
+    const divColor = div.color || '#6366f1';
+
+    html += '<div class="da-gen-scope-div" data-division="' + divName + '" style="margin-bottom:10px;">';
+    html += '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;padding:6px 0;">';
+    html += '<input type="checkbox" class="da-gen-scope-div-cb" data-div="' + divName + '" '
+         + (divChecked ? 'checked ' : '')
+         + 'style="width:16px;height:16px;accent-color:' + divColor + ';">';
+    html += '<span style="font-weight:600;font-size:13px;color:#1e293b;">' + divName + '</span>';
+    html += '<span style="font-size:11px;color:#94a3b8;">(' + bunks.length + ' bunks)</span>';
+    html += '</label>';
+
+    // Individual bunk checkboxes
+    if (bunks.length > 0) {
+      html += '<div class="da-gen-scope-bunks" style="margin-left:28px;display:flex;flex-wrap:wrap;gap:4px;">';
+      bunks.forEach(bunk => {
+        const bunkChecked = _generationBunkScope
+          ? _generationBunkScope.has(bunk)
+          : divInScope;
+        html += '<label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;padding:2px 6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;font-size:11px;color:#475569;">';
+        html += '<input type="checkbox" class="da-gen-scope-bunk-cb" data-div="' + divName + '" data-bunk="' + bunk + '" ' + (bunkChecked ? 'checked' : '') + ' style="width:12px;height:12px;accent-color:' + divColor + ';">';
+        html += bunk;
+        html += '</label>';
+      });
+      html += '</div>';
+    }
+    html += '</div>';
+  });
+  html += '</div>';
+
+  // Footer
+  html += '<div style="padding:10px 16px;border-top:1px solid #e2e8f0;background:#f8fafc;border-radius:0 0 10px 10px;display:flex;justify-content:flex-end;gap:8px;">';
+  html += '<button id="da-gen-scope-apply" class="da-btn da-btn-primary da-btn-sm">Apply</button>';
+  html += '</div>';
+
+  popover.innerHTML = html;
+
+  // Position below the button
+  const rect = anchorBtn.getBoundingClientRect();
+  const toolbar = anchorBtn.closest('.da-toolbar') || anchorBtn.parentElement;
+  const toolbarRect = toolbar.getBoundingClientRect();
+  popover.style.top = (rect.bottom + 4) + 'px';
+  popover.style.right = (window.innerWidth - rect.right) + 'px';
+  popover.style.position = 'fixed';
+
+  document.body.appendChild(popover);
+
+  // ★ Day 22.5: set indeterminate on division checkboxes that are partial on init
+  popover.querySelectorAll('.da-gen-scope-div-cb').forEach(divCb => {
+    const divName = divCb.dataset.div;
+    const bunkCbs = popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]');
+    if (bunkCbs.length === 0) return;
+    const checkedCount = [...bunkCbs].filter(b => b.checked).length;
+    if (checkedCount > 0 && checkedCount < bunkCbs.length) {
+      divCb.indeterminate = true;
+    }
+  });
+
+  // Close button
+  document.getElementById('da-gen-scope-close').onclick = () => popover.remove();
+
+  // Select All
+  document.getElementById('da-gen-scope-all').onclick = () => {
+    popover.querySelectorAll('.da-gen-scope-div-cb, .da-gen-scope-bunk-cb').forEach(cb => cb.checked = true);
+  };
+
+  // Clear All
+  document.getElementById('da-gen-scope-none').onclick = () => {
+    popover.querySelectorAll('.da-gen-scope-div-cb, .da-gen-scope-bunk-cb').forEach(cb => cb.checked = false);
+  };
+
+  // Division checkbox toggles all its bunks
+  popover.querySelectorAll('.da-gen-scope-div-cb').forEach(divCb => {
+    divCb.onchange = () => {
+      const divName = divCb.dataset.div;
+      const checked = divCb.checked;
+      popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]').forEach(b => b.checked = checked);
+    };
+  });
+
+  // Bunk checkbox updates division checkbox state
+  popover.querySelectorAll('.da-gen-scope-bunk-cb').forEach(bunkCb => {
+    bunkCb.onchange = () => {
+      const divName = bunkCb.dataset.div;
+      const allBunks = popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]');
+      const allChecked = [...allBunks].every(b => b.checked);
+      const someChecked = [...allBunks].some(b => b.checked);
+      const divCb = popover.querySelector('.da-gen-scope-div-cb[data-div="' + divName + '"]');
+      if (divCb) {
+        divCb.checked = allChecked;
+        divCb.indeterminate = someChecked && !allChecked;
+      }
+    };
+  });
+
+  // Apply
+  document.getElementById('da-gen-scope-apply').onclick = () => {
+    const checkedDivs = new Set();
+    popover.querySelectorAll('.da-gen-scope-div-cb:checked').forEach(cb => checkedDivs.add(cb.dataset.div));
+    // Also include divisions where at least one bunk is checked
+    popover.querySelectorAll('.da-gen-scope-bunk-cb:checked').forEach(cb => checkedDivs.add(cb.dataset.div));
+
+    const allDivs = Object.keys(window.divisions || {});
+    if (checkedDivs.size === 0 || checkedDivs.size === allDivs.length) {
+      // ★ Day 22.5: Even when ALL divisions are checked, check for partial-bunk
+      //   selection within any of them. If every bunk is also checked, no constraint.
+      //   Otherwise, build a bunk-level scope.
+      const divisions = window.divisions || {};
+      const allBunks = [];
+      Object.keys(divisions).forEach(d => (divisions[d]?.bunks || []).forEach(b => allBunks.push(b)));
+      const checkedBunks = new Set();
+      popover.querySelectorAll('.da-gen-scope-bunk-cb:checked').forEach(cb => checkedBunks.add(cb.dataset.bunk));
+      if (checkedBunks.size === 0 || checkedBunks.size === allBunks.length) {
+        _generationScope = null;
+        _generationBunkScope = null;
+      } else {
+        // Partial bunks across (potentially) all divisions
+        _generationScope = new Set();
+        checkedBunks.forEach(b => {
+          const ownerDiv = Object.keys(divisions).find(d => (divisions[d]?.bunks || []).includes(b));
+          if (ownerDiv) _generationScope.add(ownerDiv);
+        });
+        _generationBunkScope = checkedBunks;
+      }
+    } else {
+      _generationScope = checkedDivs;
+      // ★ Day 22.5: Build per-bunk scope when any included division is partial.
+      //   If every bunk in every checked div is checked, no per-bunk constraint.
+      const divisions = window.divisions || {};
+      const bunkScope = new Set();
+      let anyPartial = false;
+      let totalAvailable = 0;
+      checkedDivs.forEach(divName => {
+        const divBunks = divisions[divName]?.bunks || [];
+        totalAvailable += divBunks.length;
+        const checkedInDiv = [...popover.querySelectorAll('.da-gen-scope-bunk-cb[data-div="' + divName + '"]:checked')]
+          .map(cb => cb.dataset.bunk);
+        if (checkedInDiv.length < divBunks.length) anyPartial = true;
+        checkedInDiv.forEach(b => bunkScope.add(b));
+      });
+      _generationBunkScope = (anyPartial && bunkScope.size > 0) ? bunkScope : null;
+    }
+
+    popover.remove();
+    renderToolbar();
+  };
+
+  // Click outside to close
+  const closeOnOutside = (e) => {
+    if (!popover.contains(e.target) && e.target !== anchorBtn) {
+      popover.remove();
+      document.removeEventListener('mousedown', closeOnOutside);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeOnOutside), 0);
+}
+
 function renderToolbar() {
   const toolbar = document.getElementById('da-skeleton-toolbar');
   if (!toolbar) return;
@@ -2533,47 +4370,110 @@ function renderToolbar() {
   const names = Object.keys(savedSkeletons).sort();
   const loadOptions = names.map(n => `<option value="${n}">${n}</option>`).join('');
   
+  // ★ In auto mode, show auto layer templates instead of skeleton templates
+  const isAutoMode = window._daBuilderMode === 'auto';
+  const autoTemplates = isAutoMode ? (masterSettings.app1?.autoLayerTemplates || {}) : {};
+  const autoNames = Object.keys(autoTemplates).filter(n => n !== '_current').sort();
+  const autoLoadOptions = autoNames.map(n => `<option value="${n}">${n}</option>`).join('');
+  
   toolbar.innerHTML = `
     <div class="da-toolbar-group">
       <span class="da-toolbar-label">Template:</span>
       <select id="da-load-select" class="da-select">
         <option value="">Load...</option>
-        ${loadOptions}
+        ${isAutoMode ? autoLoadOptions : loadOptions}
       </select>
     </div>
     
     <div class="da-toolbar-group">
+      <button id="da-copy-grade-btn" class="da-btn da-btn-ghost">Copy Grade</button>
       <button id="da-clear-btn" class="da-btn da-btn-ghost">Clear All</button>
-      ${window.SkeletonSandbox ? '<button id="da-conflict-rules-btn" class="da-btn da-btn-ghost">⚙️ Rules</button>' : ''}
+      ${window.SkeletonSandbox ? '<button id="da-conflict-rules-btn" class="da-btn da-btn-ghost">Rules</button>' : ''}
     </div>
     
     <div style="flex:1;"></div>
-    
+
     <div class="da-toolbar-group">
+      ${isAutoMode ? '<button id="da-periods-btn" class="da-btn da-btn-ghost">Bell Schedule</button>' : ''}
+      ${(() => {
+        // ★ Day 24: show Bunk Overrides button in BOTH manual and auto modes.
+        //   Auto-mode reuses the same toggle + storage; the rendered grid
+        //   picks dawLayers vs dailyOverrideSkeleton based on the active mode.
+        const ovCount = (currentOverrides.bunkActivityOverrides || []).length;
+        const badge = ovCount > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + ovCount + '</span>' : '';
+        return '<button id="da-bunk-view-btn" class="da-btn da-btn-ghost' + (_boBunkViewActive ? ' active' : '') + '" style="' + (_boBunkViewActive ? 'background:#f59e0b;color:#fff;border-color:#f59e0b;' : '') + '">Bunk Overrides' + badge + '</button>';
+      })()}
+      <button id="da-trips-btn" class="da-btn da-btn-ghost">Trips${(() => { const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0]; const tc = loadDailyTrips(dateKey).length; return tc > 0 ? ' <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;">' + tc + '</span>' : ''; })()}</button>
+      <button id="da-gen-scope-btn" class="da-btn da-btn-ghost" title="Choose which divisions to generate">${_getGenScopeBtnLabel()}</button>
       <button id="da-generate-btn" class="da-btn da-btn-success">▶ Generate Schedule</button>
     </div>
   `;
   
-  document.getElementById('da-load-select').onchange = async function() {
+ document.getElementById('da-load-select').onchange = async function() {
     const name = this.value;
-    if (name && savedSkeletons[name]) {
-      const ok = await daShowConfirm('Load template "' + name + '"?');
-      if (ok) {
-        dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
-        clearDisplacedTiles();
-        saveDailySkeleton();
-        renderGrid();
+    if (!name) return;
+    
+    if (isAutoMode) {
+      // ★ Auto mode: load auto layer template
+      if (autoTemplates[name]) {
+        const ok = await daShowConfirm('Load auto template "' + name + '"?');
+        if (ok) {
+          daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
+          saveDAAutoLayers();
+          console.log('[DailyAdj] Loaded auto template:', name);
+          renderGrid();
+        }
+      }
+    } else {
+      // Manual mode: load skeleton template
+      if (savedSkeletons[name]) {
+        const ok = await daShowConfirm('Load template "' + name + '"?');
+        if (ok) {
+          dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
+          window._autoGeneratedSchedule = false;
+          window._autoBuildTimelines = null;
+          clearDisplacedTiles();
+          saveDailySkeleton();
+          renderGrid();
+        }
       }
     }
     this.value = '';
   };
   
+  document.getElementById('da-copy-grade-btn').onclick = () => {
+    // ★ Auto mode uses a different data shape (daAutoLayers: {grade:[layers]})
+    //   than manual mode (dailyOverrideSkeleton: [events with .division]).
+    //   Previously the button always handed manual-mode skeleton to
+    //   daShowCopyGradeModal, so in auto mode the modal saw zero events
+    //   and the Copy did nothing visible.
+    if (isAutoMode) {
+      daShowCopyAutoGradeModal(daAutoLayers, (updatedLayers) => {
+        daAutoLayers = updatedLayers;
+        saveDAAutoLayers();
+        renderGrid();
+      });
+    } else {
+      daShowCopyGradeModal(dailyOverrideSkeleton, (updated) => {
+        dailyOverrideSkeleton = updated;
+        saveDailySkeleton();
+        renderGrid();
+      });
+    }
+  };
+
   document.getElementById('da-clear-btn').onclick = async () => {
-    const ok = await daShowConfirm('Clear all blocks?', { danger: true, confirmText: 'Clear All' });
+    const ok = await daShowConfirm(isAutoMode ? 'Clear all layers?' : 'Clear all blocks?', { danger: true, confirmText: 'Clear All' });
     if (ok) {
-      dailyOverrideSkeleton = [];
-      saveDailySkeleton();
-      renderGrid();
+      if (isAutoMode) {
+        Object.keys(daAutoLayers).forEach(k => { daAutoLayers[k] = []; });
+        saveDAAutoLayers();
+        renderGrid();
+      } else {
+        dailyOverrideSkeleton = [];
+        saveDailySkeleton();
+        renderGrid();
+      }
     }
   };
   
@@ -2587,6 +4487,78 @@ function renderToolbar() {
   }
   
   document.getElementById('da-generate-btn').onclick = runOptimizer;
+
+  document.getElementById('da-gen-scope-btn').onclick = (e) => {
+    e.stopPropagation();
+    _showGenScopePopover(e.currentTarget);
+  };
+
+  const daPeriodsBtn = document.getElementById('da-periods-btn');
+  if (daPeriodsBtn) {
+    daPeriodsBtn.onclick = () => {
+      const panel = document.getElementById('da-period-panel');
+      if (!panel) return;
+      const isOpen = panel.style.display !== 'none';
+      if (isOpen) {
+        panel.style.display = 'none';
+      } else {
+        panel.style.display = 'block';
+        if (typeof window.PeriodEditor?.renderEditor === 'function') {
+          window.PeriodEditor.renderEditor(panel);
+        }
+      }
+    };
+  }
+
+  // Bunk View toggle — single click; avoid renderToolbar() which would rebuild
+  // the toolbar DOM and trigger a second-click-needed bug when reopening.
+  const bunkViewBtn = document.getElementById('da-bunk-view-btn');
+  if (bunkViewBtn) {
+    bunkViewBtn.onclick = () => {
+      _boBunkViewActive = !_boBunkViewActive;
+      _boToggleView();
+      // Manually update button visual state without re-rendering the whole toolbar
+      if (_boBunkViewActive) {
+        bunkViewBtn.classList.add('active');
+        bunkViewBtn.style.cssText = 'background:#f59e0b;color:#fff;border-color:#f59e0b;';
+      } else {
+        bunkViewBtn.classList.remove('active');
+        bunkViewBtn.style.cssText = '';
+      }
+    };
+  }
+
+  // Trips popover toggle
+  const tripsBtn = document.getElementById('da-trips-btn');
+  if (tripsBtn) {
+    tripsBtn.onclick = () => {
+      const existing = document.getElementById('da-trips-popover');
+      if (existing) { existing.remove(); return; }
+      _showTripsPopover(tripsBtn);
+    };
+  }
+}
+
+function _boToggleView() {
+  const skeletonView = document.getElementById('da-view-skeleton');
+  const gridWrapper = document.querySelector('.da-grid-wrapper');
+  const boContainer = document.getElementById('da-bunk-overrides-container');
+  // MS layout uses different wrapper
+  const msGridWrapper = document.querySelector('.ms-grid-wrapper');
+  const autoView = document.getElementById('da-view-auto-layers');
+
+  if (_boBunkViewActive) {
+    if (msGridWrapper) msGridWrapper.style.display = 'none';
+    if (gridWrapper) gridWrapper.style.display = 'none';
+    if (autoView) autoView.style.display = 'none';
+    if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
+  } else {
+    if (msGridWrapper) msGridWrapper.style.display = '';
+    if (gridWrapper) gridWrapper.style.display = '';
+    if (autoView) autoView.style.display = '';
+    if (boContainer) boContainer.style.display = 'none';
+    renderGrid();
+  }
 }
 
 // =================================================================
@@ -2595,50 +4567,272 @@ function renderToolbar() {
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
-    if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
-    saveDailySkeleton();
 
+    // ★★★ v3.13: Apply generation scope from settings picker ★★★
+    if (_generationScope && _generationScope.size > 0) {
+        window.selectedDivisionsForGeneration = [..._generationScope];
+        console.log('[Optimizer] Generation scope applied:', [..._generationScope]);
+    } else {
+        delete window.selectedDivisionsForGeneration;
+    }
+
+   // ★★★ AUTO MODE: Full pipeline via scheduler_core_auto.js ★★★
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+        console.log('[Optimizer] AUTO MODE — routing to runAutoScheduler');
+
+        if (!window.runAutoScheduler) { await daShowAlert("Error: scheduler_core_auto.js not loaded."); return; }
+
+       // Reload daAutoLayers if empty — mirror loadDAAutoLayers() fallback chain
+        if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+            try {
+                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                // Priority 1: date-specific localStorage
+                const stored = localStorage.getItem('campAutoLayers_' + dateKey);
+                if (stored) {
+                    daAutoLayers = JSON.parse(stored);
+                    console.log('[Optimizer] Loaded daAutoLayers from localStorage:', Object.keys(daAutoLayers));
+                }
+                // Priority 2: date-specific cloud
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+                    if (cloudLayers && Object.keys(cloudLayers).length > 0) {
+                        daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
+                        console.log('[Optimizer] Loaded daAutoLayers from cloud:', Object.keys(daAutoLayers));
+                    }
+                }
+                // Priority 3: template fallback (skeletonAssignments → autoLayerTemplates)
+                if (!daAutoLayers || Object.keys(daAutoLayers).length === 0) {
+                    const g = window.loadGlobalSettings?.() || {};
+                    const autoTemplates = g.app1?.autoLayerTemplates || {};
+                    const assignments = g.app1?.skeletonAssignments || {};
+                    const [Y, M, D] = dateKey.split('-').map(Number);
+                    const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+                    const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+                    const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+                    if (tmpl && autoTemplates[tmpl]) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]));
+                        console.log('[Optimizer] Loaded daAutoLayers from template:', tmpl);
+                    } else if (autoTemplates['_current']) {
+                        daAutoLayers = JSON.parse(JSON.stringify(autoTemplates['_current']));
+                        console.log('[Optimizer] Loaded daAutoLayers from _current template');
+                    }
+                }
+            } catch(e) {
+                console.warn('[Optimizer] Failed to load daAutoLayers:', e);
+            }
+        }
+
+        // Flatten grade-keyed layers into a single array
+        const allLayers = [];
+        Object.keys(daAutoLayers).forEach(grade => {
+            (daAutoLayers[grade] || []).forEach(layer => {
+                allLayers.push({ ...layer, grade: grade });
+            });
+        });
+
+        if (allLayers.length === 0) { await daShowAlert("No layers defined. Add layers before generating."); return; }
+
+        try {
+            window.invalidateSmartLogicSpecialsCache?.();
+            const scopeDivisions = _generationScope ? [..._generationScope] : null;
+            const scopeBunks = _generationBunkScope ? [..._generationBunkScope] : null;
+            // ★ Day 22.5: install per-bunk gate read by getBunksForGrade inside solver
+            if (scopeBunks) window.__allowedBunkSet = new Set(scopeBunks.map(String));
+            let success = false;
+            try {
+                success = await window.runAutoScheduler(allLayers, { allowedDivisions: scopeDivisions, allowedBunks: scopeBunks });
+            } finally {
+                delete window.__allowedBunkSet;
+            }
+            // ★ Day 22.5 IRON GATE: inline post-gen time-rule scrub.
+            //   Runs SYNCHRONOUSLY after runAutoScheduler returns, BEFORE the
+            //   schedule-generated event dispatches / save / UI re-render.
+            //   Reads from dedicated key (primary) + dailyData + LS fallback.
+            try {
+                const _dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                let _rules = null;
+                try {
+                    const _enf = localStorage.getItem('campTimeRulesEnforce_' + _dk);
+                    if (_enf) { const p = JSON.parse(_enf); if (p && Object.keys(p).length > 0) _rules = p; }
+                } catch (_e) {}
+                if (!_rules) {
+                    const _dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+                    if (_dd && Object.keys(_dd).length > 0) _rules = _dd;
+                }
+                if (!_rules) {
+                    try {
+                        const _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                        if (_s) { const _p = JSON.parse(_s); if (_p?.dailyFieldAvailability && Object.keys(_p.dailyFieldAvailability).length > 0) _rules = _p.dailyFieldAvailability; }
+                    } catch (_e) {}
+                }
+                if (_rules) {
+                    const _sa = window.scheduleAssignments || {};
+                    const _divs = window.divisions || {};
+                    let _cleared = 0;
+                    for (const [_bunk, _slots] of Object.entries(_sa)) {
+                        if (!Array.isArray(_slots)) continue;
+                        let _grade = null;
+                        for (const [_d, _info] of Object.entries(_divs)) {
+                            if ((_info.bunks || []).includes(_bunk)) { _grade = _d; break; }
+                        }
+                        for (let _i = 0; _i < _slots.length; _i++) {
+                            const _s = _slots[_i];
+                            if (!_s || _s.continuation) continue;
+                            const _field = (typeof _s.field === 'object') ? _s.field?.name : _s.field;
+                            if (!_field || _field === 'Free') continue;
+                            const _sM = _s._startMin, _eM = _s._endMin;
+                            if (_sM == null || _eM == null) continue;
+                            const _rs = _rules[_field];
+                            if (!Array.isArray(_rs) || _rs.length === 0) continue;
+                            let _bad = false, _hasAvail = false, _inside = false;
+                            for (const _r of _rs) {
+                                const _t = String(_r.type || '').toLowerCase();
+                                const _iU = _t === 'unavailable' || _r.available === false;
+                                const _iA = _t === 'available' || _r.available === true;
+                                const _rsM = _r.startMin ?? null, _reM = _r.endMin ?? null;
+                                if (_rsM == null || _reM == null) continue;
+                                if (Array.isArray(_r.divisions) && _r.divisions.length > 0
+                                    && _grade != null && !_r.divisions.map(String).includes(String(_grade))) continue;
+                                if (_iU && _rsM < _eM && _reM > _sM) { _bad = true; break; }
+                                if (_iA) { _hasAvail = true; if (_sM >= _rsM && _eM <= _reM) _inside = true; }
+                            }
+                            if (!_bad && _hasAvail && !_inside) _bad = true;
+                            if (_bad) {
+                                _slots[_i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: _sM, _endMin: _eM, _source: 'iron-gate-inline', _violationReason: 'DA time rule on ' + _field, continuation: false };
+                                _cleared++;
+                            }
+                        }
+                    }
+                    if (_cleared > 0) console.warn('[IRON GATE INLINE] cleared ' + _cleared + ' time-rule violation(s)');
+                }
+            } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
+            delete window.selectedDivisionsForGeneration;
+            if (success) {
+                // Match the manual builder's completion flow: confirm popup,
+                // then jump to the schedule view with a clean re-render.
+                try {
+                    document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+                        detail: { date: window.currentScheduleDate || new Date().toISOString().split('T')[0], mode: 'auto' }
+                    }));
+                } catch (_) { /* non-fatal */ }
+                await daShowAlert("✅ Schedule Generated!");
+                window.showTab?.('schedule');
+                const schedEl = document.getElementById('scheduleTable');
+                if (schedEl) schedEl.innerHTML = '';
+                window.renderStaggeredView?.();
+            } else {
+                await daShowAlert("Auto scheduler did not complete successfully.");
+            }
+        } catch (e) {
+            console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
+            await daShowAlert("Auto scheduler error: " + e.message);
+        }
+        return; // ← hard return — never reaches runSkeletonOptimizer
+    } else {
+        // Manual mode: original check
+        if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+    }
+    
+   // Only persist to manual skeleton storage paths in manual mode.
+    // In auto mode the skeleton was already saved via saveCurrentDailyData above.
+    if (window._daBuilderMode !== 'auto') {
+        saveDailySkeleton();
+    }
     if (window.SchedulerCoreUtils?.hydrateLocalStorageFromCloud) {
         await window.SchedulerCoreUtils.hydrateLocalStorageFromCloud();
     }
 
-  // ★★★ PRE-GENERATION CLEAR (v4 — FULL WIPE) ★★★
-  const dateKey = window.currentScheduleDate;
-  console.log('[Optimizer] ★ PRE-GENERATION FULL WIPE for', dateKey);
+   
+    
 
-  // 1. Clear window globals
-  window.scheduleAssignments = {};
-  window.leagueAssignments = {};
+    // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
+  const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
+  const allDivKeys = Object.keys(window.divisions || {});
+  const isPartialWipe = (scopeBunksForWipe && scopeBunksForWipe.length > 0)
+      || (scopeDivsForWipe && scopeDivsForWipe.length > 0 && scopeDivsForWipe.length < allDivKeys.length);
 
-  // 2. NUKE today's entry from ALL localStorage keys that store schedule data
-  try {
-      // Primary daily data store
+  console.log('[Optimizer] ★ PRE-GENERATION WIPE for', dateKey, '(partial:', isPartialWipe, ')');
+
+  // Preserve user-defined inputs across the wipe — these are not generated data
+  const savedBunkOverrides = currentOverrides.bunkActivityOverrides || [];
+  const savedResourceOverrides = {
+    overrides: {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    },
+    dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+    dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+    disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+  };
+
+  if (isPartialWipe) {
+    // ═══ PARTIAL: Only wipe selected bunks (or selected-division bunks) ═══
+    const divisions = window.divisions || {};
+    const myBunks = new Set();
+    if (scopeBunksForWipe && scopeBunksForWipe.length > 0) {
+      // Per-bunk scope: wipe only the explicitly-selected bunks
+      scopeBunksForWipe.forEach(b => myBunks.add(b));
+      console.log('[Optimizer] Partial wipe (per-bunk): clearing', myBunks.size, 'bunks');
+    } else {
+      (scopeDivsForWipe || []).forEach(divName => {
+        (divisions[divName]?.bunks || divisions[String(divName)]?.bunks || []).forEach(b => myBunks.add(b));
+      });
+      console.log('[Optimizer] Partial wipe: clearing', myBunks.size, 'bunks from [' + (scopeDivsForWipe || []).join(', ') + ']');
+    }
+    myBunks.forEach(bunk => {
+      delete window.scheduleAssignments?.[bunk];
+      delete window.leagueAssignments?.[bunk];
+    });
+
+    // Partial localStorage clear — only remove selected bunks, not the whole date
+    try {
+      const DAILY_KEY = 'campDailyData_v1';
+      const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+      if (allData[dateKey]) {
+        myBunks.forEach(bunk => {
+          delete allData[dateKey]?.scheduleAssignments?.[bunk];
+          delete allData[dateKey]?.leagueAssignments?.[bunk];
+        });
+        localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+      }
+      console.log('[Optimizer] Partial localStorage clear for', myBunks.size, 'bunks');
+    } catch (e) {
+      console.warn('[Optimizer] localStorage partial clear failed:', e);
+    }
+  } else {
+    // ═══ FULL: Wipe everything ═══
+    window.scheduleAssignments = {};
+    window.leagueAssignments = {};
+
+    try {
       const DAILY_KEY = 'campDailyData_v1';
       const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
       if (allData[dateKey]) {
           delete allData[dateKey];
           localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
       }
-      
-      // Also check the orchestrator's key
       const ORCH_KEY = 'campistry_schedule_data';
       const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
       if (orchData[dateKey]) {
           delete orchData[dateKey];
           localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
       }
-      
       console.log('[Optimizer] Nuked localStorage entries for', dateKey);
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] localStorage nuke failed:', e);
-  }
+    }
 
-  // 3. Delete from cloud so no system can rehydrate stale data
-  try {
+    // Delete from cloud (full wipe only)
+    try {
       const client = window.CampistryDB?.getClient?.() || window.supabase;
       const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
       if (client && campId) {
-          // Await this one — we need cloud clean BEFORE generation starts
           const { error } = await client
               .from('daily_schedules')
               .delete()
@@ -2647,28 +4841,53 @@ async function runOptimizer() {
           if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
           else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
       }
-  } catch (e) {
+    } catch (e) {
       console.warn('[Optimizer] Cloud delete failed:', e);
+    }
   }
 
-  // 4. Clear GlobalFieldLocks
+  // Clear GlobalFieldLocks
   if (window.GlobalFieldLocks?.clearAllLocks) {
       window.GlobalFieldLocks.clearAllLocks();
   }
 
-  // 5. Block rehydration during generation
+  // Block rehydration during generation
   window._preGenClearActive = true;
   window._generationInProgress = true;
 
-  console.log('[Optimizer] ★ FULL WIPE COMPLETE. Running optimizer...');
+  console.log('[Optimizer] ★ WIPE COMPLETE. Running optimizer...');
+
   // ★★★ END PRE-GENERATION CLEAR ★★★
 
-  const success = window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides);
+  // Restore user-defined inputs so the scheduler can read them from loadCurrentDailyData
+  if (savedBunkOverrides.length > 0) {
+    window.saveCurrentDailyData("bunkActivityOverrides", savedBunkOverrides);
+    currentOverrides.bunkActivityOverrides = savedBunkOverrides;
+    console.log(`[Optimizer] Restored ${savedBunkOverrides.length} bunk override(s) after wipe`);
+  }
+  window.saveCurrentDailyData("overrides", savedResourceOverrides.overrides);
+  window.saveCurrentDailyData("dailyDisabledSportsByField", savedResourceOverrides.dailyDisabledSportsByField);
+  window.saveCurrentDailyData("dailyFieldAvailability", savedResourceOverrides.dailyFieldAvailability);
+  window.saveCurrentDailyData("disabledSpecialtyLeagues", savedResourceOverrides.disabledSpecialtyLeagues);
+  console.log(`[Optimizer] Restored resource overrides after wipe (${savedResourceOverrides.overrides.disabledFields.length} disabled fields, ${savedResourceOverrides.overrides.leagues.length} disabled leagues)`);
 
-  // ★★★ POST-GENERATION CLEANUP ★★★
-  window._preGenClearActive = false;
+  window.invalidateSmartLogicSpecialsCache?.();
+  let success = false;
+  try {
+    const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
+    // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
+    if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
+    success = await window.runSkeletonOptimizer(dailyOverrideSkeleton, currentOverrides, scopeDivsManual);
+  } finally {
+    // ★★★ POST-GENERATION CLEANUP — always clear even if generation throws ★★★
+    window._preGenClearActive = false;
+    window._generationInProgress = false;
+    delete window.selectedDivisionsForGeneration;
+    delete window.__allowedBunkSet;
+  }
 
-  if (success) {
+if (success) {
       // Force save the fresh schedule to ALL storage layers immediately
       try {
           const freshData = {
@@ -2679,341 +4898,1406 @@ async function runOptimizer() {
               isRainyDay: window.isRainyDay || false,
               rainyDayStartTime: window.rainyDayStartTime ?? null
           };
-
-          // Save to BOTH localStorage keys
-          const DAILY_KEY = 'campDailyData_v1';
-          const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
-          allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
-          localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
-
-          const ORCH_KEY = 'campistry_schedule_data';
-          const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
-          orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
-          localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
-
+          // Save to localStorage (best-effort — may be full)
+          try {
+              const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+              const DAILY_KEY = 'campDailyData_v1';
+              const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
+              allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
+              const dKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
+              if (dKeys.length > 5) { dKeys.sort(); dKeys.slice(0, dKeys.length - 5).forEach(k => delete allData[k]); }
+              localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
+              const ORCH_KEY = 'campistry_schedule_data';
+              const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
+              orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
+              const oKeys = Object.keys(orchData).filter(k => DATE_RE.test(k));
+              if (oKeys.length > 5) { oKeys.sort(); oKeys.slice(0, oKeys.length - 5).forEach(k => delete orchData[k]); }
+              localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
+          } catch (e) {
+              if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
+          }
           // Save to cloud
           window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
-
-          console.log('[Optimizer] ★ Post-generation save complete:', 
+          console.log('[Optimizer] ★ Post-generation save complete:',
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
       } catch (e) {
           console.warn('[Optimizer] Post-generation save failed:', e);
       }
+      // Notify reports + any other listeners that the schedule for this date changed.
+      // Reports tab uses this to live-refresh availability/usage views.
+      try {
+          document.dispatchEvent(new CustomEvent('campistry-schedule-generated', {
+              detail: { date: dateKey, mode: 'manual' }
+          }));
+      } catch (e) { /* non-fatal */ }
 
-      await daShowAlert("✅ Schedule Generated!"); 
+      await daShowAlert("✅ Schedule Generated!");
       window.showTab?.('schedule');
+      // Force full re-render with clean state
+      const schedEl = document.getElementById('scheduleTable');
+      if (schedEl) schedEl.innerHTML = '';
+      window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
   }
-}// =================================================================
-// TRIPS FORM
+}
+  // =================================================================
+// DAILY TRIPS: Persistent load/save (survives reload + cloud sync)
+// =================================================================
+function loadDailyTrips(dateKey) {
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  let fromLS = null, fromCloud = null;
+
+  // Source 1: dedicated localStorage key (fast, survives cloud overwrites)
+  try {
+    const stored = localStorage.getItem('campDailyTrips_' + dateKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (Array.isArray(parsed) && parsed.length > 0) fromLS = parsed;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Source 2: dailyData (from cloud — authoritative after sync)
+  try {
+    const allDaily = window.loadAllDailyData?.() || {};
+    const dateData = allDaily[dateKey];
+    if (dateData && Array.isArray(dateData.dailyTrips) && dateData.dailyTrips.length > 0) {
+      fromCloud = dateData.dailyTrips;
+    }
+  } catch (e) { /* ignore */ }
+
+  // Merge: use whichever has more trips (handles partial sync)
+  let result = [];
+  if (fromLS && fromCloud) {
+    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+  } else {
+    result = fromLS || fromCloud || [];
+  }
+
+  // Cross-sync: ensure both sources have the data
+  if (result.length > 0) {
+    if (!fromLS) {
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(result)); } catch (e) { /* ignore */ }
+    }
+    if (!fromCloud) {
+      // Save to dailyData for cloud sync — use direct write to avoid currentScheduleDate dependency
+      try {
+        const allDaily = window.loadAllDailyData?.() || {};
+        if (!allDaily[dateKey]) allDaily[dateKey] = {};
+        allDaily[dateKey].dailyTrips = result;
+        allDaily[dateKey].updated_at = new Date().toISOString();
+        if (typeof window.saveGlobalSettings === 'function') {
+          window.saveGlobalSettings('daily_schedules', allDaily);
+        }
+      } catch (e) { /* ignore */ }
+    }
+  }
+
+  return result;
+}
+
+function saveDailyTrips(dateKey, trips) {
+  if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+
+  // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
+  try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(trips)); } catch (e) { /* ignore */ }
+
+  // 2. Save directly to dailyData using the SPECIFIC dateKey (not currentScheduleDate)
+  // This ensures trips for future dates are saved correctly
+  try {
+    const allDaily = window.loadAllDailyData?.() || {};
+    if (!allDaily[dateKey]) allDaily[dateKey] = {};
+    allDaily[dateKey].dailyTrips = trips;
+    allDaily[dateKey].updated_at = new Date().toISOString();
+    // Save to localStorage
+    const DAILY_DATA_KEY = 'campDailyData_v1';
+    localStorage.setItem(DAILY_DATA_KEY, JSON.stringify(allDaily));
+    // Sync to cloud
+    if (typeof window.saveGlobalSettings === 'function') {
+      window.saveGlobalSettings('daily_schedules', allDaily);
+    }
+  } catch (e) {
+    console.error('[saveDailyTrips] Cloud sync error:', e);
+  }
+}
+
+// Expose globally for other modules
+window.loadDailyTrips = loadDailyTrips;
+window.saveDailyTrips = saveDailyTrips;
+  // =================================================================
+// TRIPS POPOVER
 // =================================================================
 function renderTripsForm() {
-  const container = document.getElementById('da-trips-container');
-  if (!container) return;
-  
-  const divisions = window.availableDivisions || [];
-  
-  container.innerHTML = `
-    <div class="da-section">
-      <h3 class="da-section-title">Add Trip</h3>
-      <p class="da-section-desc">Add an off-campus trip. Overlapping events will be bumped.</p>
-      
-      <div class="da-form-grid">
-        <div class="da-form-field">
-          <label>Division</label>
-          <select id="da-trip-division" class="da-select">
-            <option value="">-- Select --</option>
-            ${divisions.map(d => `<option value="${d}">${d}</option>`).join("")}
-          </select>
+  const pop = document.getElementById('da-trips-popover');
+  if (pop) _renderTripsPopoverContent(pop);
+}
+
+function _showTripsPopover(anchorEl) {
+  const pop = document.createElement('div');
+  pop.id = 'da-trips-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.18);width:340px;max-height:480px;overflow:auto;padding:16px;';
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top = Math.min(rect.bottom + 6, window.innerHeight - 490) + 'px';
+  pop.style.right = Math.max(window.innerWidth - rect.right, 8) + 'px';
+  document.body.appendChild(pop);
+  _renderTripsPopoverContent(pop);
+
+  const closeHandler = (e) => {
+    if (!pop.contains(e.target) && e.target !== anchorEl && !anchorEl.contains(e.target)) {
+      pop.remove();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+let _tripEditId = null;
+
+function _renderTripsPopoverContent(pop) {
+  const allDivisions = window.availableDivisions || [];
+  const divColors = masterSettings.app1?.divisions || {};
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const existingTrips = loadDailyTrips(dateKey);
+
+  // Merge skeleton trip events not yet in the trips store (legacy manual-mode trips)
+  if (window._daBuilderMode !== 'auto' && dailyOverrideSkeleton) {
+    const tripIds = new Set(existingTrips.map(t => t.id));
+    dailyOverrideSkeleton.forEach(ev => {
+      if (ev.id && ev.id.startsWith('trip_') && !tripIds.has(ev.id)) {
+        existingTrips.push({ id: ev.id, event: ev.event, division: ev.division, startTime: ev.startTime, endTime: ev.endTime });
+      }
+    });
+    if (existingTrips.length > 0) saveDailyTrips(dateKey, existingTrips);
+  }
+
+  const editing = _tripEditId ? existingTrips.find(t => t.id === _tripEditId) : null;
+
+  let html = '<div style="font-weight:700;font-size:14px;margin-bottom:10px;">Trips</div>';
+
+  if (existingTrips.length > 0) {
+    existingTrips.forEach(t => {
+      const isEditing = editing && editing.id === t.id;
+      const divList = Array.isArray(t.division) ? t.division.join(', ') : t.division;
+      html += `<div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #f1f5f9;${isEditing ? 'background:#fffbeb;margin:0 -16px;padding:6px 16px;' : ''}">
+        <div>
+          <div style="font-weight:600;font-size:13px;">${_escHtml(t.event || 'Trip')}</div>
+          <div style="font-size:11px;color:#64748b;">${_escHtml(divList)} · ${t.startTime} – ${t.endTime}</div>
         </div>
-        <div class="da-form-field">
-          <label>Trip Name</label>
-          <input id="da-trip-name" type="text" placeholder="e.g. Six Flags" class="da-input" />
+        <div style="display:flex;gap:4px;">
+          <button class="da-trip-pop-edit" data-trip-id="${t.id}" style="background:none;border:none;color:#3b82f6;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">${isEditing ? 'Cancel' : 'Edit'}</button>
+          <button class="da-trip-pop-remove" data-trip-id="${t.id}" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:11px;font-weight:600;padding:4px 8px;">Remove</button>
         </div>
-        <div class="da-form-field">
-          <label>Start</label>
-          <input id="da-trip-start" type="text" placeholder="10:00am" class="da-input" />
-        </div>
-        <div class="da-form-field">
-          <label>End</label>
-          <input id="da-trip-end" type="text" placeholder="3:30pm" class="da-input" />
-        </div>
-      </div>
-      
-      <button id="da-apply-trip-btn" class="da-btn da-btn-primary" style="margin-top:16px;">Add Trip</button>
+      </div>`;
+    });
+    html += '<div style="height:10px;"></div>';
+  }
+
+  const prefill = editing || {};
+  const selectedDivs = editing ? (Array.isArray(editing.division) ? editing.division : [editing.division]) : [];
+  const btnLabel = editing ? 'Save Changes' : 'Add Trip';
+  const inputStyle = 'padding:6px 8px;border:1px solid #d1d5db;border-radius:6px;font-size:12px;font-family:inherit;';
+
+  html += `<div style="display:flex;flex-direction:column;gap:8px;">
+    <div style="font-size:11px;color:#64748b;font-weight:600;">Divisions</div>
+    <div id="da-trip-div-chips" style="display:flex;gap:4px;flex-wrap:wrap;">
+      ${allDivisions.map(d => {
+        const color = divColors[d]?.color || '#64748b';
+        const sel = selectedDivs.includes(d);
+        return `<button type="button" class="da-trip-div-chip" data-div="${_escHtml(d)}"
+          style="padding:4px 10px;border-radius:99px;border:1.5px solid ${color};cursor:pointer;font-size:11px;font-weight:600;font-family:inherit;
+          background:${sel ? color : '#fff'};color:${sel ? '#fff' : color};">${_escHtml(d)}</button>`;
+      }).join('')}
     </div>
-  `;
-  
-  document.getElementById("da-apply-trip-btn").onclick = () => {
-    const division = document.getElementById("da-trip-division").value;
-    const tripName = document.getElementById("da-trip-name").value.trim();
-    const startTime = document.getElementById("da-trip-start").value.trim();
-    const endTime = document.getElementById("da-trip-end").value.trim();
-    
-   if (!division || !tripName || !startTime || !endTime) { daShowAlert("Complete all fields."); return; }
+    <input id="da-trip-name" type="text" placeholder="Trip name" value="${_escHtml(prefill.event || '')}" style="${inputStyle}" />
+    <div style="display:flex;gap:6px;">
+      <input id="da-trip-start" type="text" placeholder="Start (10:00am)" value="${_escHtml(prefill.startTime || '')}" style="flex:1;${inputStyle}" />
+      <input id="da-trip-end" type="text" placeholder="End (3:30pm)" value="${_escHtml(prefill.endTime || '')}" style="flex:1;${inputStyle}" />
+    </div>
+    <button id="da-apply-trip-btn" style="padding:7px 0;background:#3b82f6;color:#fff;border:none;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;">${btnLabel}</button>
+  </div>`;
+
+  pop.innerHTML = html;
+
+  // Division chip toggle
+  const chipSelectedDivs = new Set(selectedDivs);
+  pop.querySelectorAll('.da-trip-div-chip').forEach(chip => {
+    chip.onclick = () => {
+      const d = chip.dataset.div;
+      const color = divColors[d]?.color || '#64748b';
+      if (chipSelectedDivs.has(d)) {
+        chipSelectedDivs.delete(d);
+        chip.style.background = '#fff';
+        chip.style.color = color;
+      } else {
+        chipSelectedDivs.add(d);
+        chip.style.background = color;
+        chip.style.color = '#fff';
+      }
+    };
+  });
+
+  // Add / Save
+  pop.querySelector('#da-apply-trip-btn').onclick = () => {
+    const selDivs = [...chipSelectedDivs];
+    const tripName = pop.querySelector('#da-trip-name').value.trim();
+    const startTime = pop.querySelector('#da-trip-start').value.trim();
+    const endTime = pop.querySelector('#da-trip-end').value.trim();
+    if (selDivs.length === 0 || !tripName || !startTime || !endTime) { daShowAlert("Select at least one division and fill all fields."); return; }
     const startMin = parseTimeToMinutes(startTime);
     const endMin = parseTimeToMinutes(endTime);
     if (startMin == null || endMin == null) { daShowAlert("Invalid time format. Use format like 9:00am or 2:30pm."); return; }
     if (endMin <= startMin) { daShowAlert("End time must be after start time."); return; }
-    
-    loadDailySkeleton();
-    const newEvent = { id: 'trip_' + Date.now(), type: "pinned", event: tripName, division, startTime, endTime, reservedFields: [] };
-    eraseOverlappingTiles(newEvent, division);
-    dailyOverrideSkeleton.push(newEvent);
-    saveDailySkeleton();
+
+    if (editing) {
+      // Update existing trip
+      const trips = loadDailyTrips(dateKey);
+      const idx = trips.findIndex(t => t.id === editing.id);
+      if (idx !== -1) {
+        trips[idx] = { ...trips[idx], event: tripName, division: selDivs.length === 1 ? selDivs[0] : selDivs, startTime, endTime, startMin, endMin };
+        saveDailyTrips(dateKey, trips);
+      }
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const oldIdx = dailyOverrideSkeleton.findIndex(e => e.id === editing.id);
+        if (oldIdx !== -1) dailyOverrideSkeleton.splice(oldIdx, 1);
+        selDivs.forEach(div => {
+          eraseOverlappingTiles({ startTime, endTime, division: div }, div);
+          dailyOverrideSkeleton.push({ id: editing.id + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] });
+        });
+        saveDailySkeleton();
+      }
+      _tripEditId = null;
+    } else {
+      // Add new trip(s) — one per division, always save to trips store
+      const trips = loadDailyTrips(dateKey);
+      selDivs.forEach(div => {
+        const tripId = 'trip_' + Date.now() + '_' + div;
+        trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
+      });
+      saveDailyTrips(dateKey, trips);
+
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        selDivs.forEach(div => {
+          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          eraseOverlappingTiles(newEvent, div);
+          dailyOverrideSkeleton.push(newEvent);
+        });
+        saveDailySkeleton();
+      }
+    }
+    _renderTripsPopoverContent(pop);
+    renderToolbar();
     renderGrid();
-    
-    document.querySelector('.da-subtab[data-tab="skeleton"]').click();
-    daShowAlert("✅ Trip added!");
-    document.getElementById("da-trip-name").value = "";
-    document.getElementById("da-trip-start").value = "";
-    document.getElementById("da-trip-end").value = "";
+  };
+
+  // Edit buttons
+  pop.querySelectorAll('.da-trip-pop-edit').forEach(btn => {
+    btn.onclick = () => {
+      _tripEditId = (_tripEditId === btn.dataset.tripId) ? null : btn.dataset.tripId;
+      _renderTripsPopoverContent(pop);
+    };
+  });
+
+  // Remove buttons
+  pop.querySelectorAll('.da-trip-pop-remove').forEach(btn => {
+    btn.onclick = () => {
+      const tripId = btn.dataset.tripId;
+      const trips = loadDailyTrips(dateKey).filter(t => t.id !== tripId);
+      saveDailyTrips(dateKey, trips);
+      if (window._daBuilderMode !== 'auto') {
+        loadDailySkeleton();
+        const idx = dailyOverrideSkeleton.findIndex(e => e.id === tripId);
+        if (idx !== -1) { dailyOverrideSkeleton.splice(idx, 1); saveDailySkeleton(); }
+      }
+      if (_tripEditId === tripId) _tripEditId = null;
+      _renderTripsPopoverContent(pop);
+      renderToolbar();
+      renderGrid();
+    };
+  });
+}
+
+
+// =================================================================
+// BUNK OVERRIDES UI — Visual per-bunk skeleton editor
+// =================================================================
+let _boSelectedDiv = null;
+let _boBunkViewActive = false;
+
+function _boGetActivityGroups() {
+  const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
+  const allFields = (masterSettings.app1?.fields || []).map(f => ({
+    name: f.name, activities: f.activities || [], isIndoor: f.rainyDayAvailable === true
+  }));
+  const allSportsSet = new Set();
+  allFields.forEach(f => (f.activities || []).forEach(act => allSportsSet.add(act)));
+  const allSpecials = [...new Set((masterSettings.app1?.specialActivities || []).map(s => s.name))].sort();
+  const locationZones = masterSettings.global?.locationZones || {};
+  const facilities = [];
+  Object.entries(locationZones).forEach(([zn, zone]) => {
+    if (zone && zone.locations) Object.keys(zone.locations).forEach(loc => {
+      facilities.push({ name: loc, zone: zn, displayName: loc + ' (' + zn + ')' });
+    });
+  });
+  return {
+    pinned: Object.entries(pinnedDefaults).sort(([a],[b]) => a.localeCompare(b)).map(([act, fac]) => ({
+      name: act, location: fac, type: 'pinned', label: act + ' → ' + fac
+    })),
+    facilities: facilities.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
+      name: f.name, location: f.name, type: 'pinned', label: f.displayName
+    })),
+    fields: allFields.sort((a,b) => a.name.localeCompare(b.name)).map(f => ({
+      name: f.name, location: f.name, type: 'field', label: f.name + (f.isIndoor ? ' 🏠' : '')
+    })),
+    specials: allSpecials.map(act => ({ name: act, location: null, type: 'special', label: act })),
+    sports: [...allSportsSet].sort().map(s => ({ name: s, location: null, type: 'sport', label: s }))
   };
 }
 
-// =================================================================
-// BUNK OVERRIDES UI
-// =================================================================
+function _boGetTileStyle(ev) {
+  let tile = TILES.find(t => t.name === ev.event);
+  if (!tile && ev.type) tile = TILES.find(t => t.type === ev.type);
+  if (!tile) {
+    if (ev.event === 'General Activity Slot') tile = TILES.find(t => t.type === 'activity');
+    else if (ev.event === 'Sports Slot') tile = TILES.find(t => t.type === 'sports');
+    else if (ev.event === 'Special Activity') tile = TILES.find(t => t.type === 'special');
+    else tile = TILES.find(t => t.type === 'custom');
+  }
+  return tile ? tile.style : 'background:#d1d5db;color:#374151;';
+}
+
+function _boSaveOverrides(overrides) {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  window.saveCurrentDailyData("bunkActivityOverrides", overrides);
+  try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(overrides)); } catch(e) {}
+  currentOverrides.bunkActivityOverrides = overrides;
+}
+
 function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
   if (!container) return;
-  
+
   const divisions = masterSettings.app1?.divisions || {};
-  const availableDivisions = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
-  const allBunksByDiv = {};
+  const _rawAvail = masterSettings.app1?.availableDivisions || window.availableDivisions || [];
+  // Order by the user's Campistry Me drag order via getUserDivisionOrder.
+  // Falls back to the raw list if the helper isn't loaded yet.
+  const availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder(_rawAvail.slice())
+    : _rawAvail.slice();
+
+  if (availableDivisions.length === 0) {
+    container.innerHTML = '<div class="da-empty-state">No divisions found.</div>';
+    return;
+  }
+
+  // Build header + grade selector
+  let html = '<div class="da-section">';
+  html += '<h3 class="da-section-title">Bunk-Level Overrides</h3>';
+  html += '<p class="da-section-desc">Select a grade to see its skeleton expanded per-bunk. Click any block to change it for that specific bunk.</p>';
+  html += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">';
   availableDivisions.forEach(divName => {
-    allBunksByDiv[divName] = (divisions[divName]?.bunks || []).sort((a, b) => {
-      const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-      const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-      return numA - numB || a.localeCompare(b);
-    });
+    const color = divisions[divName]?.color || '#64748b';
+    const active = _boSelectedDiv === divName;
+    html += `<button type="button" class="bo-div-btn${active ? ' active' : ''}" data-div="${_escHtml(divName)}"
+      style="padding:6px 14px;border-radius:8px;border:2px solid ${color};cursor:pointer;font-size:13px;font-weight:600;font-family:inherit;
+      background:${active ? color : '#fff'};color:${active ? '#fff' : color};">${_escHtml(divName)}</button>`;
   });
-  
-  // Get fields (from app1.fields) - these are the FIELD NAMES
-  const allFields = (masterSettings.app1?.fields || []).map(f => ({
-    name: f.name,
-    activities: f.activities || [],
-    isIndoor: f.rainyDayAvailable === true
-  }));
-  
-  // Get all sports (activities from fields)
-  const allSportsSet = new Set();
-  allFields.forEach(f => {
-    (f.activities || []).forEach(act => allSportsSet.add(act));
+  html += '</div></div>';
+
+  // Override count badge + clear all
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const divOverrides = _boSelectedDiv ? overrides.filter(o => {
+    const divForBunk = Object.keys(divisions).find(d => divisions[d]?.bunks?.includes(o.bunk));
+    return divForBunk === _boSelectedDiv;
+  }) : [];
+
+  if (overrides.length > 0) {
+    html += '<div class="da-section" style="margin-top:12px;padding:8px 14px;display:flex;align-items:center;justify-content:space-between;">';
+    html += `<span style="font-size:13px;color:#374151;"><strong>${overrides.length}</strong> override(s) total`;
+    if (_boSelectedDiv && divOverrides.length > 0) html += ` · <strong>${divOverrides.length}</strong> for ${_escHtml(_boSelectedDiv)}`;
+    html += '</span>';
+    html += '<button type="button" id="bo-clear-all" class="da-btn da-btn-danger da-btn-sm">Clear All Overrides</button>';
+    html += '</div>';
+  }
+
+  // Bunk grid (only if a division is selected)
+  html += '<div id="bo-bunk-grid-wrap"></div>';
+
+  container.innerHTML = html;
+
+  // Grade selector click handlers
+  container.querySelectorAll('.bo-div-btn').forEach(btn => {
+    btn.onclick = () => {
+      _boSelectedDiv = btn.dataset.div;
+      renderBunkOverridesUI();
+    };
   });
-  const allSports = [...allSportsSet].sort();
-  
-  // Get special activities
-  const allSpecials = (masterSettings.app1?.specialActivities || []).map(s => s.name).sort();
-  
-  // Get facilities from locationZones (Pool, Lunchroom, etc.)
-  const locationZones = masterSettings.global?.locationZones || {};
-  const facilities = [];
-  Object.entries(locationZones).forEach(([zoneName, zone]) => {
-    if (zone && zone.locations) {
-      Object.keys(zone.locations).forEach(locName => {
-        facilities.push({
-          name: locName,
-          zone: zoneName,
-          displayName: `${locName} (${zoneName})`
-        });
-      });
+
+  // Clear all handler
+  const clearBtn = container.querySelector('#bo-clear-all');
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      if (!confirm('Remove all bunk overrides?')) return;
+      _boSaveOverrides([]);
+      renderBunkOverridesUI();
+    };
+  }
+
+  // Render the bunk grid if a division is selected
+  if (_boSelectedDiv) {
+    // ★ Day 24: branch based on builder mode — auto uses dawLayers, manual uses dailyOverrideSkeleton
+    const isAutoMode = window._daBuilderMode === 'auto';
+    if (isAutoMode) {
+      _boRenderAutoBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
+    } else {
+      _boRenderBunkGrid(container.querySelector('#bo-bunk-grid-wrap'), _boSelectedDiv);
     }
+  }
+}
+
+// ★ Day 24: Auto-mode per-bunk grid — mirrors _boRenderBunkGrid layout (time
+//   column + per-bunk columns with full-width tiles, in-page) but reads from
+//   `dawLayers[grade]` instead of `dailyOverrideSkeleton`. Each layer becomes
+//   a full-width tile in each bunk's column. Click a tile to override.
+function _boRenderAutoBunkGrid(wrap, divName) {
+  if (!wrap) return;
+  const divisions = masterSettings.app1?.divisions || {};
+  const div = divisions[divName];
+  if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
+
+  const bunks = (div.bunks || []).slice().sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
+    return na - nb || a.localeCompare(b);
   });
-  
-  // Get pinned tile defaults (Swim → Pool, Lunch → Lunchroom, etc.)
-  const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
-  const pinnedActivities = Object.keys(pinnedDefaults);
-  
-  // Build grouped options
-  let activityOptions = '<option value="">-- Select Activity --</option>';
-  
-  // Pinned Activities group (Swim, Lunch, Snacks, etc.) - if available
-  if (pinnedActivities.length > 0) {
-    activityOptions += '<optgroup label="📌 Pinned Activities">';
-    pinnedActivities.sort().forEach(act => {
-      const facility = pinnedDefaults[act];
-      activityOptions += `<option value="${act}" data-type="pinned" data-location="${facility}">${act} → ${facility}</option>`;
-    });
-    activityOptions += '</optgroup>';
+  if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
+
+  // Pull the active auto layers for this grade for the current date.
+  // Storage: globalSettings.app1.dailyAutoLayers[YYYY-MM-DD][gradeName] = layers[]
+  const _gs = window.loadGlobalSettings?.() || {};
+  const _dal = _gs.app1?.dailyAutoLayers || {};
+  const _date = (window.currentScheduleDate || window.currentDate
+    || document.querySelector('input[type=date]')?.value || '').trim();
+  const _byGrade = (_dal[_date] || {});
+  const layers = ((_byGrade[divName] || []).slice()).sort((a, b) => a.startMin - b.startMin);
+  if (layers.length === 0) {
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
+    return;
   }
-  
-  // Facilities group (Pool, Lunchroom, etc.) - from locationZones
-  if (facilities.length > 0) {
-    activityOptions += '<optgroup label="🏢 Facilities">';
-    facilities.sort((a, b) => a.name.localeCompare(b.name)).forEach(fac => {
-      activityOptions += `<option value="${fac.name}" data-type="facility" data-location="${fac.name}">${fac.displayName}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Fields group (Hockey Arena, Baseball Field, etc.)
-  if (allFields.length > 0) {
-    activityOptions += '<optgroup label="🏟️ Fields">';
-    allFields.sort((a, b) => a.name.localeCompare(b.name)).forEach(field => {
-      const indoorBadge = field.isIndoor ? ' 🏠' : '';
-      activityOptions += `<option value="${field.name}" data-type="field" data-location="${field.name}">${field.name}${indoorBadge}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Special Activities group (Canteen, Gameroom, etc.)
-  if (allSpecials.length > 0) {
-    activityOptions += '<optgroup label="🎨 Special Activities">';
-    allSpecials.forEach(act => {
-      activityOptions += `<option value="${act}" data-type="special">${act}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  // Sports group (Basketball, Soccer, etc.)
-  if (allSports.length > 0) {
-    activityOptions += '<optgroup label="⚽ Sports">';
-    allSports.forEach(sport => {
-      activityOptions += `<option value="${sport}" data-type="sport">${sport}</option>`;
-    });
-    activityOptions += '</optgroup>';
-  }
-  
-  container.innerHTML = `
-    <div class="da-section">
-      <h3 class="da-section-title">Bunk-Specific Overrides</h3>
-      <p class="da-section-desc">Assign a specific activity to bunks at a specific time. This pins the activity for those bunks.</p>
-      
-      <div class="da-form-grid">
-        <div class="da-form-field" style="grid-column: span 2;">
-          <label>Select Activity:</label>
-          <select id="da-bunk-override-activity" class="da-select">${activityOptions}</select>
-        </div>
-        <div class="da-form-field">
-          <label>Start Time:</label>
-          <input id="da-bunk-override-start" placeholder="9:00am" class="da-input">
-        </div>
-        <div class="da-form-field">
-          <label>End Time:</label>
-          <input id="da-bunk-override-end" placeholder="10:00am" class="da-input">
-        </div>
-      </div>
-      
-      <p style="margin-top:16px;font-weight:600;">Select Bunks:</p>
-      <div id="da-bunk-chips"></div>
-      
-      <button id="da-add-override-btn" class="da-btn da-btn-primary" style="margin-top:16px;">Add Pinned Activity</button>
-    </div>
-    
-    <div class="da-section" style="margin-top:20px;">
-      <h4>Current Overrides</h4>
-      <div id="da-overrides-list"></div>
-    </div>
-  `;
-  
-  // Render bunk chips
-  const chipsContainer = document.getElementById('da-bunk-chips');
-  availableDivisions.forEach(divName => {
-    const bunks = allBunksByDiv[divName];
-    if (!bunks || bunks.length === 0) return;
-    
-    const divLabel = document.createElement('div');
-    divLabel.textContent = divName;
-    divLabel.style.cssText = 'font-weight:600;font-size:12px;color:#64748b;margin-top:8px;';
-    chipsContainer.appendChild(divLabel);
-    
-    const chipBox = document.createElement('div');
-    chipBox.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;';
-    bunks.forEach(bunkName => {
-      const chip = createChip(bunkName, divisions[divName]?.color || '#64748b');
-      chipBox.appendChild(chip);
-    });
-    chipsContainer.appendChild(chipBox);
+
+  // Compute time range from layers + grade window
+  const divStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
+  const divEnd   = parseTimeToMinutes(div.endTime)   || Math.max(...layers.map(l => l.endMin));
+  let earliestMin = divStart, latestMin = divEnd;
+  layers.forEach(l => {
+    if (l.startMin < earliestMin) earliestMin = l.startMin;
+    if (l.endMin > latestMin) latestMin = l.endMin;
   });
-  
-  // Add button handler
-  document.getElementById('da-add-override-btn').onclick = () => {
-    const activityEl = document.getElementById('da-bunk-override-activity');
-    const startEl = document.getElementById('da-bunk-override-start');
-    const endEl = document.getElementById('da-bunk-override-end');
-    const selectedBunks = Array.from(document.querySelectorAll('#da-bunk-chips .da-chip.selected')).map(el => el.dataset.value);
-    
-    const activity = activityEl.value;
-    const selectedOption = activityEl.options[activityEl.selectedIndex];
-    const activityType = selectedOption?.dataset?.type || 'special';
-    const location = selectedOption?.dataset?.location || null;
-    
-    // Determine type based on what was selected
-    let type = 'special';
-    if (activityType === 'pinned' || activityType === 'facility') {
-      type = 'pinned';
-    } else if (activityType === 'sport') {
-      type = 'sport';
-    }
-    
-   if (!activity) { daShowAlert('Please select an activity.'); return; }
-    if (!startEl.value || !endEl.value) { daShowAlert('Please enter a start and end time.'); return; }
-    if (selectedBunks.length === 0) { daShowAlert('Please select at least one bunk.'); return; }
-    const startMin = parseTimeToMinutes(startEl.value);
-    const endMin = parseTimeToMinutes(endEl.value);
-    
-    if (startMin == null || endMin == null || endMin <= startMin) {
-      daShowAlert('Invalid time range. Use format like 9:00am.');
-      return;
-    }
-    
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const overrides = dailyData.bunkActivityOverrides || [];
-    
-    selectedBunks.forEach(bunk => {
-      overrides.push({ 
-        id: uid(), 
-        bunk, 
-        activity, 
-        location,
-        startTime: startEl.value, 
-        endTime: endEl.value, 
-        type 
-      });
-    });
-    
-    window.saveCurrentDailyData("bunkActivityOverrides", overrides);
-    currentOverrides.bunkActivityOverrides = overrides;
-    
-    activityEl.value = "";
-    startEl.value = "";
-    endEl.value = "";
-    document.querySelectorAll('#da-bunk-chips .da-chip.selected').forEach(chip => chip.click());
-    renderBunkOverridesUI();
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+
+  const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+  const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+  const totalHeight = (latestMin - earliestMin) * PX;
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const color = div.color || '#64748b';
+
+  // Layer-type → tile background colour (matches the auto builder palette)
+  const TYPE_BG = {
+    sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
+    swim: '#cffafe', lunch: '#fecaca', snacks: '#fef3c7',
+    dismissal: '#fbcfe8', custom: '#e5e7eb',
+    league: '#fee2e2', specialty_league: '#fce7f3', elective: '#f5d0fe'
   };
-  
-  // Render existing overrides list
-  const listContainer = document.getElementById('da-overrides-list');
-  const overrides = currentOverrides.bunkActivityOverrides;
-  if (overrides.length === 0) {
-    listContainer.innerHTML = '<p style="color:#94a3b8;font-size:13px;">No overrides added yet.</p>';
-  } else {
-    listContainer.innerHTML = '';
-    overrides.forEach(item => {
-      const el = document.createElement('div');
-      el.className = 'da-override-item';
-      const locationInfo = item.location ? ` <span style="color:#059669;">@ ${item.location}</span>` : '';
-      const typeIcon = item.type === 'pinned' ? '📌' : (item.type === 'sport' ? '⚽' : '🎨');
-      el.innerHTML = `
-        <div>
-          <strong>${item.bunk}</strong> → <span style="color:#3b82f6;">${typeIcon} ${item.activity}</span>${locationInfo}
-          <div style="font-size:12px;color:#64748b;">${item.startTime} - ${item.endTime}</div>
-        </div>
-        <button class="da-btn da-btn-danger da-btn-sm" data-id="${item.id}">Remove</button>
-      `;
-      el.querySelector('button').onclick = () => {
-        let currentList = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
-        currentList = currentList.filter(o => o.id !== item.id);
-        window.saveCurrentDailyData("bunkActivityOverrides", currentList);
-        currentOverrides.bunkActivityOverrides = currentList;
+  const _typeLabel = (l) => {
+    const t = String(l.type || 'custom').toLowerCase();
+    const map = { sport: 'Sport', special: 'Special Activity', activity: 'Activity',
+                  swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
+                  custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
+                  elective: 'Elective' };
+    return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
+  };
+
+  // Each bunk column mirrors the master scheduler grade column EXACTLY —
+  // reuse the ms-daw-* CSS classes so the bands look pixel-identical.
+  const BAND_WIDTH = (typeof window.DAW_BAND_WIDTH === 'number') ? window.DAW_BAND_WIDTH : 40;
+  const BAND_GAP   = 4;
+  const BAND_PAD   = 4;
+  const GRADE_COL_MIN = 120;
+  const layerCount = Math.max(1, layers.length);
+  const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
+
+  // Outer wrap with horizontal scroll
+  let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
+
+  // Time ruler column (sticky left)
+  html += `<div class="ms-daw-ruler-col">`;
+  html += `<div class="ms-daw-ruler-header-spacer"></div>`;
+  html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += incMins) {
+    const top = (m - earliestMin) * PX;
+    const major = (m - earliestMin) % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${major ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
+  }
+  html += `</div></div>`;
+
+  // Bunk columns — one per bunk, styled like a grade column
+  bunks.forEach(bunk => {
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0
+      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;">${bunkOverrides.length}</span>`
+      : '';
+
+    html += `<div class="ms-daw-grade-col" data-bunk="${_escHtml(bunk)}" style="width:${colWidth}px;">`;
+    // Bunk header (re-uses .ms-daw-grade-header look but coloured by division)
+    html += `<div class="ms-daw-grade-header">
+      <span class="ms-daw-grade-tag" style="background:${color};">${_escHtml(bunk)}${badge}</span>
+    </div>`;
+    // Bunk track — earliest min stored on dataset for drag-drop time math
+    html += `<div class="ms-daw-track" data-earliest="${earliestMin}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+
+    // Horizontal gridlines (30-min increments)
+    for (let m = earliestMin; m < latestMin; m += incMins) {
+      const top = (m - earliestMin) * PX;
+      const cls = (m - earliestMin) % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
+    }
+
+    // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
+    layers.forEach((layer, idx) => {
+      const sm = layer.startMin, em = layer.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
+
+      const _ltKey = (layer.type || 'custom');
+      const override = overrides.find(o =>
+        o.bunk === bunk && o.startMin === sm && o.endMin === em
+        && o.layerType === _ltKey
+      );
+
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+      const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+      const durLabel = _dMin && _dMax && _dMin !== _dMax
+        ? `${_dMin}-${_dMax}m`
+        : `${_dMin || layer.periodMin || (em - sm)}m`;
+      const evName = _typeLabel(layer);
+
+      if (override) {
+        // Three override modes get different visual treatments:
+        //   • sportPool → green "pool of N sports" band
+        //   • delete   → grey hatched "deleted" band
+        //   • force / default → amber single-activity band
+        const mode = override.overrideMode || 'force';
+        let bandStyle, mainLabel, subLabel;
+        if (mode === 'sportPool') {
+          const poolCount = (override.sportPool || []).length;
+          bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+          mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+          subLabel  = (override.sportPool || []).join(' / ').slice(0, 28);
+        } else if (mode === 'delete') {
+          bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+          mainLabel = '— deleted —';
+          subLabel  = 'skipped for this bunk';
+        } else if (mode === 'resize') {
+          bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+          mainLabel = '⇕ resized';
+          subLabel  = minutesToTime(override.startMin) + '–' + minutesToTime(override.endMin);
+        } else {
+          bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+          mainLabel = override.activity;
+          subLabel  = 'override';
+        }
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click body to edit, drag edges to resize"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          <span class="band-label">${_escHtml(mainLabel)}</span>
+          <span class="band-qty">${_escHtml(subLabel)}</span>
+          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        </div>`;
+      } else {
+        html += `<div class="ms-daw-band bo-block bo-skeleton bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          <span class="band-label">${_escHtml(evName)}</span>
+          <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        </div>`;
+      }
+    });
+
+    // ★ Day 24: render added-layer overrides as extra bands after the grade
+    //   layers (positioned to the right of the last grade band).
+    const addedForBunk = overrides.filter(o => o.bunk === bunk && o.overrideMode === 'addLayer');
+    addedForBunk.forEach((ov, addIdx) => {
+      const sm = ov.startMin, em = ov.endMin;
+      if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
+      const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+      const evName = _typeLabel({ type: ov.layerType });
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="addLayer"
+        title="Added layer: ${_escHtml(evName)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, drag edges to resize"
+        style="background:${bg};color:#1e293b;box-shadow:0 0 0 2px #6366f1;top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+        <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        <span class="band-label">+ ${_escHtml(evName)}</span>
+        <span class="band-qty">added</span>
+        <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+        <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+      </div>`;
+    });
+
+    html += `</div></div>`; // /track /col
+  });
+
+  html += '</div></div>'; // /columns-wrap /scroll
+  wrap.innerHTML = html;
+
+  // Auto-mode bands → rich popover. Manual mode keeps the simple picker.
+  // Edge handles trigger drag-to-resize; clicking the body opens the popover.
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.onclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (e.target.classList.contains('band-resize')) return; // resize handles
+      const bunk = block.dataset.bunk;
+      const startMin = parseInt(block.dataset.start);
+      const endMin = parseInt(block.dataset.end);
+      const layerType = block.dataset.layerType;
+      _boShowAutoLayerPopover(block, bunk, startMin, endMin, layerType);
+    };
+  });
+
+  // ★ Day 24: drag-to-resize edge handles with ghost preview.
+  wrap.querySelectorAll('.bo-resizable .band-resize').forEach(handle => {
+    handle.onmousedown = (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+      const block = handle.parentElement;
+      if (!block) return;
+      const edge = handle.dataset.edge;
+      const track = block.parentElement; // .ms-daw-track
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+      const SNAP = 5; // snap to 5 minutes
+      const trackRect = track.getBoundingClientRect();
+      const trackEarliestMin = parseInt(track.dataset.earliest || '0') || (() => {
+        // Fallback: derive from first time-tick or fall back to band's startMin
+        return parseInt(block.dataset.start) - (parseInt(block.style.top || '0') / PX);
+      })();
+      const originalStart = parseInt(block.dataset.start);
+      const originalEnd   = parseInt(block.dataset.end);
+      const originalTop   = parseFloat(block.style.top || '0');
+      const originalHeight = parseFloat(block.style.height || '0');
+
+      // Ghost element
+      const ghost = document.createElement('div');
+      ghost.className = 'bo-resize-ghost';
+      ghost.style.cssText = `position:absolute;left:${block.style.left};width:${block.style.width};
+        background:rgba(245,158,11,0.18);border:2px dashed #f59e0b;border-radius:6px;
+        pointer-events:none;z-index:50;display:flex;align-items:center;justify-content:center;
+        font-size:10px;font-weight:700;color:#7c2d12;`;
+      ghost.style.top = block.style.top;
+      ghost.style.height = block.style.height;
+      ghost.textContent = `${minutesToTime(originalStart)}–${minutesToTime(originalEnd)}`;
+      track.appendChild(ghost);
+
+      let newStart = originalStart, newEnd = originalEnd;
+      const onMove = (ev) => {
+        const dyMin = (ev.clientY - e.clientY) / PX;
+        const dyMinSnapped = Math.round(dyMin / SNAP) * SNAP;
+        if (edge === 'top') {
+          newStart = Math.min(originalEnd - SNAP, Math.max(0, originalStart + dyMinSnapped));
+          newEnd = originalEnd;
+        } else {
+          newStart = originalStart;
+          newEnd = Math.max(originalStart + SNAP, originalEnd + dyMinSnapped);
+        }
+        const newTop = originalTop + (newStart - originalStart) * PX;
+        const newH = (newEnd - newStart) * PX;
+        ghost.style.top = newTop + 'px';
+        ghost.style.height = newH + 'px';
+        ghost.textContent = `${minutesToTime(newStart)}–${minutesToTime(newEnd)}`;
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        ghost.remove();
+        if (newStart === originalStart && newEnd === originalEnd) return;
+        // Save the resized override (creating one if this band was a skeleton)
+        const bunk = block.dataset.bunk;
+        const layerType = block.dataset.layerType;
+        const ovId = block.dataset.ovId;
+        let list = currentOverrides.bunkActivityOverrides || [];
+        if (ovId) {
+          // Update existing override's time range
+          list = list.map(o => o.id === ovId ? {
+            ...o,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd)
+          } : o);
+        } else {
+          // Skeleton band — create a new resize-only override with no activity.
+          // Storing the resize as overrideMode:'resize' so the solver knows
+          // this layer runs on a custom window for this bunk.
+          list = list.filter(o => !(o.bunk === bunk && o.startMin === originalStart && o.endMin === originalEnd && o.layerType === layerType));
+          list.push({
+            id: uid(), bunk,
+            startMin: newStart, endMin: newEnd,
+            startTime: minutesToTime(newStart), endTime: minutesToTime(newEnd),
+            originalStartMin: originalStart, originalEndMin: originalEnd,
+            layerType, overrideMode: 'resize',
+            activity: '⇕ resized', location: null, type: 'resize'
+          });
+        }
+        _boSaveOverrides(list);
         renderBunkOverridesUI();
       };
-      listContainer.appendChild(el);
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    };
+  });
+
+  // ★ Day 24: palette drag → drop a new bunk-only layer onto a bunk column.
+  //   Reads `text/daw-layer` (set by the DA palette tiles in `tile.dragstart`)
+  //   and writes an overrideMode:'addLayer' override at the drop time slot.
+  wrap.querySelectorAll('.ms-daw-grade-col[data-bunk]').forEach(col => {
+    col.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer?.types?.includes('text/daw-layer')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      col.style.outline = '2px dashed #f59e0b';
     });
+    col.addEventListener('dragleave', () => { col.style.outline = ''; });
+    col.addEventListener('drop', (e) => {
+      col.style.outline = '';
+      const layerType = e.dataTransfer.getData('text/daw-layer');
+      if (!layerType) return;
+      e.preventDefault();
+      // Find the track within this column and convert clientY → minutes
+      const track = col.querySelector('.ms-daw-track');
+      if (!track) return;
+      const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+      const rect = track.getBoundingClientRect();
+      const yOffset = e.clientY - rect.top;
+      const dropMin = (yOffset / PX) + (parseInt(track.dataset.earliest || '0') || 0);
+      // Default new layer to 40-min window starting at drop point, snapped to 5
+      const SNAP = 5;
+      const startMin = Math.max(0, Math.round(dropMin / SNAP) * SNAP);
+      const endMin = startMin + 40;
+      const bunk = col.dataset.bunk;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list.push({
+        id: uid(), bunk,
+        startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType, overrideMode: 'addLayer',
+        activity: '+ added layer', location: null, type: 'addLayer'
+      });
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    });
+  });
+
+  // Revert buttons on overrides
+  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const ovId = btn.parentElement?.dataset?.ovId;
+      if (!ovId) return;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    };
+  });
+}
+
+// ★ Day 24+: rich popover for auto-mode bunk override bands.
+//   Features:
+//     • Sport layer → multi-select sport pool (restrict bunk to those sports)
+//     • Non-sport layer → single-pick replacement activity
+//     • Time editor (start / end minutes, snapped to 5)
+//     • Delete-layer-for-this-bunk button
+//     • Save / Cancel
+function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
+  document.getElementById('bo-auto-popover')?.remove();
+  document.getElementById('bo-activity-picker')?.remove();
+
+  const groups = _boGetActivityGroups();
+  const _lt = String(layerType || 'custom').toLowerCase();
+  // Layer types that use a multi-select POOL pattern (pick which items from
+  // the pool the bunk can rotate through). Single-pick types use a different UI.
+  const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
+  const isPoolType = !!POOL_TYPES[_lt];
+
+  // Find existing override for this band (if any)
+  const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
+    o.bunk === bunk && o.startMin === startMin && o.endMin === endMin
+    && o.layerType === (layerType || 'custom')
+  );
+
+  const initPool = (existing?.sportPool && Array.isArray(existing.sportPool))
+    ? existing.sportPool.slice() : [];
+  let selectedSports = new Set(initPool); // reused for any pool-type override
+  let curStart = existing?.startMin ?? startMin;
+  let curEnd   = existing?.endMin   ?? endMin;
+  let pickedActivity = existing && !isPoolType ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+
+  const pop = document.createElement('div');
+  pop.id = 'bo-auto-popover';
+  pop.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,0.18);width:360px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column;';
+
+  const rect = anchorEl.getBoundingClientRect();
+  pop.style.top  = Math.min(rect.bottom + 6, window.innerHeight - 540) + 'px';
+  pop.style.left = Math.min(rect.left, window.innerWidth - 370) + 'px';
+
+  const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
+  const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
+
+  function render() {
+    pop.innerHTML = `
+      <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:linear-gradient(180deg,#f8fafc,#fff);">
+        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(layerLabel)} Layer</div>
+        <div style="font-size:12px;color:#475569;margin-top:2px;">${minutesToTime(curStart)} – ${minutesToTime(curEnd)}</div>
+      </div>
+      <div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:8px;align-items:center;">
+        <span style="font-size:11px;color:#64748b;font-weight:600;min-width:36px;">Time</span>
+        <input type="time" id="bo-pop-start" value="${_minutesToInputTime(curStart)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+        <span style="font-size:11px;color:#64748b;">to</span>
+        <input type="time" id="bo-pop-end" value="${_minutesToInputTime(curEnd)}" style="font-size:12px;padding:4px 6px;border:1px solid #cbd5e1;border-radius:6px;flex:1;" />
+      </div>
+      <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
+      <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="Skip this layer for ${_escHtml(bunk)} only — other bunks keep it">🗑 For ${_escHtml(bunk)}</button>
+        <button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>
+        <div style="flex:1;"></div>
+        <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
+        <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
+      </div>
+    `;
+
+    const body = pop.querySelector('#bo-pop-body');
+
+    // Helper: render a multi-select chip pool (used for sport / special / activity)
+    function renderPool(opts) {
+      const items = opts.items || [];
+      const icon  = opts.icon  || '✨';
+      const label = opts.label || layerLabel;
+      const desc  = opts.desc  || ('Allowed ' + label.toLowerCase() + ' for this bunk');
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          ${icon} ${_escHtml(desc)}:
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">
+          ${items.map(it => {
+            const on = selectedSports.has(it.name);
+            return `<button type="button" class="bo-pool-chip" data-name="${_escHtml(it.name)}"
+              style="padding:4px 10px;font-size:12px;border-radius:99px;cursor:pointer;
+              background:${on ? '#10b981' : '#fff'};color:${on ? '#fff' : '#475569'};
+              border:1.5px solid ${on ? '#10b981' : '#cbd5e1'};font-weight:600;">
+              ${on ? '✓ ' : ''}${_escHtml(it.name)}
+            </button>`;
+          }).join('')}
+        </div>
+        <div style="margin-top:8px;font-size:11px;color:#64748b;">
+          ${selectedSports.size} selected
+        </div>
+        <div style="margin-top:6px;font-size:11px;color:#94a3b8;font-style:italic;">
+          ${selectedSports.size === 0
+            ? 'No restriction — bunk follows the normal rotation.'
+            : 'During this layer, ' + bunk + ' will only receive the selected ' + label.toLowerCase() + '.'}
+        </div>`;
+      body.querySelectorAll('.bo-pool-chip').forEach(chip => {
+        chip.onclick = () => {
+          const name = chip.dataset.name;
+          if (selectedSports.has(name)) selectedSports.delete(name); else selectedSports.add(name);
+          render();
+        };
+      });
+    }
+
+    // Helper: render a single-pick option list (for swim/lunch/snacks/dismissal location pickers)
+    function renderSinglePick(opts) {
+      const cats = opts.cats || [];
+      const desc = opts.desc || ('Replace ' + layerLabel + ' for ' + bunk + ' with');
+      const icon = opts.icon || '🎯';
+      body.innerHTML = `
+        <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
+          ${icon} ${_escHtml(desc)}:
+        </div>
+        <div id="bo-pop-options"></div>`;
+      const root = body.querySelector('#bo-pop-options');
+      cats.forEach(cat => {
+        if (!cat.items?.length) return;
+        const grp = document.createElement('div');
+        grp.style.cssText = 'margin-bottom:8px;';
+        grp.innerHTML = `<div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:4px;">${cat.label}</div>`;
+        cat.items.forEach(it => {
+          const row = document.createElement('div');
+          const isPicked = pickedActivity?.name === it.name;
+          row.style.cssText = 'padding:4px 8px;font-size:12px;border-radius:4px;cursor:pointer;color:#374151;' + (isPicked ? 'background:#fef3c7;font-weight:600;color:#92400e;' : '');
+          row.textContent = it.label || it.name;
+          row.onclick = () => { pickedActivity = it; render(); };
+          row.onmouseenter = () => { if (!isPicked) row.style.background = '#f1f5f9'; };
+          row.onmouseleave = () => { if (!isPicked) row.style.background = ''; };
+          grp.appendChild(row);
+        });
+        root.appendChild(grp);
+      });
+    }
+
+    // Per-layer-type body
+    switch (_lt) {
+      case 'sport':
+        renderPool({ items: groups.sports, icon: '🏈', label: 'Sports', desc: 'Allowed sports for this bunk (program rotates only through these)' });
+        break;
+      case 'special':
+        renderPool({ items: groups.specials, icon: '🎨', label: 'Special Activities', desc: 'Allowed special activities for this bunk' });
+        break;
+      case 'activity':
+        renderPool({ items: groups.fields, icon: '🎯', label: 'Activities', desc: 'Allowed activity locations for this bunk' });
+        break;
+      case 'swim':
+        renderSinglePick({
+          icon: '🏊',
+          desc: 'Pick a custom Swim location for ' + bunk + ' (default: Pool)',
+          cats: [
+            { label: '📌 Pinned', items: (groups.pinned || []).filter(p => /pool|swim/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'lunch':
+        renderSinglePick({
+          icon: '🥪',
+          desc: 'Pick a custom Lunch location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /lunch|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'snacks':
+        renderSinglePick({
+          icon: '🍪',
+          desc: 'Pick a custom Snacks location for ' + bunk,
+          cats: [
+            { label: '📌 Common', items: (groups.pinned || []).filter(p => /snack|medrash|hall|dining/i.test(p.name)) },
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'dismissal':
+        renderSinglePick({
+          icon: '🚌',
+          desc: 'Pick a custom Dismissal location for ' + bunk,
+          cats: [
+            { label: '🏢 Facilities', items: groups.facilities }
+          ]
+        });
+        break;
+      case 'league':
+      case 'specialty_league':
+        renderPool({ items: groups.sports, icon: '🏆', label: 'League Sports', desc: 'Allowed league sports for ' + bunk });
+        break;
+      case 'elective':
+        renderPool({ items: groups.specials, icon: '✨', label: 'Electives', desc: 'Allowed electives for ' + bunk });
+        break;
+      case 'custom':
+      default:
+        renderSinglePick({
+          icon: '📌',
+          desc: 'Replace this ' + layerLabel + ' for ' + bunk + ' with',
+          cats: [
+            { label: '📌 Pinned Activities', items: groups.pinned },
+            { label: '🏢 Facilities', items: groups.facilities },
+            { label: '🏟️ Fields', items: groups.fields },
+            { label: '🎨 Special Activities', items: groups.specials },
+            { label: '⚽ Sports', items: groups.sports }
+          ]
+        });
+        break;
+    }
+
+    // Time inputs
+    pop.querySelector('#bo-pop-start').oninput = (e) => { curStart = _inputTimeToMinutes(e.target.value); };
+    pop.querySelector('#bo-pop-end').oninput   = (e) => { curEnd   = _inputTimeToMinutes(e.target.value); };
+
+    pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
+    pop.querySelector('#bo-pop-delete').onclick = () => {
+      // Delete-layer override for this bunk
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+      list.push({
+        id: uid(), bunk, startMin, endMin,
+        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+        layerType: layerType || 'custom',
+        overrideMode: 'delete',
+        activity: '— deleted —', location: null, type: 'delete'
+      });
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    // ★ Day 24: Delete the layer ENTIRELY from the grade (affects every bunk).
+    //   Modifies globalSettings.app1.dailyAutoLayers[date][grade] in place,
+    //   strips out the layer whose type+window matches, then persists via
+    //   saveGlobalSettings + cloud sync.
+    pop.querySelector('#bo-pop-delete-layer').onclick = () => {
+      if (!confirm('Delete the ' + layerLabel + ' layer entirely from ' + _boSelectedDiv + '? This affects every bunk in this grade.')) return;
+      try {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        gs.app1 = gs.app1 || {};
+        gs.app1.dailyAutoLayers = gs.app1.dailyAutoLayers || {};
+        const date = (window.currentScheduleDate || document.querySelector('input[type=date]')?.value || '').trim();
+        const day = gs.app1.dailyAutoLayers[date] = (gs.app1.dailyAutoLayers[date] || {});
+        const list = (day[_boSelectedDiv] || []).slice();
+        const _ltK = String(layerType || 'custom').toLowerCase();
+        const filtered = list.filter(l => !(String(l.type || '').toLowerCase() === _ltK && l.startMin === startMin && l.endMin === endMin));
+        day[_boSelectedDiv] = filtered;
+        if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(gs);
+        if (typeof window.forceSyncToCloud === 'function') window.forceSyncToCloud();
+        // Also drop any bunk overrides that targeted this exact layer (they no longer make sense)
+        let ovs = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+          !(o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        );
+        _boSaveOverrides(ovs);
+      } catch (e) { console.error('[bo] delete-layer failed', e); }
+      pop.remove();
+      renderBunkOverridesUI();
+    };
+
+    pop.querySelector('#bo-pop-save').onclick = () => {
+      if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
+      // Remove any existing override matching original time + layer
+      let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
+        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+      );
+
+      if (isPoolType) {
+        if (selectedSports.size === 0) {
+          // Empty pool = revert (no override needed)
+          _boSaveOverrides(list);
+          pop.remove();
+          renderBunkOverridesUI();
+          return;
+        }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: _lt,
+          overrideMode: 'sportPool', // unified pool semantic — solver filters candidates
+          sportPool: [...selectedSports],
+          activity: [...selectedSports].join(' / '),
+          location: null, type: 'sportPool'
+        });
+      } else {
+        if (!pickedActivity) { alert('Pick an option or click Cancel.'); return; }
+        list.push({
+          id: uid(), bunk,
+          startMin: curStart, endMin: curEnd,
+          startTime: minutesToTime(curStart), endTime: minutesToTime(curEnd),
+          layerType: _lt,
+          overrideMode: 'force',
+          activity: pickedActivity.name,
+          location: pickedActivity.location || null,
+          type: pickedActivity.type
+        });
+      }
+      _boSaveOverrides(list);
+      pop.remove();
+      renderBunkOverridesUI();
+    };
   }
+
+  document.body.appendChild(pop);
+  render();
+
+  // Close on outside click (skip clicks on the anchor itself)
+  setTimeout(() => {
+    const closeHandler = (e) => {
+      if (!pop.contains(e.target) && e.target !== anchorEl) {
+        pop.remove();
+        document.removeEventListener('mousedown', closeHandler);
+      }
+    };
+    document.addEventListener('mousedown', closeHandler);
+  }, 0);
+}
+
+// Helpers for <input type="time"> value <-> minutes-since-midnight
+function _minutesToInputTime(m) {
+  const h = Math.floor(m / 60), mm = m % 60;
+  return String(h).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+}
+function _inputTimeToMinutes(s) {
+  const [h, m] = (s || '0:0').split(':').map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+
+function _boRenderBunkGrid(wrap, divName) {
+  if (!wrap) return;
+  const divisions = masterSettings.app1?.divisions || {};
+  const div = divisions[divName];
+  if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
+
+  const bunks = (div.bunks || []).slice().sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
+    return na - nb || a.localeCompare(b);
+  });
+  if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
+
+  // Get skeleton events for this division
+  const divEvents = dailyOverrideSkeleton.filter(ev => ev.division === divName);
+  if (divEvents.length === 0) {
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No skeleton events for this division. Add events to the skeleton first.</p>';
+    return;
+  }
+
+  // Compute time range
+  const divStart = parseTimeToMinutes(div.startTime) || 540;
+  const divEnd = parseTimeToMinutes(div.endTime) || 960;
+  let earliestMin = divStart, latestMin = divEnd;
+  divEvents.forEach(ev => {
+    const s = parseTimeToMinutes(ev.startTime), e = parseTimeToMinutes(ev.endTime);
+    if (s != null && s < earliestMin) earliestMin = s;
+    if (e != null && e > latestMin) latestMin = e;
+  });
+  if (latestMin <= earliestMin) latestMin = earliestMin + 60;
+
+  const PX = PIXELS_PER_MINUTE;
+  const totalHeight = (latestMin - earliestMin) * PX;
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+  const color = div.color || '#64748b';
+
+  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+
+  // Header row
+  html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
+  bunks.forEach(bunk => {
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0 ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;">${bunkOverrides.length}</span>` : '';
+    html += `<div class="da-grid-header" style="background:${color};color:#fff;border-radius:6px 6px 0 0;font-size:11px;padding:6px 4px;text-align:center;">${_escHtml(bunk)}${badge}</div>`;
+  });
+
+  // Time column
+  html += `<div class="da-time-column" style="height:${totalHeight}px;">`;
+  for (let m = earliestMin; m < latestMin; m += INCREMENT_MINS) {
+    html += `<div class="da-time-marker" style="top:${(m - earliestMin) * PX}px;">${minutesToTime(m)}</div>`;
+  }
+  html += '</div>';
+
+  // Bunk columns
+  bunks.forEach(bunk => {
+    html += `<div class="da-grid-cell bo-bunk-col" data-bunk="${_escHtml(bunk)}" style="height:${totalHeight}px;position:relative;">`;
+
+    // Build merged view: for each skeleton block, check if there's an override for this bunk at that time
+    divEvents.forEach(ev => {
+      const evStart = parseTimeToMinutes(ev.startTime);
+      const evEnd = parseTimeToMinutes(ev.endTime);
+      if (evStart == null || evEnd == null || evEnd <= evStart) return;
+
+      // Check for override at this time slot for this bunk
+      const override = overrides.find(o =>
+        o.bunk === bunk && o.startMin === evStart && o.endMin === evEnd
+      );
+
+      const top = (evStart - earliestMin) * PX;
+      const height = Math.max((evEnd - evStart) * PX - 2, 24);
+
+      if (override) {
+        // Render the override block (highlighted)
+        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
+        let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${typeIcon}${_escHtml(override.activity)}</strong>`;
+          if (override.location) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(override.location)}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-override" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ov-id="${_escHtml(override.id)}"
+          title="OVERRIDE: ${_escHtml(override.activity)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to edit, right-click to revert"
+          style="${oStyle}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+          <div style="position:absolute;top:2px;right:4px;font-size:9px;cursor:pointer;" class="bo-revert-btn" title="Revert to original">✕</div>
+        </div>`;
+      } else {
+        // Render the skeleton block (normal)
+        const style = _boGetTileStyle(ev);
+        let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
+        const evName = ev.event || 'Event';
+        let content;
+        if (height < 35) {
+          content = `<span style="font-weight:600;font-size:${fontSize};">${_escHtml(evName)}</span>`;
+        } else {
+          content = `<strong style="font-size:${fontSize};">${_escHtml(evName)}</strong>`;
+          const locDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
+          if (locDisplay) content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locDisplay)}</div>`;
+        }
+        html += `<div class="da-event bo-block bo-skeleton" data-bunk="${_escHtml(bunk)}" data-start="${evStart}" data-end="${evEnd}" data-ev-type="${ev.type || 'slot'}"
+          title="${_escHtml(evName)} (${minutesToTime(evStart)}-${minutesToTime(evEnd)}) — Click to override for ${_escHtml(bunk)}"
+          style="${style}top:${top}px;height:${height}px;font-size:${fontSize};padding:3px 6px;cursor:pointer;position:absolute;left:2px;right:2px;border-radius:6px;overflow:hidden;">
+          ${content}
+        </div>`;
+      }
+    });
+
+    html += '</div>';
+  });
+
+  html += '</div>';
+  wrap.innerHTML = html;
+
+  // Attach click handlers on blocks
+  wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.onclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      const bunk = block.dataset.bunk;
+      const startMin = parseInt(block.dataset.start);
+      const endMin = parseInt(block.dataset.end);
+      _boShowPicker(block, bunk, startMin, endMin);
+    };
+  });
+
+  // Revert buttons on overrides
+  wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const block = btn.closest('.bo-override');
+      if (!block) return;
+      const ovId = block.dataset.ovId;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      renderBunkOverridesUI();
+    };
+  });
+}
+
+function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
+  // Remove any existing picker
+  const existing = document.getElementById('bo-activity-picker');
+  if (existing) existing.remove();
+  // layerType is optional — set only in auto-mode where multiple layers share
+  // the same time window and we need to disambiguate which one is overridden.
+  layerType = layerType || anchorEl?.dataset?.layerType || null;
+
+  const groups = _boGetActivityGroups();
+
+  const picker = document.createElement('div');
+  picker.id = 'bo-activity-picker';
+  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:400px;width:280px;overflow:auto;padding:8px 0;';
+
+  // Position near the clicked block
+  const rect = anchorEl.getBoundingClientRect();
+  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 410) + 'px';
+  picker.style.left = Math.min(rect.left, window.innerWidth - 290) + 'px';
+
+  // Header
+  const header = document.createElement('div');
+  header.style.cssText = 'padding:6px 12px;font-size:12px;color:#64748b;border-bottom:1px solid #e5e7eb;';
+  header.textContent = bunk + ' · ' + minutesToTime(startMin) + '-' + minutesToTime(endMin);
+  picker.appendChild(header);
+
+  // Revert option (if this is an override)
+  if (anchorEl.classList.contains('bo-override')) {
+    const revertRow = document.createElement('div');
+    revertRow.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:12px;color:#dc2626;font-weight:600;border-bottom:1px solid #e5e7eb;';
+    revertRow.textContent = '↩ Revert to grade skeleton';
+    revertRow.onmouseenter = () => { revertRow.style.background = '#fef2f2'; };
+    revertRow.onmouseleave = () => { revertRow.style.background = ''; };
+    revertRow.onclick = () => {
+      const ovId = anchorEl.dataset.ovId;
+      let list = currentOverrides.bunkActivityOverrides || [];
+      list = list.filter(o => o.id !== ovId);
+      _boSaveOverrides(list);
+      picker.remove();
+      renderBunkOverridesUI();
+    };
+    picker.appendChild(revertRow);
+  }
+
+  const categoryDefs = [
+    { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
+    { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
+    { key: 'fields', label: '🏟️ Fields', items: groups.fields },
+    { key: 'specials', label: '🎨 Special Activities', items: groups.specials },
+    { key: 'sports', label: '⚽ Sports', items: groups.sports }
+  ];
+
+  categoryDefs.forEach(cat => {
+    if (cat.items.length === 0) return;
+    const groupLabel = document.createElement('div');
+    groupLabel.style.cssText = 'padding:6px 12px 2px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;';
+    groupLabel.textContent = cat.label;
+    picker.appendChild(groupLabel);
+
+    cat.items.forEach(item => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;';
+      row.textContent = item.label;
+      row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
+      row.onmouseleave = () => { row.style.background = ''; };
+      row.onclick = () => {
+        _boApplyOverride(bunk, startMin, endMin, item, layerType);
+        picker.remove();
+      };
+      picker.appendChild(row);
+    });
+  });
+
+  document.body.appendChild(picker);
+
+  // Close on outside click
+  const closeHandler = (e) => {
+    if (!picker.contains(e.target) && e.target !== anchorEl) {
+      picker.remove();
+      document.removeEventListener('mousedown', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
+}
+
+function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
+  let overrides = currentOverrides.bunkActivityOverrides || [];
+  // Remove any existing override for this bunk + same time + same layer (or no
+  // layerType for legacy manual-mode overrides). Different layers at the same
+  // time (auto-mode floaters) coexist.
+  overrides = overrides.filter(o => !(
+    o.bunk === bunk
+    && o.startMin === startMin
+    && o.endMin === endMin
+    && (o.layerType || null) === (layerType || null)
+  ));
+  overrides.push({
+    id: uid(),
+    bunk: bunk,
+    activity: item.name,
+    location: item.location || null,
+    startTime: minutesToTime(startMin),
+    endTime: minutesToTime(endMin),
+    startMin: startMin,
+    endMin: endMin,
+    type: item.type,
+    layerType: layerType || null
+  });
+  _boSaveOverrides(overrides);
+  renderBunkOverridesUI();
 }
 
 function createChip(name, color) {
@@ -3052,10 +6336,8 @@ function renderResourceOverridesUI() {
     ${rainyBanner}
     <div class="da-resource-layout">
       <div class="da-resource-list">
-        <h4>Fields</h4>
-        <div id="da-override-fields-list"></div>
-        <h4 style="margin-top:16px;">Special Activities</h4>
-        <div id="da-override-specials-list"></div>
+        <h4>Facilities</h4>
+        <div id="da-override-facilities-list"></div>
         <h4 style="margin-top:16px;">Leagues</h4>
         <div id="da-override-leagues-list"></div>
         <h4 style="margin-top:16px;">Specialty Leagues</h4>
@@ -3071,48 +6353,78 @@ function renderResourceOverridesUI() {
   `;
   
   const saveOverrides = () => {
-    const dailyData = window.loadCurrentDailyData?.() || {};
-    const fullOverrides = dailyData.overrides || {};
-    fullOverrides.leagues = currentOverrides.leagues;
-    fullOverrides.disabledFields = currentOverrides.disabledFields;
-    fullOverrides.disabledSpecials = currentOverrides.disabledSpecials;
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    const fullOverrides = {
+      leagues: currentOverrides.leagues || [],
+      disabledFields: currentOverrides.disabledFields || [],
+      disabledSpecials: currentOverrides.disabledSpecials || []
+    };
+    // Save to dailyData (cloud sync)
     window.saveCurrentDailyData("overrides", fullOverrides);
     window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
     window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+    window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+    // ★ v7.0: Also save to dedicated localStorage key (survives cloud overwrites)
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: fullOverrides,
+        dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
+      fullOverrides.disabledFields.length + ' disabled fields, ' +
+      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
+      fullOverrides.leagues.length + ' disabled leagues');
   };
   
-  const fields = masterSettings.app1?.fields || [];
-  const fieldsListEl = document.getElementById("da-override-fields-list");
-  
-  fields.forEach(item => {
-    const isDisabled = currentOverrides.disabledFields.includes(item.name);
-    const isOutdoor = item.rainyDayAvailable !== true;
-    const isRainyDisabled = isRainy && isOutdoor;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
+  // Unified Facilities list (reads window.getFacilities() from facilities.js).
+  // Disabling a facility cascades to any special activities hosted at it so
+  // downstream scheduler logic that still consults disabledSpecials stays correct.
+  const facilitiesList = (typeof window.getFacilities === 'function')
+    ? (window.getFacilities() || [])
+    : [];
+  const legacyFields = masterSettings.app1?.fields || [];
+  const legacySpecials = masterSettings.app1?.specialActivities || [];
+
+  // facility name -> list of special-activity names hosted there
+  const specialsByLocation = {};
+  legacySpecials.forEach(s => {
+    if (s && s.location) {
+      (specialsByLocation[s.location] = specialsByLocation[s.location] || []).push(s.name);
+    }
+  });
+
+  const facilitiesListEl = document.getElementById("da-override-facilities-list");
+  facilitiesList.forEach(fac => {
+    const legacy = legacyFields.find(f => f.name === fac.name) || null;
+    const isDisabled = currentOverrides.disabledFields.includes(fac.name);
+    const isSportsFacility = Array.isArray(fac.usedFor) && fac.usedFor.includes('sports');
+    const isOutdoor = legacy ? (legacy.rainyDayAvailable !== true) : false;
+    const isRainyDisabled = isRainy && isOutdoor && isSportsFacility;
+    const hasTimeRules = (currentOverrides.dailyFieldAvailability[fac.name] || []).length > 0;
+
     const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledFields.includes(item.name)) currentOverrides.disabledFields.push(item.name);
+      const specialsHere = specialsByLocation[fac.name] || [];
+      if (isEnabled) {
+        currentOverrides.disabledFields = currentOverrides.disabledFields.filter(n => n !== fac.name);
+        if (specialsHere.length) {
+          currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(s => !specialsHere.includes(s));
+        }
+      } else {
+        if (!currentOverrides.disabledFields.includes(fac.name)) currentOverrides.disabledFields.push(fac.name);
+        specialsHere.forEach(s => {
+          if (!currentOverrides.disabledSpecials.includes(s)) currentOverrides.disabledSpecials.push(s);
+        });
+      }
       saveOverrides();
       renderResourceOverridesUI();
     };
-    
-    fieldsListEl.appendChild(createResourceToggleItem('field', item.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules));
-  });
-  
-  const specials = masterSettings.app1?.specialActivities || [];
-  const specialsListEl = document.getElementById("da-override-specials-list");
-  specials.forEach(item => {
-    const isDisabled = currentOverrides.disabledSpecials.includes(item.name);
-    const isRainyOnly = item.rainyDayOnly === true;
-    const hasTimeRules = (currentOverrides.dailyFieldAvailability[item.name] || []).length > 0;
-    
-    const onToggle = (isEnabled) => {
-      if (isEnabled) currentOverrides.disabledSpecials = currentOverrides.disabledSpecials.filter(n => n !== item.name);
-      else if (!currentOverrides.disabledSpecials.includes(item.name)) currentOverrides.disabledSpecials.push(item.name);
-      saveOverrides();
-    };
-    specialsListEl.appendChild(createResourceToggleItem('special', item.name, !isDisabled, onToggle, false, false, isRainyOnly, hasTimeRules));
+
+    facilitiesListEl.appendChild(
+      createResourceToggleItem('facility', fac.name, !isDisabled, onToggle, isOutdoor, isRainyDisabled, false, hasTimeRules)
+    );
   });
   
   const leagues = Object.keys(masterSettings.leaguesByName || {});
@@ -3134,7 +6446,7 @@ function renderResourceOverridesUI() {
     const onToggle = (isEnabled) => {
       if (isEnabled) currentOverrides.disabledSpecialtyLeagues = currentOverrides.disabledSpecialtyLeagues.filter(l => l !== name);
       else if (!currentOverrides.disabledSpecialtyLeagues.includes(name)) currentOverrides.disabledSpecialtyLeagues.push(name);
-      window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+      saveOverrides(); // ★ v7.0: Use unified save (includes dedicated localStorage key)
     };
     specialtyLeaguesListEl.appendChild(createResourceToggleItem('specialty_league', name, !isDisabled, onToggle));
   });
@@ -3186,13 +6498,27 @@ function renderOverrideDetailPane() {
   const [type, ...nameParts] = selectedOverrideId.split('-');
   const name = nameParts.join('-');
   
-  if (type === 'field' || type === 'special') {
-    const item = type === 'field' 
-      ? (masterSettings.app1?.fields || []).find(f => f.name === name)
-      : (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
-    
+  if (type === 'facility' || type === 'field' || type === 'special') {
+    // Unified lookup: facility is the primary; fall back to legacy field/special lookups
+    // for backwards compat with any stored selection ids from the old two-list UI.
+    let item = null;
+    let facility = null;
+    if (type === 'facility') {
+      facility = (typeof window.getFacilityByName === 'function') ? window.getFacilityByName(name) : null;
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name)
+          || (masterSettings.app1?.specialActivities || []).find(s => s.name === name)
+          || { name, timeRules: [], activities: [] };
+    } else if (type === 'field') {
+      item = (masterSettings.app1?.fields || []).find(f => f.name === name);
+    } else {
+      item = (masterSettings.app1?.specialActivities || []).find(s => s.name === name);
+    }
+
     if (!item) { paneEl.innerHTML = '<p style="color:#ef4444;">Item not found.</p>'; return; }
-    
+
+    // Treat 'facility' with sports-capable legacy data as a field for rendering the sports section
+    const isFieldLike = (type === 'field') || (type === 'facility' && facility && Array.isArray(facility.usedFor) && facility.usedFor.includes('sports'));
+
     // Get global rules from setup and daily rules
     const globalRules = item.timeRules || [];
     if (!currentOverrides.dailyFieldAvailability[name]) {
@@ -3201,9 +6527,12 @@ function renderOverrideDetailPane() {
     const dailyRules = currentOverrides.dailyFieldAvailability[name];
     
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;">
+      <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
         ${name}
-        ${type === 'field' ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
+        ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
+          ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
+          : ''}
       </h4>
       
       <div class="da-detail-section">
@@ -3229,7 +6558,7 @@ function renderOverrideDetailPane() {
         </div>
       </div>
       
-      ${type === 'field' ? `
+      ${isFieldLike ? `
       <div class="da-detail-section">
         <h5>🏃 Sports Availability</h5>
         <p class="da-section-desc">Disable specific sports on this field for today.</p>
@@ -3243,12 +6572,17 @@ function renderOverrideDetailPane() {
     if (globalRules.length === 0) {
       globalRulesEl.innerHTML = '<p style="color:#94a3b8;font-size:12px;margin:4px 0;">Available all day (no restrictions)</p>';
     } else {
-      globalRulesEl.innerHTML = globalRules.map(rule => `
+      globalRulesEl.innerHTML = globalRules.map(rule => {
+        const divs = Array.isArray(rule.divisions) ? rule.divisions : [];
+        const tag = divs.length > 0
+          ? ` <span style="font-size:11px;background:#e6f4f7;color:#0A4A56;border-radius:4px;padding:1px 6px;margin-left:6px;">grade ${divs.join(', ')}</span>`
+          : ' <span style="font-size:11px;color:#94a3b8;margin-left:6px;">(all grades)</span>';
+        return `
         <div class="da-rule-item da-rule-${rule.type.toLowerCase()}">
           <span class="da-rule-type">${rule.type === 'Available' ? '✅' : '❌'} ${rule.type}</span>
-          <span class="da-rule-time">${rule.start} - ${rule.end}</span>
-        </div>
-      `).join('');
+          <span class="da-rule-time">${rule.start} - ${rule.end}</span>${tag}
+        </div>`;
+      }).join('');
     }
     
     // Render daily rules
@@ -3271,6 +6605,11 @@ function renderOverrideDetailPane() {
           dailyRules.splice(idx, 1);
           currentOverrides.dailyFieldAvailability[name] = dailyRules;
           window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+          // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+          try {
+            const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+            localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+          } catch (_e) {}
           renderOverrideDetailPane();
         };
       });
@@ -3288,15 +6627,20 @@ function renderOverrideDetailPane() {
       if (startMin === null || endMin === null) { daShowAlert('Invalid time format. Use format like 9:00am or 2:30pm.'); return; }
       if (startMin >= endMin) { daShowAlert('End time must be after start time.'); return; }
       
-      dailyRules.push({ type: ruleType, start, end });
+      dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
       window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+      // ★ Day 22.5: ALSO persist to a dedicated iron-gate key that no solver path touches.
+      try {
+        const _dk = window.currentScheduleDate || new Date().toISOString().slice(0,10);
+        localStorage.setItem('campTimeRulesEnforce_' + _dk, JSON.stringify(currentOverrides.dailyFieldAvailability));
+      } catch (_e) {}
       renderOverrideDetailPane();
       renderResourceOverridesUI();
     };
     
-    // Render sports checkboxes for fields
-    if (type === 'field') {
+    // Render sports checkboxes for fields (or sports-capable facilities)
+    if (isFieldLike) {
       const sports = item.activities || [];
       const checkboxesEl = document.getElementById('da-sports-checkboxes');
       if (sports.length === 0) {
@@ -3327,93 +6671,7 @@ function renderOverrideDetailPane() {
     `;
   }
 }
-// =================================================================
-// DOUBLE-HEADER LINKER (Off-Campus)
-// =================================================================
-function renderDoubleHeaderLinker() {
-  var existing = document.getElementById('da-dh-linker');
-  if (existing) existing.remove();
 
-  var gs = window.loadGlobalSettings?.() || {};
-  var lbn = gs.leaguesByName || {};
-  var ocLeagues = Object.values(lbn).filter(function(l) {
-    return l && l.offCampus?.enabled && l.offCampus?.zone && l.offCampus?.teamsPerDay > 0 && l.enabled !== false;
-  });
-  if (ocLeagues.length === 0) return;
-
-  var leagueBlocks = dailyOverrideSkeleton.filter(function(b) {
-    return b.type === 'league' || (b.event && /league/i.test(b.event));
-  });
-  if (leagueBlocks.length < 2) return;
-
-  var grouped = {};
-  leagueBlocks.forEach(function(b) {
-    var key = b.leagueName || 'League Game';
-    var ml = ocLeagues.find(function(l) { return l.name === key; });
-    if (!ml) ml = ocLeagues.find(function(l) { return (l.divisions || []).includes(b.division); });
-    if (!ml) return;
-    if (!grouped[ml.name]) grouped[ml.name] = { league: ml, blocks: [] };
-    grouped[ml.name].blocks.push(b);
-  });
-
-  var linkable = Object.values(grouped).filter(function(g) { return g.blocks.length >= 2; });
-  if (linkable.length === 0) return;
-
-  var panel = document.createElement('div');
-  panel.id = 'da-dh-linker';
-  panel.style.cssText = 'margin:12px 0; padding:12px; background:#F8FAFC; border:1px solid #E2E8F0; border-radius:8px;';
-  var title = document.createElement('div');
-  title.style.cssText = 'font-size:0.8rem; font-weight:600; color:#475569; margin-bottom:8px;';
-  title.textContent = 'Double-Header Links';
-  panel.appendChild(title);
-
-  linkable.forEach(function(group) {
-    var blocks = group.blocks.sort(function(a, b) { return (parseTimeToMinutes(a.startTime)||0) - (parseTimeToMinutes(b.startTime)||0); });
-    var leagueRow = document.createElement('div');
-    leagueRow.style.cssText = 'margin-bottom:8px;';
-    var lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-bottom:4px;';
-    lbl.textContent = group.league.name + ' (' + group.league.offCampus.zone + ')';
-    leagueRow.appendChild(lbl);
-
-    var existingPairId = null;
-    blocks.forEach(function(b) { if (b._doubleHeaderPairId) existingPairId = b._doubleHeaderPairId; });
-    var isLinked = existingPairId && blocks.filter(function(b) { return b._doubleHeaderPairId === existingPairId; }).length >= 2;
-
-    var row = document.createElement('div');
-    row.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap;';
-    blocks.forEach(function(b, idx) {
-      var chip = document.createElement('span');
-      var inPair = isLinked && b._doubleHeaderPairId === existingPairId;
-      chip.style.cssText = 'display:inline-flex; padding:4px 10px; border-radius:6px; font-size:0.75rem; font-weight:500; ' +
-        (inPair ? 'background:#DBEAFE; color:#1E40AF; border:1px solid #93C5FD;' : 'background:#F1F5F9; color:#475569; border:1px solid #E2E8F0;');
-      chip.textContent = (b.leagueName || b.event) + ' ' + (b.division||'') + ' ' + (b.startTime||'') + '-' + (b.endTime||'');
-      row.appendChild(chip);
-      if (idx < blocks.length - 1) {
-        var arrow = document.createElement('span');
-        arrow.style.cssText = 'color:#9CA3AF; font-size:0.7rem;';
-        arrow.textContent = isLinked ? '\u2194' : '\u00B7\u00B7\u00B7';
-        row.appendChild(arrow);
-      }
-    });
-
-    var btn = document.createElement('button');
-    btn.style.cssText = 'margin-left:8px; padding:4px 10px; border-radius:5px; font-size:0.7rem; font-weight:600; cursor:pointer; ' +
-      (isLinked ? 'background:none; border:1px solid #E2E8F0; color:#9CA3AF;' : 'background:#0F5F6E; border:1px solid #0F5F6E; color:#fff;');
-    btn.textContent = isLinked ? 'Unlink' : 'Link as Double-Header';
-    btn.onclick = function() {
-      if (isLinked) { blocks.forEach(function(b) { delete b._doubleHeaderPairId; }); }
-      else { var pid = 'dh_' + Date.now().toString(36); blocks[0]._doubleHeaderPairId = pid; blocks[1]._doubleHeaderPairId = pid; }
-      saveDailySkeleton(); renderGrid();
-    };
-    row.appendChild(btn);
-    leagueRow.appendChild(row);
-    panel.appendChild(leagueRow);
-  });
-
-  var gridEl = document.getElementById('da-skeleton-grid');
-  if (gridEl && gridEl.parentNode) gridEl.parentNode.insertBefore(panel, gridEl.nextSibling);
-}
 // =================================================================
 // CSS STYLES
 // =================================================================
@@ -3433,52 +6691,55 @@ function getStyles() {
       --da-danger: #ef4444;
     }
     
-    .da-container { display:flex; gap:0; height:calc(100vh - 160px); min-height:300px; background:var(--da-bg); border:1px solid var(--da-border); border-radius:12px; overflow:hidden; }
-    
+    .da-container { display:flex; gap:0; height:calc(100vh - 78px); min-height:300px; background:var(--da-bg); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
+
     /* Sidebar */
-    .da-sidebar { width:180px; min-width:0; background:var(--da-surface); border-right:1px solid var(--da-border); display:flex; flex-direction:column; }
-    .da-sidebar-header { padding:14px; border-bottom:1px solid var(--da-border); background:var(--da-bg); }
-    .da-sidebar-header h3 { margin:0; font-size:12px; font-weight:600; color:var(--da-text2); text-transform:uppercase; letter-spacing:0.5px; }
+    .da-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; }
+    .da-sidebar-header { padding:10px 12px 6px; }
+    .da-sidebar-header h3 { margin:0; font-size:10px; font-weight:700; color:#94a3b8; text-transform:uppercase; letter-spacing:0.08em; }
     
     /* Palette */
-    .da-palette { flex:1; overflow-y:auto; padding:10px; display:flex; flex-direction:column; gap:4px; }
-    .da-tile { padding:8px 10px; border-radius:6px; cursor:grab; font-size:11px; font-weight:600; transition:transform 0.15s, box-shadow 0.15s; }
-    .da-tile:hover { transform:translateX(2px); box-shadow:0 2px 8px rgba(0,0,0,0.15); }
+    .da-palette { flex:1; overflow-y:auto; padding:4px 0; display:flex; flex-direction:column; }
+    .da-tile { display:flex; align-items:center; gap:8px; padding:7px 12px; cursor:grab; font-size:12px; font-weight:500; color:#374151; transition:background 0.12s; }
+    .da-tile:hover { background:#f8fafc; transform:none; box-shadow:none; color:#111827; }
     .da-tile:active { cursor:grabbing; }
-    .da-tile-divider { height:1px; background:var(--da-border); margin:4px 0; }
-    .da-tile-label { font-size:9px; color:var(--da-text3); font-weight:600; text-transform:uppercase; letter-spacing:0.5px; padding:4px 0; }
+    .da-tile-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+    .da-tile-name { flex:1; }
+    .da-tile-divider { height:1px; background:#eef0f3; margin:4px 0; }
+    .da-tile-label { font-size:10px; color:#94a3b8; font-weight:600; text-transform:uppercase; letter-spacing:0.06em; padding:5px 12px 3px; }
     
     /* Main */
     .da-main { flex:1; display:flex; flex-direction:column; overflow:hidden; }
     
     /* Subtabs */
-    .da-subtabs { display:flex; gap:0; border-bottom:1px solid var(--da-border); background:var(--da-surface); }
-    .da-subtab { padding:12px 20px; border:none; background:none; cursor:pointer; font-size:13px; font-weight:500; color:var(--da-text2); border-bottom:2px solid transparent; transition:all 0.2s; }
-    .da-subtab:hover { color:var(--da-text); background:rgba(0,0,0,0.02); }
-    .da-subtab.active { color:var(--da-accent); border-bottom-color:var(--da-accent); background:var(--da-bg); }
+    .da-subtabs { display:flex; gap:0; border-bottom:1px solid #eef0f3; background:#fff; flex-shrink:0; }
+    .da-subtab { padding:10px 18px; border:none; background:none; cursor:pointer; font-size:12px; font-weight:500; color:#64748b; border-bottom:2px solid transparent; transition:all 0.2s; white-space:nowrap; }
+    .da-subtab:hover { color:#1e293b; }
+    .da-subtab.active { color:#6366f1; border-bottom-color:#6366f1; background:#fff; font-weight:600; }
     
     /* Panes */
-    .da-pane { display:none; flex:1; overflow:auto; padding:16px; }
-    .da-pane.active { display:block; }
+    .da-pane { display:none; flex:1; overflow:hidden; padding:0; flex-direction:column; }
+    .da-pane.active { display:flex; }
     
     /* Toolbar */
-    .da-toolbar { display:flex; align-items:center; gap:12px; padding:12px 16px; background:var(--da-surface); border-bottom:1px solid var(--da-border); flex-wrap:wrap; }
+    .da-toolbar { display:flex; align-items:center; gap:8px; padding:0 16px; height:44px; background:#fff; border-bottom:1px solid #eef0f3; flex-wrap:nowrap; overflow:hidden; flex-shrink:0; }
     .da-toolbar-group { display:flex; align-items:center; gap:8px; }
     .da-toolbar-label { font-size:12px; color:var(--da-text2); font-weight:500; }
     
     /* Grid */
-    .da-grid-wrapper { flex:1; overflow:auto; border:1px solid var(--da-border); border-radius:8px; margin:16px; background:#fff; }
+    .da-grid-wrapper { flex:1; overflow:auto; background:#fafbfc; margin:0; border:none; border-radius:0; padding:0; }
     .da-grid { display:grid; min-width:700px; }
-    .da-grid-header { position:sticky; top:0; z-index:10; padding:10px 8px; font-weight:600; font-size:12px; text-align:center; border-bottom:1px solid var(--da-border); background:var(--da-bg); }
-    .da-time-header { background:var(--da-surface); }
+    .da-grid-header { position:sticky; top:0; z-index:10; padding:12px 10px; font-weight:600; font-size:13px; text-align:center; border-bottom:2px solid var(--da-border); background:var(--da-bg); letter-spacing:0.3px; }
+    .da-time-header { background:var(--da-surface); font-size:11px; font-weight:500; color:var(--da-text3); }
     .da-time-column { position:relative; background:var(--da-surface); border-right:1px solid var(--da-border); }
-    .da-time-marker { position:absolute; left:0; width:100%; font-size:9px; padding:2px 4px; color:var(--da-text3); border-top:1px dashed #e2e8f0; }
-    .da-grid-cell { position:relative; border-right:1px solid var(--da-border); background:#fff; }
+    .da-time-marker { position:absolute; left:0; width:100%; font-size:11px; padding:3px 6px; color:var(--da-text3); border-top:1px dashed #e2e8f0; font-weight:500; }
+    .da-grid-cell { position:relative; background:#fff; border-radius:0 0 4px 4px; }
+    .da-grid-cell:nth-child(even) { background:#fafbfc; }
     .da-grid-disabled { position:absolute; width:100%; background:repeating-linear-gradient(-45deg,#f1f5f9,#f1f5f9 5px,#e2e8f0 5px,#e2e8f0 10px); z-index:1; pointer-events:none; }
     .da-grid-night-zone { background:rgba(30,41,59,0.1) !important; }
     
     /* Events */
-    .da-event { position:absolute; width:96%; left:2%; padding:4px 6px; border-radius:4px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s; min-height:18px; }
+    .da-event { position:absolute; width:94%; left:3%; padding:5px 8px; border-radius:6px; cursor:pointer; box-sizing:border-box; display:flex; flex-direction:column; justify-content:center; overflow:hidden; z-index:2; transition:box-shadow 0.15s, transform 0.1s; min-height:24px; }
     .da-event:hover { box-shadow:0 2px 8px rgba(0,0,0,0.2); z-index:5; }
     .da-event.selected { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.3); z-index:10; }
     .da-event.da-resizing { box-shadow:0 0 0 2px var(--da-accent), 0 4px 12px rgba(59,130,246,0.25) !important; z-index:100 !important; }
@@ -3512,7 +6773,7 @@ function getStyles() {
     .da-event:hover .da-resize-handle { opacity:1; background:rgba(59,130,246,0.3); }
     
     /* Drop Preview */
-    .da-drop-preview { display:none; position:absolute; left:2%; width:96%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:4px; pointer-events:none; z-index:5; }
+    .da-drop-preview { display:none; position:absolute; left:3%; width:94%; background:rgba(59,130,246,0.15); border:2px dashed var(--da-accent); border-radius:6px; pointer-events:none; z-index:5; }
     .da-preview-time { text-align:center; padding:8px; color:var(--da-accent); font-weight:600; font-size:12px; background:rgba(255,255,255,0.9); border-radius:3px; margin:4px; }
     
     /* Tooltips & Ghosts */
@@ -3541,8 +6802,10 @@ function getStyles() {
     .da-modal-close:hover { color:#64748b; }
     .da-modal-body { padding:20px; overflow-y:auto; flex:1; }
     .da-modal-footer { padding:16px 20px; border-top:1px solid #e2e8f0; display:flex; justify-content:flex-end; gap:10px; background:#f8fafc; }
-    .da-btn-ghost { background:transparent; color:var(--da-text2); border:1px solid var(--da-border); }
-    .da-btn-ghost:hover { background:var(--da-surface); }
+    .da-btn-ghost { background:#f9fafb; color:#475569; border:1px solid #e2e8f0; }
+    .da-btn-ghost:hover { background:#f1f5f9; color:#1e293b; }
+    .da-btn-secondary { background:#f9fafb; color:#475569; border:1px solid #e2e8f0; }
+    .da-btn-secondary:hover { background:#f1f5f9; }
     .da-btn-sm { padding:4px 8px; font-size:11px; }
     
     /* Inputs */
@@ -3756,12 +7019,76 @@ function getStyles() {
     .da-modal-cb-item:hover { background:#f1f5f9; }
     .da-modal-cb-item input { margin:0; cursor:pointer; }
     .da-modal-cb-item span { color:#334155; }
-  </style>`;}
+ /* === AUTO MODE: .da-* inside .ms-container inherits MS look === */
+    .ms-container .da-pane { display:none; flex:1; overflow:auto; padding:0; }
+    .ms-container .da-pane.active { display:block; }
+    .ms-container .da-subtabs { display:flex; gap:0; border-bottom:1px solid #e2e8f0; background:#f8fafc; }
+    .ms-container .da-subtab { padding:12px 20px; border:none; background:none; cursor:pointer; font-size:13px; font-weight:500; color:#475569; border-bottom:2px solid transparent; transition:all 0.2s; }
+    .ms-container .da-subtab:hover { color:#0f172a; background:rgba(0,0,0,0.02); }
+    .ms-container .da-subtab.active { color:#3b82f6; border-bottom-color:#3b82f6; background:#fff; }
+    .ms-container #da-rainy-panel { padding:16px 16px 0; }
+    .ms-container #da-displaced-tiles-panel { padding:0 16px; }
+    .ms-container .da-grid-wrapper,
+    .ms-container .ms-grid-wrapper { flex:1; overflow:auto; margin:0; border:none; border-radius:0; }
+    .ms-container #da-skeleton-grid { padding:0; }
+    .ms-container .da-section { margin:16px; }
+    .ms-container .da-resource-layout { padding:16px; }
+    .ms-container #da-bunk-overrides-container { padding:16px; }
+    .ms-container #da-resources-container { padding:16px; }
+   
+    #da-skeleton-grid .al-toolbar { display: none !important; }
+    #da-skeleton-grid .al-palette { display: none !important; }
+  </style>`;
+}
 
 // =================================================================
 // MAIN HTML
 // =================================================================
-function getMainHTML() {
+function getMainHTML(useMS) {
+  if (useMS) {
+    return `
+      <div class="ms-container" style="height:calc(100vh - 160px);">
+        <div class="ms-sidebar">
+          <div class="ms-sidebar-header"><h3>Tile Types</h3></div>
+          <div id="da-palette" class="ms-palette"></div>
+        </div>
+        
+        <div class="ms-main" style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+          <div class="da-subtabs">
+            <button class="da-subtab active" data-tab="skeleton">Schedule</button>
+            <button class="da-subtab" data-tab="resources">Resources</button>
+
+          </div>
+
+          <div id="da-pane-skeleton" class="da-pane active">
+            <div id="da-rainy-panel"></div>
+            <div id="da-displaced-tiles-panel" style="display:none;"></div>
+            ${window._daBuilderMode === 'auto' ? `
+  <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+  <div id="da-view-auto-layers" style="flex:1;overflow:auto;">
+    <div id="da-skeleton-grid"></div>
+  </div>
+` : `
+  <div id="da-view-skeleton">
+    <div id="da-skeleton-toolbar" class="ms-toolbar"></div>
+    <div class="ms-grid-wrapper">
+      <div id="da-skeleton-grid"></div>
+    </div>
+  </div>
+`}
+            <div id="da-bunk-overrides-container" style="display:none;"></div>
+          </div>
+          
+          <div id="da-pane-resources" class="da-pane">
+            <div id="da-resources-container"></div>
+          </div>
+          <div id="da-pane-rotation-events" class="da-pane">
+            <div id="da-rotation-events-container"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
   return `
     <div class="da-container">
       <div class="da-sidebar">
@@ -3772,36 +7099,27 @@ function getMainHTML() {
       <div class="da-main">
         <div class="da-subtabs">
           <button class="da-subtab active" data-tab="skeleton">Schedule</button>
-          <button class="da-subtab" data-tab="trips">Trips</button>
-          <button class="da-subtab" data-tab="bunk-overrides">Bunk Overrides</button>
           <button class="da-subtab" data-tab="resources">Resources</button>
         </div>
-        
+
         <div id="da-pane-skeleton" class="da-pane active">
           <div id="da-rainy-panel"></div>
           <div id="da-displaced-tiles-panel" style="display:none;"></div>
           <div id="da-skeleton-toolbar" class="da-toolbar"></div>
+          <div id="da-period-panel" style="display:none; border-bottom:1px solid #e2e8f0; max-height:420px; overflow-y:auto;"></div>
           <div class="da-grid-wrapper">
             <div id="da-skeleton-grid"></div>
           </div>
+          <div id="da-bunk-overrides-container" style="display:none;"></div>
         </div>
         
-        <div id="da-pane-trips" class="da-pane">
-          <div id="da-trips-container"></div>
-        </div>
-        
-        <div id="da-pane-bunk-overrides" class="da-pane">
-          <div id="da-bunk-overrides-container"></div>
-        </div>
-        
-        <div id="da-pane-resources" class="da-pane">
+       <div id="da-pane-resources" class="da-pane">
           <div id="da-resources-container"></div>
         </div>
       </div>
     </div>
   `;
 }
-
 // =================================================================
 // SUBTAB NAVIGATION
 // =================================================================
@@ -3818,6 +7136,7 @@ function setupSubTabs() {
       if (pane) pane.classList.add('active');
       
       activeSubTab = tabId;
+      
     };
   });
 }
@@ -3828,11 +7147,14 @@ function setupSubTabs() {
 function setupKeyboardHandler() {
   if (_keyHandler) document.removeEventListener('keydown', _keyHandler);
   
-  _keyHandler = (e) => {
+ _keyHandler = (e) => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
     
+    // Auto mode: don't allow manual skeleton tile deletion via keyboard
+    if (window._daBuilderMode === 'auto') return;
+    
     if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTileId) {
-      e.preventDefault();
+      e.preventDefault();      e.preventDefault();
       (async () => {
         const ok = await daShowConfirm("Delete this block?", { danger: true, confirmText: 'Delete' });
         if (ok) {
@@ -3871,22 +7193,86 @@ function refreshFromCloud() {
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
-  loadDailySkeleton();
+  
+  // Mode-specific data reload — same isolation as init()
+  if (window._daBuilderMode === 'auto') {
+    loadDAAutoLayers();
+  } else {
+    loadDailySkeleton();
+  }
+  
   loadCurrentOverrides();
   renderGrid();
   renderResourceOverridesUI();
 }
 
 function loadCurrentOverrides() {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
   const dailyData = window.loadCurrentDailyData?.() || {};
-  const dailyOverrides = dailyData.overrides || {};
+  let dailyOverrides = dailyData.overrides || {};
+
+  // ★ v7.0: Fallback to dedicated localStorage key (survives cloud overwrites)
+  if (!dailyOverrides.disabledFields?.length && !dailyOverrides.disabledSpecials?.length && !dailyOverrides.leagues?.length) {
+    try {
+      const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed?.overrides) {
+          dailyOverrides = parsed.overrides;
+          // Also restore other override data
+          if (parsed.dailyDisabledSportsByField) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+          if (parsed.dailyFieldAvailability) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
+          if (parsed.disabledSpecialtyLeagues) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+          // Sync back to dailyData for cloud
+          window.saveCurrentDailyData?.("overrides", dailyOverrides);
+          console.log('[ResourceOverrides] Restored from localStorage for ' + dateKey);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try {
+      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+        overrides: dailyOverrides,
+        dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
+        dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
+        disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+      }));
+    } catch(e) {}
+  }
+
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
+  // ★ Day 22.5: seed the dedicated iron-gate key from whatever rules we have so they
+  //   survive even after dailyData gets wiped by solver/save paths during generation.
+  try {
+    if (Object.keys(currentOverrides.dailyFieldAvailability).length > 0) {
+      localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability));
+    }
+  } catch (_e) {}
   currentOverrides.leagues = dailyOverrides.leagues || [];
   currentOverrides.disabledSpecialtyLeagues = dailyData.disabledSpecialtyLeagues || [];
   currentOverrides.dailyDisabledSportsByField = dailyData.dailyDisabledSportsByField || {};
   currentOverrides.disabledFields = dailyOverrides.disabledFields || [];
   currentOverrides.disabledSpecials = dailyOverrides.disabledSpecials || [];
-  currentOverrides.bunkActivityOverrides = dailyData.bunkActivityOverrides || [];
+  // Load bunk overrides from multiple sources (same pattern as trips)
+  let bunkOv = dailyData.bunkActivityOverrides || [];
+  if (bunkOv.length === 0) {
+    try {
+      const stored = localStorage.getItem('campBunkOverrides_' + dateKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          bunkOv = parsed;
+          // Sync back to dailyData
+          window.saveCurrentDailyData?.("bunkActivityOverrides", bunkOv);
+        }
+      }
+    } catch(e) {}
+  } else {
+    // Sync to dedicated key for fast reload
+    try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(bunkOv)); } catch(e) {}
+  }
+  currentOverrides.bunkActivityOverrides = bunkOv;
 }
 
 // =================================================================
@@ -3895,41 +7281,187 @@ function loadCurrentOverrides() {
 function init() {
   container = document.getElementById("daily-adjustments-content");
   if (!container) { console.error("Daily Adjustments: container not found"); return; }
-  
+
+  // Read the builder mode — stored globally so renderGrid can check it
+  var globalMode = window.getCampBuilderMode ? window.getCampBuilderMode() : 'manual';
+  window._daBuilderMode = globalMode;
+  console.log('[DailyAdj] Mode:', globalMode);
+
+  // Load settings (same for both modes)
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
   masterSettings.specialtyLeagues = masterSettings.global.specialtyLeagues || {};
   smartTileHistory = loadSmartTileHistory();
-  
+
   loadCurrentOverrides();
-  
-  // Initialize window.isRainyDay from loaded daily data
-  const dailyData = window.loadCurrentDailyData?.() || {};
+
+  var dailyData = window.loadCurrentDailyData?.() || {};
   if (window.isRainyDay === undefined) {
-    // Only set if not already defined (e.g., from another module)
-    window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
+      window.isRainyDay = dailyData.isRainyDay === true || dailyData.rainyDayMode === true;
   }
   console.log("[DailyAdj] Initialized window.isRainyDay =", window.isRainyDay);
-  
+
+  // Render UI (same HTML for both modes)
   container.innerHTML = getStyles() + getMainHTML();
-  
+
   setupSubTabs();
   setupKeyboardHandler();
   setupVisibilityHandler();
-  
-  loadDailySkeleton();
-  
+
+ // ★ Mode-specific data loading — keep auto and manual completely separate
+  if (window._daBuilderMode === 'auto') {
+    // Auto mode: load layer templates, clear manual skeleton to prevent bleed
+    loadDAAutoLayers();
+    dailyOverrideSkeleton = [];
+    window.dailyOverrideSkeleton = [];
+  } else {
+    // Manual mode: load skeleton, clear auto layers to prevent bleed
+    loadDailySkeleton();
+    daAutoLayers = {};
+  }
+
   renderPalette();
   renderRainyDayPanel();
   renderDisplacedTilesPanel();
   renderToolbar();
   renderGrid();
-  renderTripsForm();
   renderBunkOverridesUI();
   renderResourceOverridesUI();
-}
+  if (window.RotationEvents?.injectSubtab) window.RotationEvents.injectSubtab();
 
+  // ★ Re-load skeleton/layers if cloud hydration arrives after init with empty data
+  window.addEventListener('campistry-cloud-hydrated', function _daHydrationHandler() {
+    // Only re-load if we got nothing at init time — avoid overwriting user edits
+    if (window._daBuilderMode === 'auto') {
+      if (Object.keys(daAutoLayers).length === 0 || Object.values(daAutoLayers).every(v => !v || v.length === 0)) {
+        console.log('[DailyAdj] Re-loading auto layers after cloud hydration');
+        loadDAAutoLayers();
+        renderGrid();
+      }
+    } else {
+      if (!dailyOverrideSkeleton || dailyOverrideSkeleton.length === 0) {
+        console.log('[DailyAdj] Re-loading skeleton after cloud hydration');
+        masterSettings.global = window.loadGlobalSettings?.() || {};
+        masterSettings.app1 = masterSettings.global.app1 || {};
+        loadDailySkeleton();
+        renderGrid();
+      }
+    }
+  });
+
+  // ★ v7.0: Re-render trips when cloud data syncs (trips may arrive after init)
+  window.addEventListener('campistry-cloud-sync', function() {
+    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+    loadDailyTrips(dateKey);
+    renderTripsForm();
+    renderToolbar();
+  });
+  window.addEventListener('campistry-schedule-saved', function() {
+    renderTripsForm();
+    renderToolbar();
+  });
+
+  // ★ Day 22.5 IRON GATE event listener — final time-rule scrub.
+  //   Fires on every generation-complete event. Runs AFTER all solver paths
+  //   have written to window.scheduleAssignments. Clears any slot that
+  //   overlaps an Unavailable window or falls outside an Available window.
+  //   This is the user-facing guarantee: no DA time rule is ever violated
+  //   in the rendered/saved schedule.
+  const _runIronGate = function _ironGateGuard() {
+    try {
+      const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+      // Build rules cache from the dedicated key first (solver paths never touch it).
+      let rulesByField = null;
+      try {
+        const enf = localStorage.getItem('campTimeRulesEnforce_' + dk);
+        if (enf) {
+          const parsed = JSON.parse(enf);
+          if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+            rulesByField = parsed;
+          }
+        }
+      } catch (_e) {}
+      if (!rulesByField) {
+        // Secondary: dailyData / legacy LS
+        const dd = window.loadCurrentDailyData?.()?.dailyFieldAvailability;
+        if (dd && Object.keys(dd).length > 0) rulesByField = dd;
+        else {
+          try {
+            const stored = localStorage.getItem('campResourceOverrides_' + dk);
+            if (stored) {
+              const parsed = JSON.parse(stored);
+              if (parsed?.dailyFieldAvailability && Object.keys(parsed.dailyFieldAvailability).length > 0) {
+                rulesByField = parsed.dailyFieldAvailability;
+              }
+            }
+          } catch (_e) {}
+        }
+      }
+      if (!rulesByField) return; // no DA time rules → nothing to enforce
+      const sa = window.scheduleAssignments || {};
+      const divs = window.divisions || {};
+      let cleared = 0;
+      const clearedDetails = [];
+      for (const [bunk, slots] of Object.entries(sa)) {
+        if (!Array.isArray(slots)) continue;
+        let grade = null;
+        for (const [d, info] of Object.entries(divs)) {
+          if ((info.bunks || []).includes(bunk)) { grade = d; break; }
+        }
+        for (let i = 0; i < slots.length; i++) {
+          const s = slots[i];
+          if (!s || s.continuation) continue;
+          const field = (typeof s.field === 'object') ? s.field?.name : s.field;
+          if (!field || field === 'Free') continue;
+          const sMin = s._startMin, eMin = s._endMin;
+          if (sMin == null || eMin == null) continue;
+          const rules = rulesByField[field];
+          if (!Array.isArray(rules) || rules.length === 0) continue;
+          let bad = false, hasAvail = false, inside = false;
+          for (const r of rules) {
+            const t = String(r.type || '').toLowerCase();
+            const isUnavail = t === 'unavailable' || r.available === false;
+            const isAvail = t === 'available' || r.available === true;
+            const rs = r.startMin ?? null, re = r.endMin ?? null;
+            if (rs == null || re == null) continue;
+            if (Array.isArray(r.divisions) && r.divisions.length > 0
+                && grade != null && !r.divisions.map(String).includes(String(grade))) continue;
+            if (isUnavail && rs < eMin && re > sMin) { bad = true; break; }
+            if (isAvail) { hasAvail = true; if (sMin >= rs && eMin <= re) inside = true; }
+          }
+          if (!bad && hasAvail && !inside) bad = true;
+          if (bad) {
+            slots[i] = {
+              field: 'Free', sport: null, _activity: 'Free',
+              _autoMode: true, _fixed: true,
+              _startMin: sMin, _endMin: eMin,
+              _source: 'iron-gate-listener',
+              _violationReason: 'DA time rule on ' + field,
+              continuation: false
+            };
+            cleared++;
+            clearedDetails.push({bunk, idx: i, field, sMin, eMin});
+          }
+        }
+      }
+      if (cleared > 0) {
+        console.warn('[IRON GATE LISTENER] cleared ' + cleared + ' time-rule violation(s)', clearedDetails);
+        // Re-render so the user sees the cleared state immediately
+        try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
+        // Re-save so the cleared state persists
+        try {
+          if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk);
+          else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} });
+        } catch (_e) {}
+      }
+    } catch (e) { console.warn('[IRON GATE LISTENER] error: ' + e.message); }
+  };
+  window.addEventListener('campistry-generation-complete', _runIronGate);
+  document.addEventListener('campistry-schedule-generated', _runIronGate);
+  window.addEventListener('campistry-schedule-saved', _runIronGate);
+}
+    
 function cleanup() {
   if (_keyHandler) {
     document.removeEventListener('keydown', _keyHandler);
@@ -3944,15 +7476,38 @@ function cleanup() {
 // =================================================================
 // PUBLIC API
 // =================================================================
+// Re-overlay period blocks and refresh open panel when bell schedule changes
+window.addEventListener('campistry-periods-changed', function() {
+  const gridEl = document.getElementById('da-skeleton-grid');
+  if (gridEl && typeof window.PeriodEditor?.overlayPeriodsOnDAWGrid === 'function') {
+    window.PeriodEditor.overlayPeriodsOnDAWGrid(gridEl);
+  }
+  const panel = document.getElementById('da-period-panel');
+  if (panel && panel.style.display !== 'none' && typeof window.PeriodEditor?.renderEditor === 'function') {
+    if (panel.contains(document.activeElement)) return;
+    window.PeriodEditor.renderEditor(panel);
+  }
+});
+
 window.initDailyAdjustments = init;
 window.cleanupDailyAdjustments = cleanup;
 window.refreshDailyAdjustmentsFromCloud = refreshFromCloud;
+// ★ Day 24: expose bunk-override helpers so the AUTO builder can reuse the
+//   same picker + storage + apply pipeline as Daily Adjustments.
+window._boShowPicker = _boShowPicker;
+window._boApplyOverride = _boApplyOverride;
+window._boGetActivityGroups = _boGetActivityGroups;
+window._boSaveOverrides = _boSaveOverrides;
+window._boGetCurrentOverrides = function() { return (currentOverrides.bunkActivityOverrides || []).slice(); };
 window.parseTimeToMinutes = parseTimeToMinutes;
 window.minutesToTime = minutesToTime;
 window.isRainyDayActive = isRainyDayActive;
 window.isMidDayModeActive = isMidDayModeActive;
 window.getMidDayStartTime = getMidDayStartTime;
 window.refreshSkeletonConflicts = function() { renderGrid(); };
+window.daShowModal = daShowModal;
+window.daShowConfirm = daShowConfirm;
+window.daShowAlert = daShowAlert;
 // === ADD THIS near the end of the IIFE, before the closing })(); ===
 
 // Expose internals for mobile touch support
@@ -3962,4 +7517,24 @@ window.DailyAdjustmentsInternal = {
   renderGrid: typeof renderGrid === 'function' ? renderGrid : function(){},
   bumpOverlappingTiles: typeof bumpOverlappingTiles === 'function' ? bumpOverlappingTiles : function(){}
 };
+ 
+
+
+  // Hook into daily adjustments render to check for auto mode
+const _origRenderDA = window.renderDailyAdjustments || window.initDailyAdjustments;
+if (_origRenderDA) {
+  window._checkAutoModeForDay = checkAutoModeForDay;
+}
+
+// ★ Listen for mode changes from Setup & Config
+window.addEventListener('campistry-builder-mode-changed', (e) => {
+  const newMode = e.detail?.mode;
+  if (newMode && newMode !== window._daBuilderMode) {
+    console.log('[DailyAdj] Mode changed to:', newMode, '— re-initializing');
+    window._daBuilderMode = newMode;
+    cleanup();
+    init();
+  }
+});
+
 })();

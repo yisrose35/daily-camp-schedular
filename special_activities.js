@@ -102,9 +102,14 @@ function setupBeforeUnloadHandler() {
 function validateSpecialActivity(activity, activityName) {
     if (!activity || typeof activity !== 'object') return createDefaultActivity(activityName || 'Unknown');
     let validDivisions = null;
-    try { const settings = window.loadGlobalSettings?.() || {}; validDivisions = new Set(Object.keys(settings.divisions || {})); } catch (e) { validDivisions = null; }
+    try {
+        // Use window.divisions (grade-based, built by app1 from campStructure) rather
+        // than settings.divisions (flat top-level key that may be stale or empty).
+        const divs = window.divisions || window.getGlobalDivisions?.() || {};
+        validDivisions = Object.keys(divs).length > 0 ? new Set(Object.keys(divs)) : null;
+    } catch (e) { validDivisions = null; }
 
-    let sharableWith = activity.sharableWith;
+   let sharableWith = activity.sharableWith;
     if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }
     else {
         if (!['not_sharable','same_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
@@ -114,20 +119,27 @@ function validateSpecialActivity(activity, activityName) {
             sharableWith.divisions = sharableWith.divisions.filter(d => typeof d === 'string' && validDivisions.has(d));
             if (sharableWith.divisions.length < ol) console.warn(`[SPECIAL_ACTIVITIES] "${activity.name}": Removed ${ol - sharableWith.divisions.length} orphaned division(s) from sharableWith`);
         }
+        // Normalize: 'custom' with empty divisions = same_division
+        if (sharableWith.type === 'custom' && sharableWith.divisions.length === 0) sharableWith.type = 'same_division';
+        if (sharableWith.type === 'all') sharableWith.type = 'same_division';
         sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
+        // Normalize allowedPairs for cross_division
+        if (sharableWith.type === 'cross_division') {
+            if (!sharableWith.allowedPairs || typeof sharableWith.allowedPairs !== 'object') { sharableWith.allowedPairs = {}; }
+            else { var _cp = {}; Object.keys(sharableWith.allowedPairs).forEach(function(k) { if (sharableWith.allowedPairs[k] === true) _cp[k] = true; }); sharableWith.allowedPairs = _cp; }
+        } else { delete sharableWith.allowedPairs; }
     }
-
-    let limitUsage = activity.limitUsage;
-    if (!limitUsage || typeof limitUsage !== 'object') { limitUsage = { enabled: false, divisions: {}, priorityList: [] }; }
+    let accessRestrictions = activity.accessRestrictions;
+    if (!accessRestrictions || typeof accessRestrictions !== 'object') { accessRestrictions = { enabled: false, divisions: {}, priorityList: [] }; }
     else {
-        limitUsage.enabled = limitUsage.enabled === true;
-        if (typeof limitUsage.divisions !== 'object' || limitUsage.divisions === null) limitUsage.divisions = {};
+        accessRestrictions.enabled = accessRestrictions.enabled === true;
+        if (typeof accessRestrictions.divisions !== 'object' || accessRestrictions.divisions === null) accessRestrictions.divisions = {};
         else if (validDivisions && validDivisions.size > 0) {
-            Object.keys(limitUsage.divisions).forEach(divKey => { if (!validDivisions.has(divKey)) { delete limitUsage.divisions[divKey]; } });
+            Object.keys(accessRestrictions.divisions).forEach(divKey => { if (!validDivisions.has(divKey)) { delete accessRestrictions.divisions[divKey]; } });
         }
-        if (!Array.isArray(limitUsage.priorityList)) limitUsage.priorityList = Object.keys(limitUsage.divisions);
-        else if (validDivisions && validDivisions.size > 0) limitUsage.priorityList = limitUsage.priorityList.filter(d => validDivisions.has(d));
-        if (limitUsage.usePriority === undefined) limitUsage.usePriority = false;
+        if (!Array.isArray(accessRestrictions.priorityList)) accessRestrictions.priorityList = Object.keys(accessRestrictions.divisions);
+        else if (validDivisions && validDivisions.size > 0) accessRestrictions.priorityList = accessRestrictions.priorityList.filter(d => validDivisions.has(d));
+        if (accessRestrictions.usePriority === undefined) accessRestrictions.usePriority = false;
     }
 
     let timeRules = activity.timeRules;
@@ -141,13 +153,24 @@ function validateSpecialActivity(activity, activityName) {
         else isIndoor = true;
     }
 
+    // ★ Subcategory: user-defined grouping inside "Special Activity" type
+    //   (e.g. "Food", "Theme"). Empty string = "Regular" (default bucket).
+    //   Trimmed; canonical case preserved as the user typed it.
+    const _subcategoryRaw = (typeof activity.subcategory === 'string') ? activity.subcategory.trim() : '';
+
     return {
         name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
-        sharableWith, limitUsage, timeRules,
+        subcategory: _subcategoryRaw,
+        sharableWith, accessRestrictions, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         maxUsagePeriod: activity.maxUsagePeriod || 'half',
-        frequencyWeeks: parseInt(activity.frequencyWeeks, 10) || 0, rainyDayExclusive: activity.rainyDayExclusive === true,
+        // Min days between visits. Renamed from legacy `frequencyWeeks` —
+        // kept as a fallback read for old configs, but always written as
+        // `frequencyDays` going forward.
+        frequencyDays: parseInt(activity.frequencyDays, 10) || parseInt(activity.frequencyWeeks, 10) || 0,
+        rainyDayExclusive: activity.rainyDayExclusive === true,
         rainyDayOnly: activity.rainyDayOnly === true, prepDuration: parseInt(activity.prepDuration, 10) || 0,
+        prepConfig: (function() { var pc = activity.prepConfig && typeof activity.prepConfig === 'object' ? activity.prepConfig : {}; return { timing: ['attached','flexible'].includes(pc.timing) ? pc.timing : 'attached', location: typeof pc.location === 'string' ? pc.location : '', sync: ['staggered','synchronized'].includes(pc.sync) ? pc.sync : 'staggered' }; })(),
         location: activity.location || null, isIndoor, rainyDayAvailable: isIndoor, availableOnRainyDay: isIndoor,
        ...(activity.rainyDayCapacity > 0 ? { rainyDayCapacity: parseInt(activity.rainyDayCapacity, 10) } : {}),
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
@@ -156,29 +179,71 @@ function validateSpecialActivity(activity, activityName) {
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
-        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? {
-            enabled: activity.multiPart.enabled === true,
-            totalParts: (function() { var tp = parseInt(activity.multiPart.totalParts, 10); return (!isNaN(tp) && tp >= 2 && tp <= 10) ? tp : 2; })(),
-            daysBetween: (function() { var db = parseInt(activity.multiPart.daysBetween, 10); return (!isNaN(db) && db >= 1 && db <= 14) ? db : 3; })()
-         } : { enabled: false, totalParts: 2, daysBetween: 3 },
+        // ★ rotationCohort: filter grades against valid divisions so deleted grades
+        //   don't stay in the cohort list and skew the equal-visits tracking.
+        rotationCohort: (activity.rotationCohort && typeof activity.rotationCohort === 'object') ? (function() {
+            const raw = Array.isArray(activity.rotationCohort.grades) ? activity.rotationCohort.grades.slice() : [];
+            const filtered = validDivisions && validDivisions.size > 0
+                ? raw.filter(function(g) { return validDivisions.has(g); })
+                : raw;
+            return { enabled: activity.rotationCohort.enabled === true, grades: filtered };
+        })() : { enabled: false, grades: [] },
+        multiPart: activity.multiPart && typeof activity.multiPart === 'object' ? (function() {
+            var tp = parseInt(activity.multiPart.totalParts, 10); if (isNaN(tp) || tp < 2 || tp > 10) tp = 2;
+            var db = parseInt(activity.multiPart.daysBetween, 10); if (isNaN(db) || db < 1 || db > 14) db = 3;
+            var existingParts = Array.isArray(activity.multiPart.parts) ? activity.multiPart.parts : [];
+            var parts = [];
+            for (var _pi = 0; _pi < tp; _pi++) {
+                var ep = existingParts[_pi] || {};
+                parts.push({ name: typeof ep.name === 'string' ? ep.name : '', location: typeof ep.location === 'string' ? ep.location : '' });
+            }
+            return { enabled: activity.multiPart.enabled === true, totalParts: tp, daysBetween: db, parts: parts };
+        })() : { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
         minFrequency: (activity.minFrequency != null && parseInt(activity.minFrequency, 10) > 0)
             ? parseInt(activity.minFrequency, 10) : null,
         minFrequencyPeriod: activity.minFrequencyPeriod || 'week',
        maxUsagePerGrade: (activity.maxUsagePerGrade && typeof activity.maxUsagePerGrade === 'object')
             ? activity.maxUsagePerGrade : {},
+        minFrequencyPerGrade: (activity.minFrequencyPerGrade && typeof activity.minFrequencyPerGrade === 'object')
+            ? activity.minFrequencyPerGrade : {},
+        exactFrequency: (activity.exactFrequency != null && parseInt(activity.exactFrequency, 10) > 0)
+            ? parseInt(activity.exactFrequency, 10) : null,
+        exactFrequencyPeriod: activity.exactFrequencyPeriod || '1week',
+        exactFrequencyPerGrade: (activity.exactFrequencyPerGrade && typeof activity.exactFrequencyPerGrade === 'object')
+            ? activity.exactFrequencyPerGrade : {},
         availableDays: Array.isArray(activity.availableDays) && activity.availableDays.length > 0
-            ? activity.availableDays : []
+            ? activity.availableDays : [],
+        // Canonical duration storage: `durations` is an array of allowed durations
+        // (in minutes). User can configure 1-to-N options — e.g. [20, 40] means
+        // "this special runs either 20 or 40 minutes." The legacy scalar `duration`
+        // stays in sync with durations[0] so older readers keep working.
+        durations: (function () {
+            const arr = Array.isArray(activity.durations)
+                ? activity.durations.map(d => parseInt(d, 10)).filter(d => !isNaN(d) && d > 0)
+                : [];
+            if (arr.length > 0) return arr.slice().sort((a, b) => a - b);
+            // Lazy-upgrade: older save with only `duration` scalar.
+            if (activity.duration != null && parseInt(activity.duration, 10) > 0) {
+                return [parseInt(activity.duration, 10)];
+            }
+            return [];
+        })(),
+        duration: (activity.duration != null && parseInt(activity.duration, 10) > 0)
+            ? parseInt(activity.duration, 10)
+            : (Array.isArray(activity.durations) && activity.durations[0] > 0
+                ? parseInt(activity.durations[0], 10) : null),
     };
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
-        limitUsage: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
-        maxUsage: null, maxUsagePeriod: 'half', frequencyWeeks: 0, rainyDayExclusive: false, prepDuration: 0,
+    return { name, type: 'Special', subcategory: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+        accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
+        maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
         rainyDayCapacity: null, rainyDayAvailableAllDay: false, fullGrade: false,
         multiPart: { enabled: false, totalParts: 2, daysBetween: 3, parts: [] },
-        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, availableDays: [] };
+        minFrequency: null, minFrequencyPeriod: 'week', maxUsagePerGrade: {}, minFrequencyPerGrade: {},
+        exactFrequency: null, exactFrequencyPeriod: '1week', exactFrequencyPerGrade: {}, availableDays: [] };
 }
 
 function validateAllActivities(activities) { if (!Array.isArray(activities)) return []; return activities.map(a => validateSpecialActivity(a, a?.name)); }
@@ -282,10 +347,36 @@ function initSpecialActivitiesTab() {
 function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
-        const allActivities = settings.specialActivities || settings.app1?.specialActivities || [];
-        console.log(`[SPECIAL_ACTIVITIES] loadData: Found ${allActivities.length} total activities`);
+        // ★ Merge BOTH storage copies (top-level `specialActivities` and
+        //   `app1.specialActivities`). They are written together by
+        //   saveGlobalSpecialActivities but cloud-sync races can leave them
+        //   drifted — reading only one would surface a stale/blank copy and the
+        //   next saveData() would then persist it, WIPING subcategory tags.
+        const _topActs  = Array.isArray(settings.specialActivities) ? settings.specialActivities : [];
+        const _app1Acts = Array.isArray(settings.app1 && settings.app1.specialActivities) ? settings.app1.specialActivities : [];
+        const allActivities = (_topActs.length || _app1Acts.length) ? [..._app1Acts, ..._topActs] : [];
+        // ★ Defensive dedupe on load. Cloud-sync races have produced storage
+        //   payloads with duplicate rows for the same name (sometimes one tagged
+        //   with a subcategory and another blank). Heal on read — and when a
+        //   duplicate exists, PREFER the row that carries a subcategory tag so a
+        //   blank copy can never shadow a tagged one (the tag-wipe bug).
+        const _hasSub = (s) => (s && typeof s.subcategory === 'string' && s.subcategory.trim() !== '');
+        const _seenNames = new Map();
+        for (const s of allActivities) {
+            if (!s || !s.name) continue;
+            const ex = _seenNames.get(s.name);
+            if (!ex) { _seenNames.set(s.name, s); continue; }
+            // Upgrade the kept row to a tagged duplicate if the kept one is blank.
+            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(s.name, s);
+        }
+        const dedupedActivities = [..._seenNames.values()];
+        const _rawMax = Math.max(_topActs.length, _app1Acts.length);
+        if (dedupedActivities.length < _rawMax) {
+            console.warn(`[SPECIAL_ACTIVITIES] loadData: healed duplicates within a copy (max copy ${_rawMax} → ${dedupedActivities.length} unique)`);
+        }
+        console.log(`[SPECIAL_ACTIVITIES] loadData: ${dedupedActivities.length} unique activities (merged top=${_topActs.length}+app1=${_app1Acts.length}, tag-preferring)`);
         specialActivities = []; rainyDayActivities = [];
-        allActivities.forEach(s => {
+        dedupedActivities.forEach(s => {
             const validated = validateSpecialActivity(s, s?.name);
             if (validated.rainyDayOnly === true) validated.rainyDayExclusive = true;
             if (validated.rainyDayExclusive) rainyDayActivities.push(validated);
@@ -294,7 +385,9 @@ function loadData() {
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error loading data:", e); specialActivities = []; rainyDayActivities = []; }
 }
 
+let _isSaving = false;
 function refreshFromStorage() {
+    if (_isSaving) return;
     const pS = JSON.stringify(specialActivities), pR = JSON.stringify(rainyDayActivities), pSel = selectedItemId;
     loadData();
     if (selectedItemId) { const [, n] = selectedItemId.split(/-(.+)/); if (!specialActivities.some(s=>s.name===n) && !rainyDayActivities.some(s=>s.name===n)) selectedItemId = null; }
@@ -302,9 +395,9 @@ function refreshFromStorage() {
         if (specialsListEl) renderMasterList(); if (rainyDayListEl) renderRainyDayList(); if (detailPaneEl) renderDetailPane();
     }
 }
-
 function saveData() {
     if (window.AccessControl?.canEditSetup && !window.AccessControl.canEditSetup()) return;
+    _isSaving = true;
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
@@ -314,18 +407,51 @@ function saveData() {
             window._specialActivitiesSyncTimeout = setTimeout(() => { window.forceSyncToCloud(); window._specialActivitiesSyncTimeout = null; }, 500);
         }
     } catch (e) { console.error("[SPECIAL_ACTIVITIES] Error saving data:", e); }
+    setTimeout(() => { _isSaving = false; }, 3000);
 }
-
 function renderMasterList() {
     if (!specialsListEl) return; specialsListEl.innerHTML = "";
     if (specialActivities.length === 0) { specialsListEl.innerHTML = '<div style="padding:20px; text-align:center; color:#9CA3AF;">No special activities yet.</div>'; return; }
     specialActivities.forEach(item => specialsListEl.appendChild(createMasterListItem(item, false)));
+    _saReorderInit(specialsListEl, specialActivities);
 }
 
 function renderRainyDayList() {
     if (!rainyDayListEl) return; rainyDayListEl.innerHTML = "";
     if (rainyDayActivities.length === 0) { rainyDayListEl.innerHTML = '<div style="padding:16px; text-align:center; color:#0369a1; font-size:0.85rem;">No rainy day activities yet.</div>'; return; }
     rainyDayActivities.forEach(item => rainyDayListEl.appendChild(createMasterListItem(item, true)));
+    _saReorderInit(rainyDayListEl, rainyDayActivities);
+}
+
+function _saReorderInit(listEl, sourceArr) {
+    if (!listEl || listEl._saDragInit) return;
+    listEl._saDragInit = true;
+    listEl.addEventListener('dragover', function (e) {
+        const dragging = listEl.querySelector(':scope > .sa-dragging');
+        if (!dragging) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        const siblings = Array.prototype.slice.call(listEl.children).filter(el => el !== dragging);
+        const next = siblings.find(sib => {
+            const r = sib.getBoundingClientRect();
+            return e.clientY < r.top + r.height / 2;
+        });
+        listEl.insertBefore(dragging, next || null);
+    });
+    listEl._saSourceArr = sourceArr;
+}
+
+function _saCommitOrder(listEl, sourceArr) {
+    if (!listEl || !Array.isArray(sourceArr)) return;
+    const names = Array.prototype.map.call(listEl.children, el => el.getAttribute('data-sa-name')).filter(Boolean);
+    const byName = {};
+    sourceArr.forEach(item => { if (item && item.name) byName[item.name] = item; });
+    const reordered = names.map(n => byName[n]).filter(Boolean);
+    // Append any items that weren't in the DOM (defensive)
+    sourceArr.forEach(item => { if (item && item.name && reordered.indexOf(item) < 0) reordered.push(item); });
+    sourceArr.length = 0;
+    reordered.forEach(it => sourceArr.push(it));
+    if (typeof saveData === 'function') saveData();
 }
 
 function createMasterListItem(item, isRainyDay) {
@@ -333,7 +459,21 @@ function createMasterListItem(item, isRainyDay) {
     const id = 'special-' + item.name;
     const el = document.createElement("div");
     el.className = "list-item" + (id === selectedItemId ? " selected" : "");
+    el.setAttribute('data-sa-name', item.name);
+    el.draggable = true;
+    el.style.cursor = 'grab';
     el.onclick = () => { selectedItemId = id; renderMasterList(); renderRainyDayList(); renderDetailPane(); };
+    el.addEventListener('dragstart', (e) => { el.classList.add('sa-dragging'); el.style.opacity = '0.45'; e.stopPropagation(); });
+    el.addEventListener('dragend', (e) => {
+        el.classList.remove('sa-dragging'); el.style.opacity = '1'; e.stopPropagation();
+        const parent = el.parentElement;
+        if (parent && parent._saSourceArr) _saCommitOrder(parent, parent._saSourceArr);
+    });
+    const grip = document.createElement('span');
+    grip.textContent = '⋮⋮';
+    grip.title = 'Drag to reorder';
+    grip.style.cssText = 'color:#9CA3AF; font-size:0.95rem; line-height:1; padding-right:6px; user-select:none; cursor:grab;';
+    el.appendChild(grip);
     const infoDiv = document.createElement("div");
     const nameEl = document.createElement("div"); nameEl.className = "list-item-name"; nameEl.textContent = item.name;
     // ★ v3.5: Show multi-part badge in master list
@@ -447,6 +587,7 @@ function renderDetailPane() {
 
     // ── WHO ───────────────────────────────────────────────────────────────────
     detailPaneEl.appendChild(sectionGroup('Who', [
+        section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
         section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
@@ -467,18 +608,151 @@ function renderDetailPane() {
 
     // ── HOW ───────────────────────────────────────────────────────────────────
     const howSections = [
-        section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)),
         section('Usage & Frequency', summaryMaxUsage(item), () => renderMaxUsageSettings(item)),
         section('Prep Duration', summaryPrepDuration(item), () => renderPrepDurationSettings(item)),
         section('Multi-Part Activity', summaryMultiPart(item), () => renderMultiPartSettings(item))
     ];
     if (window.getCampBuilderMode?.() === 'auto' || window._daBuilderMode === 'auto') {
+        // Duration and Scheduling Mode only apply when the auto-builder is active
+        howSections.unshift(section('Scheduling Mode', summarySchedulingMode(item), () => renderSchedulingMode(item)));
         howSections.splice(1, 0, section('Activity Duration', summaryDuration(item), () => renderDurationSettings(item)));
     }
     detailPaneEl.appendChild(sectionGroup('How', howSections));
 }
    
 
+
+// =========================================================================
+// SUBCATEGORY HELPERS
+// =========================================================================
+// Subcategories let the user split "Special Activity" into named buckets
+// (e.g. "Food", "Theme") so a layer can demand 1-of-each. Empty = "Regular".
+// Persistent user-defined subcategories (so a name stays even if no special
+// is tagged with it yet). Merged with tags found on existing specials.
+const SUBCAT_REGISTRY_KEY = 'specialSubcategoryRegistry_v1';
+function loadSubcategoryRegistry() {
+    try {
+        const raw = localStorage.getItem(SUBCAT_REGISTRY_KEY);
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.filter(x => typeof x === 'string') : [];
+    } catch { return []; }
+}
+function saveSubcategoryRegistry(list) {
+    try { localStorage.setItem(SUBCAT_REGISTRY_KEY, JSON.stringify(list || [])); } catch {}
+}
+function addSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim() : '';
+    if (!v) return false;
+    const reg = loadSubcategoryRegistry();
+    if (reg.some(r => r.toLowerCase() === v.toLowerCase())) return false;
+    reg.push(v);
+    saveSubcategoryRegistry(reg);
+    return true;
+}
+function removeSubcategory(name) {
+    const v = (typeof name === 'string') ? name.trim().toLowerCase() : '';
+    if (!v) return;
+    const reg = loadSubcategoryRegistry().filter(r => r.toLowerCase() !== v);
+    saveSubcategoryRegistry(reg);
+}
+
+function getAllSubcategories() {
+    const seen = new Set();
+    const out = [];
+    const push = (s) => {
+        const v = (typeof s === 'string') ? s.trim() : '';
+        if (!v) return;
+        const key = v.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(v);
+    };
+    loadSubcategoryRegistry().forEach(push);
+    (specialActivities || []).forEach(a => push(a?.subcategory));
+    (rainyDayActivities || []).forEach(a => push(a?.subcategory));
+    return out.sort((a, b) => a.localeCompare(b));
+}
+window.getSpecialSubcategories = getAllSubcategories;
+window.addSpecialSubcategory = addSubcategory;
+window.removeSpecialSubcategory = removeSubcategory;
+
+function summarySubcategory(item) {
+    const v = (typeof item.subcategory === 'string') ? item.subcategory.trim() : '';
+    // Untagged + legacy "Regular" both display as the implicit "Uncategorized" bucket.
+    if (!v || v.toLowerCase() === 'regular') return 'Uncategorized';
+    return v;
+}
+
+function renderSubcategory(item) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Group this special into a bucket (e.g. "Food", "Theme"). Layers can then demand a specific count per bucket. Leave blank = "Uncategorized".';
+    wrap.appendChild(desc);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+    const dl = document.createElement('datalist');
+    const dlId = 'sa-subcat-list';
+    dl.id = dlId;
+    getAllSubcategories().forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        dl.appendChild(opt);
+    });
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'Uncategorized';
+    input.value = (typeof item.subcategory === 'string') ? item.subcategory : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((item.subcategory || '') === v) return;
+        item.subcategory = v;
+        saveData();
+        renderMasterList();
+        renderRainyDayList();
+        renderDetailPane();
+    });
+
+    row.appendChild(input);
+    row.appendChild(dl);
+    wrap.appendChild(row);
+
+    // Existing buckets (clickable to select)
+    const existing = getAllSubcategories();
+    if (existing.length > 0) {
+        const chips = document.createElement('div');
+        chips.style.cssText = 'display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;';
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.75rem; color:#6B7280; margin-right:4px;';
+        label.textContent = 'Existing:';
+        chips.appendChild(label);
+        existing.forEach(name => {
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.textContent = name;
+            const isCur = (item.subcategory || '').trim().toLowerCase() === name.toLowerCase();
+            chip.style.cssText = 'padding:3px 10px; border-radius:12px; border:1px solid ' + (isCur ? '#147D91' : '#D1D5DB') + '; background:' + (isCur ? '#e6f4f7' : '#fff') + '; color:' + (isCur ? '#0A4A56' : '#111827') + '; font-size:0.78rem; cursor:pointer;';
+            chip.onclick = () => {
+                item.subcategory = isCur ? '' : name; // toggle off if already set
+                saveData();
+                renderMasterList();
+                renderRainyDayList();
+                renderDetailPane();
+            };
+            chips.appendChild(chip);
+        });
+        wrap.appendChild(chips);
+    }
+
+    return wrap;
+}
 
 // =========================================================================
 // SUMMARY HELPERS
@@ -491,21 +765,37 @@ function summaryMaxUsage(item) {
         var periodLabels = { 'half': 'per half', '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks' };
         parts.push('Max ' + m + ' ' + (periodLabels[period] || 'per half'));
     }
+    var exactF = parseInt(item.exactFrequency) || 0;
+    if (exactF > 0) {
+        var exactPeriodLabels = { '1week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Exactly ' + exactF + 'x ' + (exactPeriodLabels[item.exactFrequencyPeriod] || 'per week'));
+    }
     var minF = parseInt(item.minFrequency) || 0;
     if (minF > 0) {
-        parts.push('Min ' + minF + 'x ' + (item.minFrequencyPeriod === '2weeks' ? 'per 2 wks' : 'per week'));
+        var minPLabels = { 'week': 'per week', '2weeks': 'per 2 wks', '3weeks': 'per 3 wks', '4weeks': 'per 4 wks', 'half': 'per half' };
+        parts.push('Min ' + minF + 'x ' + (minPLabels[item.minFrequencyPeriod] || 'per week'));
     }
     var gradeCount = Object.keys(item.maxUsagePerGrade || {}).filter(function(k) { return (item.maxUsagePerGrade[k] || 0) > 0; }).length;
     if (gradeCount > 0) parts.push(gradeCount + ' grade override' + (gradeCount > 1 ? 's' : ''));
     return parts.length ? parts.join(' · ') : 'No limit';
 }
 function summaryFullGrade(item) { return item.fullGrade ? 'Full grade together' : 'Individual bunks'; }
-function summarySharing(item) { if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return "1 bunk at a time"; return 'Up to ' + (parseInt(item.sharableWith.capacity,10)||2) + ' bunks at once'; }
+function summarySharing(item) {
+    var sw = item.sharableWith;
+    if (!sw || sw.type === 'not_sharable') return '1 bunk at a time';
+    var cap = parseInt(sw.capacity, 10) || 2;
+    if (sw.type === 'same_division') return 'Up to ' + cap + ' bunks (same grade)';
+    if (sw.type === 'cross_division') {
+        var pc = Object.keys(sw.allowedPairs || {}).filter(function(k) { return sw.allowedPairs[k]; }).length;
+        return 'Grade pairs — ' + (pc > 0 ? pc + ' pair' + (pc !== 1 ? 's' : '') : 'no pairs set') + ', max ' + cap;
+    }
+    return 'Up to ' + cap + ' bunks at once';
+}
 function summarySchedulingMode(item) {
     if (item.fullGradePerGrade && typeof item.fullGradePerGrade === 'object'
         && Object.keys(item.fullGradePerGrade).length > 0) {
         var fullCount = 0, indivCount = 0;
-        var allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
         allDivs.forEach(function(div) {
             if (window.isFullGradeForDivision?.(item.name, div)) fullCount++; else indivCount++;
         });
@@ -516,7 +806,7 @@ function summarySchedulingMode(item) {
     if (!item.sharableWith || item.sharableWith.type === 'not_sharable') return 'Individual — 1 bunk at a time';
     return 'Individual — up to ' + (parseInt(item.sharableWith.capacity, 10) || 2) + ' bunks at once';
 }
-function summaryAccess(item) { if (!item.limitUsage?.enabled) return "Open to all grades"; const c = Object.keys(item.limitUsage.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.limitUsage.usePriority?" \u00B7 prioritized":""); }
+function summaryAccess(item) { if (!item.accessRestrictions?.enabled) return "Open to all grades"; const c = Object.keys(item.accessRestrictions.divisions||{}).length; if (c===0) return "\u26A0 Restricted (none selected)"; return c + ' grade' + (c!==1?'s':'') + ' allowed' + (item.accessRestrictions.usePriority?" \u00B7 prioritized":""); }
 function summaryTime(item) { const c = (item.timeRules||[]).length; return c ? c + ' rule(s) active' : "Available all day"; }
 function summaryWeather(item) {
     let s = item.isIndoor ? 'Indoor · Rainy day available' : 'Outdoor · Disabled on rain';
@@ -533,8 +823,114 @@ function summaryMultiPart(item) {
     if (!item.multiPart?.enabled) return 'Single session';
     return item.multiPart.totalParts + '-part activity';
 }
+   function summaryDuration(item) {
+    var d = parseInt(item.duration) || 0;
+    if (d <= 0) return 'Not set';
+    var total = d + (parseInt(item.prepDuration) || 0);
+    if (item.prepDuration > 0) return d + 'min (+' + item.prepDuration + 'min prep = ' + total + 'min total)';
+    return d + ' minutes';
+}
+function renderDurationSettings(item) {
+    var container = document.createElement('div');
+    var activityName = item.name;
+    
+    function getLiveItem() {
+        var found = specialActivities.find(function(s) { return s.name === activityName; });
+        if (!found) found = rainyDayActivities.find(function(s) { return s.name === activityName; });
+        return found || item;
+    }
+    
+    function persistDuration(val) {
+        var live = getLiveItem();
+        live.duration = val;
+        try {
+            var gs = window.loadGlobalSettings?.() || {};
+            [gs.specialActivities, gs.app1?.specialActivities].forEach(function(arr) {
+                if (!Array.isArray(arr)) return;
+                var target = arr.find(function(s) { return s.name === activityName; });
+                if (target) target.duration = val;
+            });
+            window.saveGlobalSettings?.('app1', gs.app1);
+            window.saveGlobalSettings?.('specialActivities', gs.specialActivities || gs.app1?.specialActivities);
+        } catch(e) {}
+    }
+    
+    function buildUI() {
+        var live = getLiveItem();
+        var hasDur = (parseInt(live.duration) || 0) > 0;
+        var currentDur = parseInt(live.duration) || 30;
+        container.innerHTML = '';
+        
+        container.innerHTML =
+            '<div style="margin-bottom:16px;">'
+            + '<p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Set a fixed duration for this activity. The auto-scheduler will use this instead of the layer\'s default block size.</p>'
+            + '<div style="background:' + (hasDur ? '#eff6ff' : '#f9fafb') + '; border:1px solid ' + (hasDur ? '#bfdbfe' : '#e5e7eb') + '; border-radius:10px; padding:14px;">'
+            + '<div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hasDur ? '12px' : '0') + ';">'
+            + '<div style="flex:1;">'
+            + '<div style="font-weight:600; color:' + (hasDur ? '#1e40af' : '#374151') + ';">' + (hasDur ? currentDur + ' minutes' : 'Not Set') + '</div>'
+            + '<div style="font-size:0.8rem; color:' + (hasDur ? '#3b82f6' : '#6b7280') + ';">' + (hasDur ? 'Scheduler will use this duration' : 'Uses skeleton block duration') + '</div>'
+            + '</div>'
+            + '<label class="switch"><input type="checkbox" id="duration-toggle" ' + (hasDur ? 'checked' : '') + '><span class="slider"></span></label>'
+            + '</div>'
+            + '<div id="duration-config" style="display:' + (hasDur ? 'block' : 'none') + ';">'
+            + '<div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #bfdbfe; margin-top:8px;">'
+            + '<label style="font-size:0.85rem;">Duration:</label>'
+            + '<input type="number" id="duration-input" min="5" max="180" step="5" value="' + currentDur + '" style="width:70px; padding:6px 10px; border:1px solid #bfdbfe; border-radius:6px; text-align:center;">'
+            + '<span style="font-size:0.85rem; color:#64748b;">minutes</span>'
+            + '</div></div></div></div>';
+        
+        var tog = container.querySelector('#duration-toggle');
+        if (tog) {
+            tog.addEventListener('change', function() {
+                if (this.checked) {
+                    var live = getLiveItem();
+                    persistDuration(parseInt(live.duration) > 0 ? parseInt(live.duration) : 30);
+                } else {
+                    persistDuration(null);
+                }
+                buildUI();
+                var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                if (s) s.textContent = summaryDuration(getLiveItem());
+            });
+        }
+        
+        var di = container.querySelector('#duration-input');
+        if (di) {
+            var saveTimeout = null;
+            di.addEventListener('input', function() {
+                var v = parseInt(this.value, 10);
+                if (!isNaN(v) && v >= 5 && v <= 180) {
+                    var display = container.querySelector('div[style*="font-weight:600"]');
+                    if (display) display.textContent = v + ' minutes';
+                    if (saveTimeout) clearTimeout(saveTimeout);
+                    saveTimeout = setTimeout(function() {
+                        persistDuration(v);
+                        var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                        if (s) s.textContent = summaryDuration(getLiveItem());
+                    }, 500);
+                }
+            });
+            di.addEventListener('blur', function() {
+                if (saveTimeout) { clearTimeout(saveTimeout); saveTimeout = null; }
+                var v = parseInt(this.value, 10);
+                if (!isNaN(v) && v >= 5 && v <= 180) {
+                    persistDuration(v);
+                    var s = container.closest('.detail-section')?.querySelector('.detail-section-summary');
+                    if (s) s.textContent = summaryDuration(getLiveItem());
+                }
+            });
+        }
+    }
+    
+    buildUI();
+    return container;
+}
     function summaryPrepDuration(item) {
-    return (item.prepDuration || 0) > 0 ? item.prepDuration + 'min prep' : 'None';
+    if (!(item.prepDuration > 0)) return 'None';
+    var timing = (item.prepConfig && item.prepConfig.timing === 'flexible') ? 'spread out' : 'back to back';
+    var sync = (item.prepConfig && item.prepConfig.sync === 'synchronized') ? ', synced' : '';
+    var loc = (item.prepConfig && item.prepConfig.location) ? ', @' + item.prepConfig.location : '';
+    return item.prepDuration + 'min (' + timing + sync + loc + ')';
 }
 function summaryDays(item) {
     const days = item.availableDays;
@@ -551,6 +947,7 @@ function renderDayAvailability(item) {
     };
     if (!Array.isArray(item.availableDays) || item.availableDays.length === 0) {
         item.availableDays = [...allDays];
+        saveData();
     }
     const note = document.createElement('div');
     note.style.cssText = 'font-size:0.82rem; color:#6B7280; margin-bottom:12px;';
@@ -572,11 +969,6 @@ function renderDayAvailability(item) {
                 item.availableDays.push(day);
             }
             saveData();
-            container.innerHTML = '';
-            container.appendChild(note.cloneNode(true));
-            const newGrid = renderDayAvailability(item).querySelector('div') || container;
-            saveData();
-            // re-render cleanly
             const p = container.parentElement;
             if (p) { p.innerHTML = ''; p.appendChild(renderDayAvailability(item)); }
             updateSummary();
@@ -655,7 +1047,7 @@ function renderSchedulingMode(item) {
             saveData(); renderContent(); updateSummary();
         };
         btnPerGrade.onclick = () => {
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.fullGradePerGrade || typeof item.fullGradePerGrade !== 'object') item.fullGradePerGrade = {};
             allDivs.forEach(div => { if (!(div in item.fullGradePerGrade)) item.fullGradePerGrade[div] = !!item.fullGrade; });
             saveData(); renderContent(); updateSummary();
@@ -685,7 +1077,7 @@ function renderSchedulingMode(item) {
 
         } else if (mode === 'per_grade') {
             // ── PER GRADE MODE ──
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             const perGrade = item.fullGradePerGrade || {};
 
             const infoBox = document.createElement("div");
@@ -926,7 +1318,7 @@ function renderMaxUsageSettings(item) {
             const ceilGradeGrid = document.createElement('div');
             ceilGradeGrid.style.display = hasGradeOverrides ? 'flex' : 'none';
             ceilGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.maxUsagePerGrade) item.maxUsagePerGrade = {};
             allDivs.forEach(function(div) {
                 const row = document.createElement('div');
@@ -967,6 +1359,129 @@ function renderMaxUsageSettings(item) {
             };
             ceilDetail.appendChild(ceilGradeGrid);
             container.appendChild(ceilDetail);
+        }
+
+        // ── A2: EXACT FREQUENCY ────────────────────────────────────────────
+        const exactDivider = document.createElement('div');
+        exactDivider.style.cssText = 'border-top:1px solid #F3F4F6; margin:16px 0 14px 0;';
+        container.appendChild(exactDivider);
+
+        const exactLabel = document.createElement('div');
+        exactLabel.style.cssText = 'font-weight:600; font-size:0.82rem; color:#374151; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;';
+        exactLabel.textContent = 'Exact frequency';
+        container.appendChild(exactLabel);
+
+        const exactF = parseInt(item.exactFrequency) || 0;
+        const exactEnabled = exactF > 0;
+
+        const exactTogRow = document.createElement('div');
+        exactTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:' + (exactEnabled ? '12px' : '4px') + ';';
+        const exactTog = document.createElement('label'); exactTog.className = 'switch';
+        const exactCb = document.createElement('input'); exactCb.type = 'checkbox'; exactCb.checked = exactEnabled;
+        const exactSl = document.createElement('span'); exactSl.className = 'slider';
+        exactTog.appendChild(exactCb); exactTog.appendChild(exactSl);
+        const exactLbl = document.createElement('span');
+        exactLbl.style.cssText = 'font-size:0.88rem; color:#374151;';
+        exactLbl.textContent = 'Require exactly this many times per period';
+        exactTogRow.appendChild(exactTog); exactTogRow.appendChild(exactLbl);
+        container.appendChild(exactTogRow);
+        exactCb.onchange = () => { item.exactFrequency = exactCb.checked ? 1 : null; saveData(); rebuild(); updateSummary(); };
+
+        if (exactEnabled) {
+            const exactDetail = document.createElement('div');
+            exactDetail.style.cssText = 'padding-left:12px; border-left:2px solid #8b5cf6; margin-bottom:14px;';
+
+            const exactRow = document.createElement('div');
+            exactRow.style.cssText = 'display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;';
+            exactRow.innerHTML = '<span style="font-size:0.85rem; color:#374151;">Exactly:</span>';
+            const exactIn = document.createElement('input');
+            exactIn.type = 'number'; exactIn.min = '1'; exactIn.max = '99'; exactIn.value = exactF || 1;
+            exactIn.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+            const exactSuffix = document.createElement('span');
+            exactSuffix.style.cssText = 'font-size:0.85rem; color:#374151;';
+            exactSuffix.textContent = 'time(s)';
+            const exactPeriodSel = document.createElement('select');
+            exactPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
+            [{ value:'1week', label:'per week' }, { value:'2weeks', label:'per 2 weeks' },
+             { value:'3weeks', label:'per 3 weeks' }, { value:'4weeks', label:'per 4 weeks' },
+             { value:'half', label:'per half' }].forEach(function(p) {
+                const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
+                if ((item.exactFrequencyPeriod || '1week') === p.value) opt.selected = true;
+                exactPeriodSel.appendChild(opt);
+            });
+            exactIn.onchange = () => { item.exactFrequency = Math.max(1, parseInt(exactIn.value) || 1); saveData(); updateSummary(); };
+            exactPeriodSel.onchange = () => { item.exactFrequencyPeriod = exactPeriodSel.value; saveData(); updateSummary(); };
+            exactRow.appendChild(exactIn); exactRow.appendChild(exactSuffix); exactRow.appendChild(exactPeriodSel);
+            exactDetail.appendChild(exactRow);
+
+            const exactNote = document.createElement('div');
+            exactNote.style.cssText = 'font-size:0.78rem; color:#5b21b6; background:#ede9fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
+            var _exactPeriodLabels = { '1week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
+            exactNote.innerHTML = 'The scheduler will ensure every bunk gets this activity exactly <strong>' +
+                (item.exactFrequency || 1) + 'x</strong> ' +
+                (_exactPeriodLabels[item.exactFrequencyPeriod] || 'per week') +
+                ' — no more, no less.';
+            exactDetail.appendChild(exactNote);
+
+            // per-grade exact toggle
+            const exactPerGradeTogRow = document.createElement('div');
+            exactPerGradeTogRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin:4px 0 6px 0;';
+            const exactPgTog = document.createElement('label'); exactPgTog.className = 'switch';
+            const exactPgCb = document.createElement('input'); exactPgCb.type = 'checkbox';
+            const hasExactGradeOverrides = Object.keys(item.exactFrequencyPerGrade || {}).length > 0;
+            exactPgCb.checked = hasExactGradeOverrides;
+            const exactPgSl = document.createElement('span'); exactPgSl.className = 'slider';
+            exactPgTog.appendChild(exactPgCb); exactPgTog.appendChild(exactPgSl);
+            const exactPgLbl = document.createElement('span');
+            exactPgLbl.style.cssText = 'font-size:0.82rem; color:#374151;';
+            exactPgLbl.textContent = 'Different exact count per grade';
+            exactPerGradeTogRow.appendChild(exactPgTog); exactPerGradeTogRow.appendChild(exactPgLbl);
+            exactDetail.appendChild(exactPerGradeTogRow);
+
+            const exactGradeGrid = document.createElement('div');
+            exactGradeGrid.style.display = hasExactGradeOverrides ? 'flex' : 'none';
+            exactGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
+            const exactAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+            if (!item.exactFrequencyPerGrade) item.exactFrequencyPerGrade = {};
+            exactAllDivs.forEach(function(div) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const lbl = document.createElement('span');
+                lbl.style.cssText = 'font-size:0.82rem; color:#374151; flex:1;';
+                lbl.textContent = div;
+                const inp = document.createElement('input');
+                inp.type = 'number'; inp.min = '0'; inp.max = '99';
+                inp.placeholder = String(parseInt(item.exactFrequency) || '—');
+                const gv = item.exactFrequencyPerGrade[div];
+                if (gv > 0) inp.value = gv;
+                inp.style.cssText = 'width:56px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.85rem;';
+                inp.onchange = () => {
+                    const v = parseInt(inp.value);
+                    if (v > 0) item.exactFrequencyPerGrade[div] = v;
+                    else delete item.exactFrequencyPerGrade[div];
+                    saveData(); updateSummary();
+                };
+                const clrBtn = document.createElement('button');
+                clrBtn.textContent = '✕'; clrBtn.title = 'Clear override';
+                clrBtn.style.cssText = 'background:none; border:none; color:#D1D5DB; cursor:pointer; font-size:0.8rem; padding:2px 4px; line-height:1;';
+                clrBtn.onmouseover = () => clrBtn.style.color = '#9CA3AF';
+                clrBtn.onmouseout = () => clrBtn.style.color = '#D1D5DB';
+                clrBtn.onclick = () => { inp.value = ''; delete item.exactFrequencyPerGrade[div]; saveData(); updateSummary(); };
+                row.appendChild(lbl); row.appendChild(inp); row.appendChild(clrBtn);
+                exactGradeGrid.appendChild(row);
+            });
+            exactPgCb.onchange = () => {
+                if (!exactPgCb.checked) {
+                    item.exactFrequencyPerGrade = {};
+                    saveData(); updateSummary();
+                }
+                exactGradeGrid.style.display = exactPgCb.checked ? 'flex' : 'none';
+                exactGradeGrid.style.flexDirection = 'column';
+                exactGradeGrid.style.gap = '5px';
+                exactGradeGrid.style.marginTop = '6px';
+            };
+            exactDetail.appendChild(exactGradeGrid);
+            container.appendChild(exactDetail);
         }
 
         // ── B: MINIMUM (FLOOR) ────────────────────────────────────────────
@@ -1010,7 +1525,9 @@ function renderMaxUsageSettings(item) {
             minSuffix.textContent = 'time(s) per';
             const minPeriodSel = document.createElement('select');
             minPeriodSel.style.cssText = 'padding:5px 8px; border-radius:6px; border:1px solid #D1D5DB; font-size:0.85rem; background:white; cursor:pointer;';
-            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' }].forEach(function(p) {
+            [{ value:'week', label:'week' }, { value:'2weeks', label:'2 weeks' },
+             { value:'3weeks', label:'3 weeks' }, { value:'4weeks', label:'4 weeks' },
+             { value:'half', label:'half' }].forEach(function(p) {
                 const opt = document.createElement('option'); opt.value = p.value; opt.textContent = p.label;
                 if ((item.minFrequencyPeriod || 'week') === p.value) opt.selected = true;
                 minPeriodSel.appendChild(opt);
@@ -1020,11 +1537,12 @@ function renderMaxUsageSettings(item) {
             minRow.appendChild(minIn); minRow.appendChild(minSuffix); minRow.appendChild(minPeriodSel);
             minDetail.appendChild(minRow);
 
+            var _minPeriodLabels = { 'week': 'per week', '2weeks': 'every 2 weeks', '3weeks': 'every 3 weeks', '4weeks': 'every 4 weeks', 'half': 'per half' };
             const minNote = document.createElement('div');
             minNote.style.cssText = 'font-size:0.78rem; color:#0369a1; background:#e0f2fe; padding:8px 10px; border-radius:6px; line-height:1.5; margin-bottom:10px;';
             minNote.innerHTML = 'The scheduler will actively push to get every bunk this activity at least <strong>' +
                 (item.minFrequency || 1) + 'x</strong> ' +
-                (item.minFrequencyPeriod === '2weeks' ? 'every 2 weeks' : 'per week') + '.';
+                (_minPeriodLabels[item.minFrequencyPeriod] || 'per week') + '.';
             minDetail.appendChild(minNote);
 
             // per-grade min toggle
@@ -1045,7 +1563,7 @@ function renderMaxUsageSettings(item) {
             const minGradeGrid = document.createElement('div');
             minGradeGrid.style.display = hasMinGradeOverrides ? 'flex' : 'none';
             minGradeGrid.style.cssText += 'flex-direction:column; gap:5px; margin-top:6px;';
-            const minAllDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+            const minAllDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
             if (!item.minFrequencyPerGrade) item.minFrequencyPerGrade = {};
             minAllDivs.forEach(function(div) {
                 const row = document.createElement('div');
@@ -1093,39 +1611,147 @@ function renderMaxUsageSettings(item) {
     return container;
 }
 // =========================================================================
-// RENDER: Sharing — toggle pattern matching fields.js
+// RENDER: Sharing — No Sharing / Same Grade / Grade Pairs
 // =========================================================================
 function renderSharing(item) {
-    const container = document.createElement("div");
-    const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summarySharing(item); };
-    const renderContent = () => {
+    var container = document.createElement("div");
+    var updateSummary = function() { var s = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary'); if (s) s.textContent = summarySharing(item); };
+    var renderContent = function() {
+
         container.innerHTML = "";
-        const rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
-        const isSharable = rules.type !== 'not_sharable';
-        const toggleRow = document.createElement("div"); toggleRow.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:16px;";
-        const tog = document.createElement("label"); tog.className = "switch";
-        const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = isSharable;
-        cb.onchange = () => {
-            if (cb.checked) { rules.type = 'same_division'; rules.capacity = rules.capacity > 1 ? rules.capacity : 2; }
-            else { rules.type = 'not_sharable'; rules.capacity = 1; }
-            rules.divisions = []; item.sharableWith = rules; saveData(); renderContent(); updateSummary();
-        };
-        const sl = document.createElement("span"); sl.className = "slider"; tog.appendChild(cb); tog.appendChild(sl);
-        const label = document.createElement("span"); label.style.cssText = "font-weight:500; font-size:0.9rem;"; label.textContent = "Allow Sharing";
-        toggleRow.appendChild(tog); toggleRow.appendChild(label); container.appendChild(toggleRow);
-        if (!isSharable) { const n = document.createElement("div"); n.style.cssText = "color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;"; n.textContent = "Only 1 bunk can use this activity at a time."; container.appendChild(n); }
-        else {
-            const det = document.createElement("div"); det.style.cssText = "margin-top:4px; padding-left:12px; border-left:2px solid #147D91;";
-            const capRow = document.createElement("div"); capRow.style.cssText = "display:flex; align-items:center; gap:8px; margin-bottom:12px;";
-            capRow.innerHTML = '<span style="font-size:0.85rem;">Max bunks at once:</span>';
-            const capIn = document.createElement("input"); capIn.type = "number"; capIn.min = "2"; capIn.max = "20"; capIn.value = rules.capacity || 2;
-            capIn.style.cssText = "width:60px; padding:4px; border-radius:6px; border:1px solid #D1D5DB; text-align:center;";
-            capIn.onchange = () => { rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value)||2)); capIn.value = rules.capacity; item.sharableWith = rules; saveData(); updateSummary(); };
-            capRow.appendChild(capIn); det.appendChild(capRow);
-            const note = document.createElement("div"); note.style.cssText = "color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;";
-            note.innerHTML = 'Up to <strong>' + (rules.capacity||2) + '</strong> bunks <strong>within the same grade</strong> can use this simultaneously.';
-            det.appendChild(note); container.appendChild(det);
+        var rules = item.sharableWith || { type: 'not_sharable', divisions: [], capacity: 2 };
+        if (!rules.allowedPairs || typeof rules.allowedPairs !== 'object') rules.allowedPairs = {};
+        item.sharableWith = rules;
+
+        function pk(a, b) { return [a, b].sort().join('|'); }
+
+        // ── Mode button row ───────────────────────────────────────
+        var modeWrap = document.createElement('div');
+        modeWrap.style.cssText = 'display:flex; gap:0; margin-bottom:14px; border-radius:8px; overflow:hidden; border:1px solid #E5E7EB;';
+        var modeDefs = [
+            { id: 'not_sharable',  label: 'No Sharing' },
+            { id: 'same_division', label: 'Same Grade' },
+            { id: 'cross_division',label: 'Grade Pairs' }
+        ];
+        modeDefs.forEach(function(m, i) {
+            var btn = document.createElement('button');
+            btn.textContent = m.label;
+            var active = rules.type === m.id;
+            btn.style.cssText = 'flex:1; padding:9px 4px; border:none; cursor:pointer; font-size:0.84rem; transition:all 0.15s;'
+                + (i > 0 ? 'border-left:1px solid #E5E7EB;' : '')
+                + (active ? 'background:#0F5F6E; color:white; font-weight:600;' : 'background:#fff; color:#374151;');
+            btn.onclick = (function(mId) { return function() {
+                rules.type = mId;
+                if (mId === 'not_sharable') rules.capacity = 1;
+                else if (!rules.capacity || rules.capacity < 2) rules.capacity = 2;
+                if (mId !== 'cross_division') rules.allowedPairs = {};
+                item.sharableWith = rules; saveData(); renderContent(); updateSummary();
+            }; })(m.id);
+            modeWrap.appendChild(btn);
+        });
+        container.appendChild(modeWrap);
+
+        if (rules.type === 'not_sharable') {
+            var nNote = document.createElement('div');
+            nNote.style.cssText = 'color:#6B7280; font-size:0.85rem; padding:10px; background:#F9FAFB; border-radius:8px;';
+            nNote.textContent = 'Only 1 bunk can use this activity at a time.';
+            container.appendChild(nNote);
+            return;
         }
+
+        // ── Detail panel ──────────────────────────────────────────
+        var det = document.createElement('div');
+        det.style.cssText = 'padding-left:12px; border-left:2px solid #147D91;';
+
+        // Capacity row
+        var capRow = document.createElement('div');
+        capRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:12px;';
+        var capLbl = document.createElement('span'); capLbl.style.cssText = 'font-size:0.85rem; color:#374151;';
+        capLbl.textContent = 'Max bunks at once:';
+        var capIn = document.createElement('input');
+        capIn.type = 'number'; capIn.min = '2'; capIn.max = '20'; capIn.value = rules.capacity || 2;
+        capIn.style.cssText = 'width:60px; padding:4px 6px; border-radius:6px; border:1px solid #D1D5DB; text-align:center; font-size:0.88rem;';
+        capIn.onchange = function() {
+            rules.capacity = Math.min(20, Math.max(2, parseInt(capIn.value)||2));
+            capIn.value = rules.capacity;
+            item.sharableWith = rules; saveData(); updateSummary();
+        };
+        capRow.appendChild(capLbl); capRow.appendChild(capIn);
+        det.appendChild(capRow);
+
+        if (rules.type === 'same_division') {
+            var sdNote = document.createElement('div');
+            sdNote.style.cssText = 'color:#6B7280; font-size:0.8rem; padding:10px; background:#f0f9fb; border-radius:8px; line-height:1.5;';
+            sdNote.innerHTML = 'Up to <strong>' + (rules.capacity || 2) + '</strong> bunks <strong>within the same grade</strong> can share this slot.';
+            det.appendChild(sdNote);
+        }
+
+        if (rules.type === 'cross_division') {
+            var allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+
+            var matrixLbl = document.createElement('div');
+            matrixLbl.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:500; margin-bottom:8px;';
+            matrixLbl.textContent = 'Which grade combinations can share this activity at the same time?';
+            det.appendChild(matrixLbl);
+
+            if (allDivs.length < 2) {
+                var noGr = document.createElement('div');
+                noGr.style.cssText = 'font-size:0.8rem; color:#6B7280; padding:8px; background:#F9FAFB; border-radius:6px;';
+                noGr.textContent = 'No grades configured yet.';
+                det.appendChild(noGr);
+            } else {
+                // Upper-triangle layout: one row per grade (A), chips for all grades >= A
+                // Diagonal chip = same-grade sharing
+                var pairCount = Object.keys(rules.allowedPairs).filter(function(k) { return rules.allowedPairs[k]; }).length;
+                var pairWrap = document.createElement('div');
+                pairWrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-bottom:8px;';
+
+                allDivs.forEach(function(rowGrade, ri) {
+                    var colGrades = allDivs.slice(ri); // diagonal + upper
+                    if (colGrades.length === 0) return;
+
+                    var row = document.createElement('div');
+                    row.style.cssText = 'display:flex; align-items:center; gap:6px; flex-wrap:wrap;';
+
+                    var rowLbl = document.createElement('span');
+                    rowLbl.style.cssText = 'font-size:0.8rem; color:#374151; font-weight:500; flex-shrink:0; white-space:nowrap;';
+                    rowLbl.textContent = rowGrade + ':';
+                    row.appendChild(rowLbl);
+
+                    colGrades.forEach(function(colGrade) {
+                        var key = pk(rowGrade, colGrade);
+                        var isOn = rules.allowedPairs[key] === true;
+                        var chip = document.createElement('button');
+                        chip.type = 'button';
+                        var isSame = rowGrade === colGrade;
+                        chip.textContent = isSame ? '(same grade)' : colGrade;
+                        chip.style.cssText = 'padding:4px 10px; border-radius:20px; font-size:0.78rem; cursor:pointer; transition:all 0.12s; border:1px solid '
+                            + (isOn ? '#0F5F6E' : '#D1D5DB') + '; background:'
+                            + (isOn ? '#e6f4f7' : '#F9FAFB') + '; color:'
+                            + (isOn ? '#0F5F6E' : '#6B7280') + '; font-weight:' + (isOn ? '600' : '400') + ';';
+                        if (isSame) chip.style.cssText += 'font-style:italic;';
+                        chip.onclick = (function(k) { return function() {
+                            if (rules.allowedPairs[k]) delete rules.allowedPairs[k];
+                            else rules.allowedPairs[k] = true;
+                            item.sharableWith = rules; saveData(); renderContent(); updateSummary();
+                        }; })(key);
+                        row.appendChild(chip);
+                    });
+                    pairWrap.appendChild(row);
+                });
+                det.appendChild(pairWrap);
+
+                var countNote = document.createElement('div');
+                countNote.style.cssText = 'font-size:0.75rem; padding:7px 10px; border-radius:6px; '
+                    + (pairCount > 0 ? 'color:#0369a1; background:#e0f2fe;' : 'color:#92400E; background:#fffbeb;');
+                countNote.textContent = pairCount > 0
+                    ? pairCount + ' pair' + (pairCount !== 1 ? 's' : '') + ' allowed to share simultaneously.'
+                    : 'No pairs selected — effectively the same as No Sharing.';
+                det.appendChild(countNote);
+            }
+        }
+
+        container.appendChild(det);
     };
     renderContent(); return container;
 }
@@ -1138,7 +1764,7 @@ function renderAccess(item) {
     const updateSummary = () => { const s = container.closest('.detail-section')?.querySelector('.detail-section-summary'); if (s) s.textContent = summaryAccess(item); };
     const renderContent = () => {
         container.innerHTML = "";
-        const rules = item.limitUsage || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
+        const rules = item.accessRestrictions || { enabled: false, divisions: {}, priorityList: [], usePriority: false };
         if (!rules.priorityList) rules.priorityList = Object.keys(rules.divisions || {});
         if (rules.usePriority === undefined) rules.usePriority = false;
         const modeWrap = document.createElement("div"); modeWrap.style.cssText = "display:flex; gap:12px; margin-bottom:16px;";
@@ -1146,10 +1772,10 @@ function renderAccess(item) {
         btnAll.style.cssText = 'flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:' + (!rules.enabled ? '#e6f4f7' : '#fff') + '; color:' + (!rules.enabled ? '#0F5F6E' : '#333') + '; border-color:' + (!rules.enabled ? '#147D91' : '#E5E7EB') + '; font-weight:' + (!rules.enabled ? '600' : '400') + ';';
         const btnRes = document.createElement("button"); btnRes.textContent = "Specific Grades Only";
         btnRes.style.cssText = 'flex:1; padding:8px; border-radius:6px; border:1px solid #E5E7EB; cursor:pointer; background:' + (rules.enabled ? '#e6f4f7' : '#fff') + '; color:' + (rules.enabled ? '#0F5F6E' : '#333') + '; border-color:' + (rules.enabled ? '#147D91' : '#E5E7EB') + '; font-weight:' + (rules.enabled ? '600' : '400') + ';';
-        btnAll.onclick = () => { rules.enabled = false; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
-        btnRes.onclick = () => { rules.enabled = true; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
+        btnAll.onclick = () => { rules.enabled = false; item.accessRestrictions = rules; saveData(); renderContent(); updateSummary(); };
+        btnRes.onclick = () => { rules.enabled = true; item.accessRestrictions = rules; saveData(); renderContent(); updateSummary(); };
         modeWrap.appendChild(btnAll); modeWrap.appendChild(btnRes); container.appendChild(modeWrap);
-        const allDivs = Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+        const allDivs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
         if (rules.enabled) {
             const body = document.createElement("div"); body.style.cssText = "padding-left:12px; border-left:2px solid #147D91; margin-bottom:16px;";
             const chipLabel = document.createElement("div"); chipLabel.style.cssText = "font-size:0.85rem; font-weight:500; margin-bottom:8px; color:#374151;"; chipLabel.textContent = "Select allowed grades:"; body.appendChild(chipLabel);
@@ -1157,7 +1783,7 @@ function renderAccess(item) {
             allDivs.forEach(divName => {
                 const isAllowed = !!rules.divisions[divName];
                 const c = document.createElement("span"); c.className = "chip " + (isAllowed ? "active" : "inactive"); c.textContent = divName;
-                c.onclick = () => { if (isAllowed) { delete rules.divisions[divName]; rules.priorityList = rules.priorityList.filter(d=>d!==divName); } else { rules.divisions[divName] = []; if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName); } item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
+                c.onclick = () => { if (isAllowed) { delete rules.divisions[divName]; rules.priorityList = rules.priorityList.filter(d=>d!==divName); } else { rules.divisions[divName] = []; if (!rules.priorityList.includes(divName)) rules.priorityList.push(divName); } item.accessRestrictions = rules; saveData(); renderContent(); updateSummary(); };
                 chipWrap.appendChild(c);
             });
             body.appendChild(chipWrap);
@@ -1170,7 +1796,7 @@ function renderAccess(item) {
             const ptr = document.createElement("div"); ptr.style.cssText = "display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;";
             const pl = document.createElement("span"); pl.style.cssText = "font-weight:600; font-size:0.9rem;"; pl.textContent = "Priority Order";
             const pt = document.createElement("label"); pt.className = "switch"; const pc = document.createElement("input"); pc.type = "checkbox"; pc.checked = rules.usePriority === true;
-            pc.onchange = () => { rules.usePriority = pc.checked; if (pc.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades]; item.limitUsage = rules; saveData(); renderContent(); updateSummary(); };
+            pc.onchange = () => { rules.usePriority = pc.checked; if (pc.checked && rules.priorityList.length === 0) rules.priorityList = [...availableGrades]; item.accessRestrictions = rules; saveData(); renderContent(); updateSummary(); };
             const psl = document.createElement("span"); psl.className = "slider"; pt.appendChild(pc); pt.appendChild(psl);
             ptr.appendChild(pl); ptr.appendChild(pt); ps.appendChild(ptr);
             const pd = document.createElement("div"); pd.style.cssText = "font-size:0.8rem; color:#6B7280; margin-bottom:10px;";
@@ -1185,9 +1811,9 @@ function renderAccess(item) {
                     const num = document.createElement("span"); num.style.cssText = "width:20px; text-align:center; font-weight:600; color:#147D91;"; num.textContent = idx+1;
                     const ne = document.createElement("span"); ne.style.cssText = "flex:1; font-size:0.85rem;"; ne.textContent = dn;
                     const bu = document.createElement("button"); bu.textContent = "\u2191"; bu.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;"; bu.disabled = idx===0; if(idx===0)bu.style.opacity="0.3";
-                    bu.onclick = () => { [rules.priorityList[idx-1],rules.priorityList[idx]]=[rules.priorityList[idx],rules.priorityList[idx-1]]; item.limitUsage=rules; saveData(); renderContent(); updateSummary(); };
+                    bu.onclick = () => { [rules.priorityList[idx-1],rules.priorityList[idx]]=[rules.priorityList[idx],rules.priorityList[idx-1]]; item.accessRestrictions=rules; saveData(); renderContent(); updateSummary(); };
                     const bd = document.createElement("button"); bd.textContent = "\u2193"; bd.style.cssText = "border:1px solid #D1D5DB; background:#fff; border-radius:4px; width:24px; height:24px; cursor:pointer;"; bd.disabled = idx===rules.priorityList.length-1; if(idx===rules.priorityList.length-1)bd.style.opacity="0.3";
-                    bd.onclick = () => { [rules.priorityList[idx],rules.priorityList[idx+1]]=[rules.priorityList[idx+1],rules.priorityList[idx]]; item.limitUsage=rules; saveData(); renderContent(); updateSummary(); };
+                    bd.onclick = () => { [rules.priorityList[idx],rules.priorityList[idx+1]]=[rules.priorityList[idx+1],rules.priorityList[idx]]; item.accessRestrictions=rules; saveData(); renderContent(); updateSummary(); };
                     row.appendChild(num); row.appendChild(ne); row.appendChild(bu); row.appendChild(bd); le.appendChild(row);
                 });
                 ps.appendChild(le);
@@ -1226,7 +1852,7 @@ function renderTimeRules(item) {
     const spb = document.createElement("button"); spb.textContent = "Specific Grades"; spb.style.cssText = "padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;";
     let selDivs = [];
     const dcw = document.createElement("div"); dcw.style.cssText = "display:none; flex-wrap:wrap; gap:4px; margin-top:6px; margin-bottom:8px; width:100%;";
-    const allDivs = window.availableDivisions || Object.keys(window.loadGlobalSettings?.()?.divisions || {});
+    const allDivs = window.availableDivisions || Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
     function rebuildDC() { dcw.innerHTML = ""; allDivs.forEach(d => { const a = selDivs.includes(d); const c = document.createElement("span"); c.className = "chip " + (a?"active":"inactive"); c.textContent = d; c.onclick = () => { if(a) selDivs=selDivs.filter(x=>x!==d); else selDivs.push(d); rebuildDC(); }; dcw.appendChild(c); }); }
     agb.onclick = () => { selDivs=[]; agb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;"; spb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;"; dcw.style.display="none"; };
     spb.onclick = () => { spb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #147D91; background:#e6f4f7; color:#0F5F6E; font-size:0.8rem; cursor:pointer; font-weight:600;"; agb.style.cssText="padding:4px 10px; border-radius:6px; border:1px solid #E5E7EB; background:#fff; color:#333; font-size:0.8rem; cursor:pointer;"; dcw.style.display="flex"; rebuildDC(); };
@@ -1391,13 +2017,147 @@ function renderWeatherSettings(item) {
     return container;
 }
 function renderPrepDurationSettings(item) {
-    const container = document.createElement("div");
-    const hp = (item.prepDuration||0) > 0;
-    container.innerHTML = '<div style="margin-bottom:16px;"><p style="font-size:0.85rem; color:#6b7280; margin:0 0 12px 0;">Some activities need prep time. Example: <strong>Skits</strong> = 30min practice + 60min performance.</p><div style="background:' + (hp?'#faf5ff':'#f9fafb') + '; border:1px solid ' + (hp?'#d8b4fe':'#e5e7eb') + '; border-radius:10px; padding:14px;"><div style="display:flex; align-items:center; gap:12px; margin-bottom:' + (hp?'12px':'0') + ';"><div style="flex:1;"><div style="font-weight:600; color:' + (hp?'#6b21a8':'#374151') + ';">' + (hp?'Has Prep Phase':'Single Phase') + '</div><div style="font-size:0.8rem; color:' + (hp?'#7c3aed':'#6b7280') + ';">' + (hp?item.prepDuration+' min prep + main':'No prep needed') + '</div></div><label class="switch"><input type="checkbox" id="prep-duration-toggle" ' + (hp?'checked':'') + '><span class="slider"></span></label></div><div id="prep-duration-config" style="display:' + (hp?'block':'none') + ';"><div style="display:flex; align-items:center; gap:10px; padding:10px; background:white; border-radius:8px; border:1px solid #e9d5ff;"><label style="font-size:0.85rem;">Prep time:</label><input type="number" id="prep-duration-input" min="5" max="120" step="5" value="' + (item.prepDuration||30) + '" style="width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;"><span style="font-size:0.85rem; color:#64748b;">minutes</span></div></div></div></div>';
-    const pt = container.querySelector("#prep-duration-toggle");
-    if (pt) { pt.addEventListener("change", function() { const c = container.querySelector("#prep-duration-config"); if(this.checked){c.style.display="block";item.prepDuration=parseInt(container.querySelector("#prep-duration-input").value,10)||30;}else{c.style.display="none";item.prepDuration=0;} saveData(); const s=container.closest('.detail-section')?.querySelector('.detail-section-summary'); if(s)s.textContent=(item.prepDuration>0)?item.prepDuration+'min prep':'None'; }); }
-    const di = container.querySelector("#prep-duration-input");
-    if (di) { di.addEventListener("change", function() { const v=parseInt(this.value,10); if(!isNaN(v)&&v>=5&&v<=120){item.prepDuration=v;saveData();const s=container.closest('.detail-section')?.querySelector('.detail-section-summary');if(s)s.textContent=v+'min prep';} }); }
+    if (!item.prepConfig) item.prepConfig = { timing: 'attached', location: '', sync: 'staggered' };
+    var container = document.createElement('div');
+    container.style.cssText = 'padding:0;';
+
+    var updateSum = function() {
+        var s = container.closest('.detail-section') && container.closest('.detail-section').querySelector('.detail-section-summary');
+        if (s) s.textContent = summaryPrepDuration(item);
+    };
+
+    var renderContent = function() {
+        container.innerHTML = '';
+        var hp = (item.prepDuration || 0) > 0;
+
+        // Toggle row
+        var toggleWrap = document.createElement('div');
+        toggleWrap.style.cssText = 'display:flex; align-items:center; gap:12px; padding:14px; background:' + (hp ? '#faf5ff' : '#f9fafb') + '; border:1px solid ' + (hp ? '#d8b4fe' : '#e5e7eb') + '; border-radius:10px; margin-bottom:' + (hp ? '12px' : '0') + ';';
+        var togInfo = document.createElement('div'); togInfo.style.cssText = 'flex:1;';
+        var togTitle = document.createElement('div'); togTitle.style.cssText = 'font-weight:600; color:' + (hp ? '#6b21a8' : '#374151') + ';'; togTitle.textContent = hp ? 'Has Prep Phase' : 'Single Phase';
+        var togSub = document.createElement('div'); togSub.style.cssText = 'font-size:0.8rem; color:' + (hp ? '#7c3aed' : '#6b7280') + ';'; togSub.textContent = hp ? (item.prepDuration + ' min prep + main') : 'No prep needed';
+        togInfo.appendChild(togTitle); togInfo.appendChild(togSub);
+        var tog = document.createElement('label'); tog.className = 'switch';
+        var cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = hp;
+        cb.onchange = function() {
+            item.prepDuration = this.checked ? 30 : 0;
+            saveData(); renderContent(); updateSum();
+        };
+        var sl = document.createElement('span'); sl.className = 'slider';
+        tog.appendChild(cb); tog.appendChild(sl);
+        toggleWrap.appendChild(togInfo); toggleWrap.appendChild(tog);
+        container.appendChild(toggleWrap);
+
+        if (!hp) return;
+
+        var config = document.createElement('div');
+        config.style.cssText = 'display:flex; flex-direction:column; gap:12px;';
+
+        // Duration
+        var durRow = document.createElement('div');
+        durRow.style.cssText = 'display:flex; align-items:center; gap:10px; padding:10px; background:#fff; border-radius:8px; border:1px solid #e9d5ff;';
+        var durLbl = document.createElement('label'); durLbl.style.cssText = 'font-size:0.85rem;'; durLbl.textContent = 'Prep time:';
+        var durIn = document.createElement('input'); durIn.type = 'number'; durIn.min = '5'; durIn.max = '120'; durIn.step = '5'; durIn.value = item.prepDuration || 30;
+        durIn.style.cssText = 'width:70px; padding:6px 10px; border:1px solid #d8b4fe; border-radius:6px; text-align:center;';
+        durIn.onchange = function() { var v = parseInt(this.value, 10); if (!isNaN(v) && v >= 5) { item.prepDuration = v; saveData(); updateSum(); } };
+        var durNote = document.createElement('span'); durNote.style.cssText = 'font-size:0.85rem; color:#64748b;'; durNote.textContent = 'minutes';
+        durRow.appendChild(durLbl); durRow.appendChild(durIn); durRow.appendChild(durNote);
+        config.appendChild(durRow);
+
+        // Timing mode
+        var timingCard = document.createElement('div');
+        timingCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;';
+        var timingHeader = document.createElement('div');
+        timingHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+        timingHeader.textContent = 'Timing';
+        timingCard.appendChild(timingHeader);
+
+        var timingBody = document.createElement('div');
+        timingBody.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+
+        var mkTimingOpt = function(value, label, desc) {
+            var row = document.createElement('label');
+            row.style.cssText = 'display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px; transition:background 0.1s;';
+            var r = document.createElement('input'); r.type = 'radio'; r.name = 'prep-timing-' + item.name.replace(/s/g,'_'); r.value = value;
+            r.checked = (item.prepConfig.timing === value);
+            r.style.cssText = 'margin-top:2px; flex-shrink:0;';
+            r.onchange = function() {
+                item.prepConfig.timing = value;
+                saveData(); renderContent(); updateSum();
+            };
+            var txt = document.createElement('div');
+            var tTitle = document.createElement('div'); tTitle.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;'; tTitle.textContent = label;
+            var tDesc = document.createElement('div'); tDesc.style.cssText = 'font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;'; tDesc.textContent = desc;
+            txt.appendChild(tTitle); txt.appendChild(tDesc);
+            row.appendChild(r); row.appendChild(txt);
+            if (item.prepConfig.timing === value) row.style.background = '#f5f3ff';
+            return row;
+        };
+
+        timingBody.appendChild(mkTimingOpt('attached', 'Back to back', 'Prep immediately precedes the activity — combined into one ' + ((item.prepDuration||30) + (parseInt(item.duration)||60)) + '-min block.'));
+        timingBody.appendChild(mkTimingOpt('flexible', 'Spread out', 'Scheduler places prep anywhere earlier in the same day, before the activity starts.'));
+        timingCard.appendChild(timingBody);
+        config.appendChild(timingCard);
+
+        // Prep location
+        var locCard = document.createElement('div');
+        locCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff;';
+        var locHeader = document.createElement('div');
+        locHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+        locHeader.textContent = 'Prep Location';
+        locCard.appendChild(locHeader);
+        var locBody = document.createElement('div');
+        locBody.style.cssText = 'padding:10px 12px; display:flex; align-items:center; gap:8px;';
+        var locLbl = document.createElement('span'); locLbl.style.cssText = 'font-size:0.85rem;'; locLbl.textContent = 'Location:';
+        var locSel = document.createElement('select');
+        locSel.style.cssText = 'flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;';
+        var blankOpt = document.createElement('option'); blankOpt.value = ''; blankOpt.textContent = '— same as activity —'; locSel.appendChild(blankOpt);
+        var facs = window.getFacilities ? window.getFacilities() : [];
+        facs.forEach(function(f) {
+            var o = document.createElement('option'); o.value = f.name; o.textContent = f.name;
+            if (f.name === item.prepConfig.location) o.selected = true;
+            locSel.appendChild(o);
+        });
+        locSel.onchange = function() { item.prepConfig.location = locSel.value; saveData(); updateSum(); };
+        locBody.appendChild(locLbl); locBody.appendChild(locSel);
+        locCard.appendChild(locBody);
+        config.appendChild(locCard);
+
+        // Sync (only for flexible)
+        if (item.prepConfig.timing === 'flexible') {
+            var syncCard = document.createElement('div');
+            syncCard.style.cssText = 'background:#fff; border-radius:8px; border:1px solid #e9d5ff; overflow:hidden;';
+            var syncHeader = document.createElement('div');
+            syncHeader.style.cssText = 'padding:8px 12px; font-size:0.82rem; font-weight:600; color:#6b21a8; background:#faf5ff; border-bottom:1px solid #e9d5ff;';
+            syncHeader.textContent = 'Who does prep together?';
+            syncCard.appendChild(syncHeader);
+            var syncBody = document.createElement('div');
+            syncBody.style.cssText = 'padding:10px 12px; display:flex; flex-direction:column; gap:8px;';
+            var mkSyncOpt = function(value, label, desc) {
+                var row = document.createElement('label');
+                row.style.cssText = 'display:flex; align-items:flex-start; gap:10px; cursor:pointer; padding:8px; border-radius:6px;';
+                var r = document.createElement('input'); r.type = 'radio'; r.name = 'prep-sync-' + item.name.replace(/s/g,'_'); r.value = value;
+                r.checked = (item.prepConfig.sync === value);
+                r.style.cssText = 'margin-top:2px; flex-shrink:0;';
+                r.onchange = function() { item.prepConfig.sync = value; saveData(); updateSum(); };
+                var txt = document.createElement('div');
+                var tTitle = document.createElement('div'); tTitle.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;'; tTitle.textContent = label;
+                var tDesc = document.createElement('div'); tDesc.style.cssText = 'font-size:0.75rem; color:#6b7280; line-height:1.4; margin-top:2px;'; tDesc.textContent = desc;
+                txt.appendChild(tTitle); txt.appendChild(tDesc);
+                row.appendChild(r); row.appendChild(txt);
+                if (item.prepConfig.sync === value) row.style.background = '#f5f3ff';
+                return row;
+            };
+            syncBody.appendChild(mkSyncOpt('staggered', 'Staggered', 'Each bunk does prep on its own, at any free time before the activity. Works even when the activity itself is full-grade.'));
+            syncBody.appendChild(mkSyncOpt('synchronized', 'Synchronized', 'All bunks in the grade do prep at exactly the same time — like a camp-wide event leading into the activity.'));
+            syncCard.appendChild(syncBody);
+            config.appendChild(syncCard);
+        }
+
+        container.appendChild(config);
+    };
+
+    renderContent();
     return container;
 }
 
@@ -1478,6 +2238,50 @@ function renderMultiPartSettings(item) {
         daysRow.lastElementChild.insertAdjacentHTML('afterend', '<span style="font-size:0.8rem; color:#6B7280;">days before the scheduler starts pushing the next part</span>');
         configPanel.appendChild(daysRow);
 
+        // Per-part configuration
+        if (!Array.isArray(mp.parts) || mp.parts.length !== mp.totalParts) {
+            var existParts = Array.isArray(mp.parts) ? mp.parts : [];
+            mp.parts = [];
+            for (var _mpi = 0; _mpi < mp.totalParts; _mpi++) {
+                var _mep = existParts[_mpi] || {};
+                mp.parts.push({ name: _mep.name || '', location: _mep.location || '' });
+            }
+            item.multiPart = mp;
+        }
+        var partsSection = document.createElement('div');
+        partsSection.style.cssText = 'margin-bottom:16px;';
+        partsSection.innerHTML = '<div style="font-weight:600; font-size:0.85rem; margin-bottom:8px; color:#374151;">Part Details <span style="font-weight:400; color:#6B7280;">(optional: custom name &amp; location per part)</span></div>';
+        for (var _pci = 0; _pci < mp.totalParts; _pci++) {
+            (function(pidx) {
+                var part = mp.parts[pidx];
+                var partRow = document.createElement('div');
+                partRow.style.cssText = 'display:flex; align-items:center; gap:8px; margin-bottom:6px; padding:8px 10px; border:1px solid #E5E7EB; border-radius:8px; background:#F9FAFB;';
+                var num = document.createElement('span');
+                num.style.cssText = 'width:22px; height:22px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-weight:700; font-size:0.72rem; flex-shrink:0; color:#fff; background:#147D91;';
+                num.textContent = pidx + 1;
+                var nameInp = document.createElement('input');
+                nameInp.type = 'text'; nameInp.placeholder = 'Part ' + (pidx+1) + ' name';
+                nameInp.value = part.name || '';
+                nameInp.style.cssText = 'flex:1.5; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem;';
+                nameInp.onchange = function() { mp.parts[pidx].name = nameInp.value.trim(); item.multiPart = mp; saveData(); };
+                var locInp = document.createElement('select');
+                locInp.style.cssText = 'flex:1; min-width:0; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; background:#fff;';
+                var _bOpt = document.createElement('option'); _bOpt.value = ''; _bOpt.textContent = '— same location —'; locInp.appendChild(_bOpt);
+                var _facs = window.getFacilities ? window.getFacilities() : [];
+                _facs.forEach(function(f) { var o = document.createElement('option'); o.value = f.name; o.textContent = f.name; if (f.name === (part.location || '')) o.selected = true; locInp.appendChild(o); });
+                locInp.onchange = function() { mp.parts[pidx].location = locInp.value; item.multiPart = mp; saveData(); };
+                partRow.appendChild(num); partRow.appendChild(nameInp); partRow.appendChild(locInp);
+                if (pidx > 0) {
+                    var prereq = document.createElement('span');
+                    prereq.style.cssText = 'font-size:0.68rem; color:#92400e; white-space:nowrap;';
+                    prereq.textContent = 'after ' + pidx;
+                    partRow.appendChild(prereq);
+                }
+                partsSection.appendChild(partRow);
+            })(_pci);
+        }
+        configPanel.appendChild(partsSection);
+
         // Preview
         var preview = document.createElement("div");
         preview.style.cssText = "border:1px solid #E5E7EB; border-radius:10px; padding:14px; background:#FAFAFA; margin-bottom:14px;";
@@ -1491,10 +2295,14 @@ function renderMultiPartSettings(item) {
             step.appendChild(badge);
             var label = document.createElement("span");
             label.style.cssText = "font-size:0.85rem; color:#374151;";
-            label.textContent = escapeHtml(item.name) + " " + i + "/" + mp.totalParts;
+            var pvName = (mp.parts && mp.parts[i-1] && mp.parts[i-1].name) ? mp.parts[i-1].name : (escapeHtml(item.name) + " " + i + "/" + mp.totalParts);
+            label.textContent = pvName;
+            if (mp.parts && mp.parts[i-1] && mp.parts[i-1].location) {
+                label.textContent += " • " + mp.parts[i-1].location;
+            }
             step.appendChild(label);
             if (i === 1) { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#6B7280;">No prerequisite</span>'); }
-            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires ' + (i-1) + '/' + mp.totalParts + ' done</span>'); }
+            else { step.insertAdjacentHTML('beforeend', '<span style="margin-left:auto; font-size:0.7rem; color:#92400e;">Requires part ' + (i-1) + ' done</span>'); }
             preview.appendChild(step);
             if (i < mp.totalParts) {
                 var arrow = document.createElement("div");
@@ -1559,8 +2367,230 @@ function propagateMultiPartRename(oldName, newName) {
 function addSpecial() { if(!window.AccessControl?.checkSetupAccess?.('add special activities'))return; if(!addSpecialInput)return; const n=addSpecialInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} specialActivities.push(createDefaultActivity(n)); addSpecialInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('add rainy day activities'))return; if(!addRainyDayInput)return; const n=addRainyDayInput.value.trim(); if(!n)return; if(specialActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())||rainyDayActivities.some(s=>s.name.toLowerCase()===n.toLowerCase())){alert("Already exists.");return;} const a=createDefaultActivity(n); a.rainyDayExclusive=true; a.rainyDayOnly=true; a.isIndoor=true; rainyDayActivities.push(a); addRainyDayInput.value=""; saveData(); selectedItemId='special-'+n; renderMasterList(); renderRainyDayList(); renderDetailPane(); }
 
-function cleanupDeletedSpecialActivity(name) { if(!name)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name){dd.scheduleAssignments[bk][i]=null;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.scheduleAssignments){Object.keys(window.scheduleAssignments).forEach(bk=>{const sl=window.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===name||s?.activity===name||s?.event===name)window.scheduleAssignments[bk][i]=null;});}); } if(window.activityProperties?.[name])delete window.activityProperties[name]; } catch(e){console.error('[SPECIAL_ACTIVITIES] Cleanup error:',e);} }
-function propagateSpecialActivityRename(oldN,newN) { if(!oldN||!newN||oldN===newN)return; try { const s=window.loadGlobalSettings?.()||{}; const ds=s.daily_schedules||{}; let c=0; Object.keys(ds).forEach(dk=>{const dd=ds[dk]; if(!dd?.scheduleAssignments)return; Object.keys(dd.scheduleAssignments).forEach(bk=>{const sl=dd.scheduleAssignments[bk]; if(!Array.isArray(sl))return; sl.forEach((s,i)=>{if(s?._activity===oldN){dd.scheduleAssignments[bk][i]._activity=newN;c++;} if(s?.activity===oldN){dd.scheduleAssignments[bk][i].activity=newN;c++;} if(s?.event===oldN){dd.scheduleAssignments[bk][i].event=newN;c++;}});}); }); if(c>0)window.saveGlobalSettings?.('daily_schedules',ds); if(window.activityProperties?.[oldN]){window.activityProperties[newN]={...window.activityProperties[oldN]};delete window.activityProperties[oldN];} } catch(e){console.error('[SPECIAL_ACTIVITIES] Rename error:',e);} }
+function cleanupDeletedSpecialActivity(name) {
+    if (!name) return;
+    try {
+        const s = window.loadGlobalSettings?.() || {};
+        const ds = s.daily_schedules || {};
+        let c = 0;
+        Object.keys(ds).forEach(dk => {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(bk => {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        dd.scheduleAssignments[bk][i] = null;
+                        c++;
+                    }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+        if (window.scheduleAssignments) {
+            Object.keys(window.scheduleAssignments).forEach(bk => {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach((slot, i) => {
+                    if (slot?._activity === name || slot?.activity === name || slot?.event === name) {
+                        window.scheduleAssignments[bk][i] = null;
+                    }
+                });
+            });
+        }
+        if (window.activityProperties?.[name]) delete window.activityProperties[name];
+
+        // Cloud rotation_counts purge — without this, deleted specials
+        // accumulate stale rotation rows that bias the auto-builder's
+        // least-recently-done picker forever. The facilities.js delete
+        // path already routes through cleanupRotationTracking; this UI
+        // path bypassed it.
+        try { window.RotationCloud?.deleteActivity?.(name); } catch (_) {}
+
+        // Local rotation tracking purge — mirror what cleanupRotationTracking
+        // does so this UI path matches the facilities path.
+        try {
+            if (window.historicalCounts) {
+                Object.keys(window.historicalCounts).forEach(bk => {
+                    if (window.historicalCounts[bk] && name in window.historicalCounts[bk]) {
+                        delete window.historicalCounts[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+            }
+            if (window.manualUsageOffsets) {
+                Object.keys(window.manualUsageOffsets).forEach(bk => {
+                    if (window.manualUsageOffsets[bk] && name in window.manualUsageOffsets[bk]) {
+                        delete window.manualUsageOffsets[bk][name];
+                    }
+                });
+                window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+            }
+            const rh = window.loadRotationHistory?.();
+            if (rh?.bunks) {
+                let rhChanged = false;
+                Object.keys(rh.bunks).forEach(bk => {
+                    if (rh.bunks[bk] && name in rh.bunks[bk]) {
+                        delete rh.bunks[bk][name];
+                        rhChanged = true;
+                    }
+                });
+                if (rhChanged) window.saveRotationHistory?.(rh);
+            }
+        } catch (_) {}
+    } catch (e) { console.error('[SPECIAL_ACTIVITIES] Cleanup error:', e); }
+}
+// Slice 4 audit fix — full propagation, transactional best-effort.
+// Earlier this only updated saved daily_schedules and activityProperties.
+// Missed:
+//   - window.scheduleAssignments (live data)
+//   - window.historicalCounts[bunk][name] / window.manualUsageOffsets
+//   - rotationHistory.bunks[bunk][name]
+//   - pinnedTileDefaults
+//   - cloud rotation_counts
+// Same shape as facilities.js propagateFieldRename — see its comment for
+// the rationale.
+function propagateSpecialActivityRename(oldN, newN) {
+    if (!oldN || !newN || oldN === newN) return;
+    const snapshot = {};
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+
+        // 1) saved daily_schedules
+        const ds = settings.daily_schedules || {};
+        snapshot.daily_schedules = JSON.parse(JSON.stringify(ds));
+        let c = 0;
+        Object.keys(ds).forEach(function (dk) {
+            const dd = ds[dk];
+            if (!dd?.scheduleAssignments) return;
+            Object.keys(dd.scheduleAssignments).forEach(function (bk) {
+                const sl = dd.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (s, i) {
+                    if (!s) return;
+                    if (s._activity === oldN) { sl[i]._activity = newN; c++; }
+                    if (s.activity === oldN) { sl[i].activity = newN; c++; }
+                    if (s.event === oldN) { sl[i].event = newN; c++; }
+                });
+            });
+        });
+        if (c > 0) window.saveGlobalSettings?.('daily_schedules', ds);
+
+        // 2) live scheduleAssignments
+        if (window.scheduleAssignments) {
+            snapshot.scheduleAssignments = JSON.parse(JSON.stringify(window.scheduleAssignments));
+            Object.keys(window.scheduleAssignments).forEach(function (bk) {
+                const sl = window.scheduleAssignments[bk];
+                if (!Array.isArray(sl)) return;
+                sl.forEach(function (slot) {
+                    if (!slot) return;
+                    if (slot._activity === oldN) slot._activity = newN;
+                    if (slot.activity === oldN) slot.activity = newN;
+                    if (slot.event === oldN) slot.event = newN;
+                });
+            });
+        }
+
+        // 3) activityProperties keyed by name
+        if (window.activityProperties && window.activityProperties[oldN]) {
+            snapshot.activityProperties = JSON.parse(JSON.stringify(window.activityProperties));
+            window.activityProperties[newN] = window.activityProperties[oldN];
+            delete window.activityProperties[oldN];
+            window.saveGlobalSettings?.('activityProperties', window.activityProperties);
+        }
+
+        // 4) pinnedTileDefaults
+        const ptd = settings.pinnedTileDefaults || window.pinnedTileDefaults;
+        if (ptd && typeof ptd === 'object') {
+            snapshot.pinnedTileDefaults = JSON.parse(JSON.stringify(ptd));
+            let changed = false;
+            Object.keys(ptd).forEach(function (k) {
+                const v = ptd[k];
+                if (!v) return;
+                if (v.activity === oldN) { v.activity = newN; changed = true; }
+                if (v._activity === oldN) { v._activity = newN; changed = true; }
+            });
+            if (changed) window.saveGlobalSettings?.('pinnedTileDefaults', ptd);
+        }
+
+        // 5) historicalCounts[bunk][name]
+        if (window.historicalCounts) {
+            snapshot.historicalCounts = JSON.parse(JSON.stringify(window.historicalCounts));
+            Object.keys(window.historicalCounts).forEach(function (bunk) {
+                const m = window.historicalCounts[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('historicalCounts', window.historicalCounts);
+        }
+
+        // 6) manualUsageOffsets[bunk][name]
+        if (window.manualUsageOffsets) {
+            snapshot.manualUsageOffsets = JSON.parse(JSON.stringify(window.manualUsageOffsets));
+            Object.keys(window.manualUsageOffsets).forEach(function (bunk) {
+                const m = window.manualUsageOffsets[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = (m[newN] || 0) + m[oldN];
+                delete m[oldN];
+            });
+            window.saveGlobalSettings?.('manualUsageOffsets', window.manualUsageOffsets);
+        }
+
+        // 7) rotationHistory.bunks
+        if (typeof window.loadRotationHistory === 'function') {
+            const rh = window.loadRotationHistory() || { bunks: {}, leagues: {} };
+            snapshot.rotationHistory = JSON.parse(JSON.stringify(rh));
+            let rhChanged = false;
+            Object.keys(rh.bunks || {}).forEach(function (bunk) {
+                const m = rh.bunks[bunk];
+                if (!m || !(oldN in m)) return;
+                m[newN] = m[oldN];
+                delete m[oldN];
+                rhChanged = true;
+            });
+            if (rhChanged && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(rh);
+            }
+        }
+
+        // 8) Cloud rotation_counts
+        if (window.RotationCloud) {
+            if (typeof window.RotationCloud.renameActivity === 'function') {
+                try { window.RotationCloud.renameActivity(oldN, newN); } catch (_) {}
+            } else if (typeof window.RotationCloud.deleteActivity === 'function') {
+                try { window.RotationCloud.deleteActivity(oldN); } catch (_) {}
+            }
+        }
+
+        console.log('[SPECIAL_ACTIVITIES] Rename propagated: "' + oldN + '" → "' + newN + '"');
+    } catch (e) {
+        console.error('[SPECIAL_ACTIVITIES] Rename propagation error — attempting rollback:', e);
+        try {
+            if (snapshot.daily_schedules) window.saveGlobalSettings?.('daily_schedules', snapshot.daily_schedules);
+            if (snapshot.activityProperties) {
+                window.activityProperties = snapshot.activityProperties;
+                window.saveGlobalSettings?.('activityProperties', snapshot.activityProperties);
+            }
+            if (snapshot.scheduleAssignments) window.scheduleAssignments = snapshot.scheduleAssignments;
+            if (snapshot.historicalCounts) {
+                window.historicalCounts = snapshot.historicalCounts;
+                window.saveGlobalSettings?.('historicalCounts', snapshot.historicalCounts);
+            }
+            if (snapshot.manualUsageOffsets) {
+                window.manualUsageOffsets = snapshot.manualUsageOffsets;
+                window.saveGlobalSettings?.('manualUsageOffsets', snapshot.manualUsageOffsets);
+            }
+            if (snapshot.rotationHistory && typeof window.saveRotationHistory === 'function') {
+                window.saveRotationHistory(snapshot.rotationHistory);
+            }
+            console.warn('[SPECIAL_ACTIVITIES] Rename rolled back to pre-rename snapshot');
+        } catch (restoreErr) {
+            console.error('[SPECIAL_ACTIVITIES] Rollback also failed:', restoreErr);
+        }
+    }
+}
 
 function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
 function makeEditable(el,save) { if(!el)return; el.ondblclick=()=>{ const inp=document.createElement("input"); inp.value=el.textContent; inp.style.cssText="font-size:inherit;font-weight:inherit;border:1px solid #147D91;outline:none;border-radius:4px;padding:2px 6px;width:"+Math.max(100,el.offsetWidth+20)+"px;"; el.replaceWith(inp); inp.focus(); inp.select(); const finish=()=>{const v=inp.value.trim();if(v&&v!==el.textContent)save(v);else if(inp.parentNode)inp.replaceWith(el);}; inp.onblur=finish; inp.onkeyup=e=>{if(e.key==="Enter")finish();if(e.key==="Escape")inp.replaceWith(el);}; }; }
@@ -1575,7 +2605,15 @@ window.getAllSpecialActivities = function() {
     if((!specialActivities||specialActivities.length===0)&&(!rainyDayActivities||rainyDayActivities.length===0)){
         console.log('[SPECIAL_ACTIVITIES] Arrays empty - auto-loading from storage...');
         const settings=window.loadGlobalSettings?.()||{};
-        const allActivities=settings.specialActivities||settings.app1?.specialActivities||[];
+        // ★ Day 17 fix: an empty array is truthy in JS, so the previous
+        // `settings.specialActivities || settings.app1?.specialActivities`
+        // silently picked an empty top-level array over a populated app1
+        // array. That made every special temporarily disappear (and let
+        // saveGlobalSpecialActivities clobber the populated copy on the
+        // next save). Pick the first source that actually has entries.
+        const _topArr=Array.isArray(settings.specialActivities)?settings.specialActivities:null;
+        const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:null;
+        const allActivities=(_topArr&&_topArr.length>0)?_topArr:((_app1Arr&&_app1Arr.length>0)?_app1Arr:[]);
         if(allActivities.length>0){
             specialActivities=[];rainyDayActivities=[];
             allActivities.forEach(s=>{const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
@@ -1611,7 +2649,6 @@ window.getGlobalSpecialActivities = function(respectRainyDay=true) {
         console.log('[SpecialActivities] Rainy mode - filtering for indoor/rainy activities');
         return allActivities.filter(s=>s.rainyDayOnly===true||s.rainyDayExclusive===true||s.isIndoor===true);
     }
-    console.log('[SpecialActivities] Normal mode - excluding rainy-day-only activities');
     return allActivities.filter(s=>s.rainyDayOnly!==true&&s.rainyDayExclusive!==true);
 };
 window.getRainyDayOnlySpecials = function() { return rainyDayActivities.filter(s=>s.available!==false); };
@@ -1626,7 +2663,7 @@ window.diagnoseSpecialActivities = function() {
     console.log('='.repeat(60));
     var settings = window.loadGlobalSettings?.() || {};
     var storedActivities = settings.specialActivities || settings.app1?.specialActivities || [];
-    var divisions = Object.keys(settings.divisions || {});
+    var divisions = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
     var isRainyMode = window.isRainyDayModeActive?.() || false;
     var indoorCount = specialActivities.filter(function(s){return s.isIndoor === true;}).length;
     var outdoorCount = specialActivities.filter(function(s){return s.isIndoor !== true;}).length;
@@ -1653,14 +2690,14 @@ window.diagnoseSpecialActivities = function() {
                 if (staleSharable.length > 0) actIssues.push('Stale sharableWith.divisions: ' + staleSharable.join(', '));
             }
         }
-        if (!a.limitUsage) { actIssues.push('Missing limitUsage'); }
+        if (!a.accessRestrictions) { actIssues.push('Missing accessRestrictions'); }
         else {
-            if (a.limitUsage.enabled === undefined) actIssues.push('limitUsage.enabled missing');
-            if (typeof a.limitUsage.divisions !== 'object') actIssues.push('limitUsage.divisions not object');
-            if (!Array.isArray(a.limitUsage.priorityList)) actIssues.push('limitUsage.priorityList missing');
-            if (typeof a.limitUsage.divisions === 'object' && a.limitUsage.divisions !== null) {
-                var staleLimit = Object.keys(a.limitUsage.divisions).filter(function(d) { return !divisions.includes(d); });
-                if (staleLimit.length > 0) actIssues.push('Stale limitUsage.divisions: ' + staleLimit.join(', '));
+            if (a.accessRestrictions.enabled === undefined) actIssues.push('accessRestrictions.enabled missing');
+            if (typeof a.accessRestrictions.divisions !== 'object') actIssues.push('accessRestrictions.divisions not object');
+            if (!Array.isArray(a.accessRestrictions.priorityList)) actIssues.push('accessRestrictions.priorityList missing');
+            if (typeof a.accessRestrictions.divisions === 'object' && a.accessRestrictions.divisions !== null) {
+                var staleLimit = Object.keys(a.accessRestrictions.divisions).filter(function(d) { return !divisions.includes(d); });
+                if (staleLimit.length > 0) actIssues.push('Stale accessRestrictions.divisions: ' + staleLimit.join(', '));
             }
         }
         if (!Array.isArray(a.timeRules)) { actIssues.push('timeRules not array'); }

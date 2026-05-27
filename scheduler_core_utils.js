@@ -31,6 +31,24 @@
     // 1. BASIC HELPERS
     // =================================================================
 
+    // ★ Day 19.5: display-name helper for multiPart activities.
+    // Returns "Baking 1/3" when slot has _partLabel (stamped by the gen
+    // for multiPart specials), otherwise falls back to _activity or field.
+    // Use this anywhere render code needs the visible activity name —
+    // schedule grid, print center, calendar, daily adjustments, etc.
+    Utils.getActivityDisplayName = function (slot) {
+        if (!slot) return '';
+        if (slot._partLabel) return slot._partLabel;
+        if (slot._partNumber && slot._totalParts && slot._activity) {
+            return slot._activity + ' ' + slot._partNumber + '/' + slot._totalParts;
+        }
+        return slot._activity || slot.field || slot.event || '';
+    };
+    // Also expose on window for non-Utils call sites
+    if (typeof window !== 'undefined') {
+        window.getActivityDisplayName = Utils.getActivityDisplayName;
+    }
+
     Utils.parseTimeToMinutes = function (str) {
         if (str == null) return null;
         if (typeof str === "number") return str;
@@ -95,33 +113,46 @@
      * @param {string} [divisionOrBunk] - Division name or bunk name (NEW: for division-specific lookup)
      * @returns {number[]} Array of slot indices
      */
-    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null) {
+    Utils.findSlotsForRange = function (startMin, endMin, divisionOrBunk = null, bunkName = null) {
         const slots = [];
         if (startMin == null || endMin == null) return slots;
 
-        // ★★★ NEW: Division-specific lookup ★★★
         if (divisionOrBunk && window.divisionTimes) {
             let divName = String(divisionOrBunk);
 
-            // ★★★ FIX: Check if it's already a DIVISION name FIRST ★★★
             if (!window.divisionTimes[divName]) {
-                // Not a division, check if it's a bunk name
                 const divisions = window.divisions || {};
                 const bunkStr = String(divisionOrBunk);
                 for (const [dName, dData] of Object.entries(divisions)) {
                     if (dData.bunks?.some(b => String(b) === bunkStr)) {
                         divName = dName;
+                        if (!bunkName) bunkName = bunkStr;
                         break;
                     }
                 }
             }
 
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
+            // ★★★ AUTO MODE ONLY: Per-bunk slots exist only when auto scheduler built them ★★★
+            const hasPerBunkSlots = !!window.divisionTimes[divName]?._perBunkSlots;
+            if (hasPerBunkSlots && bunkName) {
+                const perBunkSlots = window.divisionTimes[divName]._perBunkSlots[String(bunkName)];
+                if (perBunkSlots && perBunkSlots.length > 0) {
+                    for (let i = 0; i < perBunkSlots.length; i++) {
+                        const slot = perBunkSlots[i];
+                        if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
+                            slots.push(i);
+                        }
+                    }
+                    if (slots.length > 0) return slots;
+                    // If per-bunk found nothing, fall through to division-level
+                }
+            }
+
+            // ★ MANUAL MODE (and auto fallback): Division-level slots — unchanged ★
             const divSlots = window.divisionTimes[divName];
             if (divSlots && divSlots.length > 0) {
                 for (let i = 0; i < divSlots.length; i++) {
                     const slot = divSlots[i];
-                    // Check if slot overlaps with requested range
                     if (!(slot.endMin <= startMin || slot.startMin >= endMin)) {
                         slots.push(i);
                     }
@@ -130,7 +161,6 @@
             }
         }
 
-        // No fallback - division context is required
         if (divisionOrBunk) {
             console.warn(`[findSlotsForRange] No divisionTimes for: ${divisionOrBunk}`);
         }
@@ -513,20 +543,31 @@
     // 7. MAIN FIT LOGIC (WITH DIVISION-AWARE LOCK CHECK)
     // =================================================================
 
-    Utils.isTimeAvailable = function (slotIndex, props) {
-        if (!window.unifiedTimes?.[slotIndex]) return false;
+    Utils.isTimeAvailable = function (slotIndex, props, divName) {
+       if (!window.unifiedTimes?.[slotIndex]) return props.available !== false;
         const slot = window.unifiedTimes[slotIndex];
         const slotStart = new Date(slot.start).getHours() * 60 + new Date(slot.start).getMinutes();
         const slotEnd = new Date(slot.end).getHours() * 60 + new Date(slot.end).getMinutes();
 
-        const rules = (props.timeRules || []).map(r => {
-            if (typeof r.startMin === "number") return r;
-            return {
-                ...r,
-                startMin: Utils.parseTimeToMinutes(r.start),
-                endMin: Utils.parseTimeToMinutes(r.end)
-            };
-        });
+        // ★ Optional per-grade scoping. Most callers pre-filter timeRules by
+        //   division before passing props in (see v7.7 callers); this is a
+        //   safety net for any caller that hasn't.
+        const myDiv = divName != null ? String(divName) : null;
+        const rules = (props.timeRules || [])
+            .filter(r => {
+                const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+                if (rDivs.length === 0) return true;
+                if (!myDiv) return true;
+                return rDivs.includes(myDiv);
+            })
+            .map(r => {
+                if (typeof r.startMin === "number") return r;
+                return {
+                    ...r,
+                    startMin: Utils.parseTimeToMinutes(r.start),
+                    endMin: Utils.parseTimeToMinutes(r.end)
+                };
+            });
 
         if (rules.length === 0) return props.available !== false;
         if (!props.available) return false;
@@ -586,6 +627,16 @@
         if (disabledFields.includes(fieldName)) {
             if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - field is DISABLED (rainy day or manual override)`);
             return false;
+        }
+
+        // ★ v6.0: Sport-to-field restriction check
+        if (actName) {
+            const dailyDisabledSports = (window.loadCurrentDailyData?.() || {}).dailyDisabledSportsByField || {};
+            const blockedSports = dailyDisabledSports[fieldName];
+            if (blockedSports && blockedSports.length > 0 && blockedSports.includes(actName)) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport "${actName}" is disabled on this field today`);
+                return false;
+            }
         }
 
         // Get slots for this block
@@ -679,19 +730,23 @@
         // =================================================================
         // ★★★ LIMIT USAGE CHECK (Division & Bunk Restrictions) ★★★
         // =================================================================
-        if (effectiveProps.limitUsage?.enabled) {
-            const divisionRules = effectiveProps.limitUsage.divisions || {};
-            if (!(block.divName in divisionRules)) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: division ${block.divName} not in allowed list`);
+        if (effectiveProps.accessRestrictions?.enabled) {
+            const divisionRules = effectiveProps.accessRestrictions.divisions || {};
+            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+            //   the original grade type (3). Matches the auto solver's
+            //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
+            const _divNameStr = String(block.divName);
+            if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                 return false;
             }
-            const divRule = divisionRules[block.divName];
+            const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
             if (Array.isArray(divRule) && divRule.length > 0) {
                 const bunkStr = String(block.bunk);
                 const bunkNum = parseInt(block.bunk);
                 const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
                 if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - limitUsage: bunk not in allowed list`);
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
                     return false;
                 }
             }
@@ -761,6 +816,63 @@
         }
         
         // =================================================================
+        // ★ COMBINED FIELD ENFORCEMENT
+        // combined (A+B) requested → block if any sub-field is in use at any slot
+        // sub-field (A) requested  → block if combined (A+B) is in use at any slot
+        // =================================================================
+        {
+            let comboLookup = window.getFieldComboLookup?.();
+            if (!comboLookup || Object.keys(comboLookup.combinedToSubs || {}).length === 0) {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
+                const _entries = Object.values(_fc);
+                if (_entries.length > 0) {
+                    comboLookup = { combinedToSubs: {}, subToCombined: {} };
+                    for (const combo of _entries) {
+                        if (!combo.combinedField || !Array.isArray(combo.subFields)) continue;
+                        const cN = combo.combinedField.toLowerCase().trim();
+                        comboLookup.combinedToSubs[cN] = combo.subFields.slice();
+                        for (const sub of combo.subFields) {
+                            comboLookup.subToCombined[sub.toLowerCase().trim()] = combo.combinedField;
+                        }
+                    }
+                }
+            }
+            if (comboLookup) {
+                const normFn = (n) => (n || '').toLowerCase().trim();
+                const normField = normFn(fieldName);
+
+                // Case 1: this IS the combined field — reject if any sub-field is occupied
+                const subs = comboLookup.combinedToSubs[normField];
+                if (subs) {
+                    for (const subField of subs) {
+                        for (const idx of uniqueSlots) {
+                            const subUsage = getFieldUsageAtSlot(idx, subField, fieldUsageBySlot);
+                            const subSched  = getScheduleUsageAtSlot(idx, subField);
+                            if ((subUsage.bunkList?.length || 0) > 0 || (subSched.bunkList?.length || 0) > 0) {
+                                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - combined field blocked by sub-field ${subField} at slot ${idx}`);
+                                return false;
+                            }
+                        }
+                    }
+                }
+
+                // Case 2: this IS a sub-field — reject if its combined field is occupied
+                const combinedField = comboLookup.subToCombined[normField];
+                if (combinedField) {
+                    for (const idx of uniqueSlots) {
+                        const comboUsage = getFieldUsageAtSlot(idx, combinedField, fieldUsageBySlot);
+                        const comboSched  = getScheduleUsageAtSlot(idx, combinedField);
+                        if ((comboUsage.bunkList?.length || 0) > 0 || (comboSched.bunkList?.length || 0) > 0) {
+                            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sub-field blocked by combined field ${combinedField} at slot ${idx}`);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
@@ -789,8 +901,22 @@
             const currentCount = allBunks.size;
 
             // STRICT CAPACITY CHECK
-            if (currentCount >= maxCapacity) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at capacity (${currentCount}/${maxCapacity})`);
+            // ★ PER-GRADE SHARING OVERRIDE: effective capacity/type for this grade
+            const gradeShareOverride = effectiveProps.gradeShareRules?.[myDivision];
+            const effectiveShareType = gradeShareOverride
+                ? (gradeShareOverride.type || 'not_sharable')
+                : (effectiveProps.sharableWith?.type || 'not_sharable');
+            const effectiveCap = gradeShareOverride
+                ? (parseInt(gradeShareOverride.capacity) || (gradeShareOverride.type === 'not_sharable' ? 1 : 2))
+                : maxCapacity;
+
+            if (currentCount >= effectiveCap) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - at effective capacity (${currentCount}/${effectiveCap}) [gradeOverride=${!!gradeShareOverride}]`);
+                return false;
+            }
+
+            if (effectiveShareType === 'not_sharable' && currentCount > 0) {
+                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - gradeShareRule: not_sharable for ${myDivision}`);
                 return false;
             }
 
@@ -798,7 +924,7 @@
             // ★★★ v7.6: same_division ENFORCEMENT ★★★
             // When type="same_division", ONLY bunks from the same division can share
             // =================================================================
-            if (effectiveProps.sharableWith?.type === 'same_division' && currentCount > 0) {
+            if (effectiveShareType === 'same_division' && currentCount > 0) {
                 for (const existingDiv of allDivisions) {
                     if (existingDiv !== myDivision) {
                         if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - same_division: existing division ${existingDiv} != my division ${myDivision}`);
@@ -811,7 +937,7 @@
             // ★★★ v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
             // When type="custom", only allow sharing with specified divisions
             // =================================================================
-            if (effectiveProps.sharableWith?.type === 'custom' && currentCount > 0) {
+            if (effectiveProps.sharableWith?.type === 'custom' && !gradeShareOverride && currentCount > 0) {
                 const allowedDivisions = effectiveProps.sharableWith.divisions || [];
                 
                 // Check if MY division is in the allowed list
@@ -1087,7 +1213,7 @@
         console.log('  - capacity:', props?.sharableWith?.capacity);
         console.log('Calculated Capacity:', Utils.getFieldCapacity(fieldName, window.activityProperties));
         console.log('TimeRules:', props?.timeRules);
-        console.log('LimitUsage:', props?.limitUsage);
+        console.log('LimitUsage:', props?.accessRestrictions);
         console.log('RainyDayAvailable:', props?.rainyDayAvailable);
         console.log('Activities:', props?.activities);
 
@@ -1827,6 +1953,24 @@
         return !(end1 <= start2 || start1 >= end2);
     };
 
+    // Slice 3 audit fix (N16): dual-key divisions lookup. The auto pipeline
+    // has ~40 sites that read `divisions[grade]?.startTime` directly. If
+    // `grade` ever arrives as a number when `divisions` is keyed by
+    // string (or vice versa), the optional chain returns undefined, the
+    // parse returns null, and the `|| 540 / || 960` literal default
+    // silently kicks in — schedule uses the wrong day-window hours.
+    // Use this helper at any time-lookup site to be type-tolerant.
+    Utils.getDivisionRecord = function(grade) {
+        const divs = window.divisions || {};
+        if (grade == null) return null;
+        return divs[grade] || divs[String(grade)] || null;
+    };
+    Utils.getDivisionTimes = function(grade) {
+        const dt = window.divisionTimes || {};
+        if (grade == null) return null;
+        return dt[grade] || dt[String(grade)] || null;
+    };
+
     // =================================================================
     // 16. LEGACY COMPATIBILITY LAYER
     // =================================================================
@@ -1892,7 +2036,10 @@
         for (let i = 0; i < beforeSlotIndex && i < schedule.length; i++) {
             const entry = schedule[i];
             if (entry && entry._activity && !entry._isTransition && !entry.continuation) {
-                activities.add(entry._activity.toLowerCase().trim());
+                const _al = entry._activity.toLowerCase().trim();
+                if (_al !== 'free' && _al !== 'free play' && !_al.includes('transition')) {
+                    activities.add(_al);
+                }
             }
         }
 
@@ -1985,8 +2132,22 @@
         const historicalCounts = globalSettings.historicalCounts || {};
         const manualOffsets = globalSettings.manualUsageOffsets || {};
 
-        const baseCount = historicalCounts[bunkName]?.[activityName] || 0;
-        const offset = manualOffsets[bunkName]?.[activityName] || 0;
+        const bunkCounts = historicalCounts[bunkName];
+        let baseCount = bunkCounts?.[activityName] || 0;
+        if (baseCount === 0 && bunkCounts) {
+            const lower = activityName.toLowerCase();
+            for (const key in bunkCounts) {
+                if (key.toLowerCase() === lower) { baseCount = bunkCounts[key]; break; }
+            }
+        }
+        const bunkOffsets = manualOffsets[bunkName];
+        let offset = bunkOffsets?.[activityName] || 0;
+        if (offset === 0 && bunkOffsets) {
+            const lower = activityName.toLowerCase();
+            for (const key in bunkOffsets) {
+                if (key.toLowerCase() === lower) { offset = bunkOffsets[key]; break; }
+            }
+        }
 
         return Math.max(0, baseCount + offset);
     };
@@ -2006,6 +2167,241 @@
         }
 
         return total / allActivityNames.length;
+    };
+
+    /**
+     * Get camp dates config (if set by owner on the dashboard).
+     * Returns { startDate, half1End, half2Start, endDate } or null.
+     */
+    Utils.getCampDates = function() {
+        const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+        const cd = gs.campDates || (window.loadGlobalSettings ? window.loadGlobalSettings('campDates') : null);
+        if (cd && cd.startDate) return cd;
+        return null;
+    };
+
+    /**
+     * Compute the start date of the current N-week period, anchored to camp
+     * start date if configured, else rolling calendar windows.
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate] - reference date (ISO), defaults to today
+     * @returns {string|null} ISO date string
+     */
+    Utils.getPeriodStartDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half' || (!period)) {
+            if (cd) {
+                var curParts = today.split('-').map(Number);
+                var curD = new Date(curParts[0], curParts[1] - 1, curParts[2]);
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) return cd.half2Start;
+                // ★ FIX: if refDate is BEFORE camp startDate (e.g. pre-camp
+                // staging/test runs), returning cd.startDate causes
+                // getPeriodActivityCount to filter out ALL historical dates
+                // (every dateKey < periodStart), so the count is always 0
+                // and maxUsage/exactFrequency caps go unenforced.
+                // Only anchor to campStart when we're actually inside the
+                // camp window. Before camp starts, use a rolling fallback
+                // (return null → no date filter → count entire local
+                // history, which is the conservative, safe behavior).
+                if (cd.startDate) {
+                    var _startD = new Date(cd.startDate + 'T00:00:00');
+                    if (curD >= _startD) return cd.startDate;
+                    // fall through to local settings fallback below
+                }
+            }
+            var gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            var s = gs.app1 || gs;
+            return s.halfStartDate || s.currentHalfStart || s.sessionHalfStart || null;
+        }
+
+        // ★ FIX: accept 'week' as an alias for '1week'. Several specials in
+        // the config use the legacy 'week' string. Without this alias,
+        // nWeeks=0 → return null → getPeriodActivityCount applies no period
+        // filter → counts the ENTIRE local history. That makes a per-week
+        // cap behave like a lifetime cap (overly strict, blocks the special
+        // forever after first use ever).
+        var nWeeks = (period === '1week' || period === 'week') ? 1
+                   : period === '2weeks' ? 2
+                   : period === '3weeks' ? 3
+                   : period === '4weeks' ? 4
+                   : 0;
+        if (nWeeks === 0) return null;
+
+        if (cd && cd.startDate) {
+            var campStart = new Date(cd.startDate + 'T00:00:00');
+            var todayParts = today.split('-').map(Number);
+            var cur = new Date(todayParts[0], todayParts[1] - 1, todayParts[2]);
+            var daysSinceStart = Math.floor((cur - campStart) / 86400000);
+            if (daysSinceStart >= 0) {
+                var weeksSinceStart = Math.floor(daysSinceStart / 7);
+                var periodIndex = Math.floor(weeksSinceStart / nWeeks);
+                var periodStartDay = periodIndex * nWeeks * 7;
+                var periodDate = new Date(campStart);
+                periodDate.setDate(periodDate.getDate() + periodStartDay);
+                return periodDate.getFullYear() + '-' + String(periodDate.getMonth() + 1).padStart(2, '0') + '-' + String(periodDate.getDate()).padStart(2, '0');
+            }
+        }
+
+        // Fallback: rolling calendar window from Monday
+        var parts = today.split('-').map(Number);
+        var d = new Date(parts[0], parts[1] - 1, parts[2]);
+        var dow = d.getDay();
+        var daysToMon = dow === 0 ? 6 : dow - 1;
+        d.setDate(d.getDate() - daysToMon - ((nWeeks - 1) * 7));
+        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Period-aware activity count: how many days within the given period has
+     * this bunk done this activity? Scans allDailyData.
+     * @param {string} bunk
+     * @param {string} activityName
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {string} [refDate]
+     * @returns {number}
+     */
+    Utils.getPeriodActivityCount = function(bunk, activityName, period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var count = 0;
+        Object.keys(allDaily).forEach(function(dateKey) {
+            if (dateKey >= today) return;
+            if (periodStart && dateKey < periodStart) return;
+            var slots = allDaily[dateKey]?.scheduleAssignments?.[bunk];
+            if (!Array.isArray(slots)) return;
+            if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
+        });
+        return count;
+    };
+
+    /**
+     * Determine the end date of the current period.
+     */
+    Utils.getPeriodEndDate = function(period, refDate) {
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+        var cd = Utils.getCampDates();
+
+        if (period === 'half') {
+            if (cd) {
+                var curD = new Date(today + 'T00:00:00');
+                if (cd.half2Start && curD >= new Date(cd.half2Start + 'T00:00:00')) {
+                    return cd.endDate || null;
+                }
+                return cd.half1End || cd.endDate || null;
+            }
+            return null;
+        }
+
+        var nWeeks = period === '1week' ? 1 : period === '2weeks' ? 2 : period === '3weeks' ? 3 : period === '4weeks' ? 4 : 0;
+        if (nWeeks === 0) return null;
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        if (!periodStart) return null;
+        var ps = new Date(periodStart + 'T00:00:00');
+        ps.setDate(ps.getDate() + (nWeeks * 7) - 1);
+        var endDate = cd && cd.endDate ? cd.endDate : null;
+        if (endDate && ps > new Date(endDate + 'T00:00:00')) {
+            return endDate;
+        }
+        return ps.getFullYear() + '-' + String(ps.getMonth() + 1).padStart(2, '0') + '-' + String(ps.getDate()).padStart(2, '0');
+    };
+
+    /**
+     * Check if a date is an active camp day. Excludes Saturday (Shabbat).
+     * Detects whether Sundays are active by checking allDailyData.
+     */
+    Utils._sundayActiveCache = null;
+    Utils._isSundayActive = function() {
+        if (Utils._sundayActiveCache !== null) return Utils._sundayActiveCache;
+        var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {};
+        var keys = Object.keys(allDaily);
+        for (var i = 0; i < keys.length; i++) {
+            var d = new Date(keys[i] + 'T00:00:00');
+            if (d.getDay() === 0) {
+                var dayData = allDaily[keys[i]];
+                if (dayData && dayData.scheduleAssignments && Object.keys(dayData.scheduleAssignments).length > 0) {
+                    Utils._sundayActiveCache = true;
+                    return true;
+                }
+            }
+        }
+        Utils._sundayActiveCache = false;
+        return false;
+    };
+
+    Utils.isCampDay = function(dateStr) {
+        var d = new Date(dateStr + 'T00:00:00');
+        var dow = d.getDay();
+        if (dow === 6) return false;
+        if (dow === 0 && !Utils._isSundayActive()) return false;
+        return true;
+    };
+
+    /**
+     * Count active camp days between two dates (inclusive).
+     */
+    Utils.countCampDays = function(startDate, endDate) {
+        if (!startDate || !endDate) return 0;
+        var cur = new Date(startDate + 'T00:00:00');
+        var end = new Date(endDate + 'T00:00:00');
+        var count = 0;
+        while (cur <= end) {
+            var iso = cur.getFullYear() + '-' + String(cur.getMonth() + 1).padStart(2, '0') + '-' + String(cur.getDate()).padStart(2, '0');
+            if (Utils.isCampDay(iso)) count++;
+            cur.setDate(cur.getDate() + 1);
+        }
+        return count;
+    };
+
+    /**
+     * Compute the escalating bonus for min/exact frequency enforcement.
+     * Accounts for cooldown: if the activity can't be scheduled until a
+     * future date, the effective remaining window shrinks and urgency rises.
+     *
+     * @param {string} period - '1week','2weeks','3weeks','4weeks','half'
+     * @param {number} visitsNeeded - how many more visits are required
+     * @param {string} [refDate] - reference date
+     * @param {number} [cooldownDaysLeft] - calendar days until cooldown expires
+     * @returns {number} bonus score (always >= 0)
+     */
+    Utils.getEscalationBonus = function(period, visitsNeeded, refDate, cooldownDaysLeft) {
+        if (visitsNeeded <= 0) return 0;
+        var today = refDate || (window.currentScheduleDate
+            ? (typeof window.currentScheduleDate === 'string' ? window.currentScheduleDate : window.currentScheduleDate.toISOString().slice(0, 10))
+            : new Date().toISOString().slice(0, 10));
+
+        var periodStart = Utils.getPeriodStartDate(period, today);
+        var periodEnd = Utils.getPeriodEndDate(period, today);
+        if (!periodStart || !periodEnd) {
+            return 100 * visitsNeeded;
+        }
+
+        var daysTotal = Utils.countCampDays(periodStart, periodEnd);
+        if (daysTotal <= 0) return 100 * visitsNeeded;
+
+        // Effective remaining camp days: subtract cooldown-blocked days
+        var daysRemaining = Utils.countCampDays(today, periodEnd);
+        if (cooldownDaysLeft > 0) {
+            var cooldownExpiry = new Date(today + 'T00:00:00');
+            cooldownExpiry.setDate(cooldownExpiry.getDate() + cooldownDaysLeft);
+            var expiryStr = cooldownExpiry.getFullYear() + '-' + String(cooldownExpiry.getMonth() + 1).padStart(2, '0') + '-' + String(cooldownExpiry.getDate()).padStart(2, '0');
+            var eligibleRemaining = Utils.countCampDays(expiryStr, periodEnd);
+            daysRemaining = Math.min(daysRemaining, eligibleRemaining);
+        }
+
+        var effectiveElapsed = Math.max(0, daysTotal - daysRemaining);
+        var dayIndex = Math.max(0, effectiveElapsed - 1);
+        var base = 100 * Math.pow(2, dayIndex);
+        return base * visitsNeeded;
     };
 
     /**
@@ -2037,7 +2433,7 @@
 
                         // Skip "Free" and transition types
                         const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower.includes('transition')) {
+                        if (actLower === 'free' || actLower === 'free play' || actLower.includes('transition')) {
                             return;
                         }
 
@@ -2055,6 +2451,11 @@
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
             window.saveGlobalSettings('historicalCounts', counts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
+            const _countedDates = {};
+            Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
             // Trigger cloud sync if available
@@ -2157,12 +2558,12 @@
                 console.log(`📊 [Hydrate] ✅ Merged ${datesSeen.size} dates into localStorage. ` +
                     `Total dates: ${Object.keys(allLocal).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).length}`);
             } catch (e) {
-                console.warn('📊 [Hydrate] localStorage full, trimming old dates...', e);
+                console.warn('📊 [Hydrate] localStorage full, trimming old dates...');
                 const dateKeys = Object.keys(allLocal)
                     .filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k))
                     .sort();
 
-                while (dateKeys.length > 30) {
+                while (dateKeys.length > 14) {
                     delete allLocal[dateKeys.shift()];
                 }
 
@@ -2170,7 +2571,11 @@
                     localStorage.setItem(DAILY_KEY, JSON.stringify(allLocal));
                     console.log('📊 [Hydrate] ✅ Saved trimmed data (last 30 dates)');
                 } catch (e2) {
-                    console.error('📊 [Hydrate] ❌ Still cannot save:', e2);
+                    console.warn('📊 [Hydrate] localStorage still full, using in-memory fallback');
+                    if (window.setDailyDataMemoryOverride) {
+                        window.setDailyDataMemoryOverride(allLocal);
+                        console.log('📊 [Hydrate] ✅ Data available via in-memory fallback');
+                    }
                 }
             }
 
@@ -2219,8 +2624,12 @@ Utils.getValidActivityNames = function() {
 const validActivities = Utils.getValidActivityNames();
         Object.keys(sched).forEach(bunk => {
             (sched[bunk] || []).forEach(entry => {
-                if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
-                    const actName = entry._activity;
+                if (entry && !entry.continuation && !entry._isTransition) {
+                    let actName = entry._activity || entry.sport || '';
+                    if (!actName) return;
+                    if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
+                        actName = entry.sport;
+                    }
                     const actLower = actName.toLowerCase();
                     if (actLower === 'free' || actLower.includes('transition')) return;
 
@@ -2249,7 +2658,7 @@ const validActivities = Utils.getValidActivityNames();
     };
 
 
-    Utils.reIncrementHistoricalCounts = function(dateKey, newScheduleAssignments, saveToCloud = true) {
+    Utils.reIncrementHistoricalCounts = function(dateKey, newScheduleAssignments, saveToCloud = true, oldScheduleAssignments = null) {
         console.log(`📊 [SchedulerCoreUtils] Re-incrementing for ${dateKey}...`);
 
         const globalSettings = window.loadGlobalSettings?.() || {};
@@ -2257,14 +2666,20 @@ const validActivities = Utils.getValidActivityNames();
         const countedDates = globalSettings.historicalCountedDates || {};
 
         if (countedDates[dateKey]) {
-            const allDaily = window.loadAllDailyData?.() || {};
-            const oldSched = allDaily[dateKey]?.scheduleAssignments || {};
+            // Use caller-supplied old schedule when available — avoids reading stale localStorage
+            // when the caller has already overwritten it with the new schedule.
+            const allDaily = oldScheduleAssignments ? null : (window.loadAllDailyData?.() || {});
+            const oldSched = oldScheduleAssignments || allDaily?.[dateKey]?.scheduleAssignments || {};
             let removed = 0;
 const validActivities = Utils.getValidActivityNames();
             Object.keys(oldSched).forEach(bunk => {
                 (oldSched[bunk] || []).forEach(entry => {
-                    if (entry && entry._activity && !entry.continuation && !entry._isTransition) {
-                        const actName = entry._activity;
+                    if (entry && !entry.continuation && !entry._isTransition) {
+                        let actName = entry._activity || entry.sport || '';
+                        if (!actName) return;
+                        if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {
+                            actName = entry.sport;
+                        }
                         const actLower = actName.toLowerCase();
                         if (actLower === 'free' || actLower.includes('transition')) return;
 
@@ -2315,6 +2730,100 @@ const validActivities = Utils.getValidActivityNames();
     window.reIncrementHistoricalCounts = Utils.reIncrementHistoricalCounts;
     window.rebuildHistoricalCountsFromCloud = Utils.rebuildHistoricalCountsFromCloud;
 
+    // =================================================================
+    // POST-EDIT COUNTS + ROTATION HISTORY — shared by all edit paths
+    // =================================================================
+    // Single source of truth for the delta update that must run after ANY
+    // manual cell edit (direct edit, conflict-resolved edit, bypass, proposal).
+    //
+    // @param {string}   bunk          — bunk name
+    // @param {string[]} oldActivities — activities that were in the affected slots before the edit
+    // @param {string|null} newActivity — the replacement activity (null = clear)
+    // @param {number[]} slots         — slot indices that were edited
+    Utils.applyPostEditCounts = function(bunk, oldActivities, newActivity, slots) {
+        // ── historicalCounts delta ────────────────────────────────────
+        try {
+            const _gs = window.loadGlobalSettings?.() || {};
+            const _hc = _gs.historicalCounts || {};
+            if (!_hc[bunk]) _hc[bunk] = {};
+
+            let _newAct = newActivity || null;
+            // Normalize case: reuse old casing when the name matches
+            if (_newAct) {
+                for (const oldAct of (oldActivities || [])) {
+                    if (oldAct.toLowerCase() === _newAct.toLowerCase() && oldAct !== _newAct) {
+                        _newAct = oldAct;
+                        break;
+                    }
+                }
+            }
+
+            // Decrement old activities
+            const _oldUnique = {};
+            (oldActivities || []).forEach(a => { _oldUnique[a] = (_oldUnique[a] || 0) + 1; });
+            for (const [act, count] of Object.entries(_oldUnique)) {
+                _hc[bunk][act] = Math.max(0, (_hc[bunk][act] || 0) - count);
+            }
+
+            // Increment new activity
+            const _validActs = Utils.getValidActivityNames?.() || new Set();
+            if (_newAct && (_validActs.size === 0 || _validActs.has(_newAct))) {
+                let _newCount = 0;
+                (slots || []).forEach(idx => {
+                    const entry = window.scheduleAssignments?.[bunk]?.[idx];
+                    if (entry && !entry.continuation) _newCount++;
+                });
+                if (_newCount === 0) _newCount = 1; // fallback when slots list unavailable
+                _hc[bunk][_newAct] = (_hc[bunk][_newAct] || 0) + _newCount;
+            }
+
+            if (window.saveGlobalSettings) {
+                window.saveGlobalSettings('historicalCounts', _hc);
+                if (typeof window.forceSyncToCloud === 'function') {
+                    setTimeout(() => window.forceSyncToCloud(), 100);
+                }
+            }
+        } catch (e) { console.error('[PostEditCounts] historicalCounts delta failed:', e); }
+
+        // ── rotationHistory rebuild for this bunk ─────────────────────
+        try {
+            const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
+            _rotHist.bunks = _rotHist.bunks || {};
+            const _bunkSlots = window.scheduleAssignments?.[bunk] || [];
+            const _schedDate = window.currentScheduleDate ? new Date(window.currentScheduleDate + 'T12:00:00').getTime() : Date.now();
+            const _now = _schedDate || Date.now();
+            // Merge today's activities into existing timestamps instead of
+            // wiping the bunk — preserves previous-day recency data.
+            if (!_rotHist.bunks[bunk]) _rotHist.bunks[bunk] = {};
+            const _todayActs = new Set();
+            _bunkSlots.forEach(entry => {
+                if (entry?._activity && !entry.continuation && !entry._isTransition) {
+                    const _aLower = entry._activity.toLowerCase();
+                    if (_aLower !== 'free' && !_aLower.includes('transition')) {
+                        _rotHist.bunks[bunk][entry._activity] = _now;
+                        _todayActs.add(entry._activity);
+                    }
+                }
+            });
+            window.saveRotationHistory?.(_rotHist);
+        } catch (e) { console.error('[PostEditCounts] rotationHistory rebuild failed:', e); }
+
+        // ── Sync rotation counts to cloud (debounced) ────────────────
+        //    Multiple bunks may be edited in quick succession (proposals,
+        //    conflict resolution).  Debounce so only one cloud save fires.
+        clearTimeout(Utils._postEditCloudTimer);
+        Utils._postEditCloudTimer = setTimeout(() => {
+            try {
+                const _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                if (_dateKey && window.RotationCloud?.save) {
+                    window.RotationCloud.save(_dateKey, window.scheduleAssignments || {});
+                    console.log('[PostEditCounts] ☁️ Synced rotation counts to cloud');
+                }
+            } catch (e) { console.error('[PostEditCounts] RotationCloud sync failed:', e); }
+        }, 500);
+    };
+    window.applyPostEditCounts = Utils.applyPostEditCounts;
+
 
     // =================================================================
     // ★★★ NEW v7.5: DIAGNOSTIC FUNCTIONS ★★★
@@ -2346,13 +2855,13 @@ const validActivities = Utils.getValidActivityNames();
                 if (f.sharableWith.capacity === undefined) fieldIssues.push('sharableWith.capacity missing');
             }
             
-            // Check limitUsage
-            if (!f.limitUsage) {
-                fieldIssues.push('Missing limitUsage');
+            // Check accessRestrictions
+            if (!f.accessRestrictions) {
+                fieldIssues.push('Missing accessRestrictions');
             } else {
-                if (f.limitUsage.enabled === undefined) fieldIssues.push('limitUsage.enabled missing');
-                if (typeof f.limitUsage.divisions !== 'object') fieldIssues.push('limitUsage.divisions not an object');
-                if (!Array.isArray(f.limitUsage.priorityList)) fieldIssues.push('limitUsage.priorityList not an array');
+                if (f.accessRestrictions.enabled === undefined) fieldIssues.push('accessRestrictions.enabled missing');
+                if (typeof f.accessRestrictions.divisions !== 'object') fieldIssues.push('accessRestrictions.divisions not an object');
+                if (!Array.isArray(f.accessRestrictions.priorityList)) fieldIssues.push('accessRestrictions.priorityList not an array');
             }
             
             // Check timeRules

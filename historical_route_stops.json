@@ -1,0 +1,2442 @@
+{
+  "BEIGE": [
+    {
+      "time": "9:05 AM",
+      "stop": "Lehigh Blvd@Dartmouth Dr",
+      "names": [
+        "Goldberg, Huvi",
+        "Goldberg, Chaya Rochel"
+      ]
+    },
+    {
+      "time": "9:07 AM",
+      "stop": "Lehigh Blvd@Drexel Dr",
+      "names": [
+        "Teiler, Rochel",
+        "Teiler, Fraidy",
+        "Perlstein, Baila",
+        "Perlstein, Leah"
+      ]
+    },
+    {
+      "time": "9:11 AM",
+      "stop": "Buckingham Dr@Chelsea Rd",
+      "names": [
+        "Birnbaum, Yael",
+        "Birnbaum, Dina",
+        "Birnbaum, Zahava",
+        "Bleier, Mariam",
+        "Gluck, Chavi"
+      ]
+    },
+    {
+      "time": "9:12 AM",
+      "stop": "Buckingham Dr@Birmingham Rd",
+      "names": [
+        "Rudnicki, Miri"
+      ]
+    },
+    {
+      "time": "9:14 AM",
+      "stop": "Winchester Dr@Chelsea Rd",
+      "names": [
+        "Cweiber, Leba"
+      ]
+    },
+    {
+      "time": "9:16 AM",
+      "stop": "Buckingham Dr@Cambridge Dr",
+      "names": [
+        "Tabak, Hudi"
+      ]
+    },
+    {
+      "time": "9:18 AM",
+      "stop": "Brewers Bridge Rd@Bridge Ct",
+      "names": [
+        "Wolf, Nechama"
+      ]
+    },
+    {
+      "time": "9:19 AM",
+      "stop": "Brewers Bridge Rd@Green Valley Rd",
+      "names": [
+        "Silberstein, Sarah"
+      ]
+    },
+    {
+      "time": "9:20 AM",
+      "stop": "Brewers Bridge Rd@Blue Heron Dr",
+      "names": [
+        "Mizrahi, Rachel"
+      ]
+    },
+    {
+      "time": "9:20 AM",
+      "stop": "Brewers Bridge Rd@Bridgewater Ct",
+      "names": [
+        "Tabi, Miri",
+        "Aron, Avigayil"
+      ]
+    },
+    {
+      "time": "9:21 AM",
+      "stop": "S Cooks Bridge Rd@Brewers Bridge Rd",
+      "names": [
+        "Shain, Chana"
+      ]
+    },
+    {
+      "time": "9:23 AM",
+      "stop": "S Cooks Bridge Rd@Christine Lynn Ct",
+      "names": [
+        "Tikhner, Naomi",
+        "Glassman, Minna"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "S Cooks Bridge Rd@Owl Ct",
+      "names": [
+        "Schulgasser, Shoshana",
+        "Schulgasser, Goldie"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Gail Chambers Rd@Meadow Run Ct",
+      "names": [
+        "Brisman, Devorah"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "S Cooks Bridge Rd@Spectrum Ct",
+      "names": [
+        "Kahan, Sara",
+        "Nachumson, Atara"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "New Central Ave@Jackson Pines Rd",
+      "names": [
+        "Lax, Batya"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Pitney Ln@Danielle Ct",
+      "names": [
+        "Gottlieb, Nechama",
+        "Stone, Chana",
+        "Scholar, Miri",
+        "Kaufman, Nechama",
+        "Kaufman, Rachel",
+        "Cooper, Chava",
+        "Cooper, Miriam",
+        "Frischman, Blimie"
+      ]
+    },
+    {
+      "time": "9:35 AM",
+      "stop": "E Veterans Hwy@Melissa Lee Dr",
+      "names": [
+        "Feinstein, Miriam"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Rustic Rd@Scarlet Ct",
+      "names": [
+        "Pechter, Gitti",
+        "Pechter, Sabi",
+        "Leshkowitz, Miri",
+        "Blumenfrucht, Shaindy",
+        "Blumenfrucht, Raizy",
+        "Fruchthandler, Tziri"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Rustic Rd@Auburn Rd",
+      "names": [
+        "Goldberger, Batsheva",
+        "Liebermann, Malka",
+        "Kornbluh, Bella"
+      ]
+    }
+  ],
+  "BLACK": [
+    {
+      "time": "9:16 AM",
+      "stop": "Lanes Mill Rd@Melrose Ct",
+      "names": [
+        "Lichtenfeld, Aviva",
+        "Lieberman, Esti",
+        "Becker, Batsheva",
+        "Becker, Faigy",
+        "Fagan, Zehava"
+      ]
+    },
+    {
+      "time": "9:18 AM",
+      "stop": "Hidden Ln@Barrymor Dr",
+      "names": [
+        "Berger, Ita"
+      ]
+    },
+    {
+      "time": "9:22 AM",
+      "stop": "County Line Rd E@Pismo Ct",
+      "names": [
+        "Miller, Leah",
+        "Grossman, Fraidy",
+        "Ehrman, Adina",
+        "Back, Malka",
+        "Ehrman, Cipora"
+      ]
+    },
+    {
+      "time": "9:23 AM",
+      "stop": "Ventura Dr@Del Mar Rd",
+      "names": [
+        "Jankelovits, Michal",
+        "Perlow, Sara"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Ventura Dr@Coronado St",
+      "names": [
+        "Sapezhansky, Sarah",
+        "Friedman, Rachel",
+        "Freeman, Rachel",
+        "Freeman, Miriam"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "County Line Rd E@J Scott Ct@Alvarado Ave",
+      "names": [
+        "Joseph, Racheli",
+        "Joseph, Sara",
+        "Kalisch, Chavi"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "County Line Rd E@Marcella Ct",
+      "names": [
+        "Berger, Dina"
+      ]
+    },
+    {
+      "time": "9:28 AM",
+      "stop": "JOE PARKER RD@MEADOW LN",
+      "names": [
+        "Basch, Hudy",
+        "Fisher, Avigail",
+        "Obstfeld, Estee",
+        "Basch, Faigy",
+        "Basch, Sarah"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "Joe Parker Rd@Grandview Dr",
+      "names": [
+        "Segal, Haddas",
+        "Rubelow, Goldie",
+        "Segal, Michal",
+        "Wolf, Adina",
+        "Berkowitz, Sara",
+        "Wolf, Talia"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Joe Parker Rd@Brookfield Dr (Brookfield Side)",
+      "names": [
+        "Kaplan, Fraidy"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Joe Parker Rd@Brookfield Dr (Brookfield Side)",
+      "names": [
+        "Hellman, Miri"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Laguna Ln@Alamitos Dr (NORTH WEST)",
+      "names": [
+        "Golding, Leah",
+        "Kranz, Shifra"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Laguna Ln@Alamitos Dr (EAST)",
+      "names": [
+        "Meyer, Breindy"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "LANES MILL RD@CINDY CT N/S",
+      "names": [
+        "Kanarek, Chava",
+        "Kanarek, Malka"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "LANES MILL RD@CINDY CT N/S",
+      "names": [
+        "Storch, Chani",
+        "Swerdloff, Riki"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Ocean Ave@Sea Point Dr",
+      "names": [
+        "Possick, Devora"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Ocean Ave@Sea Point Dr",
+      "names": [
+        "Perl, Chaya"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "BOULDER WAY@RIVKA LN",
+      "names": [
+        "Sonenblick, Miri"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Dr Szold Way@Aspen Ct",
+      "names": [
+        "Sternbach, Batsheva",
+        "Sternbach, Chana"
+      ]
+    },
+    {
+      "time": "9:48 AM",
+      "stop": "Albert Ave@READ PL",
+      "names": [
+        "Nakdimen, Sari",
+        "Klugmann, Avigail"
+      ]
+    }
+  ],
+  "BLUE": [
+    {
+      "time": "9:18 AM",
+      "stop": "Ocean Ave@Regal Ct",
+      "names": [
+        "Antebi, Ruthie",
+        "Swiatycki, Kaila",
+        "Betesh, Sarah",
+        "Draiarsh, Chaya Sara",
+        "Cohen, Shani"
+      ]
+    },
+    {
+      "time": "9:21 AM",
+      "stop": "10th St@Monmouth Ave",
+      "names": [
+        "Dinkels, Chashie",
+        "Betesh, Shoshana",
+        "Cohen, Hendy",
+        "Liberman, Miriam"
+      ]
+    },
+    {
+      "time": "9:23 AM",
+      "stop": "E 13th St@Shafto Ave",
+      "names": [
+        "Schorr, Leah"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Princeton Ave@Tudor Ct@Colony Cir",
+      "names": [
+        "Brecher, Ella",
+        "Brecher, Atara",
+        "Neger, Chana"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "Princeton Ave@Downing St",
+      "names": [
+        "Levy, Nava",
+        "Hilman, Tzivya",
+        "Green, Etty",
+        "Yudkovsky, Rochelle",
+        "Yudkovsky, Chana",
+        "Rosenberg, Sari"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Princeton Ave@Stratford Pl",
+      "names": [
+        "Blumenkrantz, Kayla"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Squankum Rd @ Whispering Pines Ln (1st Ent)",
+      "names": [
+        "Braun, Batsheva"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Twin Oaks DR@Kew Garden Dr",
+      "names": [
+        "Monoker, Frumi",
+        "Caplan, Leah"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "E KENNEDY BLVD@TWIN OAKS DR WEST",
+      "names": [
+        "Ruzohorsky, Miri",
+        "Kutcher, Hadasa",
+        "Stern, Bracha",
+        "Kramer, Hudis",
+        "Anisfeld, Goldie",
+        "Berger, Miriam",
+        "Gewirtzman, Penina",
+        "Friedman, Shana"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "AROSA HILL@ENGLEBERG TER N",
+      "names": [
+        "Frankel, Chedva",
+        "Frankel, Kaila"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Gefen Dr@Remon Dr",
+      "names": [
+        "Jacobowitz, Miriam",
+        "Weiss, Chana",
+        "Jacobowitz, Perel",
+        "Israel, Esty",
+        "Israel, Gittel",
+        "Schubert, Yocheved"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Ridge Ave@New York Ave",
+      "names": [
+        "Taub, Racheli",
+        "Weinstein, Perel",
+        "Richt, Tzivi"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Holly St@StIrling Ave",
+      "names": [
+        "Schepansky, Esther",
+        "Smoke, Nechama",
+        "Smoke, Tzivia",
+        "Soll, Yocheved",
+        "Diamond, Miriam"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Ocean Ave@Holly St",
+      "names": [
+        "Feifer, Rosie",
+        "Klang, Brocha"
+      ]
+    }
+  ],
+  "BROWN": [
+    {
+      "time": "8:55 AM",
+      "stop": "Hampshire Blvd@Lancaster Way",
+      "names": [
+        "Klein, Chana"
+      ]
+    },
+    {
+      "time": "8:56 AM",
+      "stop": "Hampshire Blvd@Chiswick Dr",
+      "names": [
+        "Robinson, Leah"
+      ]
+    },
+    {
+      "time": "8:57 AM",
+      "stop": "Knightsbridge Pl@Hamshire Blvd@Hampshire Blvd",
+      "names": [
+        "Bondy, Rachelli",
+        "Sommerfeld, Ayala",
+        "Schwartz, Rachel",
+        "Fogel, Yonina",
+        "Fogel, Hindy",
+        "Muschel, Shana",
+        "Wolf, Zeesy"
+      ]
+    },
+    {
+      "time": "8:58 AM",
+      "stop": "Piccadilly Dr@Sussex Pl",
+      "names": [
+        "Ungar, Aliza",
+        "Ungar, Esther",
+        "Greenebaum, Esty",
+        "Deutsch, Miriam",
+        "Hertz, Sari",
+        "Miller, Henny",
+        "Porgess, Adina",
+        "Orgel, Cheryl",
+        "Orgel, Dena",
+        "Orgel, Meira"
+      ]
+    },
+    {
+      "time": "8:58 AM",
+      "stop": "Piccadilly Dr@Knightsbridge Pl",
+      "names": [
+        "Helmreich, Atara"
+      ]
+    },
+    {
+      "time": "8:59 AM",
+      "stop": "Piccadilly Dr@Hastings Ct",
+      "names": [
+        "Felder, Avigayil",
+        "Rutta, Tehilla",
+        "Rutta, Sarala",
+        "Felder, Chava"
+      ]
+    },
+    {
+      "time": "9:00 AM",
+      "stop": "Piccadilly Dr@Victoria Cir",
+      "names": [
+        "Orzel, Yehudis",
+        "Hoffman, Racheli"
+      ]
+    },
+    {
+      "time": "9:01 AM",
+      "stop": "Piccadilly Dr@Earl Ct",
+      "names": [
+        "Gejerman, Perry"
+      ]
+    },
+    {
+      "time": "9:01 AM",
+      "stop": "Cook Rd@Piccadilly Dr",
+      "names": [
+        "Munk, Chava"
+      ]
+    },
+    {
+      "time": "9:03 AM",
+      "stop": "Hyson Rd@Monterey Ct@Symphony Ct",
+      "names": [
+        "Silverstein, Esti",
+        "Flohr, Rikki",
+        "Silverstein, Riki"
+      ]
+    },
+    {
+      "time": "9:06 AM",
+      "stop": "Bridle Ct@Trotters Way",
+      "names": [
+        "Finkel, Rachelli",
+        "Finkel, Aviva"
+      ]
+    },
+    {
+      "time": "9:08 AM",
+      "stop": "Colts Ct@Trotters Way",
+      "names": [
+        "Storch, Sarah"
+      ]
+    },
+    {
+      "time": "9:09 AM",
+      "stop": "Hyson Rd@Meadowood Rd@Buchanan Blvd",
+      "names": [
+        "Gottlieb, Naomi"
+      ]
+    },
+    {
+      "time": "9:11 AM",
+      "stop": "Summerhill Ave@Winter Way",
+      "names": [
+        "Heimowitz, Racheli",
+        "Heimowitz, Esther"
+      ]
+    },
+    {
+      "time": "9:17 AM",
+      "stop": "Cross Farms Ct@Highland Dr",
+      "names": [
+        "Stein, Chani"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Pennsylvania Ave@S Carolina St",
+      "names": [
+        "Werner, Mindy"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Vermont Ave@Trenton St",
+      "names": [
+        "Schecter, Hadassa"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Bates Rd@Plasner Ct@Dorchester Ct",
+      "names": [
+        "Rabinowitz, Tzivia"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Ryans Way@Lons Ln",
+      "names": [
+        "Tropper, Hinda"
+      ]
+    }
+  ],
+  "CORAL": [
+    {
+      "time": "8:50 AM",
+      "stop": "Brandon Rd@Weldon Rd",
+      "names": [
+        "Adler, Baila"
+      ]
+    },
+    {
+      "time": "9:04 AM",
+      "stop": "Broadway Blvd@Middlesex St",
+      "names": [
+        "Rex, Esther",
+        "Fried, Chaviva"
+      ]
+    },
+    {
+      "time": "9:07 AM",
+      "stop": "Manchester St@Seventh Ave",
+      "names": [
+        "Spira, Dina"
+      ]
+    },
+    {
+      "time": "9:09 AM",
+      "stop": "Manchester St@Birmingham Ave",
+      "names": [
+        "Berkovicz, Ahuva",
+        "Leeder, Chaya Sara",
+        "Jaffe, Esti"
+      ]
+    },
+    {
+      "time": "9:10 AM",
+      "stop": "Manchester St@Englemere Blvd",
+      "names": [
+        "Weinberg, Miriam"
+      ]
+    },
+    {
+      "time": "9:11 AM",
+      "stop": "Manchester St@Montgomery Ave",
+      "names": [
+        "Pollak, Faigy"
+      ]
+    },
+    {
+      "time": "9:13 AM",
+      "stop": "Grinnell Ave@N Hampton Blvd",
+      "names": [
+        "Fogel, Batsheva"
+      ]
+    },
+    {
+      "time": "9:14 AM",
+      "stop": "Amsterdam Ave@N Hampton Blvd",
+      "names": [
+        "Scheff, Yaela"
+      ]
+    },
+    {
+      "time": "9:15 AM",
+      "stop": "Amsterdam Ave@Middlesex St",
+      "names": [
+        "Dorfman, Tzippy",
+        "Lew, Gitty",
+        "Dorfman, Esti",
+        "Levin, Miri",
+        "Friedman, Adina Sarah"
+      ]
+    },
+    {
+      "time": "9:18 AM",
+      "stop": "Burnside St@Wellington Ave",
+      "names": [
+        "Friedman, Rikki",
+        "Friedman, Yonina"
+      ]
+    },
+    {
+      "time": "9:19 AM",
+      "stop": "Oakdale St@Birmingham Ave",
+      "names": [
+        "Greenfield, Batsheva"
+      ]
+    },
+    {
+      "time": "9:21 AM",
+      "stop": "Tenth Ave@Burnside St",
+      "names": [
+        "Cherney, Abby"
+      ]
+    },
+    {
+      "time": "9:22 AM",
+      "stop": "Oakdale St@Seventh Ave",
+      "names": [
+        "Balaban, Tehilla Yehudis"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Parkview Blvd@Tenth Ave",
+      "names": [
+        "Ruvel, Rikki",
+        "Ruvel, Rena"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "2nd Ave@Beacon St",
+      "names": [
+        "Schiff, Charni",
+        "Schiff, Simi"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "1st Ave@Morningside St",
+      "names": [
+        "Greenfield, Esther",
+        "Defreudiger, Esti",
+        "Greenfield, Yehudis"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Beacon St@Oak Knoll Dr",
+      "names": [
+        "Schabes, Nechama"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Jumping Brook Dr@Charlton Cir",
+      "names": [
+        "Pinkasovits, Vivi",
+        "Tauber, Avigail",
+        "Lerer, Rosie",
+        "Slatus, Yocheved",
+        "Slatus, Chana",
+        "Slatus, Avigayil"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Stevens Rd@Lands End Dr",
+      "names": [
+        "Shain, Adina",
+        "Shain, Ruchoma"
+      ]
+    }
+  ],
+  "GOLD": [
+    {
+      "time": "9:24 AM",
+      "stop": "Village Rd@Sawmill Ct@Bricksburg Ct",
+      "names": [
+        "Akerman, Leah",
+        "Jerusalem, Rochel",
+        "Blech, Aviva",
+        "Kenzer, Nechama",
+        "Strasberg, Hudis"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Liberty Bell Rd@Huddy Dr",
+      "names": [
+        "Shapiro, Ahuva",
+        "Lapciuc, Leah",
+        "Friedman, Ahuva",
+        "Back, Devorah",
+        "Goldner, Chavy"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Bunker Hill Dr@Ticonderoga Dr",
+      "names": [
+        "Hoffman, Yitty",
+        "Friedman, Leah",
+        "Hoffman, Sarala"
+      ]
+    },
+    {
+      "time": "9:28 AM",
+      "stop": "White Knoll Dr@Bunker Hill Dr",
+      "names": [
+        "Rubin, Ahuva",
+        "Menchel, Simi",
+        "Shulman, Buna"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "White Knoll Dr@Bunker Hill Dr",
+      "names": [
+        "Goldschmidt, Ruchoma",
+        "Katz, Adina",
+        "Goldstein, Peri",
+        "Youlus, Aliza"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Grande Woodlands Way@White Knoll Dr",
+      "names": [
+        "Ganz, Sima",
+        "Birnbaum, Toby"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Grande Woodlands Way@Sprucewood Dr",
+      "names": [
+        "Friedman, Ahuva",
+        "Weinman, Rivka",
+        "Weinman, Yael",
+        "Berman, Ayala"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "White Knoll Dr@Grande Woodlands Way",
+      "names": [
+        "Brenner, Esther",
+        "Newman, Estee"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Rio Grande Dr@MISSISSIPPI ST",
+      "names": [
+        "Landau, Leah",
+        "Verstandig, Tamara",
+        "Verstandig, Avital",
+        "Treitel, Chavie",
+        "Dembitzer, Ruby Dembitzer"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "Cox Cro Rd@Paavo Ct",
+      "names": [
+        "Hoffman, Sophia",
+        "Hoffman, Talya"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Cox Cro Rd@Vermont Ave",
+      "names": [
+        "Friedman, Naomi",
+        "Ehrman, Meira",
+        "Boles, Esty",
+        "Ringel, Suri"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Vermont Ave@Marisa Dr",
+      "names": [
+        "Richter, Raizy"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Vermont Ave@Mercedes Bend",
+      "names": [
+        "Marcus, Leah",
+        "Bar, Renee"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Vermont Ave@Starc Rd@Jasam Ct",
+      "names": [
+        "Avshalom, Shira",
+        "Avshalom, Yael",
+        "Ellenbogen, Lea"
+      ]
+    }
+  ],
+  "GRAY": [
+    {
+      "time": "9:42 AM",
+      "stop": "Elm St@Melville Ave",
+      "names": [
+        "Aaron, Chayala",
+        "Schuss, Miriam",
+        "Rudnicki, Mindy",
+        "Rudnicki, Chana",
+        "Massry, Chayala",
+        "Malin, Nechama Pessi",
+        "Kaisman, Esther",
+        "Kaisman, Shifra",
+        "Kaisman, Ahuva",
+        "Janowski, Simi",
+        "Malin, Rachel Frumit",
+        "Frankel, Rivky"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Arlington Ave@Elm St",
+      "names": [
+        "Neuman, Sarah",
+        "Broyde, Sara",
+        "Broyde, Batsheva",
+        "Broyde, Etty",
+        "Yablonsky, Esti"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Arlington Ave@John St",
+      "names": [
+        "Herz, Sara",
+        "Fried, Aviva",
+        "Herskowitz, Shaindel",
+        "David, Avigail",
+        "Abrams, Rochel",
+        "Abramson, Chaya",
+        "Broyde, Sara",
+        "Herskowitz, Leah"
+      ]
+    },
+    {
+      "time": "9:44 AM",
+      "stop": "Lincoln St@Arlington Ave",
+      "names": [
+        "Stern, Rochel",
+        "Stern, Chana",
+        "Goldstein, Bracha",
+        "Epstein, Chelli",
+        "Levin, Leah"
+      ]
+    },
+    {
+      "time": "9:44 AM",
+      "stop": "Lincoln St@Ashley Ave",
+      "names": [
+        "Stavrach, Esther",
+        "Stavrach, Chana",
+        "Siegfried, Bella",
+        "Siegfried, Chani",
+        "Schwarz, Leah",
+        "Schwarz, Yehudis",
+        "Goldstein, Esther",
+        "Moskovits, Sarala",
+        "Moskovits, Toby",
+        "Meisels, Hennie",
+        "Goldstein, Batsheva",
+        "Goldstein, Aliza"
+      ]
+    },
+    {
+      "time": "9:46 AM",
+      "stop": "Ashley Ave@Wynatt St",
+      "names": [
+        "Waldman, Nechama",
+        "Hoffberg, Elisheva",
+        "Waldman, Racheli",
+        "Rosenberg, Rivky",
+        "Miller, Avigail",
+        "Schwartz, Ahuva",
+        "Schwartz, Miriam",
+        "Sobel, Tzirel",
+        "Rosenberg, Breidny"
+      ]
+    }
+  ],
+  "GREEN": [
+    {
+      "time": "9:11 AM",
+      "stop": "Silverton Rd@Fielders Ln",
+      "names": [
+        "Feldman, Bassy"
+      ]
+    },
+    {
+      "time": "9:13 AM",
+      "stop": "Todd Rd@Badger Dr",
+      "names": [
+        "Gobioff, Rikki",
+        "Lopiansky, Rikki",
+        "Lopiansky, Aliza",
+        "Lopiansky, Tehilla"
+      ]
+    },
+    {
+      "time": "9:17 AM",
+      "stop": "Silverton Rd@Esto Ct",
+      "names": [
+        "Siegfried, Dina"
+      ]
+    },
+    {
+      "time": "9:19 AM",
+      "stop": "Silverton Rd@Regina Ct",
+      "names": [
+        "Beck, Tamar"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "White Oak Bottom Rd@Dino Blvd",
+      "names": [
+        "Schlesinger, Daniella",
+        "Hiley, Ariella"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "White Oak Bottom Rd@Orien Rd",
+      "names": [
+        "Rosenberg, Shana"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "N Maple Ave@Tapestry Ct@S Tapestry Ct",
+      "names": [
+        "Enock, Elka"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "New Hampshire Rd@Bridport Dr",
+      "names": [
+        "Ackerman, Chaya",
+        "Ackerman, Adina"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Hickory St@Longest Dr",
+      "names": [
+        "Weinberg, Esther",
+        "Pilchick, Goldy"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Swiss Mountain Dr@Hanna Dr",
+      "names": [
+        "Itzkowitz, Sari"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "Isabella Dr@Swiss Mountain Dr",
+      "names": [
+        "Friedman, Ayala",
+        "Deutsch, Gitty Deutsch"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Locust St@LODZ DR",
+      "names": [
+        "Silver, Abby"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Locust St@Rose Ct",
+      "names": [
+        "Silver, Hadassa",
+        "Kirzner, Vichna",
+        "Kirzner, Rochel",
+        "Landsberg, Devora"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "LOCUST ST @ HANOVER WAY",
+      "names": [
+        "Weinberger, Chana"
+      ]
+    },
+    {
+      "time": "9:46 AM",
+      "stop": "Salem St@Coral Ave",
+      "names": [
+        "Breiner, Tzivya"
+      ]
+    },
+    {
+      "time": "9:47 AM",
+      "stop": "Salem St@Marlin Ave",
+      "names": [
+        "Fried, Batsheva"
+      ]
+    },
+    {
+      "time": "9:48 AM",
+      "stop": "Salem St@Marlin Ave",
+      "names": [
+        "Witty, Sarah Gila"
+      ]
+    }
+  ],
+  "MAROON": [
+    {
+      "time": "8:38 AM",
+      "stop": "Brittany Ln@Wellesley Ct",
+      "names": [
+        "Reichman, Aviva",
+        "Monoker, Avigail"
+      ]
+    },
+    {
+      "time": "8:39 AM",
+      "stop": "Greenwich Dr@Normandy Dr",
+      "names": [
+        "Sorotzkin, Esther",
+        "Sorotzkin, Rochel",
+        "Shapiro, Zahava",
+        "Muller, Adina",
+        "Feder, Miri",
+        "Muller, Yael",
+        "Hainig, Daniella"
+      ]
+    },
+    {
+      "time": "8:47 AM",
+      "stop": "Overlook Dr@Quaker Hill Rd",
+      "names": [
+        "Birnbaum, Tamara"
+      ]
+    },
+    {
+      "time": "8:51 AM",
+      "stop": "Cedarview Ave@Flat Brook Run",
+      "names": [
+        "Krasner, Yael",
+        "Krasner, Atara"
+      ]
+    },
+    {
+      "time": "8:54 AM",
+      "stop": "Overlook Dr@Sheldon Dr",
+      "names": [
+        "Lieberman, Fraydee",
+        "Lieberman, Leah",
+        "Aberbach, Lani",
+        "Aberbach, Leah"
+      ]
+    },
+    {
+      "time": "8:57 AM",
+      "stop": "Freehold Rd@Wellington Ct",
+      "names": [
+        "Amoyelle, Esther"
+      ]
+    },
+    {
+      "time": "8:58 AM",
+      "stop": "Leesville Rd@Toshi Ct",
+      "names": [
+        "Berger, Avigayil"
+      ]
+    },
+    {
+      "time": "9:00 AM",
+      "stop": "Leesville Rd@Sherwood Ct",
+      "names": [
+        "Ganz, Bryna",
+        "Blaustein, Tehilla",
+        "Ganz, Rachelli"
+      ]
+    },
+    {
+      "time": "9:04 AM",
+      "stop": "Wilson Blvd@Grant Ln",
+      "names": [
+        "Gold, Atara",
+        "Green, Leah",
+        "Green, Chana",
+        "Bensoussan, Elana",
+        "Gold, Leah"
+      ]
+    },
+    {
+      "time": "9:13 AM",
+      "stop": "Bennetts Mills Rd@Morning Star Ln",
+      "names": [
+        "Silver, Meira"
+      ]
+    },
+    {
+      "time": "9:20 AM",
+      "stop": "Bennetts Mills Rd@N Boston Rd@S Boston Rd",
+      "names": [
+        "Fleischman, Rena",
+        "Wilner, Miri"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Butterfly Rd@Ambassador Ct",
+      "names": [
+        "Tress, Miri",
+        "Lichtman, Avigail",
+        "Lichtman, Tamary",
+        "Tress, Leah",
+        "Schlachet, Kayla"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Butterfly Rd@Ambassador Way",
+      "names": [
+        "Gutman, Mindy",
+        "Gutman, Chava"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "E Veterans Hwy@Skylark Dr",
+      "names": [
+        "Maidi, Elana",
+        "Maidi, Malka"
+      ]
+    },
+    {
+      "time": "9:35 AM",
+      "stop": "E Veterans Hwy@Cleveland Ct",
+      "names": [
+        "Isaacson, Esther"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "Whitesville Rd@Calendula Ct (Calendula side)",
+      "names": [
+        "Sahar, Leah"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "Whitesville Rd@Rebecca Dr",
+      "names": [
+        "Furer, Esther",
+        "Gobioff, Ahuva",
+        "Mayer, Ariella",
+        "Furer, Goldy"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Whitesville Rd@Grawtown Rd",
+      "names": [
+        "Lowenstein, Sarah Meirav",
+        "Lowenstein, Yaeli",
+        "Lowenstein, Lily"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Whitesville Rd@Grawtown Rd",
+      "names": [
+        "Sevy, Rachel Leah"
+      ]
+    }
+  ],
+  "ORANGE": [
+    {
+      "time": "9:04 AM",
+      "stop": "Hemlock Hill Rd@Harvest Ct@Mulberry Ct",
+      "names": [
+        "Marcus, Adina",
+        "Samson, Rochel",
+        "Linsky, Chani",
+        "Marcus, Hadassa",
+        "Marcus, Nechama",
+        "Samson, Rivka"
+      ]
+    },
+    {
+      "time": "9:05 AM",
+      "stop": "Hickory Hill Rd@Harmony Farms Ln",
+      "names": [
+        "Breiner, Rena",
+        "Friedman, Miri"
+      ]
+    },
+    {
+      "time": "9:07 AM",
+      "stop": "Hemlock Hill Rd@Holly Hill Ct",
+      "names": [
+        "Plotsker, Chayala",
+        "Sharaby, Miri",
+        "Benisti, Ahuva"
+      ]
+    },
+    {
+      "time": "9:10 AM",
+      "stop": "Hickory Hill Rd@EDEN WAY",
+      "names": [
+        "Morgenstern, Mindy",
+        "Dickstein, Ahuva",
+        "Gruen, Ettie",
+        "Gruen, Bassie"
+      ]
+    },
+    {
+      "time": "9:11 AM",
+      "stop": "Hickory Hill Rd@Briarwood Ct",
+      "names": [
+        "Relis, Devora",
+        "Relis, Rachelli",
+        "Neustadt, Miriam"
+      ]
+    },
+    {
+      "time": "9:13 AM",
+      "stop": "S New Prospect Rd@Pointe Cir",
+      "names": [
+        "Salomon, Aliza",
+        "Salomon, Lele",
+        "Becker, Meira",
+        "Grunhut, Yocheved",
+        "Schwartz, Lele",
+        "Smilow, Leah",
+        "Goldberger, Leah",
+        "Biegeleisen, Sarala",
+        "Hanover, Adina",
+        "Biegeleisen, Rachelli"
+      ]
+    },
+    {
+      "time": "9:15 AM",
+      "stop": "Ashford Rd@Dunbarton Rd",
+      "names": [
+        "Berger, Tova",
+        "Brodt, Chanala"
+      ]
+    },
+    {
+      "time": "9:17 AM",
+      "stop": "Claridge Dr@Weston Ct",
+      "names": [
+        "Richter, Rivka",
+        "Gut, Aliza"
+      ]
+    },
+    {
+      "time": "9:21 AM",
+      "stop": "Valley Rd@Quincy Dr",
+      "names": [
+        "Gold, Bracha",
+        "Stauber, Nechama",
+        "Stauber, Miriam"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "S New Prospect Rd@Idaho Pl",
+      "names": [
+        "Maymon, Michal"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "Pawnee Rd@Genesee Pl",
+      "names": [
+        "Fried, Breindy"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Pawnee Rd@Iroquois Pl",
+      "names": [
+        "Kalish, Perli"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Hope Chapel Rd@Hope Ter",
+      "names": [
+        "Sternheim, Simi"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Kimberly Dr@Walden Ave",
+      "names": [
+        "Vorhand, Golda",
+        "Brachfeld, Riki"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "14th St@Roselle Ct",
+      "names": [
+        "Kraushar, Devoiry",
+        "Einhorn, Chassida"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "Fernwood Ave@Tuxedo Ter",
+      "names": [
+        "Melcer, Nechama"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Case Rd@Magnolia Dr",
+      "names": [
+        "Gorelick, Dassi"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Magnolia Dr@Iris Rd",
+      "names": [
+        "Katz, Yitty",
+        "Greenberg, Chavi",
+        "Greenberg, Tzipora",
+        "Perlow, Leah",
+        "Katz, Miriam"
+      ]
+    }
+  ],
+  "PEACH": [
+    {
+      "time": "9:22 AM",
+      "stop": "New Central Ave@Irene Ct",
+      "names": [
+        "Spero, Brocha"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "Adams St@Van Buren Ave N",
+      "names": [
+        "Scott, Fraidy",
+        "Rothstein, Hadassah",
+        "Bak, Batsheva"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Miller Rd@Adams St@Forest Dr",
+      "names": [
+        "Natan, Ayala",
+        "Hirsch, Peri",
+        "Amon, Gene"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Forest Dr@Shady Lane Dr",
+      "names": [
+        "Jeremias, Riki"
+      ]
+    },
+    {
+      "time": "9:28 AM",
+      "stop": "New Central Ave@Primrose Dr",
+      "names": [
+        "Polinsky, Tehilla"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Van Buren Ave@Kings Ct",
+      "names": [
+        "Lewenstein, Mati",
+        "May, Simi",
+        "Darabaner, Yehudis"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Kings Ct@Queens Ct",
+      "names": [
+        "Stern, Frumi",
+        "Moskowitz, Sari",
+        "Stern, Avigail"
+      ]
+    },
+    {
+      "time": "9:34 AM",
+      "stop": "N Crest Pl@Kletsk Hill Rd",
+      "names": [
+        "Shafran, Adina",
+        "Bernstein, Hadassa"
+      ]
+    },
+    {
+      "time": "9:35 AM",
+      "stop": "N Crest Pl@Maplewood Ter",
+      "names": [
+        "Felsinger, Sari",
+        "Sturman, Lele",
+        "Sturman, Leeba"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Sanztown Rd@Greencove Rd",
+      "names": [
+        "Gellis, Devorah",
+        "Lowy, Gitty"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "Sanztown Rd @ Kingsfield Dr S",
+      "names": [
+        "Hirsch, Chaya Tzipora Hirsch",
+        "Hirsch, Ita",
+        "Hirsch, Miriam"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "HILLSIDE BLVD@KINGSFIELD DR@LUBLIN",
+      "names": [
+        "Hildeshaim, Esti",
+        "Back, Basya",
+        "Back, Layla",
+        "Hildeshaim, Chani",
+        "Herber, Yocheved",
+        "Heller, Baila",
+        "Deutsch, Mushky",
+        "Dvorkes, Hadas",
+        "Dvorkes, Mimi",
+        "Goldberg, Leah"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Drake Rd@SERENITY WAY",
+      "names": [
+        "Czermak, Rikki",
+        "Zeitman, Tamar",
+        "Zaks, Adina",
+        "Grunberger, Racheli",
+        "Mendlowitz, Adina",
+        "Mendlowitz, Yael",
+        "Klein, Sorala"
+      ]
+    },
+    {
+      "time": "9:45 AM",
+      "stop": "Majestic Way@Olympic Circle",
+      "names": [
+        "Escava, Rachel",
+        "Greenwald, Rachelli",
+        "Levy, Rivkah",
+        "Pomerantz, Tzipora",
+        "Goldman, Riki"
+      ]
+    }
+  ],
+  "PINK": [
+    {
+      "time": "9:37 AM",
+      "stop": "NEW WOOD HILLS AVE@LONDON AVE",
+      "names": [
+        "Alter, Tzipora",
+        "Tabak, Rivka"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "Flannery Ave@New Wood Hills Ave",
+      "names": [
+        "Septon, Penina",
+        "Landau, Leah",
+        "Landau, Malka",
+        "Garfinkel, Sarah",
+        "Fox, Hadas",
+        "Landau, Devora",
+        "Berkowitz, Rachel"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Shenandoah Dr@ROCKBRIDGE RD",
+      "names": [
+        "Yarmush, Adina",
+        "Taplin, Yehudis",
+        "Sternstein, Saraliza",
+        "Sternstein, Avigail",
+        "Singer, Tzippora",
+        "Goldstein, Esti",
+        "Lieberman, Sori",
+        "Lieberman, Leah"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "SHENANDOAH DR@WALKER DR N SIDE",
+      "names": [
+        "Barer, Tzipora",
+        "Stern, Fraydee",
+        "Steinberg, Tirtza",
+        "Munk, Michal",
+        "Levin, Rachelli",
+        "Klein, Adina",
+        "Eisen, Dassi",
+        "Lesser, Tova",
+        "Engel, Sarah"
+      ]
+    },
+    {
+      "time": "9:45 AM",
+      "stop": "CANARY DR@RAVEN LN",
+      "names": [
+        "Waidenbaum, Rochel",
+        "Waidenbaum, Rochel",
+        "Diamant, Raizy",
+        "Brody, Michal",
+        "Glass, Shoshana",
+        "Glass, Avigail",
+        "Sprecher, Rikki",
+        "Serebrowski, Rikki",
+        "Schmuckler, Malky",
+        "Grama, Esther Yehudis",
+        "Goldenberg, Yael",
+        "Grama, Adina",
+        "Brody, Ahuva",
+        "Brody, Chana",
+        "Laniado, Rina",
+        "Diamant, Shaindy",
+        "Grama, Leeba",
+        "Hirschel, Chaya",
+        "Lichtman, Miri",
+        "Lichtman, Aliza"
+      ]
+    },
+    {
+      "time": "9:46 AM",
+      "stop": "CANARY DR@Eagle Ln",
+      "names": [
+        "Goldburd, Bassi",
+        "Goldburd, Riki",
+        "Shiman, Michal",
+        "Shiman, Avigail",
+        "Klein, Leah",
+        "Klein, Bayla",
+        "Kaufman, Rachel"
+      ]
+    },
+    {
+      "time": "9:47 AM",
+      "stop": "Eagle Ln@CANARY DR",
+      "names": [
+        "Wolmark, Miriam"
+      ]
+    }
+  ],
+  "PURPLE": [
+    {
+      "time": "9:24 AM",
+      "stop": "Edward Dr@LIVERPOOL CT@MARIAN CT",
+      "names": [
+        "Pick, Nechama",
+        "Moskowitz, Mindy"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "Edward Dr@Bristol Ct",
+      "names": [
+        "Weingarten, Esti"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Massachusetts Ave@White Dove Ct",
+      "names": [
+        "Waxman, Rivka"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Massachusetts Ave@Blue Jay Way@KIELT WAY",
+      "names": [
+        "Klein, Etti"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "Claire Dr@Hearthstone Dr",
+      "names": [
+        "Yanes, Esther Shaindel",
+        "Wesel, Miriam",
+        "Barash, Zisi",
+        "Schonblum, Sarala"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Rachel Ct@Morris Ave",
+      "names": [
+        "Friedman, Avigail",
+        "Gottlieb, Chaya"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Finchley Blvd@Waldorf Ter",
+      "names": [
+        "Twersky, Shiffy",
+        "Paler, Dina"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Finchley Blvd@SHAYAS RD",
+      "names": [
+        "Orbach, Ahuva",
+        "Levin, Sari",
+        "Azoolay, Chaya",
+        "Azoolay, Miriam",
+        "Brecher, Leba",
+        "Elbogen, Leah"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Ford Ave@Truman Ave",
+      "names": [
+        "Iwaniski, Bracha",
+        "Svarc, Nechama",
+        "Steinmetz, Shira",
+        "Rothenberg, Raizy",
+        "Rotenberg, Deena",
+        "Rotenberg, Shayna",
+        "Rothenberg, Shoshana",
+        "Loketch, Tzipora"
+      ]
+    },
+    {
+      "time": "9:34 AM",
+      "stop": "Elmhurst Blvd@Tova Dr",
+      "names": [
+        "Rubelow, Ahuva"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "WALNUT AVE@WALNUT AVE",
+      "names": [
+        "Barrish, Chaya Sara",
+        "Grossman, Rivky",
+        "Lutin, Dassy"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "WALNUT AVE@KATHLEEN DR SOUTH",
+      "names": [
+        "Perlstein, Mindy",
+        "Silver, Leah",
+        "Schecter, Rachelle",
+        "Silver, Michal",
+        "Fuchs, Atara",
+        "Rothschild, Shevy"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Mackenzie Ct@Jennifer Dr",
+      "names": [
+        "Josephs, Batsehva",
+        "Kleinhendler, Adina"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Anthony Ct@Jennifer Dr",
+      "names": [
+        "Statfeld, Leora"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Mountain View Dr@Colonial Dr",
+      "names": [
+        "Bender, Tehilla"
+      ]
+    },
+    {
+      "time": "9:44 AM",
+      "stop": "Chestnut st@Coughlin St (North Side)",
+      "names": [
+        "Miller, Adina",
+        "Goldberger, Batsheva",
+        "Wulliger, Miriam",
+        "Goldberger, Yocheved",
+        "Neustadt, Adina"
+      ]
+    },
+    {
+      "time": "9:48 AM",
+      "stop": "Vine Ave@Wadsworth Avenue",
+      "names": [
+        "Goldring, Gitty"
+      ]
+    }
+  ],
+  "RED": [
+    {
+      "time": "9:39 AM",
+      "stop": "Arlington Ave@Center St",
+      "names": [
+        "Kugler, Sara",
+        "Whitehouse, Charna",
+        "Kugler, Tzipora",
+        "Whitehouse, Devorah",
+        "Whitehouse, Etty"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Center St@Ashley Ave",
+      "names": [
+        "Kaufman, Bracha",
+        "Kaufman, Devora",
+        "Jakobovits, Chava"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Dr Martin Luther King Dr@Lois Ln",
+      "names": [
+        "Shenkolevsky, Lea",
+        "Schorr, Hindy",
+        "Schorr, Fraidy",
+        "Grossman, Rochel"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Dr Martin Luther King Dr@Lincoln St",
+      "names": [
+        "Feldhamer, Faigy",
+        "Reich, Dassi",
+        "Raber, Chayala",
+        "Newhouse, Raizy",
+        "Feldhamer, Tobi",
+        "Reich, Malki"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Warren Ave@Emmanuel Dr",
+      "names": [
+        "Snow, Miriam",
+        "Winkler, Esti",
+        "Greenspan, Zehava",
+        "Friedman, Rikki"
+      ]
+    },
+    {
+      "time": "9:43 AM",
+      "stop": "Pine St@Ponderosa Dr@Warren Ave",
+      "names": [
+        "Asseraf, Miriam",
+        "Gemal, Rochel",
+        "Fruchthandler, Rochel"
+      ]
+    },
+    {
+      "time": "9:44 AM",
+      "stop": "Pine St@Newberry Ct",
+      "names": [
+        "Gellis, Rachelli",
+        "Becker, Devora",
+        "Weinstein, Tzipora",
+        "Weinstein, Temi",
+        "Steinharter, Simi",
+        "Steinharter, Yocheved",
+        "Steinharter, Bracha",
+        "Fuerst, Yehudis",
+        "Abramson, Shana",
+        "Sabo, Hudis",
+        "Gellis, Ruti",
+        "Gellis, Sari",
+        "Gellis, Hadassa",
+        "Ornstein, Yitty",
+        "Griver, Esti"
+      ]
+    },
+    {
+      "time": "9:46 AM",
+      "stop": "Sims ave @Radiant Hill N",
+      "names": [
+        "Lapides, Mindy",
+        "Hirsch, Sara",
+        "Kahan, Goldie",
+        "Hirsch, Breindy"
+      ]
+    },
+    {
+      "time": "9:48 AM",
+      "stop": "Bellinger St@SIMS AVE",
+      "names": [
+        "Saks, Chama"
+      ]
+    }
+  ],
+  "SILVER": [
+    {
+      "time": "9:28 AM",
+      "stop": "Linda Dr@Jessica Ct@Jenny Ln",
+      "names": [
+        "Zussman, Chani",
+        "Gottesman, Chaya",
+        "Lustiger, Chavi",
+        "Metzger, Ruti",
+        "Shulman, Sara Rina",
+        "Vogel, Peri",
+        "Bulman, Raizy",
+        "Vogel, Malka",
+        "Tress, Henny"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "White Rd@Kevins Ct",
+      "names": [
+        "Neumann, Yehudis",
+        "Teicher, Tziporah",
+        "Herskovits, Sophie"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "White Rd@Linda Dr",
+      "names": [
+        "Czermak, Serri",
+        "Dorfman, Sara"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "White Rd@Galassi Ct",
+      "names": [
+        "Compton, Sori",
+        "Compton, Ahuva",
+        "Reiss, Chaya",
+        "Hertz, Gitty"
+      ]
+    },
+    {
+      "time": "9:35 AM",
+      "stop": "King David Dr @ King Saul Dr",
+      "names": [
+        "Drillick, Malky",
+        "Jacobson, Henny"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Cabernet Dr@Burgundy Way",
+      "names": [
+        "Kibel, Hindy",
+        "Katz, Adina"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "Prospect St@Cabernet Dr",
+      "names": [
+        "Levitan, Ahuva"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Prospect St@Wood Ave",
+      "names": [
+        "Abramczyk, Shaindy"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Blanche St@TRUDY LN",
+      "names": [
+        "Oelbaum, Rivky",
+        "Wahl, Deena",
+        "Katz, Leeba",
+        "Alon, Rochella",
+        "Cohen, Tziri",
+        "Glenn, Ahuva",
+        "Thau, Rivky",
+        "Manies, Rikki",
+        "Manies, Rachelli",
+        "Freund, Brochie",
+        "Fischer, Henny",
+        "Neuwirth, Bracha",
+        "Homnick, Tehila",
+        "Perlow, Chaya Esther",
+        "Fischer, Shaindy"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Nussbaum @ Path",
+      "names": [
+        "Gruber, Adina",
+        "Katz, Hudis"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Prospect St@Elaine St",
+      "names": [
+        "Dwek, Rachel",
+        "Cohen, Elisheva",
+        "Grama, Aliza",
+        "Dwek, Sarah"
+      ]
+    },
+    {
+      "time": "9:44 AM",
+      "stop": "Shelly Ln@W Spruce St",
+      "names": [
+        "Smith, Shana",
+        "Yaroslawitz, Chaya Bracha",
+        "Yaroslawitz, Esty"
+      ]
+    },
+    {
+      "time": "9:45 AM",
+      "stop": "High St@Grassmere St",
+      "names": [
+        "Swerdloff, Sarah",
+        "Goldman, Ayala"
+      ]
+    },
+    {
+      "time": "9:47 AM",
+      "stop": "Oak St@Sheraton Dr",
+      "names": [
+        "Fried, Sori"
+      ]
+    }
+  ],
+  "TEAL": [
+    {
+      "time": "9:30 AM",
+      "stop": "Forest Cir@Hundred Oaks Dr",
+      "names": [
+        "Kornbluth, Esther",
+        "Dunoff, Penina",
+        "Dunoff, Malka",
+        "Marvet, Racheli",
+        "Marvet, Aliza"
+      ]
+    },
+    {
+      "time": "9:32 AM",
+      "stop": "Hundred Oaks Dr@Sherwood Forest Dr",
+      "names": [
+        "Schwartz, Rachelli",
+        "Schwartz, Leah",
+        "Hirsch, Esther",
+        "Kornbluh, Sari"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Forest Cir@Thicket Ct",
+      "names": [
+        "Dimarsky, Chavi",
+        "Stern, Leah"
+      ]
+    },
+    {
+      "time": "9:34 AM",
+      "stop": "Forest Cir@Sherwood Forest Dr",
+      "names": [
+        "Katz, Yehudis"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "BENJAMIN ST@REYNOLDS AVE S",
+      "names": [
+        "Neuhaus, Nechama",
+        "Neuhaus, Chavi",
+        "Marmorstein, Sima",
+        "Levy, Miriam",
+        "Rabinowitz, Bracha",
+        "Rabinowitz, Racheli",
+        "Yormark, Shoshana",
+        "Iann, Chavi",
+        "Rabinowitz, Sara",
+        "Iann, Esty",
+        "Horwitz, Hadassah",
+        "Belsky, Yael",
+        "Horwitz, Ayala",
+        "Horwitz, Rena",
+        "Feifer, Eliana",
+        "Green, Michal",
+        "Young, Estee",
+        "Green, Adina",
+        "Hecht, Goldie"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "BENJAMIN ST@REYNOLDS AVE N",
+      "names": [
+        "Bornstein, Sara",
+        "Gold, Esther",
+        "Cohen, Shaindy",
+        "Cohen, Dassi",
+        "Cohen, Rikki",
+        "Bornstein, Mindy",
+        "Tomor, Charna",
+        "Tomor, Rosie"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Brentwood Ave@Aldous St",
+      "names": [
+        "Weitman, Adina",
+        "Weitman, Rachel",
+        "Vinitsky, Tziporah",
+        "Staum, Chayala",
+        "Klein, Shira",
+        "Binder, Chana",
+        "Birnbaum, Naomi",
+        "Klein, Penina",
+        "Lowy, Tziporah",
+        "Feiner, Rachel",
+        "Levin, Riikki",
+        "Birnbaum, Shani",
+        "Ben-jacob, Rachel"
+      ]
+    }
+  ],
+  "WHITE": [
+    {
+      "time": "9:23 AM",
+      "stop": "Jule Ct@Clayton Ct",
+      "names": [
+        "Rosenfeld, Russi",
+        "Mendlowitz, Perri",
+        "Friedman, Malky",
+        "Friedman, Sari"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Gudz Rd@Attaya Rd",
+      "names": [
+        "Kahan, Rivky",
+        "Herzog, Faigy",
+        "Gross, Sorala",
+        "Kahan, Shifra",
+        "Anemer, Perri",
+        "Babad, Dina",
+        "Slomovits, Chavie"
+      ]
+    },
+    {
+      "time": "9:26 AM",
+      "stop": "Gudz Rd@Attaya Rd",
+      "names": [
+        "Treitel, Toby",
+        "Treitel, Baila"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "New Central Ave@Glen Ave",
+      "names": [
+        "Gobioff, Adina",
+        "Gobioff, Aliza"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "Glen Ave@Carlton Ave",
+      "names": [
+        "Novoseller, Adina"
+      ]
+    },
+    {
+      "time": "9:30 AM",
+      "stop": "Columbus Ave@Knoll Rd",
+      "names": [
+        "Bruck, Ahuva"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Columbus Ave S@Elliot St",
+      "names": [
+        "Davis, Tehilla",
+        "Weiss, Yocheved"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Central Ave@Valley Dr",
+      "names": [
+        "Shapiro, Batsheva",
+        "Breatross, Ayala",
+        "Bender, Bassie",
+        "Schorr, Bracha"
+      ]
+    },
+    {
+      "time": "9:34 AM",
+      "stop": "S Lake Dr@Lapsley Ln",
+      "names": [
+        "Semah, Debra",
+        "Kreitman, Adina",
+        "Kreitman, Sara"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Caranetta Dr@Kimball Rd",
+      "names": [
+        "Brull, Rochel",
+        "Brull, Nechama"
+      ]
+    },
+    {
+      "time": "9:38 AM",
+      "stop": "POWDERHORN DR@FLINTLOCK DR - NORTH",
+      "names": [
+        "Greenebaum, Tzipori",
+        "Schmool, Meryl",
+        "Safdieh, Brenda",
+        "Safdieh, Mozelle",
+        "Schwab, Leeba"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Powderhorn Dr@Hearth Ct W@Hearth Ct E",
+      "names": [
+        "Weiss, Miriam",
+        "Kleinman, Rena",
+        "Fishman, Chayala"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Flintlock Dr@Hearth Ct E",
+      "names": [
+        "Gruenebaum, Tziporah",
+        "Pritzker , Rachelli"
+      ]
+    },
+    {
+      "time": "9:41 AM",
+      "stop": "Liberty Dr@Freedom Dr",
+      "names": [
+        "Bendkowski, Rikki",
+        "Bendkowski, Batsheva"
+      ]
+    },
+    {
+      "time": "9:45 AM",
+      "stop": "Carol St@Cathy Ln",
+      "names": [
+        "Herzberg, Rivka Nechama",
+        "Verschleisser, Kayla"
+      ]
+    },
+    {
+      "time": "9:47 AM",
+      "stop": "WASHINGTONAVE@90-148 COLES WAY",
+      "names": [
+        "Mendlowitz, Sarala",
+        "Lerner, Sary",
+        "Bernstein, Miriam Baila"
+      ]
+    }
+  ],
+  "YELLOW": [
+    {
+      "time": "9:22 AM",
+      "stop": "Whitesville Rd@Schley Ave",
+      "names": [
+        "Schon, Rivky"
+      ]
+    },
+    {
+      "time": "9:24 AM",
+      "stop": "Mackenzie Rd@Brittany Ln",
+      "names": [
+        "Luwish, Ahuva",
+        "Stern, Shayna",
+        "Simha, Mindy"
+      ]
+    },
+    {
+      "time": "9:25 AM",
+      "stop": "Down Hill Run@Columbus St",
+      "names": [
+        "Moore, Racheli",
+        "Moore, Rikki",
+        "Chorney, Chana Tehila",
+        "Perl, Shaindy"
+      ]
+    },
+    {
+      "time": "9:27 AM",
+      "stop": "Whitesville Rd@Grande River Blvd",
+      "names": [
+        "Forst, Aliza",
+        "Forst, Adina"
+      ]
+    },
+    {
+      "time": "9:29 AM",
+      "stop": "Grande River Blvd@Brookewood Dr",
+      "names": [
+        "Salomon, Shaina"
+      ]
+    },
+    {
+      "time": "9:31 AM",
+      "stop": "Grande River Blvd@Longewood Ln",
+      "names": [
+        "Oelbaum, Rosie",
+        "Oelbaum, Rutti",
+        "Maybloom, Zehava",
+        "Ritterman, Aliza",
+        "Pollack, Gitti",
+        "Greenberg, Suri",
+        "Baldinger, Esti",
+        "Baldinger, Henny",
+        "Brander, Gitty",
+        "Brander, Tova",
+        "Greenberg, Leah"
+      ]
+    },
+    {
+      "time": "9:33 AM",
+      "stop": "Whitesville Rd@Crest Hill Rd",
+      "names": [
+        "Hettleman, Ruti",
+        "Tokayer, Kayla",
+        "Schoenfeld, Chani",
+        "Schlesinger, Sarah",
+        "Brisman, Leah",
+        "Brisman, Chaya",
+        "Brisman, Gitty",
+        "Drebin, Ahuva",
+        "Ganz, Bryna",
+        "Ganz, Chaya",
+        "Goldberg, Fraidy",
+        "Kikin, Racheli"
+      ]
+    },
+    {
+      "time": "9:34 AM",
+      "stop": "Whitesville Rd@Medjay Ln",
+      "names": [
+        "Sokol, Atara"
+      ]
+    },
+    {
+      "time": "9:36 AM",
+      "stop": "Whitesville Rd@Superior Ct",
+      "names": [
+        "Zuker, Esty"
+      ]
+    },
+    {
+      "time": "9:37 AM",
+      "stop": "Rivers Edge Ln@Whitewater Ct",
+      "names": [
+        "Waldman, Frady",
+        "Phillip, Esti"
+      ]
+    },
+    {
+      "time": "9:39 AM",
+      "stop": "Rivers Edge Ln@Rolling Ridge Ln",
+      "names": [
+        "Rosenfeld, Sarah"
+      ]
+    },
+    {
+      "time": "9:40 AM",
+      "stop": "Rolling Ridge Ln@Jumping Brook Dr",
+      "names": [
+        "Cohen, Malka",
+        "Rosenfeld, Ahuva"
+      ]
+    },
+    {
+      "time": "9:42 AM",
+      "stop": "Whitesville Rd@Edgemere Ct@Edgemere Dr",
+      "names": [
+        "Danzig, Sima Leah"
+      ]
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" data-product="flow">
+<html lang="en">
 <head>
     <meta charset="UTF-8" />
     <title>Campistry Flow</title>
@@ -9,10 +9,11 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=Fraunces:wght@600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="campistry-unified.css" />
     <link rel="stylesheet" href="design-system.css" />
     <link rel="stylesheet" href="styles.css" />
     <link rel="stylesheet" href="mobile-responsive.css" />
+    <link rel="stylesheet" href="auto_schedule_styles.css">
+    <link rel="stylesheet" href="campistry-unified.css">
     
     
     <!-- FIX: Hide app container initially to prevent flash -->
@@ -21,35 +22,20 @@
             display: none;
         }
         #auth-loading-screen {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            min-height: 100vh;
-            background: linear-gradient(135deg, #f0f9fb 0%, #e6f7fa 50%, #edf8fa 100%);
-            font-family: 'DM Sans', sans-serif;
+            position: fixed; inset: 0; z-index: 999999;
+            background: #ffffff;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 28px;
+            font-family: 'DM Sans', system-ui, -apple-system, sans-serif;
+            transition: opacity 0.4s ease;
         }
-        .auth-loading-spinner {
-            width: 48px;
-            height: 48px;
-            border: 4px solid #e5e7eb;
-            border-top-color: #1AACCA;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
+        #auth-loading-screen.hide { opacity: 0; pointer-events: none; }
+        .auth-draw-wrap {
+            display: flex; gap: 0; align-items: center; justify-content: center;
         }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-        .auth-loading-text {
-            margin-top: 16px;
-            color: #374151;
-            font-size: 1rem;
-            font-weight: 500;
-        }
-        .auth-loading-subtext {
-            margin-top: 4px;
-            color: #6b7280;
-            font-size: 0.85rem;
+        .auth-draw-letter {
+            display: inline-block;
+            clip-path: inset(0 100% 0 0);
         }
         
         /* =============================================================== */
@@ -173,10 +159,32 @@
 <!-- =============================================================== -->
 <!-- AUTH LOADING SCREEN (Shown while checking session) -->
 <!-- =============================================================== -->
-<div id="auth-loading-screen">
-    <div class="auth-loading-spinner"></div>
-    <div class="auth-loading-text">Loading Campistry Flow</div>
-    <div class="auth-loading-subtext">Checking authentication...</div>
+<div id="auth-loading-screen" role="status" aria-live="polite">
+    <div class="auth-draw-wrap">
+        <img src="Flow_clean.png" alt="" class="auth-draw-letter" id="flow-logo-draw" style="height:72px;">
+    </div>
+    <script>
+    (function() {
+        var img = document.getElementById('flow-logo-draw');
+        if (!img) return;
+        window._flowAnimStart = Date.now();
+        function run() {
+            var totalMs = 2000;
+            var start = null;
+            function tick(ts) {
+                if (!start) start = ts;
+                var elapsed = ts - start;
+                var pct = Math.min(elapsed / totalMs, 1);
+                var ease = pct < 0.5 ? 2 * pct * pct : 1 - Math.pow(-2 * pct + 2, 2) / 2;
+                img.style.clipPath = 'inset(0 ' + ((1 - ease) * 100).toFixed(2) + '% 0 0)';
+                if (pct < 1) requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+        }
+        if (img.complete) run();
+        else img.onload = run;
+    })();
+    </script>
 </div>
 
 <!-- =============================================================== -->
@@ -190,24 +198,24 @@
         <header class="app-header">
             <div class="header-left">
                 <!-- DASHBOARD LINK -->
-                <a href="dashboard.html" style="color:#147D91; text-decoration:none; font-weight:500; margin-right:16px;">&larr; Dashboard</a>
+                <a href="dashboard.html" class="nav-back">&larr; Dashboard</a>
 
                 <!-- Hamburger -->
                 <button id="hamburgerBtn" class="hamburger-btn" aria-label="Toggle Navigation">
                     <span></span><span></span><span></span>
                 </button>
-                <!-- App Title: Flow Branding -->
-                <div class="app-title">
-                    <img src="Flow_clean.png" alt="Campistry Flow" class="app-logo-full app-logo-flow-img">
+                <!-- Quick-Switch Bar -->
+                <div class="quick-switch-bar">
+                    <div class="quick-switch-active" data-app="flow">
+                        <img src="Flow_clean.png" alt="Campistry Flow">
+                    </div>
+                    <a href="campistry_me.html" class="quick-switch-link" data-app="me" title="Open Campistry Me — Structure &amp; Campers">
+                        <img src="Me_clean.png" alt="Campistry Me">
+                    </a>
+                    <span class="quick-switch-link" data-app="go" title="Campistry Go — Coming Soon" style="opacity:0.35;cursor:not-allowed;pointer-events:none;">
+                        <img src="Go_clean.png" alt="Campistry Go">
+                    </span>
                 </div>
-
-                <!-- Quick Link: Campistry Me -->
-                <a href="campistry_me.html" class="header-app-switch" title="Open Campistry Me — Structure &amp; Campers">
-                    <img src="Me_clean.png" alt="Campistry Me" class="app-logo-full app-logo-me-img">
-                </a>
-                <a href="campistry_go.html" class="header-app-switch" title="Open Campistry Go — Bus Routing">
-                    <img src="Go_clean.png" alt="Campistry Go" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
-                </a>
             </div>
             <div class="header-right">
                 <label class="header-date-label" for="calendar-date-picker">
@@ -230,14 +238,14 @@
                     <button class="sidebar-item active" data-tab="setup">
                         <span class="sidebar-dot"></span> Setup (Bunks / Divisions)
                     </button>
-                    <button class="sidebar-item" data-tab="locations">
-                        <span class="sidebar-dot"></span> Location Zones
+                    <button class="sidebar-item" data-tab="facilities">
+                        <span class="sidebar-dot"></span> Facilities
                     </button>
-                    <button class="sidebar-item" data-tab="fields">
-                        <span class="sidebar-dot"></span> Fields
+                    <button class="sidebar-item" data-tab="zones">
+                        <span class="sidebar-dot"></span> Zones
                     </button>
-                    <button class="sidebar-item" data-tab="special_activities">
-                        <span class="sidebar-dot"></span> Special Activities
+                    <button class="sidebar-item" data-tab="rules">
+                        <span class="sidebar-dot"></span> Rules
                     </button>
                     <button class="sidebar-item" data-tab="leagues">
                         <span class="sidebar-dot"></span> Leagues
@@ -348,14 +356,7 @@
                                     </button>
                                     <button id="eraseHistoryBtn"
                                             style="background:#5e35b1;color:#fff;border:none;"
-                                            onclick="
-                                                if(confirm('Reset rotation history and League counters?')) {
-                                                    window.eraseRotationHistory?.();
-                                                    window.leagueRoundState = {};
-                                                    window.saveGlobalSettings?.('leagueRoundState', {});
-                                                    alert('Activity History and Game Counters reset!');
-                                                }
-                                            ">
+                                            onclick="window.eraseRotationHistory?.();">
                                         Reset Activity History
                                     </button>
                                     <button id="newHalfBtn"
@@ -406,17 +407,21 @@
                             </div>
                         </section>
                     </div>
+                    <div id="schedule-mode-toggle" style="margin-top:20px;"></div>
                 </div>
                 <!-- /setup -->
 
                 <!-- ======================================================= -->
                 <!-- OTHER TABS -->
                 <!-- ======================================================= -->
-                <div id="locations" class="tab-content"></div>
-                <div id="fields" class="tab-content"></div>
-                <div id="special_activities" class="tab-content"></div>
+                <div id="facilities" class="tab-content"></div>
+                <div id="zones" class="tab-content"></div>
+                <!-- Legacy tabs (hidden, kept for API compatibility) -->
+                <div id="fields" class="tab-content" style="display:none"></div>
+                <div id="special_activities" class="tab-content" style="display:none"></div>
                 <div id="leagues" class="tab-content"></div>
-                <div id="specialty-leagues" class="tab-content"></div>
+               <div id="specialty-leagues" class="tab-content"></div>
+                <div id="rules" class="tab-content"></div>
 
                 <div id="master-scheduler" class="tab-content">
                     <!-- MULTI-SCHEDULER: Subdivision Status Panel will be inserted here -->
@@ -458,7 +463,7 @@
 <!-- =============================================================== -->
 
 <!-- CLOUD FOUNDATION (MUST LOAD FIRST) -->
-    <script src="offline_data.js" onerror=""></script>
+    
 <script src="demo_mode.js"></script>
 <!-- Optional: config.js (gitignored) sets window.__CAMPISTRY_SUPABASE__ so keys stay out of repo -->
 <script src="config.js"></script>
@@ -486,6 +491,7 @@
 <script src="supabase_permissions.js"></script>
 <script src="supabase_schedules.js"></script>
 <script src="supabase_sync.js"></script>
+<script src="local_cache_idb.js"></script>
 <script src="integration_hooks.js"></script>
 
 <script src="schedule_versions_db.js"></script>
@@ -606,7 +612,15 @@
     }
     
     function showApp() {
-        if (loadingScreen) loadingScreen.style.display = 'none';
+        if (loadingScreen) {
+            var elapsed = Date.now() - (window._flowAnimStart || Date.now());
+            var minDisplay = 4500;
+            var remaining = Math.max(0, minDisplay - elapsed);
+            setTimeout(function() {
+                loadingScreen.classList.add('hide');
+                setTimeout(() => { loadingScreen.style.display = 'none'; }, 500);
+            }, remaining);
+        }
         if (mainApp) mainApp.style.display = 'block';
         
         window.__CAMPISTRY_BOOTED__ = true;
@@ -631,17 +645,38 @@
 <script src="welcome.js"></script>
 <script src="calendar.js"></script>
 <script src="app1.js"></script>
-<script src="locations.js"></script>
 <script src="skeleton_sandbox.js"></script>
 <script src="daily_adjustments.js"></script>
+    <script src="rotation_events.js"></script>
 <script src="rainy_day_manager.js"></script>
 <script src="midday_rain_stacker.js"></script>
 <script src="special_activities.js"></script>
-<script src="fields.js"></script>
+<script src="facilities.js"></script>
+<script src="zones.js"></script>
+<script src="rules.js"></script>
+<script src="playoff_mode.js"></script>
+<script src="playoff_hub.js"></script>
 <script src="leagues.js"></script>
 <script src="specialty_leagues.js"></script>
 <script src="master_schedule_builder.js"></script>
-    
+    <script src="auto_field_locks.js"></script>
+<script src="period_editor.js"></script>
+<script src="auto_segment_model.js"></script>
+<script src="period_packer.js"></script>
+<script src="auto_solver_engine.js"></script>
+    <script src="feasibility_oracle.js"></script>
+    <script src="period_tiler.js"></script>
+    <script src="day_packer.js"></script>
+    <script src="scheduler_core_auto.js"></script>
+    <!-- v2 SOLVER (un-parked X2f-17): SA local-search optimizer with bucket-grid
+         mutations. Gated by globalSettings.app1.solverVersion = 'v2'. v1 stays
+         live as default + as v2's seed builder. Goal: validate v2 closes sliver
+         gaps via moveAddBucket; if parity holds, flip default and retire v1. -->
+    <script src="scheduler_core_solver_v2.js"></script>
+    <script src="solver_version_switch.js"></script>
+<script src="swim_debug.js"></script>
+
+
 <script src="smart_logic_adapter.js"></script>
 
 <!-- PERMISSIONS & VERSIONING SYSTEM -->
@@ -654,12 +689,17 @@
 
 <script src="division_times_system.js"></script>
 <script src="division_times_integration.js"></script>
+<script src="plan_limits.js"></script>
 <script src="trial_guard.js"></script>
 <!-- SCHEDULER CORE -->
+    
+
 <script src="scheduler_core_loader.js"></script>
 <script src="global_field_locks.js"></script>
 <script src="scheduler_core_utils.js"></script>
+<script src="rotation_cloud.js"></script>
 <script src="rotation_engine.js"></script>
+<script src="tests/rotation_audit.js"></script>
 <script src="total_solver_engine.js"></script>
 <script src="scheduler_core_specialty_leagues.js"></script>
 <script src="scheduler_core_leagues.js"></script>
@@ -668,22 +708,28 @@
 <script src="schedule_orchestrator.js"></script>
 
 <!-- UNIFIED SCHEDULE SYSTEM -->
+    <script src="auto_schedule_grid.js"></script>
 <script src="unified_schedule_system.js"></script>
+    <script src="schedule_calendar_views.js"></script>
 <script src="post_edit_system.js"></script>
+<script src="auto_fill_slot.js"></script>
 
 <!-- Pinned preservation (must come after scheduler_core_main.js) -->
 <script src="pinned_activity_preservation.js"></script>
 
 <!-- OUTPUT / HELP -->
 <script src="analytics.js"></script>
+<script src="coverage_warning.js"></script>
 <script src="camper_locator.js"></script>
 <script src="validator.js"></script>
+<script src="auto_validator.js"></script>
 <script src="print_center.js"></script>
 <script src="helper.js"></script>
 <script src="updates.js"></script>
     <script src="rbac_diagnostics.js"></script>
 <script src="campistry_diagnostics.js"></script>
 <script src="mobile_touch_drag.js"></script>
+    
 <!-- TAB NAVIGATION & SIDEBAR HANDLING -->
 <script>
 /* TAB SWITCHING */
@@ -697,11 +743,11 @@ function showTab(id) {
     );
 
     if (id === "setup") window.initApp1?.();
-    if (id === "locations") window.initLocationsTab?.();
-    if (id === "fields") window.initFieldsTab?.();
-    if (id === "special_activities") window.initSpecialActivitiesTab?.();
+    if (id === "facilities") window.initFacilitiesTab?.();
+    if (id === "zones") window.initZonesTab?.();
     if (id === "leagues") window.initLeagues?.();
     if (id === "specialty-leagues") window.initSpecialtyLeagues?.();
+    if (id === "rules") window.initRulesTab?.();
     if (id === "master-scheduler") {
         window.initMasterScheduler?.();
         const container = document.getElementById('subdivision-status-container');
@@ -710,7 +756,12 @@ function showTab(id) {
         }
     }
     if (id === "daily-adjustments") window.initDailyAdjustments?.();
-    if (id === "schedule") window.updateTable?.();
+    if (id === "schedule") {
+        // Only re-render if data changed since last render (flag set by
+        // renderTransposedView when it skips invisible renders).
+        if (window._scheduleNeedsRender !== false) window.updateTable?.();
+        window._scheduleNeedsRender = false;
+    }
     if (id === "camper-locator") window.initCamperLocator?.();
     if (id === "report") window.initReportTab?.();
     if (id === "print") window.initPrintCenter?.();
@@ -757,5 +808,35 @@ function showTab(id) {
   window.va = window.va || function () { (window.vaq = window.vaq || []).push(arguments); };
 </script>
 <script defer src="/_vercel/insights/script.js"></script>
+
+<!-- Live View pop-out detector — when ?view=live is set, take over the page
+     and run the schedule fullscreen with a live time cursor. -->
+<script>
+(function () {
+    try {
+        var params = new URLSearchParams(window.location.search);
+        if (params.get('view') !== 'live') return;
+        window.PC_LIVE_MODE = true;
+        // Optional date override — set BEFORE any scheduling-data scripts trigger their loads
+        var dateParam = params.get('date');
+        if (dateParam) window.currentScheduleDate = dateParam;
+
+        function startLive() {
+            if (!window._pc3RunLiveStandalone) {
+                // Print Center JS not ready yet — try again shortly
+                setTimeout(startLive, 200);
+                return;
+            }
+            try { window._pc3RunLiveStandalone(); }
+            catch (e) { console.error('[LiveView] start failed', e); }
+        }
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', startLive);
+        } else {
+            startLive();
+        }
+    } catch (e) { console.error('[LiveView] bootstrap failed', e); }
+})();
+</script>
 </body>
 </html>

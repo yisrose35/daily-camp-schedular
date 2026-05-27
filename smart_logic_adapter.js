@@ -12,6 +12,13 @@
 (function() {
     "use strict";
 
+    // Cache the specials list for the duration of one solve run so
+    // getAvailableSpecialsForTimeBlock doesn't call getGlobalSpecialActivities
+    // (and iterate 864+ rainy-only entries) on every single block.
+    let _specialsCache = null;
+    let _specialsCacheRainyMode = null;
+    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; };
+
     // =========================================================================
     // STORAGE KEYS
     // =========================================================================
@@ -100,7 +107,7 @@
      * Checks if a specific division is allowed to use this special activity.
      * * Checks:
      * 1. GlobalFieldLocks (elective locks)
-     * 2. limitUsage.enabled + limitUsage.divisions
+     * 2. accessRestrictions.enabled + accessRestrictions.divisions
      * 3. preferences.exclusive + preferences.list
      * * @param {string} divisionName - The division to check
      * @param {object} props - The activity properties
@@ -130,11 +137,11 @@
             }
         }
         
-        // Check limitUsage restrictions
-        if (props.limitUsage?.enabled) {
-            const allowedDivisions = props.limitUsage.divisions || {};
+        // Check accessRestrictions restrictions
+        if (props.accessRestrictions?.enabled) {
+            const allowedDivisions = props.accessRestrictions.divisions || {};
             
-            // If limitUsage is enabled, division must be in the allowed list
+            // If accessRestrictions is enabled, division must be in the allowed list
             if (!(divisionName in allowedDivisions)) {
                 return false;
             }
@@ -164,7 +171,7 @@
      * Checks if a specific BUNK can use this special activity.
      * * Checks:
      * 1. Division-level access (via canDivisionUseSpecial)
-     * 2. Bunk-level restrictions (limitUsage.divisions[div] array)
+     * 2. Bunk-level restrictions (accessRestrictions.divisions[div] array)
      * * @param {string} bunkName - The bunk to check
      * @param {string} divisionName - The division this bunk belongs to
      * @param {object} props - The activity properties
@@ -181,8 +188,8 @@
         }
         
         // Then check bunk-level restrictions
-        if (props.limitUsage?.enabled) {
-            const allowedDivisions = props.limitUsage.divisions || {};
+        if (props.accessRestrictions?.enabled) {
+            const allowedDivisions = props.accessRestrictions.divisions || {};
             const bunkRestrictions = allowedDivisions[divisionName];
             
             // If there's an array of specific bunks, check if this bunk is in it
@@ -224,33 +231,18 @@
      * @returns {{ name: string, capacity: number, maxUsage: number, remainingSlots: number }[]}
      */
     function getAvailableSpecialsForTimeBlock(startMin, endMin, divisionName, activityProps, dailyFieldAvailability) {
-        // Get all specials from the global registry
-        let allSpecials = window.getGlobalSpecialActivities?.() || [];
-        
-        // ★★★ FIX V44.1: Filter out rainy day exclusive activities on normal days ★★★
+        // ★ Cached per solve run — invalidated by window.invalidateSmartLogicSpecialsCache()
         const isRainyMode = window.isRainyDayModeActive?.() || false;
-        
-        if (!isRainyMode) {
-            // Normal day: exclude rainy-day-only activities
-            const beforeCount = allSpecials.length;
-            allSpecials = allSpecials.filter(s => 
-                s.rainyDayExclusive !== true && s.rainyDayOnly !== true
-            );
-            const filtered = beforeCount - allSpecials.length;
-            if (filtered > 0) {
-                log(`  [RainyDay] Filtered out ${filtered} rainy-day-only activities (normal day)`);
-            }
-        } else {
-            // Rainy day: exclude activities not available on rainy days
-            const beforeCount = allSpecials.length;
-            allSpecials = allSpecials.filter(s => 
-                s.rainyDayAvailable !== false && s.availableOnRainyDay !== false
-            );
-            const filtered = beforeCount - allSpecials.length;
-            if (filtered > 0) {
-                log(`  [RainyDay] Filtered out ${filtered} activities unavailable on rainy days`);
+        if (_specialsCache === null || _specialsCacheRainyMode !== isRainyMode) {
+            const raw = window.getGlobalSpecialActivities?.() || [];
+            _specialsCacheRainyMode = isRainyMode;
+            if (!isRainyMode) {
+                _specialsCache = raw.filter(s => s.rainyDayExclusive !== true && s.rainyDayOnly !== true);
+            } else {
+                _specialsCache = raw.filter(s => s.rainyDayAvailable !== false && s.availableOnRainyDay !== false);
             }
         }
+        let allSpecials = _specialsCache;
         
         // Also check activityProperties for specials (backup source)
         const propsSpecials = [];
@@ -309,7 +301,7 @@
             const effectiveRules = dailyRules.length > 0 ? dailyRules : (props.timeRules || []);
             
             if (effectiveRules.length > 0 && !bypassTimeRules) {
-                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots);
+                const isOpen = checkTimeRulesForBlock(startMin, endMin, effectiveRules, slots, divisionName);
                 
                 if (!isOpen) {
                     log(`    ❌ ${specialName}: closed during ${startMin}-${endMin} (time rules)`);
@@ -347,7 +339,7 @@
                 name: specialName,
                 capacity: capacity,
                 maxUsage: props.maxUsage || 0,
-                frequencyWeeks: props.frequencyWeeks || 0,
+                frequencyDays: props.frequencyDays || props.frequencyWeeks || 0,
                 remainingSlots: capacity,
                 props: props // Keep reference for bunk-level checks
             });
@@ -361,8 +353,17 @@
     /**
      * Check if a time block passes time rules
      */
-    function checkTimeRulesForBlock(startMin, endMin, rules, slots) {
-        const parsedRules = rules.map(r => ({
+    function checkTimeRulesForBlock(startMin, endMin, rules, slots, divisionName) {
+        const myDiv = divisionName != null ? String(divisionName) : null;
+        // Per-grade scoping: skip rules whose `divisions` list doesn't
+        // include the current division. Empty/missing list = applies to all.
+        const scoped = rules.filter(r => {
+            const rDivs = Array.isArray(r.divisions) ? r.divisions.map(String) : [];
+            if (rDivs.length === 0) return true;
+            if (!myDiv) return true;
+            return rDivs.includes(myDiv);
+        });
+        const parsedRules = scoped.map(r => ({
             ...r,
             startMin: parseTime(r.start) ?? r.startMin,
             endMin: parseTime(r.end) ?? r.endMin
@@ -370,7 +371,7 @@
 
         const availableRules = parsedRules.filter(r => r.type === "Available");
         if (availableRules.length > 0) {
-            const inAvailable = availableRules.some(r => 
+            const inAvailable = availableRules.some(r =>
                 startMin >= r.startMin && endMin <= r.endMin
             );
             if (!inAvailable) return false;
@@ -400,7 +401,7 @@
     /**
      * Checks if a bunk can use a specific special activity.
      * * Checks:
-     * 1. Bunk-level access (limitUsage.divisions[div] array)
+     * 1. Bunk-level access (accessRestrictions.divisions[div] array)
      * 2. maxUsage limits from historical counts
      * 3. GlobalFieldLocks
      */
@@ -420,12 +421,27 @@
             maxUsage = props2.maxUsagePerGrade[divisionName];
         }
 
-        const bunkHistory = historicalCounts[bunk] || {};
-        const usedCount = bunkHistory[special.name] || 0;
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        const maxPeriod = props2.maxUsagePeriod || 'half';
+        const usedCount = (_gpc && maxUsage > 0) ? _gpc(bunk, special.name, maxPeriod) : ((historicalCounts[bunk] || {})[special.name] || 0);
 
         if (maxUsage > 0 && usedCount >= maxUsage) {
             log(`      ${bunk}: maxed out ${special.name} (${usedCount}/${maxUsage}${divisionName ? ' for ' + divisionName : ''})`);
             return false;
+        }
+
+        // ★ Exact frequency: ceiling enforcement
+        let exactFreq = props2.exactFrequency || 0;
+        if (divisionName && props2.exactFrequencyPerGrade && props2.exactFrequencyPerGrade[divisionName] > 0) {
+            exactFreq = props2.exactFrequencyPerGrade[divisionName];
+        }
+        if (exactFreq > 0) {
+            const exactPeriod = props2.exactFrequencyPeriod || '1week';
+            const exactCount = _gpc ? _gpc(bunk, special.name, exactPeriod) : usedCount;
+            if (exactCount >= exactFreq) {
+                log(`      ${bunk}: at exact limit for ${special.name} (${exactCount}/${exactFreq}${divisionName ? ' for ' + divisionName : ''})`);
+                return false;
+            }
         }
         
         // ★ v3.5: Multi-Part check — Part 2 requires Part 1 completion
@@ -464,8 +480,16 @@
             const propsB = activityProps?.[b.name] || b;
             const minFA = parseInt(propsA.minFrequency) || 0;
             const minFB = parseInt(propsB.minFrequency) || 0;
-            const scoreA = countA - Math.max(0, minFA - countA) * 0.5;
-            const scoreB = countB - Math.max(0, minFB - countB) * 0.5;
+            const exactFA = parseInt(propsA.exactFrequency) || 0;
+            const exactFB = parseInt(propsB.exactFrequency) || 0;
+            const shortageA = Math.max(minFA - countA, exactFA - countA, 0);
+            const shortageB = Math.max(minFB - countB, exactFB - countB, 0);
+            const periodA = propsA.exactFrequencyPeriod || propsA.minFrequencyPeriod || '1week';
+            const periodB = propsB.exactFrequencyPeriod || propsB.minFrequencyPeriod || '1week';
+            const escA = shortageA > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodA, shortageA) || shortageA * 100) : 0;
+            const escB = shortageB > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodB, shortageB) || shortageB * 100) : 0;
+            const scoreA = countA - escA;
+            const scoreB = countB - escB;
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
         });   

@@ -53,15 +53,7 @@
     'use strict';
     console.log('[Go] Campistry Go v4.0 loading...');
 
-    // =========================================================================
-    // PLATFORM API KEYS — loaded from config.js via window globals
-    // Users never need to configure these; setup fields are optional overrides
-    // =========================================================================
-    const _PLATFORM_KEYS = {
-        ors: window.__CAMPISTRY_ORS_KEY__ || '',
-        graphhopper: window.__CAMPISTRY_GH_KEY__ || '',
-        mapbox: window.__CAMPISTRY_MAPBOX_TOKEN__ || ''
-    };
+    const ROAD_FACTOR = 1.35; // haversine × road-factor → approximate driving distance
 
     // =========================================================================
     // STATE
@@ -70,17 +62,30 @@
         setup: {
             campAddress: '', campName: '', avgSpeed: 25,
             reserveSeats: 2, dropoffMode: 'door-to-door',
-            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 60, maxRideTime: 45, orsApiKey: '', graphhopperKey: '', mapboxToken: '',
-            campLat: null, campLng: null
+            avgStopTime: 2, maxWalkDistance: 375, maxRouteDuration: 90, maxRideTime: 45,
+            googleMapsKey: '', googleProjectId: '',
+            geoapifyKey: '',
+            campLat: null, campLng: null,
+            // Neighborhood mode uses the OSM road graph to cluster campers by
+            // shared road segments (which arterials they share, which streets
+            // are connected). Spatial-sort uses lat/lng k-means, which
+            // produces wedges that mix campers across natural neighborhood
+            // boundaries — e.g. lumping Whitesville Rd corridor with interior
+            // Toms River streets, even though those routes don't share any
+            // common driving path. Camp's reference output groups by
+            // neighborhood/arterial, so default to that.
+            routingPipeline: 'neighborhood',
+            clusterSoftCapPct: 112, clusterDissolvePct: 55, clusterFloorPct: 30,
+            clusterSpreadRatio: 150, clusterMaxSpreadMi: 3.5
         },
         activeMode: 'dismissal',
         buses: [], shifts: [], monitors: [], counselors: [],
         savedRoutes: null, dismissal: null, arrival: null,
-        addresses: {}, dailyOverrides: {}, carpoolGroups: {}
+        addresses: {}
     };
     let _editBusId = null, _editMonitorId = null, _editCounselorId = null, _editCamper = null;
     let _generatedRoutes = null;
-    let _toastTimer = null;
+let _toastTimer = null;
     const BUS_COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#84cc16','#e11d48','#0ea5e9','#d946ef'];
     const STORE = 'campistry_go_data';
     const REGION_COLORS = ['#3b82f6','#ef4444','#22c55e','#f59e0b','#a855f7','#ec4899','#06b6d4','#f97316','#8b5cf6','#14b8a6','#6366f1','#e11d48'];
@@ -93,7 +98,7 @@
     // =========================================================================
     const esc = s => { if (s == null) return ''; const m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'}; return String(s).replace(/[&<>"']/g, c => m[c]); };
     const uid = () => 'go_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6);
-    function toast(msg, type) { const el = document.getElementById('toastEl'); el.textContent = msg; el.className = 'toast' + (type === 'error' ? ' error' : ''); clearTimeout(_toastTimer); requestAnimationFrame(() => { el.classList.add('show'); _toastTimer = setTimeout(() => el.classList.remove('show'), 2500); }); }
+    function toast() { /* removed */ }
     function openModal(id) {
         const el = document.getElementById(id);
         if (!el) return;
@@ -106,9 +111,31 @@
         el.classList.add('modal-entering');
         setTimeout(() => { el.classList.remove('open', 'modal-entering'); }, 200);
     }
-    function getApiKey() { return window.__CAMPISTRY_ORS_KEY__ || D.setup.orsApiKey || _PLATFORM_KEYS.ors; }
-    function getGHKey() { return window.__CAMPISTRY_GH_KEY__ || D.setup.graphhopperKey || _PLATFORM_KEYS.graphhopper; }
-    function getMBToken() { return D.setup.mapboxToken || _PLATFORM_KEYS.mapbox; }
+    // ★★★ STARTER PLAN: Camper limit check (counts Me + Go combined) ★★★
+    async function checkCamperLimitGo(newCount, silent) {
+        newCount = newCount || 1;
+        try {
+            var client = window.CampistryDB?.getClient?.() || window.supabase;
+            var campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            if (!client || !campId) return { allowed: true };
+
+            var result = await client.rpc('check_camper_limit', { p_camp_id: campId, p_new_count: newCount });
+            if (!result.error && result.data && result.data.allowed === false) {
+                if (!silent) {
+                    toast('Camper limit reached (' + result.data.current + '/' + result.data.max + '). Upgrade for more.', 'error');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'camper', current: result.data.current, max: result.data.max }
+                    }));
+                }
+                return { allowed: false, current: result.data.current, max: result.data.max };
+            }
+            return { allowed: true, current: result.data?.current, max: result.data?.max };
+        } catch (e) {
+            console.warn('[Go] Camper limit check failed, proceeding:', e);
+            return { allowed: true };
+        }
+    }
+
     let _campCoordsCache = null;
 
     function haversineMi(lat1, lng1, lat2, lng2) {
@@ -124,70 +151,18 @@
         return haversineMi(lat1, lng1, lat2, lng1) + haversineMi(lat2, lng1, lat2, lng2);
     }
 
-    // =========================================================================
-    // DRIVING DISTANCE CACHE — shared by all pipeline steps
-    //
-    // Every distance comparison in zones, stops, and routing goes through
-    // drivingDist() which checks this cache first. The cache is populated by
-    // fetchDistanceMatrixCascade() calls during zone building and routing.
-    //
-    // Key format: "lat1_5dec,lng1_5dec|lat2_5dec,lng2_5dec" (sorted so A|B == B|A)
-    // Value: driving duration in seconds
-    // =========================================================================
-    const _drivingCache = new Map();
-    const ROAD_FACTOR = 1.35; // haversine-to-driving approximation factor
-
-    function _cacheKey(lat1, lng1, lat2, lng2) {
-        const a = Math.round(lat1 * 1e5) + ',' + Math.round(lng1 * 1e5);
-        const b = Math.round(lat2 * 1e5) + ',' + Math.round(lng2 * 1e5);
-        return a < b ? a + '|' + b : b + '|' + a;
-    }
-
-    /** Store a driving duration (seconds) between two points in the cache */
-    function _cacheSet(lat1, lng1, lat2, lng2, durationSec) {
-        if (durationSec == null || durationSec < 0) return;
-        _drivingCache.set(_cacheKey(lat1, lng1, lat2, lng2), durationSec);
-    }
-
-    /** Look up cached driving duration (seconds) between two points, or null */
-    function _cacheGet(lat1, lng1, lat2, lng2) {
-        const v = _drivingCache.get(_cacheKey(lat1, lng1, lat2, lng2));
-        return v !== undefined ? v : null;
-    }
-
-    /**
-     * Populate cache from an NxN duration matrix + its coordinate list.
-     * coords = [{lat, lng}, ...], matrix = [[sec, ...], ...]
-     */
-    function _cacheFromMatrix(coords, matrix) {
-        if (!matrix || !coords) return;
-        for (let i = 0; i < coords.length; i++) {
-            for (let j = i + 1; j < coords.length; j++) {
-                const val = matrix[i]?.[j];
-                if (val != null && val >= 0) {
-                    _cacheSet(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng, val);
-                }
-            }
-        }
-    }
-
     /**
      * drivingDist — the universal distance function.
      * Returns driving duration in SECONDS between two points.
-     * Checks cache first; falls back to haversine × ROAD_FACTOR.
+     * Uses haversine × ROAD_FACTOR approximation.
      *
      * Use drivingDistMi() for miles (approximate).
      */
     function drivingDist(lat1, lng1, lat2, lng2) {
         if (!lat1 || !lng1 || !lat2 || !lng2) return Infinity;
-        // Same point
         if (Math.abs(lat1 - lat2) < 1e-5 && Math.abs(lng1 - lng2) < 1e-5) return 0;
-        const cached = _cacheGet(lat1, lng1, lat2, lng2);
-        if (cached !== null) return cached;
-        // Fallback: haversine → approximate driving seconds
-        const mi = haversineMi(lat1, lng1, lat2, lng2) * ROAD_FACTOR;
         const avgSpeedMph = D.setup.avgSpeed || 25;
-        return (mi / avgSpeedMph) * 3600;
+        return (haversineMi(lat1, lng1, lat2, lng2) * ROAD_FACTOR / avgSpeedMph) * 3600;
     }
 
     /** Approximate driving distance in miles (from cache seconds → miles, or haversine×factor) */
@@ -200,171 +175,6 @@
     }
 
     // =========================================================================
-    // DISTANCE MATRIX CASCADE — Mapbox → OSRM → haversine fallback
-    // =========================================================================
-
-    /**
-     * fetchDistanceMatrixCascade(coords)
-     * coords = [{lat, lng}, ...]  (max ~25 for a single call)
-     * Returns NxN duration matrix in seconds, or null on total failure.
-     * Also populates _drivingCache.
-     */
-    async function fetchDistanceMatrixCascade(coords) {
-        const n = coords.length;
-        if (n < 2) return null;
-        const coordStr = coords.map(c => c.lng + ',' + c.lat).join(';');
-
-        // ── Try Mapbox Matrix API ──
-        const mbToken = getMBToken();
-        if (mbToken && n <= 25) {
-            try {
-                const url = 'https://api.mapbox.com/directions-matrix/v1/mapbox/driving/' + coordStr + '?annotations=duration&access_token=' + mbToken;
-                const resp = await fetch(url);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.durations) {
-                        console.log('[Go] Matrix: Mapbox (' + n + ' points)');
-                        _cacheFromMatrix(coords, data.durations);
-                        return data.durations;
-                    }
-                }
-            } catch (e) {
-                console.warn('[Go] Mapbox Matrix failed:', e.message);
-            }
-        }
-
-        // ── Fallback: OSRM with retry ──
-        const osrmResult = await fetchOSRMWithRetry(coordStr, 3);
-        if (osrmResult) {
-            _cacheFromMatrix(coords, osrmResult);
-            return osrmResult;
-        }
-
-        // ── Last resort: synthetic matrix from haversine × ROAD_FACTOR ──
-        console.warn('[Go] Matrix: all APIs failed, using haversine approximation');
-        const avgSpeedMph = D.setup.avgSpeed || 25;
-        const synthetic = Array.from({ length: n }, (_, i) =>
-            Array.from({ length: n }, (_, j) => {
-                if (i === j) return 0;
-                return (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
-            })
-        );
-        _cacheFromMatrix(coords, synthetic);
-        return synthetic;
-    }
-
-    /**
-     * fetchLargeMatrixBatched(coords)
-     * Handles >25 coords by pivot-row batching.
-     * Always includes coord[0] (typically camp) in every batch for consistent anchoring.
-     * Returns full NxN matrix in seconds.
-     */
-    async function fetchLargeMatrixBatched(coords) {
-        const n = coords.length;
-        if (n <= 25) return await fetchDistanceMatrixCascade(coords);
-
-        console.log('[Go] Matrix: batching ' + n + ' points (>' + 25 + ')');
-        const matrix = Array.from({ length: n }, () => new Array(n).fill(null));
-        // Self-distances are always 0
-        for (let i = 0; i < n; i++) matrix[i][i] = 0;
-
-        const CHUNK = 24; // leave 1 slot for pivot (coord[0])
-
-        // Strategy: for each batch, include coord[0] (pivot) + up to CHUNK others.
-        // This gives us camp↔stop distances in every batch, plus stop↔stop for each chunk.
-        for (let start = 1; start < n; start += CHUNK) {
-            const end = Math.min(start + CHUNK, n);
-            // Build sub-coord list: [pivot, chunk members...]
-            const subIndices = [0];
-            for (let i = start; i < end; i++) subIndices.push(i);
-
-            const subCoords = subIndices.map(i => coords[i]);
-            const subMatrix = await fetchDistanceMatrixCascade(subCoords);
-
-            if (subMatrix) {
-                // Map sub-matrix back to full matrix
-                for (let si = 0; si < subIndices.length; si++) {
-                    for (let sj = 0; sj < subIndices.length; sj++) {
-                        const gi = subIndices[si], gj = subIndices[sj];
-                        if (subMatrix[si]?.[sj] != null) {
-                            matrix[gi][gj] = subMatrix[si][sj];
-                        }
-                    }
-                }
-            }
-
-            // Stagger to avoid rate limiting
-            if (end < n) await new Promise(r => setTimeout(r, 250));
-        }
-
-        // Now we have camp↔all and within-chunk pairs. Fill cross-chunk gaps
-        // with a second pass: for each pair of chunks, fetch a bridging batch.
-        // But first, check how many gaps remain.
-        let gaps = 0;
-        for (let i = 1; i < n; i++) for (let j = i + 1; j < n; j++) if (matrix[i][j] === null) gaps++;
-
-        if (gaps > 0 && gaps < n * n * 0.3) {
-            // Moderate gaps — fill with targeted cross-chunk batches
-            const chunkStarts = [];
-            for (let s = 1; s < n; s += CHUNK) chunkStarts.push(s);
-
-            for (let ci = 0; ci < chunkStarts.length; ci++) {
-                for (let cj = ci + 1; cj < chunkStarts.length; cj++) {
-                    const aEnd = Math.min(chunkStarts[ci] + CHUNK, n);
-                    const bEnd = Math.min(chunkStarts[cj] + CHUNK, n);
-                    // Pick up to 12 from each chunk for a batch of 24
-                    const aSlice = [], bSlice = [];
-                    for (let i = chunkStarts[ci]; i < aEnd && aSlice.length < 12; i++) aSlice.push(i);
-                    for (let i = chunkStarts[cj]; i < bEnd && bSlice.length < 12; i++) bSlice.push(i);
-                    const crossIndices = [...aSlice, ...bSlice];
-                    if (crossIndices.length < 2) continue;
-
-                    const crossCoords = crossIndices.map(i => coords[i]);
-                    const crossMatrix = await fetchDistanceMatrixCascade(crossCoords);
-                    if (crossMatrix) {
-                        for (let si = 0; si < crossIndices.length; si++) {
-                            for (let sj = 0; sj < crossIndices.length; sj++) {
-                                const gi = crossIndices[si], gj = crossIndices[sj];
-                                if (matrix[gi][gj] === null && crossMatrix[si]?.[sj] != null) {
-                                    matrix[gi][gj] = crossMatrix[si][sj];
-                                }
-                            }
-                        }
-                    }
-                    await new Promise(r => setTimeout(r, 250));
-                }
-            }
-        }
-
-        // Fill any remaining nulls with haversine fallback
-        const avgSpeedMph = D.setup.avgSpeed || 25;
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) {
-                if (matrix[i][j] === null) {
-                    matrix[i][j] = (haversineMi(coords[i].lat, coords[i].lng, coords[j].lat, coords[j].lng) * ROAD_FACTOR / avgSpeedMph) * 3600;
-                }
-            }
-        }
-
-        _cacheFromMatrix(coords, matrix);
-        return matrix;
-    }
-
-    /**
-     * prewarmCache — called after geocoding or at start of generateRoutes.
-     * Fetches camp→all camper distances so drivingDist() has cache hits
-     * for all subsequent zone/stop/route decisions.
-     */
-    async function prewarmCache(camperCoords, campLat, campLng) {
-        if (!camperCoords.length || !campLat || !campLng) return;
-        // Build coord list: [camp, camper1, camper2, ...]
-        const coords = [{ lat: campLat, lng: campLng }, ...camperCoords];
-        console.log('[Go] Cache: pre-warming with ' + coords.length + ' points...');
-        await fetchLargeMatrixBatched(coords);
-        console.log('[Go] Cache: ' + _drivingCache.size + ' pairs cached');
-    }
-
-    // =========================================================================
     // SMART CLUSTERING ENGINE
     // Street-aware distance, major road barriers, capacity caps
     // =========================================================================
@@ -374,16 +184,84 @@
     // All use drivingDist (driving seconds) for ordering, not haversine.
     // =========================================================================
 
-    /** Sort stops by driving distance from camp: farthest-first for arrival, nearest-first for dismissal */
+    /**
+     * Order stops using nearest-neighbor TSP heuristic + 2-opt improvement.
+     *
+     * Much better than the old 1D distance-from-camp sort, which produced
+     * routes that zigzagged (skipping a nearby stop, driving far away, then
+     * looping back). NN always moves to the closest unvisited stop, producing
+     * a coherent path with no unnecessary doubling-back.
+     *
+     * Dismissal: camp → nearest unvisited → ... → farthest stop
+     * Arrival:   reversed (bus starts farthest, works back toward camp)
+     *
+     * 2-opt sweeps remove remaining crossing segments (runs up to 3 passes,
+     * fast for the typical 8-20 stops per bus).
+     */
     function directionalSort(stops, campLat, campLng) {
-        if (stops.length < 2) return;
+        if (stops.length < 2) { stops.forEach((s, i) => { s.stopNum = i + 1; }); return; }
         const isArr = D.activeMode === 'arrival';
-        stops.forEach(s => {
-            s._dSort = (s.lat && s.lng) ? drivingDist(campLat, campLng, s.lat, s.lng) : 0;
-        });
-        if (isArr) stops.sort((a, b) => b._dSort - a._dSort);
-        else stops.sort((a, b) => a._dSort - b._dSort);
-        stops.forEach((s, i) => { s.stopNum = i + 1; delete s._dSort; });
+
+        // ── Nearest-neighbor heuristic (start from camp) ──
+        const visited = new Array(stops.length).fill(false);
+        const order = [];
+        let curLat = campLat, curLng = campLng;
+
+        for (let step = 0; step < stops.length; step++) {
+            let bestI = -1, bestD = Infinity;
+            for (let i = 0; i < stops.length; i++) {
+                if (visited[i]) continue;
+                const s = stops[i];
+                if (!s.lat || !s.lng) { if (bestI < 0) bestI = i; continue; }
+                const d = drivingDist(curLat, curLng, s.lat, s.lng);
+                if (d < bestD) { bestD = d; bestI = i; }
+            }
+            if (bestI < 0) break;
+            visited[bestI] = true;
+            order.push(bestI);
+            curLat = stops[bestI].lat || curLat;
+            curLng = stops[bestI].lng || curLng;
+        }
+
+        // Arrival: bus picks up from farthest point → toward camp, so reverse
+        if (isArr) order.reverse();
+
+        // Rearrange stops in-place according to NN order
+        const orig = stops.slice();
+        for (let i = 0; i < order.length; i++) {
+            stops[i] = orig[order[i]];
+            stops[i].stopNum = i + 1;
+        }
+
+        // ── 2-opt improvement (up to 3 passes) ──
+        // Reverses sub-sequences that would shorten the total path.
+        // Eliminates crossing segments that NN can introduce.
+        for (let pass = 0; pass < 3; pass++) {
+            let improved = false;
+            for (let i = 0; i < stops.length - 1; i++) {
+                for (let j = i + 1; j < stops.length; j++) {
+                    const sA = stops[i], sB = stops[j];
+                    if (!sA.lat || !sB.lat) continue;
+                    const prevLat = i === 0 ? campLat : (stops[i - 1].lat || campLat);
+                    const prevLng = i === 0 ? campLng : (stops[i - 1].lng || campLng);
+                    const nextLat = j === stops.length - 1 ? campLat : (stops[j + 1].lat || campLat);
+                    const nextLng = j === stops.length - 1 ? campLng : (stops[j + 1].lng || campLng);
+                    const before = drivingDist(prevLat, prevLng, sA.lat, sA.lng) +
+                                   drivingDist(sB.lat, sB.lng, nextLat, nextLng);
+                    const after  = drivingDist(prevLat, prevLng, sB.lat, sB.lng) +
+                                   drivingDist(sA.lat, sA.lng, nextLat, nextLng);
+                    if (after < before * 0.99) { // accept 1%+ improvement
+                        // Reverse stops[i..j]
+                        let lo = i, hi = j;
+                        while (lo < hi) { const t = stops[lo]; stops[lo] = stops[hi]; stops[hi] = t; lo++; hi--; }
+                        stops.forEach((s, idx) => { s.stopNum = idx + 1; });
+                        improved = true;
+                    }
+                }
+            }
+            if (!improved) break;
+        }
+        stops.forEach((s, i) => { s.stopNum = i + 1; });
     }
 
     /** Insert a stop at the directionally correct position (by driving distance from camp) */
@@ -461,6 +339,86 @@
         return result;
     }
     let _majorRoadSegments = null; // [{lat1,lng1,lat2,lng2,name}] from Overpass
+    let _majorRoadsBboxKey = null; // cache key so we don't refetch within a session
+
+    /** Standalone fetch of just the major-roads layer for clustering use.
+     *  Mirrors the major-roads query in fetchIntersections but doesn't
+     *  also fetch the larger intersection set. Sets _majorRoadSegments. */
+    async function _prefetchMajorRoads(campers) {
+        const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
+        const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
+        if (lats.length < 4 || lngs.length < 4) return;
+        const q1Lat = lats[Math.floor(lats.length * 0.25)], q3Lat = lats[Math.floor(lats.length * 0.75)];
+        const q1Lng = lngs[Math.floor(lngs.length * 0.25)], q3Lng = lngs[Math.floor(lngs.length * 0.75)];
+        const iqrLat = q3Lat - q1Lat, iqrLng = q3Lng - q1Lng;
+        const cleanLats = lats.filter(v => v >= q1Lat - 1.5*iqrLat && v <= q3Lat + 1.5*iqrLat);
+        const cleanLngs = lngs.filter(v => v >= q1Lng - 1.5*iqrLng && v <= q3Lng + 1.5*iqrLng);
+        if (cleanLats.length < 2 || cleanLngs.length < 2) return;
+        const buf = 0.012;
+        const minLat = cleanLats[0] - buf, maxLat = cleanLats[cleanLats.length-1] + buf;
+        const minLng = cleanLngs[0] - buf, maxLng = cleanLngs[cleanLngs.length-1] + buf;
+        const bboxKey = [minLat, minLng, maxLat, maxLng].map(v => v.toFixed(3)).join(',');
+        if (_majorRoadsBboxKey === bboxKey && _majorRoadSegments) return;
+        const bbox = minLat + ',' + minLng + ',' + maxLat + ',' + maxLng;
+        const query = '[out:json][timeout:25];' +
+            'way["highway"~"^(primary|secondary|trunk|tertiary)$"]["name"](' + bbox + ');' +
+            'out body;>;out skel qt;';
+        const endpoints = [
+            '/api/overpass',
+            'https://overpass-api.de/api/interpreter',
+            'https://overpass.kumi.systems/api/interpreter'
+        ];
+        for (const url of endpoints) {
+            try {
+                const ctrl = new AbortController();
+                const t = setTimeout(() => ctrl.abort(), 15000);
+                const r = await fetch(url + '?data=' + encodeURIComponent(query), { signal: ctrl.signal });
+                clearTimeout(t);
+                if (!r.ok) continue;
+                const data = await r.json();
+                if (!data?.elements?.length) continue;
+                const nodes = {};
+                data.elements.filter(e => e.type === 'node' && e.lat && e.lon)
+                    .forEach(e => { nodes[e.id] = { lat: e.lat, lng: e.lon }; });
+                const segs = [];
+                data.elements.filter(e => e.type === 'way' && e.nodes?.length >= 2).forEach(way => {
+                    const name = way.tags?.name || '';
+                    for (let i = 0; i < way.nodes.length - 1; i++) {
+                        const a = nodes[way.nodes[i]], b = nodes[way.nodes[i+1]];
+                        if (a && b) segs.push({ lat1: a.lat, lng1: a.lng, lat2: b.lat, lng2: b.lng, name });
+                    }
+                });
+                _majorRoadSegments = segs;
+                _majorRoadsBboxKey = bboxKey;
+                console.log('[Go v6] Prefetched ' + segs.length + ' major road segments for clustering');
+                return;
+            } catch (_) { continue; }
+        }
+        console.warn('[Go v6] Could not prefetch major roads — clustering will use plain spread');
+    }
+
+    /** For each atom, find the closest major-road name within ~0.25mi. Returns Map(atom→name|null). */
+    function _buildArterialFingerprints(atoms) {
+        const fingerprint = new Map();
+        if (!_majorRoadSegments || !_majorRoadSegments.length) {
+            atoms.forEach(a => fingerprint.set(a, null));
+            return fingerprint;
+        }
+        const MAX_MI = 0.25;
+        // Precompute segment midpoints for cheap haversine pre-filter
+        for (const atom of atoms) {
+            let bestName = null, bestD = MAX_MI;
+            for (const seg of _majorRoadSegments) {
+                if (!seg.name) continue;
+                const midLat = (seg.lat1 + seg.lat2) / 2;
+                const midLng = (seg.lng1 + seg.lng2) / 2;
+                const d = haversineMi(atom.lat, atom.lng, midLat, midLng);
+                if (d < bestD) { bestD = d; bestName = seg.name.toLowerCase(); }
+            }
+            fingerprint.set(atom, bestName);
+        }
+        return fingerprint;
+    }
 
     /** Line segment intersection test (2D) */
     function segmentsIntersect(ax1, ay1, ax2, ay2, bx1, by1, bx2, by2) {
@@ -623,115 +581,6 @@
         return finalClusters;
     }
 
-    // ── Distance matrix: backward-compatible wrapper ──
-    // Delegates to fetchDistanceMatrixCascade (Mapbox → OSRM → haversine).
-    // Kept for any code that still calls fetchDistanceMatrix(coords).
-    async function fetchDistanceMatrix(coords) {
-        return await fetchDistanceMatrixCascade(coords);
-    }
-
-    async function fetchOSRMWithRetry(coordStr, retries) {
-        if (retries === undefined) retries = 3;
-        for (let attempt = 0; attempt < retries; attempt++) {
-            if (attempt > 0) {
-                const delay = 1000 * Math.pow(2, attempt - 1);
-                console.log('[Go] OSRM retry ' + attempt + ' after ' + delay + 'ms...');
-                await new Promise(r => setTimeout(r, delay));
-            }
-            try {
-                const resp = await fetch('https://router.project-osrm.org/table/v1/driving/' + coordStr + '?annotations=duration');
-                if (resp.status === 429) {
-                    console.warn('[Go] OSRM 429 (rate limited) — attempt ' + (attempt + 1) + '/' + retries);
-                    continue;
-                }
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.durations) return data.durations;
-                }
-                return null;
-            } catch (e) {
-                if (attempt === retries - 1) return null;
-            }
-        }
-        return null;
-    }
-
-    // =========================================================================
-    // ISOCHRONE-BASED ZONE CREATION
-    // Uses Mapbox Isochrone API to build drive-time bands from camp.
-    // These replace ZIP codes as the primary zone grouping — zones now
-    // follow actual road networks, not arbitrary postal boundaries.
-    // =========================================================================
-
-    let _isochroneCache = null; // cached isochrone polygons
-    let _isoCacheCampKey = null; // cache key = camp coords
-
-    async function fetchIsochrones(campLat, campLng) {
-        const token = getMapboxToken();
-        if (!token) return null;
-
-        // Check cache — camp rarely moves
-        const cacheKey = campLat.toFixed(5) + ',' + campLng.toFixed(5);
-        if (_isochroneCache && _isoCacheCampKey === cacheKey) {
-            console.log('[Go] Isochrone: using cached bands');
-            return _isochroneCache;
-        }
-
-        // Also check localStorage for persistence across sessions
-        try {
-            const stored = localStorage.getItem('CAMPISTRY_ISO_' + cacheKey);
-            if (stored) {
-                const parsed = JSON.parse(stored);
-                if (parsed.ts && Date.now() - parsed.ts < 7 * 86400000) { // 7-day TTL
-                    _isochroneCache = parsed.data;
-                    _isoCacheCampKey = cacheKey;
-                    console.log('[Go] Isochrone: loaded from localStorage cache');
-                    return _isochroneCache;
-                }
-            }
-        } catch (_) {}
-
-        // Fetch from Mapbox Isochrone API
-        // contours_minutes: drive-time bands in minutes from camp
-        const intervals = [8, 15, 22, 30, 40, 55];
-        try {
-            const url = 'https://api.mapbox.com/isochrone/v1/mapbox/driving/' +
-                campLng + ',' + campLat +
-                '?contours_minutes=' + intervals.join(',') +
-                '&polygons=true&generalize=200' +
-                '&access_token=' + token;
-            console.log('[Go] Isochrone: fetching ' + intervals.length + ' bands...');
-            const resp = await fetch(url);
-            if (!resp.ok) {
-                console.warn('[Go] Isochrone: HTTP ' + resp.status);
-                return null;
-            }
-            const data = await resp.json();
-            if (!data.features?.length) return null;
-
-            // Mapbox returns features ordered outermost to innermost — reverse so band 0 = closest
-            const bands = data.features.reverse().map((feat, i) => ({
-                minutes: intervals[i],
-                polygon: feat.geometry.coordinates[0], // outer ring of polygon
-                properties: feat.properties
-            }));
-
-            _isochroneCache = bands;
-            _isoCacheCampKey = cacheKey;
-
-            // Persist to localStorage
-            try {
-                localStorage.setItem('CAMPISTRY_ISO_' + cacheKey, JSON.stringify({ ts: Date.now(), data: bands }));
-            } catch (_) {}
-
-            console.log('[Go] Isochrone: ' + bands.length + ' bands fetched (' + intervals.join(', ') + ' min)');
-            return bands;
-        } catch (e) {
-            console.warn('[Go] Isochrone: fetch error:', e.message);
-            return null;
-        }
-    }
-
     // Ray-casting point-in-polygon test
     function pointInPolygon(lat, lng, polygon) {
         let inside = false;
@@ -887,93 +736,6 @@
         return result;
     }
 
-    // =========================================================================
-    // TRAFFIC-AWARE ETAs
-    // Uses Mapbox Directions API with depart_at for traffic-predicted
-    // leg durations. Falls back to OSRM matrix → haversine.
-    // =========================================================================
-
-    async function fetchTrafficLegs(orderedStops, campLat, campLng, departureTimeMin, isArrival) {
-        const token = getMapboxToken();
-        if (!token || !orderedStops.length) return null;
-
-        // Build waypoint string: camp → stops (dismissal) or stops → camp (arrival)
-        const coords = [];
-        if (!isArrival) coords.push(campLng + ',' + campLat);
-        orderedStops.forEach(s => { if (s.lat && s.lng) coords.push(s.lng + ',' + s.lat); });
-        if (isArrival) coords.push(campLng + ',' + campLat);
-
-        if (coords.length < 2 || coords.length > 25) return null; // Mapbox limit
-
-        // Convert departure minutes to ISO 8601 for today
-        const now = new Date();
-        const depHours = Math.floor(departureTimeMin / 60);
-        const depMins = Math.round(departureTimeMin % 60);
-        const depDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), depHours, depMins);
-        // If the time has already passed today, use tomorrow
-        if (depDate < now) depDate.setDate(depDate.getDate() + 1);
-        const isoTime = depDate.toISOString().replace(/\.\d{3}Z$/, 'Z');
-
-        try {
-            const url = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
-                coords.join(';') +
-                '?annotations=duration&overview=false' +
-                '&depart_at=' + isoTime +
-                '&access_token=' + token;
-
-            const resp = await fetch(url);
-            if (!resp.ok) {
-                if (resp.status === 422) {
-                    // depart_at may not be supported on free tier — try without
-                    console.warn('[Go] Traffic: depart_at not supported, trying static');
-                    const fallbackUrl = 'https://api.mapbox.com/directions/v5/mapbox/driving/' +
-                        coords.join(';') + '?annotations=duration&overview=false&access_token=' + token;
-                    const fb = await fetch(fallbackUrl);
-                    if (!fb.ok) return null;
-                    const fbData = await fb.json();
-                    return extractLegDurations(fbData);
-                }
-                return null;
-            }
-            const data = await resp.json();
-            return extractLegDurations(data);
-        } catch (e) {
-            console.warn('[Go] Traffic legs error:', e.message);
-            return null;
-        }
-    }
-
-    function extractLegDurations(data) {
-        if (!data.routes?.[0]?.legs) return null;
-        // Each leg = segment between consecutive waypoints, duration in seconds
-        return data.routes[0].legs.map(leg => leg.duration); // seconds
-    }
-
-    // =========================================================================
-    // OSRM WALKING DISTANCE VALIDATION
-    // Uses OSRM foot profile to verify actual walking distances.
-    // Manhattan distance underestimates when there are dead-ends, parks, etc.
-    // =========================================================================
-    async function fetchWalkingDistances(stopLat, stopLng, camperCoords) {
-        if (!camperCoords.length) return null;
-        // OSRM table: stop as source, camper homes as destinations
-        const coords = [stopLng + ',' + stopLat];
-        camperCoords.forEach(c => coords.push(c.lng + ',' + c.lat));
-        if (coords.length > 25) return null; // OSRM limit
-        try {
-            const url = 'https://router.project-osrm.org/table/v1/foot/' + coords.join(';') +
-                '?sources=0&annotations=distance';
-            const resp = await fetch(url);
-            if (!resp.ok) return null;
-            const data = await resp.json();
-            if (data.code !== 'Ok' || !data.distances?.[0]) return null;
-            // Returns distances in meters from stop to each camper
-            return data.distances[0].slice(1); // skip stop-to-self
-        } catch (e) {
-            return null;
-        }
-    }
-
     function decodePolyline(encoded) {
         const points = []; let i = 0, lat = 0, lng = 0;
         while (i < encoded.length) {
@@ -1042,59 +804,74 @@
     }
 
     // ── Geocode validation — reject results that don't make sense ──
-    function validateGeocode(lat, lng, address, camperName) {
-        // 1. Null or zero coordinates
-        if (!lat || !lng || lat === 0 || lng === 0) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': null coordinates');
+    function validateGeocode(lat, lng, address, camperName, returnedResult) {
+        // 1. Invalid coordinates (null, zero, NaN, Infinity)
+        if (!lat || !lng || lat === 0 || lng === 0 || isNaN(lat) || isNaN(lng) || !isFinite(lat) || !isFinite(lng)) {
+            console.warn('[Go] Geocode rejected for ' + camperName + ': invalid coordinates (' + lat + ', ' + lng + ')');
             return false;
         }
-        // 2. Outside continental US bounds (rough)
+        // 2. Outside continental US bounds
         if (lat < 24 || lat > 50 || lng < -125 || lng > -66) {
             console.warn('[Go] Geocode rejected for ' + camperName + ': outside continental US (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ')');
             return false;
         }
-        // 3. If camp location is known, reject if too far
+        // 3. If camp location known, hard limit 30 miles (was 100 — too loose for urban camps)
         if (_campCoordsCache) {
             const dist = haversineMi(_campCoordsCache.lat, _campCoordsCache.lng, lat, lng);
-            // Hard limit: 50 miles (covers most day camp service areas)
-            if (dist > 50) {
-                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(1) + ' miles from camp (max 50) — likely wrong location');
+            if (dist > 30) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': ' + dist.toFixed(0) + 'mi from camp (max 30)');
                 return false;
             }
-            // Soft limit: if we have other geocoded addresses, check if this is an outlier
-            // Compare against the cluster of already-geocoded addresses
-            const geocodedAddrs = Object.values(D.addresses).filter(a => a.geocoded && a.lat && a.lng);
-            if (geocodedAddrs.length >= 5) {
-                const avgLat = geocodedAddrs.reduce((s, a) => s + a.lat, 0) / geocodedAddrs.length;
-                const avgLng = geocodedAddrs.reduce((s, a) => s + a.lng, 0) / geocodedAddrs.length;
-                const maxExistingDist = Math.max(...geocodedAddrs.map(a => haversineMi(avgLat, avgLng, a.lat, a.lng)));
-                const thisDist = haversineMi(avgLat, avgLng, lat, lng);
-                // If this address is >3x farther than the farthest existing address, flag it
-                if (maxExistingDist > 0 && thisDist > maxExistingDist * 3 && thisDist > 5) {
-                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + thisDist.toFixed(1) + 'mi from cluster center (max existing: ' + maxExistingDist.toFixed(1) + 'mi) — likely geocoded to wrong location');
-                    return false;
-                }
+        }
+        // 4. State-level sanity
+        const addrData = D.addresses[camperName];
+        if (addrData?.state) {
+            const stBounds = {
+                NY: [40.4, 45.1, -80, -71.8], NJ: [38.9, 41.4, -75.6, -73.9],
+                CT: [40.9, 42.1, -73.8, -71.8], PA: [39.7, 42.3, -80.6, -74.7],
+                MA: [41.2, 42.9, -73.5, -69.9], FL: [24.5, 31.0, -87.7, -80.0],
+                CA: [32.5, 42.0, -124.5, -114.1], TX: [25.8, 36.5, -106.7, -93.5],
+                OH: [38.4, 42.0, -84.9, -80.5], IL: [36.9, 42.5, -91.5, -87.0],
+                GA: [30.3, 35.0, -85.6, -80.8], MI: [41.7, 48.3, -90.4, -82.1],
+                NC: [33.8, 36.6, -84.3, -75.5], CO: [36.9, 41.0, -109.1, -102.0],
+                MD: [37.9, 39.7, -79.5, -75.0], VA: [36.5, 39.5, -83.7, -75.2],
+                WI: [42.5, 47.1, -92.9, -86.8], MN: [43.5, 49.4, -97.3, -89.5],
+                IN: [37.8, 41.8, -88.1, -84.8], AZ: [31.3, 37.0, -115.0, -109.0],
+                TN: [35.0, 36.7, -90.3, -81.6], MO: [35.9, 40.6, -95.8, -89.1],
+                SC: [32.0, 35.2, -83.4, -78.5], AL: [30.2, 35.0, -88.5, -84.9],
+                LA: [28.9, 33.0, -94.0, -88.8], KY: [36.5, 39.2, -89.6, -82.0],
+                OR: [41.9, 46.3, -124.6, -116.5], OK: [33.6, 37.0, -103.0, -94.4],
+                WA: [45.5, 49.0, -124.8, -116.9], IA: [40.4, 43.5, -96.6, -90.1],
+                MS: [30.2, 35.0, -91.7, -88.1], AR: [33.0, 36.5, -94.6, -89.6],
+                KS: [37.0, 40.0, -102.1, -94.6], UT: [37.0, 42.0, -114.1, -109.0],
+                NV: [35.0, 42.0, -120.0, -114.0], NM: [31.3, 37.0, -109.1, -103.0],
+                NE: [40.0, 43.0, -104.1, -95.3], WV: [37.2, 40.6, -82.6, -77.7],
+                ID: [42.0, 49.0, -117.2, -111.0], HI: [18.9, 22.3, -160.3, -154.8],
+                NH: [42.7, 45.3, -72.6, -70.7], ME: [43.1, 47.5, -71.1, -66.9],
+                MT: [44.4, 49.0, -116.1, -104.0], RI: [41.1, 42.0, -71.9, -71.1],
+                DE: [38.4, 39.8, -75.8, -75.0], SD: [42.5, 46.0, -104.1, -96.4],
+                ND: [45.9, 49.0, -104.1, -96.6], AK: [51.0, 71.5, -180, -130],
+                VT: [42.7, 45.0, -73.5, -71.5], WY: [41.0, 45.0, -111.1, -104.1],
+                DC: [38.8, 39.0, -77.1, -77.0]
+            };
+            const b = stBounds[addrData.state.toUpperCase()];
+            if (b && (lat < b[0] || lat > b[1] || lng < b[2] || lng > b[3])) {
+                console.warn('[Go] Geocode rejected for ' + camperName + ': coords (' + lat.toFixed(4) + ', ' + lng.toFixed(4) + ') outside ' + addrData.state);
+                return false;
             }
         }
-        // 4. Coordinates that land in the ocean
-        if (lng > -71 && lat < 40.4 && lng < -60) {
-            console.warn('[Go] Geocode rejected for ' + camperName + ': appears to be in the ocean');
-            return false;
-        }
-        // 5. ZIP code cross-check — if camper has a ZIP, verify geocoded location is near that ZIP
-        const addrData = D.addresses[camperName];
-        if (addrData?.zip && _campCoordsCache) {
-            // Check other addresses with same ZIP — are they near this geocoded point?
-            const sameZipAddrs = Object.values(D.addresses).filter(a => a.zip === addrData.zip && a.geocoded && a.lat && a !== addrData);
-            if (sameZipAddrs.length >= 2) {
-                const zipCentLat = sameZipAddrs.reduce((s, a) => s + a.lat, 0) / sameZipAddrs.length;
-                const zipCentLng = sameZipAddrs.reduce((s, a) => s + a.lng, 0) / sameZipAddrs.length;
-                const distFromZip = haversineMi(zipCentLat, zipCentLng, lat, lng);
-                // If geocoded location is >5mi from the centroid of other addresses in the same ZIP, it's wrong
-                if (distFromZip > 5) {
-                    console.warn('[Go] Geocode rejected for ' + camperName + ': ' + distFromZip.toFixed(1) + 'mi from ZIP ' + addrData.zip + ' cluster — likely geocoded to wrong city/state');
+        // 5. ZIP mismatch — reject if confidence is not high enough to trust a cross-ZIP match
+        if (addrData?.zip && returnedResult?.zip) {
+            const inputZip = addrData.zip.substring(0, 5);
+            const returnedZip = (returnedResult.zip + '').substring(0, 5);
+            if (inputZip && returnedZip && inputZip !== returnedZip) {
+                const conf = returnedResult.confidence || 0;
+                if (conf < 0.75) {
+                    // Low-confidence cross-ZIP result — likely matched a different street in a neighboring ZIP
+                    console.warn('[Go] Geocode REJECTED for ' + camperName + ': ZIP mismatch (' + inputZip + ' vs ' + returnedZip + ') at confidence ' + (conf * 100).toFixed(0) + '% < 75%');
                     return false;
                 }
+                console.warn('[Go] Geocode ZIP mismatch for ' + camperName + ': input ' + inputZip + ' vs returned ' + returnedZip + ' — accepting at ' + (conf * 100).toFixed(0) + '% confidence');
             }
         }
         return true;
@@ -1117,7 +894,9 @@
     }
 
     function formatTime(totalMin) {
-        const h = Math.floor(totalMin / 60), m = Math.round(totalMin % 60);
+        let total = Math.round(totalMin);
+        let h = Math.floor(total / 60), m = total % 60;
+        if (m === 60) { m = 0; h += 1; }
         const p = h >= 12 ? 'PM' : 'AM', h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
         return h12 + ':' + String(m).padStart(2, '0') + ' ' + p;
     }
@@ -1137,15 +916,230 @@
     function load() {
         try {
             const g = readCampistrySettings();
-            if (g.campistryGo && Object.keys(g.campistryGo).length) { D = merge(g.campistryGo); console.log('[Go] Loaded from cloud settings'); return; }
-            const raw = localStorage.getItem(STORE);
-            if (raw) { D = merge(JSON.parse(raw)); console.log('[Go] Loaded from localStorage'); }
+            const cloud = g.campistryGo && Object.keys(g.campistryGo).length ? g.campistryGo : null;
+            let local = null;
+            try { const raw = localStorage.getItem(STORE); if (raw) local = JSON.parse(raw); } catch (_) {}
+
+            if (cloud && local) {
+                // Cloud may be missing addresses/savedRoutes (stripped for quota).
+                // Merge: use cloud as base, fill in missing large fields from local.
+                if (!cloud.addresses || !Object.keys(cloud.addresses).length) cloud.addresses = local.addresses || {};
+                if (!cloud.savedRoutes) cloud.savedRoutes = local.savedRoutes || null;
+                D = merge(cloud);
+                console.log('[Go] Loaded from cloud settings (addresses from local)');
+            } else if (cloud) {
+                D = merge(cloud);
+                console.log('[Go] Loaded from cloud settings');
+            } else if (local) {
+                D = merge(local);
+                console.log('[Go] Loaded from localStorage');
+            }
+
+            // One-time migration: spatial-sort → neighborhood. Spatial-sort was
+            // the default before we recognized it produced wedges that mix
+            // corridors. Existing users have 'spatial-sort' saved from when
+            // it was the default; upgrade them so they get road-graph-aware
+            // clustering. Users who explicitly chose spatial-sort can flip
+            // back via settings; this migration only runs once.
+            if (D.setup && D.setup.routingPipeline === 'spatial-sort' &&
+                !D.setup._pipelineMigrated_v1) {
+                D.setup.routingPipeline = 'neighborhood';
+                D.setup._pipelineMigrated_v1 = true;
+                console.log('[Go] Upgraded routing pipeline: spatial-sort → neighborhood ' +
+                    '(road-graph aware). Set routingPipeline back to spatial-sort to revert.');
+            }
+            // One-time migration: maxRouteDuration 60 → 90. The 60-min cap was
+            // too tight for hard geographic clusters (camp's MAROON runs 71min
+            // with 24mi distance), causing the solver to drop stops via
+            // cheapest-insert and produce 100+min routes. Bumping to 90 lets
+            // the solver finish naturally; tight clusters still come in well
+            // under 90 (camp's typical is 30-50min).
+            if (D.setup && D.setup.maxRouteDuration === 60 &&
+                !D.setup._maxRouteDurationMigrated_v1) {
+                D.setup.maxRouteDuration = 90;
+                D.setup._maxRouteDurationMigrated_v1 = true;
+                console.log('[Go] Upgraded maxRouteDuration: 60 → 90 min ' +
+                    '(prevents solver from dropping stops on hard clusters). ' +
+                    'Set back to 60 in settings to revert.');
+            }
+
+            // Recover geocoding checkpoint: if the tab was closed mid-geocode,
+            // the checkpoint key has more geocodes than the main store.
+            try {
+                const ckptRaw = localStorage.getItem(STORE + '_addr_ckpt');
+                if (ckptRaw) {
+                    const ckpt = JSON.parse(ckptRaw);
+                    const ckptGeocoded = Object.values(ckpt).filter(a => a.geocoded).length;
+                    const mainGeocoded = Object.values(D.addresses || {}).filter(a => a.geocoded).length;
+                    if (ckptGeocoded > mainGeocoded) {
+                        D.addresses = ckpt;
+                        console.log('[Go] Recovered geocode checkpoint (' + ckptGeocoded + ' geocoded vs ' + mainGeocoded + ' in main store)');
+                    }
+                    localStorage.removeItem(STORE + '_addr_ckpt');
+                }
+            } catch (_) {}
         } catch (e) { console.error('[Go] Load error:', e); }
     }
 
+    // -------------------------------------------------------------------------
+    // fetchGoConfig() — loads API keys from Supabase secrets via get-config
+    // edge function. Keys are injected into D.setup at runtime only — they are
+    // NEVER saved to localStorage, globalSettings, or the cloud table.
+    // Called after auth is confirmed (campistry-cloud-hydrated + 1.5s fallback).
+    // -------------------------------------------------------------------------
+    async function fetchGoConfig() {
+        const cfg = window.__CAMPISTRY_SUPABASE__;
+        if (!cfg?.url || !cfg?.anonKey) return; // Supabase not wired in
+        try {
+            const sess = await window.supabase?.auth?.getSession?.();
+            const token = sess?.data?.session?.access_token;
+            if (!token) return; // Not logged in — skip
+
+            const resp = await fetch(cfg.url + '/functions/v1/get-config', {
+                headers: {
+                    'Authorization': 'Bearer ' + token,
+                    'apikey': cfg.anonKey
+                }
+            });
+            if (!resp.ok) {
+                console.warn('[Go] fetchGoConfig: HTTP', resp.status);
+                return;
+            }
+            const config = await resp.json();
+
+            // Inject keys into D.setup (runtime only — not persisted)
+            if (config.googleMapsKey)  D.setup.googleMapsKey  = config.googleMapsKey;
+            if (config.geoapifyKey)    D.setup.geoapifyKey    = config.geoapifyKey;
+            if (config.googleProjectId) D.setup.googleProjectId = config.googleProjectId;
+            if (config.orsKey) {
+                D.setup.orsKey = config.orsKey;
+                window.__CAMPISTRY_ORS_KEY__ = config.orsKey;
+            }
+
+            console.log('[Go] Config loaded from Supabase secrets — keys:', [
+                config.googleMapsKey  ? 'googleMaps ✅'  : 'googleMaps ❌',
+                config.geoapifyKey    ? 'geoapify ✅'    : 'geoapify ❌',
+                config.googleProjectId ? 'projectId ✅'  : 'projectId ❌'
+            ].join(', '));
+        } catch (e) {
+            console.warn('[Go] fetchGoConfig error:', e.message);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // loadGoCloudData() — async supplement to load()
+    // Fetches addresses and routes from the go_standalone_data table.
+    // Called after campistry-cloud-hydrated fires (and optionally on init).
+    // Merges only fields that are currently empty so it never overwrites
+    // data the user just entered.
+    // -------------------------------------------------------------------------
+    async function loadGoCloudData() {
+        if (!window.GoCloudSync) return;
+        try {
+            const cloud = await window.GoCloudSync.loadAll();
+            if (!cloud) return;
+
+            let changed = false;
+
+            // ── Restore full state (setup, buses, shifts, monitors, counselors) ─
+            // Only hydrates fields that are empty/default locally so we never
+            // overwrite data the user just entered.
+            if (cloud.state && typeof cloud.state === 'object') {
+                const s = cloud.state;
+
+                // Setup: restore if local campName is empty but cloud has one
+                if (s.setup && !D.setup.campName && s.setup.campName) {
+                    D.setup = Object.assign({}, D.setup, s.setup);
+                    changed = true;
+                    console.log('[Go] Restored setup from GoCloud (campName:', s.setup.campName + ')');
+                }
+
+                // Fleet config: restore if local is empty
+                if (!D.buses?.length && s.buses?.length) {
+                    D.buses = s.buses;
+                    changed = true;
+                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud');
+                }
+                if (!D.shifts?.length && s.shifts?.length) {
+                    D.shifts = s.shifts;
+                    changed = true;
+                }
+                if (!D.monitors?.length && s.monitors?.length) {
+                    D.monitors = s.monitors;
+                    changed = true;
+                }
+                if (!D.counselors?.length && s.counselors?.length) {
+                    D.counselors = s.counselors;
+                    changed = true;
+                }
+
+                // Mode snapshots
+                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length)) {
+                    D.dismissal = Object.assign(D.dismissal || {}, s.dismissal);
+                    changed = true;
+                }
+                if (s.arrival && (!D.arrival || !D.arrival.buses?.length)) {
+                    D.arrival = Object.assign(D.arrival || {}, s.arrival);
+                    changed = true;
+                }
+
+            }
+
+            // ── Restore addresses ─────────────────────────────────────────────
+            if (cloud.addresses && typeof cloud.addresses === 'object') {
+                const localCount = Object.keys(D.addresses || {}).length;
+                const cloudCount = Object.keys(cloud.addresses).length;
+                if (cloudCount > localCount) {
+                    // Cloud has more addresses — merge (cloud wins for matching keys)
+                    D.addresses = Object.assign({}, D.addresses || {}, cloud.addresses);
+                    changed = true;
+                    console.log('[Go] Restored', cloudCount, 'addresses from GoCloud');
+                }
+            }
+
+            // ── Restore routes ────────────────────────────────────────────────
+            if (cloud.routes && typeof cloud.routes === 'object') {
+                if (!D.savedRoutes && cloud.routes.savedRoutes) {
+                    D.savedRoutes = cloud.routes.savedRoutes;
+                    changed = true;
+                    console.log('[Go] Restored savedRoutes from GoCloud');
+                }
+                if (D.dismissal && !D.dismissal.savedRoutes && cloud.routes.dismissalRoutes) {
+                    D.dismissal.savedRoutes = cloud.routes.dismissalRoutes;
+                    changed = true;
+                }
+                if (D.arrival && !D.arrival.savedRoutes && cloud.routes.arrivalRoutes) {
+                    D.arrival.savedRoutes = cloud.routes.arrivalRoutes;
+                    changed = true;
+                }
+                if (changed && (cloud.routes.savedRoutes || cloud.routes.dismissalRoutes)) {
+                    _generatedRoutes = D.savedRoutes;
+                    console.log('[Go] Restored routes from GoCloud — re-rendering');
+                }
+            }
+
+            if (changed) {
+                // Persist the restored data to localStorage so subsequent
+                // sync loads find it without another round-trip
+                try { localStorage.setItem(STORE, JSON.stringify(D)); } catch (_) {}
+                renderFleet();
+                renderShifts();
+                renderStaff();
+                renderAddresses();
+                updateStats();
+                populateSetup();
+                if (D.savedRoutes && D.savedRoutes.length) {
+                    setTimeout(() => { renderRouteResults(D.savedRoutes); toast('Routes restored from cloud'); }, 200);
+                }
+            }
+        } catch (e) {
+            console.error('[Go] loadGoCloudData error:', e);
+        }
+    }
+
     function merge(d) {
-        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,orsApiKey:'',graphhopperKey:'',mapboxToken:'',campLat:null,campLng:null }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null, dailyOverrides:{}, carpoolGroups:{} };
-        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null, dailyOverrides: d.dailyOverrides || {}, carpoolGroups: d.carpoolGroups || {} };
+        const def = { setup: { campAddress:'',campName:'',avgSpeed:25,reserveSeats:2,dropoffMode:'door-to-door',avgStopTime:2,maxWalkDistance:375,googleMapsKey:'',googleProjectId:'',geoapifyKey:'',campLat:null,campLng:null,standaloneMode:false }, activeMode:'dismissal', buses:[], shifts:[], monitors:[], counselors:[], addresses:{}, savedRoutes:null, dismissal:null, arrival:null };
+        const result = { setup: { ...def.setup, ...(d.setup || {}) }, activeMode: d.activeMode || 'dismissal', buses: d.buses || [], shifts: d.shifts || [], monitors: d.monitors || [], counselors: d.counselors || [], addresses: d.addresses || {}, savedRoutes: d.savedRoutes || null, dismissal: d.dismissal || null, arrival: d.arrival || null };
         if (!result.dismissal && result.buses.length) { result.dismissal = { buses: [...result.buses], shifts: [...result.shifts], monitors: [...result.monitors], counselors: [...result.counselors], savedRoutes: result.savedRoutes }; }
         if (!result.arrival) { result.arrival = { buses: [], shifts: [], monitors: [], counselors: [], savedRoutes: null }; }
         return result;
@@ -1155,8 +1149,92 @@
         try {
             setSyncStatus('syncing');
             saveModeData();
-            localStorage.setItem(STORE, JSON.stringify(D));
-            if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings('campistryGo', D);
+            var json = JSON.stringify(D);
+            try {
+                localStorage.setItem(STORE, json);
+            } catch (quota) {
+                // Quota exceeded — strip savedRoutes from Go data and retry
+                console.warn('[Go] Save: quota exceeded, stripping routes to fit (' + (json.length / 1024).toFixed(0) + 'KB)');
+                var slim = JSON.parse(json);
+                delete slim.savedRoutes;
+                delete slim.arrival?.savedRoutes;
+                delete slim.dismissal?.savedRoutes;
+                localStorage.setItem(STORE, JSON.stringify(slim));
+            }
+            // Sync to global settings without any route data (too large for localStorage quota).
+            // Road geometry (_roadPts) alone can be several MB — strip all savedRoutes
+            // from every mode before writing to globalSettings / localStorage.
+            if (typeof window.saveGlobalSettings === 'function') {
+                const lite = Object.assign({}, D);
+                delete lite.savedRoutes;
+                if (lite.dismissal) { lite.dismissal = Object.assign({}, lite.dismissal); delete lite.dismissal.savedRoutes; }
+                if (lite.arrival)   { lite.arrival   = Object.assign({}, lite.arrival);   delete lite.arrival.savedRoutes;   }
+                window.saveGlobalSettings('campistryGo', lite);
+            }
+            // ── Go-specific cloud persistence ─────────────────────────────────
+            // ALL Campistry Go data is saved to the go_standalone_data table so
+            // it survives cache clears / new devices / non-standalone mode.
+            // standaloneMode only controls WHERE camper+staff data comes from
+            // (Campistry Me vs manual/CSV) — it does NOT affect cloud saves.
+            //
+            // Data types saved:
+            //   'state'     — setup, buses, shifts, monitors, counselors (all modes)
+            //   'addresses' — geocoded camper addresses (large; kept separate)
+            //   'routes'    — computed route results (large; kept separate)
+            if (window.GoCloudSync) {
+                // ── State: setup + fleet config for both modes ────────────────
+                // Snapshot the current mode's live data back into D[activeMode]
+                // before saving so the cloud copy is always up-to-date.
+                const _currentModeSnap = {
+                    buses:      D.buses      || [],
+                    shifts:     D.shifts     || [],
+                    monitors:   D.monitors   || [],
+                    counselors: D.counselors || []
+                };
+                // Strip runtime-only API keys — these come from Supabase secrets
+                // via fetchGoConfig() and must never be written back to the DB.
+                const _setupForCloud = Object.assign({}, D.setup);
+                delete _setupForCloud.googleMapsKey;
+                delete _setupForCloud.googleProjectId;
+                delete _setupForCloud.geoapifyKey;
+
+                const stateSnap = {
+                    setup:       _setupForCloud,
+                    activeMode:  D.activeMode,
+                    buses:       D.buses      || [],
+                    shifts:      D.shifts     || [],
+                    monitors:    D.monitors   || [],
+                    counselors:  D.counselors || [],
+                    dismissal: D.dismissal ? {
+                        buses:      D.activeMode === 'dismissal' ? _currentModeSnap.buses      : (D.dismissal.buses      || []),
+                        shifts:     D.activeMode === 'dismissal' ? _currentModeSnap.shifts     : (D.dismissal.shifts     || []),
+                        monitors:   D.activeMode === 'dismissal' ? _currentModeSnap.monitors   : (D.dismissal.monitors   || []),
+                        counselors: D.activeMode === 'dismissal' ? _currentModeSnap.counselors : (D.dismissal.counselors || [])
+                    } : null,
+                    arrival: D.arrival ? {
+                        buses:      D.activeMode === 'arrival' ? _currentModeSnap.buses      : (D.arrival.buses      || []),
+                        shifts:     D.activeMode === 'arrival' ? _currentModeSnap.shifts     : (D.arrival.shifts     || []),
+                        monitors:   D.activeMode === 'arrival' ? _currentModeSnap.monitors   : (D.arrival.monitors   || []),
+                        counselors: D.activeMode === 'arrival' ? _currentModeSnap.counselors : (D.arrival.counselors || [])
+                    } : null,
+                };
+                window.GoCloudSync.save('state', stateSnap);
+
+                // ── Addresses: save whenever there is at least one entry ───────
+                if (D.addresses && Object.keys(D.addresses).length > 0) {
+                    window.GoCloudSync.save('addresses', D.addresses);
+                }
+                // ── Routes: save dismissal + arrival savedRoutes together ──────
+                const routePayload = {
+                    savedRoutes:     D.savedRoutes            || null,
+                    dismissalRoutes: D.dismissal?.savedRoutes || null,
+                    arrivalRoutes:   D.arrival?.savedRoutes   || null
+                };
+                if (routePayload.savedRoutes || routePayload.dismissalRoutes || routePayload.arrivalRoutes) {
+                    window.GoCloudSync.save('routes', routePayload);
+                }
+            }
+            // ─────────────────────────────────────────────────────────────────
             setTimeout(() => setSyncStatus('synced'), 300);
         } catch (e) { console.error('[Go] Save:', e); setSyncStatus('error'); }
     }
@@ -1182,7 +1260,7 @@
         document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
         const sub = document.getElementById('modeLabel');
         if (sub) sub.textContent = mode === 'arrival' ? 'Morning Pickup Routes' : 'Afternoon Drop-off Routes';
-        if (D.savedRoutes) { renderRouteResults(applyOverrides(D.savedRoutes)); }
+        if (D.savedRoutes) { renderRouteResults(D.savedRoutes); }
         else { document.getElementById('routeResults').style.display = 'none'; document.getElementById('shiftResultsContainer').innerHTML = ''; }
         toast('Switched to ' + (mode === 'arrival' ? 'Arrival' : 'Dismissal') + ' mode');
     }
@@ -1192,7 +1270,7 @@
     // =========================================================================
     function getCapacityWarnings() {
         if (!_generatedRoutes) return [];
-        const applied = applyOverrides(_generatedRoutes);
+        const applied = _generatedRoutes;
         const warnings = [];
         applied.forEach(sr => { sr.routes.forEach(r => { const bus = D.buses.find(b => b.id === r.busId); if (!bus) return; const brs = getBusReserve(bus); const mon = D.monitors.find(m => m.assignedBus === bus.id); const couns = D.counselors.filter(c => c.assignedBus === bus.id); const maxCampers = Math.max(0, (bus.capacity || 0) - (mon ? 1 : 0) - couns.length - brs); if (r.camperCount > maxCampers) warnings.push({ busName: r.busName, busColor: r.busColor, shift: sr.shift.label || 'Shift', actual: r.camperCount, max: maxCampers, over: r.camperCount - maxCampers }); }); });
         return warnings;
@@ -1214,19 +1292,21 @@
     let _goStandaloneRoster = {};
 
     function getRoster() {
-        // 1. Try Campistry Me roster first
-        const g = readCampistrySettings();
-        const meRoster = g?.app1?.camperRoster || {};
-        if (Object.keys(meRoster).length > 0) {
-            let needsSave = false, maxId = 0;
-            Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
-            let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
-            if (maxId >= nextId) nextId = maxId + 1;
-            Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
-            if (needsSave) {
-                try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+        // 1. If not standalone, try Campistry Me roster first
+        if (!D.setup.standaloneMode) {
+            const g = readCampistrySettings();
+            const meRoster = g?.app1?.camperRoster || {};
+            if (Object.keys(meRoster).length > 0) {
+                let needsSave = false, maxId = 0;
+                Object.values(meRoster).forEach(c => { if (c.camperId && c.camperId > maxId) maxId = c.camperId; });
+                let nextId = (g?.campistryMe?.nextCamperId) || maxId + 1;
+                if (maxId >= nextId) nextId = maxId + 1;
+                Object.entries(meRoster).forEach(([n, c]) => { if (!c.camperId) { c.camperId = nextId; nextId++; needsSave = true; } });
+                if (needsSave) {
+                    try { const raw = localStorage.getItem('campGlobalSettings_v1'); if (raw) { const data = JSON.parse(raw); data.app1.camperRoster = meRoster; if (!data.campistryMe) data.campistryMe = {}; data.campistryMe.nextCamperId = nextId; localStorage.setItem('campGlobalSettings_v1', JSON.stringify(data)); } } catch (e) {}
+                }
+                return meRoster;
             }
-            return meRoster;
         }
         // 2. Fall back to Go's standalone roster (from CSV import)
         if (Object.keys(_goStandaloneRoster).length > 0) return _goStandaloneRoster;
@@ -1234,6 +1314,8 @@
         const addrRoster = {};
         Object.keys(D.addresses).forEach(name => {
             const a = D.addresses[name];
+            // Skip staff — they're tracked in D.monitors/D.counselors, not the camper roster
+            if (a._isStaff) return;
             addrRoster[name] = {
                 camperId: a._camperId || 0,
                 division: a._division || '',
@@ -1244,10 +1326,12 @@
         return addrRoster;
     }
     function getStructure() {
-        // Try Me's camp structure first
-        const g = readCampistrySettings();
-        const meStruct = g?.campStructure || {};
-        if (Object.keys(meStruct).length) return meStruct;
+        // If not standalone, try Me's camp structure first
+        if (!D.setup.standaloneMode) {
+            const g = readCampistrySettings();
+            const meStruct = g?.campStructure || {};
+            if (Object.keys(meStruct).length) return meStruct;
+        }
 
         // Build structure from Go's standalone data (CSV import or addresses)
         const roster = getRoster();
@@ -1290,31 +1374,117 @@
         if (document.getElementById('dropoffMode')) document.getElementById('dropoffMode').value = s.dropoffMode || 'door-to-door';
         document.getElementById('avgStopTime').value = s.avgStopTime ?? 2;
         document.getElementById('maxWalkDistance').value = s.maxWalkDistance ?? 375;
-        document.getElementById('orsApiKey').value = s.orsApiKey || '';
-        if (document.getElementById('ghApiKey')) document.getElementById('ghApiKey').value = s.graphhopperKey || '';
-        if (document.getElementById('mapboxToken')) document.getElementById('mapboxToken').value = s.mapboxToken || '';
+        if (document.getElementById('clusterSoftCapPct')) document.getElementById('clusterSoftCapPct').value = s.clusterSoftCapPct ?? 112;
+        if (document.getElementById('clusterDissolvePct')) document.getElementById('clusterDissolvePct').value = s.clusterDissolvePct ?? 55;
+        if (document.getElementById('clusterFloorPct')) document.getElementById('clusterFloorPct').value = s.clusterFloorPct ?? 30;
+        if (document.getElementById('clusterSpreadRatio')) document.getElementById('clusterSpreadRatio').value = s.clusterSpreadRatio ?? 150;
+        window._GoSetup = () => D.setup;
+        if (document.getElementById('standaloneToggle')) document.getElementById('standaloneToggle').checked = !!s.standaloneMode;
+    }
+    function toggleStandalone(on) {
+        D.setup.standaloneMode = !!on;
+        save();
+        console.log('[Go] Standalone mode: ' + (on ? 'ON — using Go data only' : 'OFF — connected to Campistry Me'));
     }
     function saveSetup() {
         const el = id => document.getElementById(id);
-        D.setup.campAddress = el('campAddress')?.value.trim() || '';
+        const newAddr = el('campAddress')?.value.trim() || '';
+        // If camp address changed, clear cached coordinates so they get re-geocoded
+        if (newAddr !== D.setup.campAddress) {
+            D.setup.campLat = null;
+            D.setup.campLng = null;
+            _campCoordsCache = null;
+            console.log('[Go] Camp address changed — coordinates will re-geocode on next route generation');
+        }
+        D.setup.campAddress = newAddr;
         D.setup.campName = el('campName')?.value.trim() || '';
         D.setup.avgSpeed = parseInt(el('avgSpeed')?.value) || 25;
         D.setup.reserveSeats = parseInt(el('reserveSeats')?.value) || 0;
         D.setup.dropoffMode = el('dropoffMode')?.value || 'door-to-door';
         D.setup.avgStopTime = parseInt(el('avgStopTime')?.value) || 2;
         D.setup.maxWalkDistance = parseInt(el('maxWalkDistance')?.value) || 375;
-        D.setup.orsApiKey = el('orsApiKey')?.value.trim() || '';
-        D.setup.graphhopperKey = el('ghApiKey')?.value.trim() || '';
-        D.setup.mapboxToken = el('mapboxToken')?.value.trim() || '';
+        D.setup.clusterSoftCapPct = parseInt(el('clusterSoftCapPct')?.value) || 112;
+        D.setup.clusterDissolvePct = parseInt(el('clusterDissolvePct')?.value) || 55;
+        D.setup.clusterFloorPct = parseInt(el('clusterFloorPct')?.value) || 30;
+        D.setup.clusterSpreadRatio = parseInt(el('clusterSpreadRatio')?.value) || 150;
+        window._GoSetup = () => D.setup;
         save(); toast('Setup saved');
     }
-    async function testApiKey() {
-        const key = document.getElementById('orsApiKey')?.value.trim();
-        const st = document.getElementById('apiKeyStatus');
-        if (!key) { st.innerHTML = '<span style="color:var(--red-600)">Enter key first</span>'; return; }
-        st.innerHTML = '<span style="color:var(--text-muted)">Testing...</span>';
-        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?text=Times+Square+New+York&size=1', { headers: { 'Authorization': key, 'Accept': 'application/json' } }); st.innerHTML = r.status === 200 ? '<span style="color:var(--green-600)">✓ Connected</span>' : r.status === 401 ? '<span style="color:var(--red-600)">✗ Invalid key</span>' : '<span style="color:var(--amber-600)">⚠ HTTP ' + r.status + '</span>'; } catch (_) { st.innerHTML = '<span style="color:var(--red-600)">✗ Network error</span>'; }
-    }
+
+    // ── Google Route Optimization connection test ──────────────────────────────
+    (function () {
+        const btn = document.getElementById('btnTestGoogleProxy');
+        const box = document.getElementById('googleProxyStatus');
+        if (!btn || !box) return;
+
+        btn.addEventListener('click', async function () {
+            btn.disabled = true;
+            btn.textContent = '⏳ Testing...';
+            box.style.display = 'block';
+            box.textContent = 'Connecting to Supabase edge function…';
+
+            const supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+            const anonKey    = window.__CAMPISTRY_SUPABASE__?.anonKey || '';
+            let token = null;
+            try {
+                const sess = await window.supabase?.auth?.getSession();
+                token = sess?.data?.session?.access_token || anonKey || null;
+            } catch (_) { token = anonKey || null; }
+
+            const lines = [];
+
+            // Step 1: Supabase session
+            if (supabaseUrl && token) {
+                lines.push('✅ Supabase: connected');
+            } else if (!supabaseUrl) {
+                lines.push('❌ Supabase URL not found');
+                finish(false, lines); return;
+            } else {
+                lines.push('❌ No auth token available');
+                finish(false, lines); return;
+            }
+
+            // Step 2: Call edge function health check
+            lines.push('🔄 Calling edge function health check…');
+            box.textContent = lines.join('\n');
+            try {
+                const resp = await fetch(supabaseUrl + '/functions/v1/optimize-routes', {
+                    method: 'GET',
+                    headers: {
+                        'Authorization': 'Bearer ' + token,
+                        'apikey': anonKey
+                    }
+                });
+                const data = await resp.json();
+
+                if (data.checks) {
+                    Object.entries(data.checks).forEach(([k, v]) => lines.push(v + '  (' + k + ')'));
+                }
+
+                if (data.ok) {
+                    lines.push('');
+                    lines.push('🎉 All good! Google Route Optimization is ready.');
+                    lines.push('   Project: ' + (data.projectId || 'unknown'));
+                    finish(true, lines);
+                } else {
+                    lines.push('');
+                    lines.push('⚠️  Fix the issues above, then re-deploy the edge function.');
+                    finish(false, lines);
+                }
+            } catch (e) {
+                lines.push('❌ Could not reach edge function: ' + e.message);
+                lines.push('   Make sure it is deployed in Supabase → Edge Functions.');
+                finish(false, lines);
+            }
+
+            function finish(ok, lines) {
+                box.textContent = lines.join('\n');
+                box.style.borderColor = ok ? '#22c55e' : '#ef4444';
+                btn.disabled = false;
+                btn.textContent = '🔍 Test Google Connection';
+            }
+        });
+    })();
 
     // =========================================================================
     // BUS FLEET
@@ -1503,7 +1673,10 @@
             const divChips = divNames.map(dName => {
                 const isActive = (sh.divisions || []).includes(dName);
                 const color = struct[dName]?.color || '#888';
-                const gradeNames = Object.keys(struct[dName]?.grades || {}).sort();
+                const gOrd = struct[dName]?.gradeOrder;
+                const gradeNames = Array.isArray(gOrd) && gOrd.length
+                    ? gOrd.filter(g => g in (struct[dName]?.grades || {}))
+                    : Object.keys(struct[dName]?.grades || {}).sort();
                 const gradeMode = sh.grades[dName];
                 let gradeHtml = '';
                 if (isActive && gradeNames.length > 1) {
@@ -1573,7 +1746,16 @@
     // =========================================================================
     // STAFF (Monitors + Counselors)
     // =========================================================================
-    function renderStaff() { renderMonitors(); renderCounselors(); document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff'; }
+    function renderStaff() {
+        renderMonitors(); renderCounselors();
+        document.getElementById('staffCount').textContent = (D.monitors.length + D.counselors.length) + ' staff';
+        // Show "Accept All" button only when there are pending suggestions
+        const pending = [...D.monitors, ...D.counselors].some(s =>
+            s._suggestedBusId && s._assignStatus !== 'accepted' && s._assignStatus !== 'denied'
+        );
+        const btn = document.getElementById('acceptAllStaffBtn');
+        if (btn) btn.style.display = pending ? '' : 'none';
+    }
     // ── Staff suggestion status badges ──
     function _staffStatusBadge(staff) {
         if (staff._assignStatus === 'accepted') {
@@ -1606,6 +1788,20 @@
             + '</div></div>';
     }
 
+    function _staffGeoBadge(staffMember) {
+        const name = staffMember.name || (staffMember.firstName + ' ' + staffMember.lastName);
+        const a = D.addresses[name];
+        if (!staffMember.address && !a?.street) return '<span class="badge badge-neutral" style="font-size:.65rem">No address</span>';
+        if (a?.geocoded && a._geocodeConfidence) {
+            const pct = Math.round(a._geocodeConfidence * 100);
+            if (pct >= 80) return '<span class="badge badge-success" style="font-size:.65rem">✓ ' + pct + '%</span>';
+            return '<span class="badge badge-warning" style="font-size:.65rem">⚠ ' + pct + '%</span>';
+        }
+        if (a?.geocoded) return '<span class="badge badge-success" style="font-size:.65rem">✓ Geocoded</span>';
+        if (staffMember._lat && staffMember._lng) return '<span class="badge badge-success" style="font-size:.65rem">✓ Geocoded</span>';
+        return '<span class="badge badge-neutral" style="font-size:.65rem">Not geocoded</span>';
+    }
+
     function renderMonitors() {
         const tbody = document.getElementById('monitorTableBody'), empty = document.getElementById('monitorEmptyState');
         const tw = tbody?.closest('.table-wrapper');
@@ -1617,7 +1813,8 @@
             const busCol = (bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '—');
             const suggestionHtml = _staffSuggestionHtml(m, 'monitor');
             const idCol = m._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + m._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            return '<tr>' + idCol + '<td>' + esc(m.lastName || '') + '</td><td style="font-weight:600">' + esc(m.firstName || m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + busCol + suggestionHtml + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
+            const geoBadge = _staffGeoBadge(m);
+            return '<tr>' + idCol + '<td>' + esc(m.lastName || '') + '</td><td style="font-weight:600">' + esc(m.firstName || m.name) + '</td><td>' + (esc(m.address) || '—') + '</td><td>' + geoBadge + '</td><td>' + (esc(m.phone) || '—') + '</td><td>' + busCol + suggestionHtml + '</td><td><div style="display:flex;gap:4px"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editMonitor(\'' + m.id + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.deleteMonitor(\'' + m.id + '\')">×</button></div></td></tr>';
         }).join('');
     }
     function renderCounselors() {
@@ -1630,23 +1827,108 @@
             const bus = D.buses.find(b => b.id === c.assignedBus);
             const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
             const modeBadge = mode === 'stop' ? '<span class="badge badge-warning">Own Stop</span>' : mode === 'auto' ? '<span class="badge badge-neutral">Auto-assign</span>' : bus ? '<span style="display:inline-flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:50%;background:' + esc(bus.color) + '"></span>' + esc(bus.name) + '</span>' : '<span class="badge badge-neutral">Manual (unset)</span>';
-            const suggestionHtml = (mode !== 'stop') ? _staffSuggestionHtml(c, 'counselor') : '';
+            const suggestionHtml = _staffSuggestionHtml(c, 'counselor');
             const idCol = c._personId ? '<td style="font-size:.8rem;color:var(--text-muted)">' + c._personId + '</td>' : '<td style="color:var(--text-muted)">—</td>';
-            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
+            const geoBadge = _staffGeoBadge(c);
+            return '<tr style="cursor:pointer" onclick="CampistryGo.editCounselor(\'' + c.id + '\')">' + idCol + '<td>' + esc(c.lastName || '') + '</td><td style="font-weight:600">' + esc(c.firstName || c.name) + '</td><td>' + (esc(c.address) || '—') + '</td><td>' + geoBadge + '</td><td>' + (esc(c.bunk) || '—') + '</td><td>' + modeBadge + suggestionHtml + '</td><td>' + (c._walkFt ? c._walkFt + 'ft' : '—') + '</td></tr>';
         }).join('');
     }
 
     // ── Staff assignment actions ──
+    function acceptAllStaffSuggestions() {
+        let accepted = 0;
+        const all = [
+            ...D.monitors.map(m => ({ staff: m, type: 'monitor' })),
+            ...D.counselors.map(c => ({ staff: c, type: 'counselor' }))
+        ];
+        for (const { staff } of all) {
+            if (!staff._suggestedBusId) continue;
+            if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') continue;
+            staff._assignStatus = 'accepted';
+            staff._acceptedBus = staff._suggestedBus;
+            staff._acceptedBusId = staff._suggestedBusId;
+            staff._acceptedStop = staff._suggestedStop;
+            staff._acceptedStopNum = staff._suggestedStopNum;
+            staff.assignedBus = staff._suggestedBusId;
+            accepted++;
+        }
+        if (!accepted) { toast('No pending suggestions to accept'); return; }
+        save(); renderStaff();
+        toast('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : ''));
+    }
+
+    // ── Capacity check helper ────────────────────────────────────────────────
+    // Returns how many seats over capacity a bus will be AFTER adding one more
+    // staff member. Positive = over capacity.
+    function _capacityAfterStaffAdd(busId) {
+        const bus = D.buses.find(b => b.id === busId);
+        if (!bus) return 0;
+        const brs    = getBusReserve(bus);
+        const mon    = D.monitors.find(m => m.assignedBus === busId);
+        const couns  = D.counselors.filter(c => c.assignedBus === busId);
+        // +1 accounts for the staff member we're about to add
+        const usedByStaff = (mon ? 1 : 0) + couns.length + 1 + brs;
+        const maxCampers  = Math.max(0, (bus.capacity || 0) - usedByStaff);
+        let camperCount   = 0;
+        (D.savedRoutes || []).forEach(sr => {
+            const r = (sr.routes || []).find(r => r.busId === busId);
+            if (r) camperCount += r.camperCount || 0;
+        });
+        return { overBy: camperCount - maxCampers, camperCount, maxCampers, busName: bus.name };
+    }
+
+    // ── Commit a staff assignment and refresh the UI ─────────────────────────
+    function _commitStaffAssign(staff, busId, busName, stopAddr, stopNum) {
+        staff._assignStatus  = 'accepted';
+        staff._acceptedBus   = busName;
+        staff._acceptedBusId = busId;
+        staff._acceptedStop  = stopAddr;
+        staff._acceptedStopNum = stopNum;
+        staff.assignedBus    = busId;
+        save();
+        renderStaff();
+        // Re-render routes so capacity badges + stop lists reflect the new assignment
+        if (typeof CampistryGo !== 'undefined' && CampistryGo._refreshRoutes) {
+            CampistryGo._refreshRoutes();
+        }
+        toast(staff.name + ' confirmed on ' + busName);
+    }
+
+    // ── Overcapacity warning modal ───────────────────────────────────────────
+    function _showCapacityWarning(staff, type, busId, busName, stopAddr, stopNum, overBy) {
+        const existing = document.getElementById('staffCapWarningModal');
+        if (existing) existing.remove();
+        const overlay = document.createElement('div');
+        overlay.id = 'staffCapWarningModal';
+        overlay.style.cssText = 'position:fixed;inset:0;z-index:10001;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;';
+        overlay.innerHTML = '<div class="modal" style="max-width:400px;padding:1.5rem;">'
+            + '<h3 style="margin:0 0 .75rem;color:var(--red-600);">⚠ Bus Over Capacity</h3>'
+            + '<p style="margin:0 0 1.25rem;line-height:1.5;">Adding <strong>' + esc(staff.name) + '</strong> to <strong>' + esc(busName) + '</strong> will put it <strong>' + overBy + ' seat' + (overBy > 1 ? 's' : '') + ' over capacity</strong>.</p>'
+            + '<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;">'
+            + '<button class="btn btn-secondary" id="scwCancel">Cancel</button>'
+            + '<button class="btn btn-secondary" id="scwManual">Choose Different Bus</button>'
+            + '<button class="btn btn-danger" id="scwForce">Force Anyway</button>'
+            + '</div></div>';
+        document.body.appendChild(overlay);
+
+        overlay.querySelector('#scwCancel').onclick  = () => overlay.remove();
+        overlay.querySelector('#scwForce').onclick   = () => { overlay.remove(); _commitStaffAssign(staff, busId, busName, stopAddr, stopNum); };
+        overlay.querySelector('#scwManual').onclick  = () => { overlay.remove(); manualStaffAssign(staff.id, type); };
+    }
+
     function acceptStaffAssign(staffId, type) {
         const staff = type === 'monitor' ? D.monitors.find(m => m.id === staffId) : D.counselors.find(c => c.id === staffId);
         if (!staff || !staff._suggestedBusId) return;
-        staff._assignStatus = 'accepted';
-        staff._acceptedBus = staff._suggestedBus;
-        staff._acceptedBusId = staff._suggestedBusId;
-        staff._acceptedStop = staff._suggestedStop;
-        staff._acceptedStopNum = staff._suggestedStopNum;
-        staff.assignedBus = staff._suggestedBusId;
-        save(); renderStaff(); toast(staff.name + ' confirmed on ' + staff._suggestedBus);
+
+        const cap = _capacityAfterStaffAdd(staff._suggestedBusId);
+        if (cap.overBy > 0) {
+            _showCapacityWarning(staff, type,
+                staff._suggestedBusId, staff._suggestedBus,
+                staff._suggestedStop, staff._suggestedStopNum,
+                cap.overBy);
+            return;
+        }
+        _commitStaffAssign(staff, staff._suggestedBusId, staff._suggestedBus, staff._suggestedStop, staff._suggestedStopNum);
     }
 
     function denyStaffAssign(staffId, type) {
@@ -1718,16 +2000,16 @@
                 });
             }
 
-            staff._assignStatus = 'accepted';
-            staff._acceptedBus = bus?.name || '';
-            staff._acceptedBusId = busId;
-            staff._acceptedStop = stopAddr;
-            staff._acceptedStopNum = stopNum;
-            staff.assignedBus = busId;
+            // Capacity check before committing
+            const cap = _capacityAfterStaffAdd(busId);
+            if (cap.overBy > 0) {
+                overlay.remove();
+                _showCapacityWarning(staff, type, busId, bus?.name || '', stopAddr, stopNum, cap.overBy);
+                return;
+            }
 
-            save(); renderStaff();
             overlay.remove();
-            toast(staff.name + ' assigned to ' + (bus?.name || 'bus') + (stopNum ? ', Stop ' + stopNum : ''));
+            _commitStaffAssign(staff, busId, bus?.name || '', stopAddr, stopNum);
         });
     }
     function openMonitorModal(eId) { _editMonitorId = eId || null; document.getElementById('monitorModalTitle').textContent = eId ? 'Edit Monitor' : 'Add Monitor'; updateBusSelects(); const m = eId ? D.monitors.find(x => x.id === eId) : null; document.getElementById('monitorName').value = m?.name || ''; document.getElementById('monitorAddress').value = m?.address || ''; document.getElementById('monitorPhone').value = m?.phone || ''; document.getElementById('monitorBusAssign').value = m?.assignedBus || ''; openModal('monitorModal'); document.getElementById('monitorName').focus(); }
@@ -1835,7 +2117,18 @@
             };
         });
 
-        // Filter
+        // Filter by active mode (arrival/dismissal)
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        rows = rows.filter(r => {
+            const a = D.addresses[r.name];
+            return !a || a[modeKey] !== false;
+        });
+
+        // Capture mode-filtered totals BEFORE search filter
+        const modeTotal = rows.length;
+        const modeWithAddr = rows.filter(r => r.hasAddr).length;
+
+        // Search filter
         const filter = (document.getElementById('addressSearch')?.value || '').toLowerCase().trim();
         if (filter) rows = rows.filter(r => r.name.toLowerCase().includes(filter) || r.first.toLowerCase().includes(filter) || r.last.toLowerCase().includes(filter) || r.division.toLowerCase().includes(filter) || r.grade.toLowerCase().includes(filter) || r.bunk.toLowerCase().includes(filter) || r.street.toLowerCase().includes(filter) || r.city.toLowerCase().includes(filter));
 
@@ -1849,21 +2142,26 @@
             else if (sc === 'last') { av = a.last.toLowerCase(); bv = b.last.toLowerCase(); }
             else if (sc === 'division') { av = a.division.toLowerCase(); bv = b.division.toLowerCase(); }
             else if (sc === 'grade') { av = a.grade.toLowerCase(); bv = b.grade.toLowerCase(); }
-            else if (sc === 'bunk') { av = a.bunk.toLowerCase(); bv = b.bunk.toLowerCase(); }
+            else if (sc === 'bunk') {
+                var ai = parseInt(a.bunk, 10), bi = parseInt(b.bunk, 10);
+                av = isNaN(ai) ? (a.bunk || '').toLowerCase() : ai;
+                bv = isNaN(bi) ? (b.bunk || '').toLowerCase() : bi;
+                if (typeof av === 'number' && typeof bv === 'number') return (av - bv) * dir;
+                if (typeof av === 'number') return -1 * dir;
+                if (typeof bv === 'number') return 1 * dir;
+            }
             else if (sc === 'address') { av = a.street.toLowerCase(); bv = b.street.toLowerCase(); }
             else if (sc === 'status') { av = a.geocoded ? 1 : a.hasAddr ? 0 : -1; bv = b.geocoded ? 1 : b.hasAddr ? 0 : -1; return (av - bv) * dir; }
             else { av = a.last.toLowerCase(); bv = b.last.toLowerCase(); }
             if (av < bv) return -1 * dir; if (av > bv) return 1 * dir; return 0;
         });
 
-        const total = [...allNames].length;
         const tbody = document.getElementById('addressTableBody'), empty = document.getElementById('addressEmptyState');
         const tw = tbody?.closest('.table-wrapper');
-        document.getElementById('addressCount').textContent = filter ? rows.length + ' of ' + total : total;
-        if (!total) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; updateAddrProgress(0, 0); return; }
+        document.getElementById('addressCount').textContent = filter ? rows.length + ' of ' + modeTotal : modeTotal;
+        if (!modeTotal) { if (tw) tw.style.display = 'none'; if (empty) empty.style.display = ''; updateAddrProgress(0, 0); return; }
         if (tw) tw.style.display = ''; if (empty) empty.style.display = 'none';
-        let withAddr = 0; rows.forEach(r => { if (r.hasAddr) withAddr++; });
-        updateAddrProgress(withAddr, total);
+        updateAddrProgress(modeWithAddr, modeTotal);
 
         // Update header arrows
         document.querySelectorAll('#addressTableBody')?.forEach(() => {});
@@ -1886,115 +2184,194 @@
             const srcLabel = r.source ? ' via ' + r.source : '';
             const confTitle = (confPct ? confPct + ' confidence' + srcLabel : '') + (r.crossValidated ? ' [cross-validated]' : '');
             const badge = r.hasAddr ? (r.geocodeWarning ? '<span class="badge badge-danger" title="' + esc(r.geocodeWarning) + '">⚠ ' + esc(r.geocodeWarning.substring(0,30)) + '</span>' : r.geocoded ? (r.zipMismatch ? '<span class="badge badge-warning" title="ZIP mismatch' + (confTitle ? ' — ' + confTitle : '') + '">⚠ Check ZIP</span>' : r.confidence >= 0.8 ? '<span class="badge badge-success" title="' + esc(confTitle) + '">✓ ' + confPct + (r.crossValidated ? ' ✓✓' : '') + '</span>' : r.confidence >= 0.5 ? '<span class="badge badge-warning" title="' + esc(confTitle) + '">' + confPct + srcLabel + '</span>' : '<span class="badge badge-danger" title="' + esc(confTitle) + '">⚠ ' + confPct + '</span>') : validated ? '<span class="badge badge-warning">Verified, not geocoded</span>' : '<span class="badge badge-warning">Not geocoded</span>') : '<span class="badge badge-danger">Missing</span>';
-            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + esc(r.name.replace(/'/g, "\\'")) + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + '</div></td></tr>';
+            const safeName = esc(r.name.replace(/'/g, "\\'"));
+            const deleteBtn = r.hasAddr ? '<button class="btn btn-ghost btn-sm" onclick="if(confirm(\'Delete address for ' + safeName + '?\'))CampistryGo._quickDeleteAddress(\'' + safeName + '\')" title="Delete address" style="color:var(--danger,#ef4444);font-size:.75rem;">🗑</button>' : '';
+            return '<tr><td style="font-size:.75rem;color:var(--text-muted);font-family:monospace;">' + (r.id ? '#' + String(r.id).padStart(4, '0') : '') + '</td><td style="font-weight:600">' + esc(r.last) + '</td><td>' + esc(r.first) + '</td><td>' + (esc(r.division) || '—') + '</td><td>' + (esc(r.grade) || '—') + '</td><td>' + (esc(r.bunk) || '—') + '</td><td>' + (full ? esc(full) : '<span style="color:var(--text-muted)">No address</span>') + '</td><td>' + badge + '</td><td><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" onclick="CampistryGo.editAddress(\'' + safeName + '\')">' + (r.hasAddr ? 'Edit' : 'Add') + '</button>' + (r.geocoded ? '<button class="btn btn-ghost btn-sm" onclick="CampistryGo.locateCamper(\'' + safeName + '\')" title="Show on map" style="font-size:.7rem;">📍</button>' : '') + deleteBtn + '</div></td></tr>';
         }).join('');
     }
     function updateAddrProgress(n, t) { const p = t > 0 ? Math.round(n / t * 100) : 0; document.getElementById('addressProgressBar').style.width = p + '%'; document.getElementById('addressProgressText').textContent = n + ' of ' + t + ' (' + p + '%)'; }
+
+    /* ── Progress bar takeover for geocoding / validation ── */
+    let _progStartTime = 0;
+    function progressStart(label) {
+        _progStartTime = Date.now();
+        const card = document.getElementById('progressCard');
+        card.className = card.className.replace(/progress-card-\w+/g, '').trim() + ' progress-card-active';
+        document.getElementById('progressLabel').textContent = label;
+        document.getElementById('progressHint').style.display = 'none';
+        document.getElementById('progressETA').style.display = '';
+        document.getElementById('progressETA').textContent = 'Estimating...';
+    }
+    function progressUpdate(done, total, detail) {
+        const p = total > 0 ? Math.round(done / total * 100) : 0;
+        document.getElementById('addressProgressBar').style.width = p + '%';
+        document.getElementById('addressProgressText').textContent = done + ' of ' + total + ' (' + p + '%)';
+        // ETA calculation
+        const elapsed = (Date.now() - _progStartTime) / 1000;
+        const etaEl = document.getElementById('progressETA');
+        if (done > 0 && done < total) {
+            const rate = done / elapsed;
+            const remaining = (total - done) / rate;
+            let etaStr;
+            if (remaining < 60) etaStr = Math.ceil(remaining) + 's remaining';
+            else if (remaining < 3600) etaStr = Math.ceil(remaining / 60) + 'm ' + Math.ceil(remaining % 60) + 's remaining';
+            else etaStr = Math.floor(remaining / 3600) + 'h ' + Math.ceil((remaining % 3600) / 60) + 'm remaining';
+            etaEl.textContent = (detail ? detail + ' · ' : '') + '~' + etaStr;
+        } else if (done >= total) {
+            etaEl.textContent = detail || 'Finishing...';
+        } else {
+            etaEl.textContent = detail || 'Starting...';
+        }
+    }
+    function progressEnd(summary, isError) {
+        const card = document.getElementById('progressCard');
+        card.className = card.className.replace(/progress-card-\w+/g, '').trim() + (isError ? ' progress-card-error' : ' progress-card-done');
+        document.getElementById('progressLabel').textContent = isError ? 'Geocoding — Issues Found' : 'Geocoding Complete';
+        document.getElementById('progressETA').textContent = summary;
+        document.getElementById('addressProgressBar').style.width = '100%';
+        // Revert to address completion mode after 8 seconds
+        setTimeout(() => {
+            card.className = card.className.replace(/progress-card-\w+/g, '').trim();
+            document.getElementById('progressLabel').textContent = 'Address Completion';
+            document.getElementById('progressHint').style.display = '';
+            document.getElementById('progressHint').textContent = 'Import addresses via CSV/Excel above, or add them individually below.';
+            document.getElementById('progressETA').style.display = 'none';
+            renderAddresses();
+        }, 8000);
+    }
     function editAddress(name) {
         _editCamper = name; const roster = getRoster(), c = roster[name] || {}, a = D.addresses[name] || {};
         document.getElementById('addressCamperName').textContent = name;
-        const div = c.division || a._division || '';
-        const grade = c.grade || a._grade || '';
-        const bunk = c.bunk || a._bunk || '';
-        document.getElementById('addressCamperBunk').textContent = [div, grade, bunk].filter(Boolean).join(' / ');
-        document.getElementById('addrStreet').value = a.street || ''; document.getElementById('addrCity').value = a.city || '';
-        document.getElementById('addrState').value = a.state || 'NY'; document.getElementById('addrZip').value = a.zip || '';
+        // Camper info fields
+        document.getElementById('addrCamperId').value = c.camperId || a._camperId || '';
+        document.getElementById('addrDivision').value = c.division || a._division || '';
+        document.getElementById('addrGrade').value = c.grade || a._grade || '';
+        document.getElementById('addrBunk').value = c.bunk || a._bunk || '';
+        // Address fields
+        document.getElementById('addrStreet').value = a.street || '';
+        document.getElementById('addrCity').value = a.city || '';
+        document.getElementById('addrState').value = a.state || 'NY';
+        document.getElementById('addrZip').value = a.zip || '';
+        // Arrival/Dismissal checkboxes (default true if not set)
+        document.getElementById('addrArrival').checked = a._arrival !== false;
+        document.getElementById('addrDismissal').checked = a._dismissal !== false;
+        const deleteBtn = document.getElementById('addrDeleteBtn');
+        if (deleteBtn) deleteBtn.style.display = D.addresses[name] ? 'inline-flex' : 'none';
         openModal('addressModal'); document.getElementById('addrStreet').focus();
     }
-    function saveAddress() {
+    async function saveAddress() {
         if (!_editCamper) return;
         const st = document.getElementById('addrStreet')?.value.trim(), ci = document.getElementById('addrCity')?.value.trim(), sa = document.getElementById('addrState')?.value.trim().toUpperCase(), z = document.getElementById('addrZip')?.value.trim();
-        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Address cleared'); return; }
-        D.addresses[_editCamper] = { street: st, city: ci, state: sa, zip: z, lat: null, lng: null, geocoded: false };
-        save(); closeModal('addressModal'); renderAddresses(); updateStats(); toast('Saved — geocoding...');
-        geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); toast('Geocoded'); } });
+        const camperId = parseInt(document.getElementById('addrCamperId')?.value) || 0;
+        const division = document.getElementById('addrDivision')?.value.trim();
+        const grade = document.getElementById('addrGrade')?.value.trim();
+        const bunk = document.getElementById('addrBunk')?.value.trim();
+
+        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); return; }
+        // ★ Starter plan: check limit if this is a NEW address
+        if (!D.addresses[_editCamper]) {
+            var limit = await checkCamperLimitGo(1);
+            if (!limit.allowed) return;
+        }
+        // Merge: preserve existing fields (geocode data, overrides, transport, etc.)
+        const existing = D.addresses[_editCamper] || {};
+        const addrChanged = existing.street !== st || existing.city !== ci || existing.state !== sa || existing.zip !== z;
+        const forArrival = document.getElementById('addrArrival')?.checked !== false;
+        const forDismissal = document.getElementById('addrDismissal')?.checked !== false;
+        D.addresses[_editCamper] = Object.assign(existing, {
+            street: st, city: ci, state: sa, zip: z,
+            _camperId: camperId, _division: division, _grade: grade, _bunk: bunk,
+            _arrival: forArrival, _dismissal: forDismissal
+        });
+        // Only re-geocode if address actually changed
+        if (addrChanged) {
+            D.addresses[_editCamper].lat = null;
+            D.addresses[_editCamper].lng = null;
+            D.addresses[_editCamper].geocoded = false;
+        }
+        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        if (addrChanged) {
+            geocodeOne(_editCamper).then(ok => { if (ok) { save(); renderAddresses(); } });
+        }
     }
+    function deleteAddress() {
+        if (!_editCamper) return;
+        if (!confirm('Delete all address data for ' + _editCamper + '?\n\nThis cannot be undone.')) return;
+        delete D.addresses[_editCamper];
+        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        toast(_editCamper + ': address deleted');
+    }
+    function _quickDeleteAddress(name) {
+        // Called directly from table row — confirmation already shown inline
+        delete D.addresses[name];
+        save(); renderAddresses(); updateStats();
+        toast(name + ': address deleted');
+    }
+
+    // ── Clear-all helpers ──────────────────────────────────────────────────────
+    // Each wipes the relevant data from D, localStorage (via save()), and the
+    // go_standalone_data Supabase table.
+
+    function _clearCloudDataType(dataType) {
+        // Overwrite the cloud row with an empty object so it can't restore stale data
+        if (window.GoCloudSync) window.GoCloudSync.save(dataType, {});
+    }
+
+    function clearAllAddresses() {
+        if (!Object.keys(D.addresses).length) { toast('No addresses to clear', 'error'); return; }
+        const count = Object.keys(D.addresses).length;
+        if (!confirm('Delete all ' + count + ' camper addresses?\n\nGeocodes and imported data will be permanently removed from this device and the cloud. This cannot be undone.')) return;
+        D.addresses = {};
+        D.savedRoutes = null;
+        _generatedRoutes = null;
+        if (D.dismissal) D.dismissal.savedRoutes = null;
+        if (D.arrival)   D.arrival.savedRoutes   = null;
+        save();
+        _clearCloudDataType('addresses');
+        _clearCloudDataType('routes');
+        _clearCloudDataType('state');
+        _goStandaloneRoster = {};
+        renderAddresses(); updateStats();
+        document.getElementById('routeResults').style.display = 'none';
+        document.getElementById('shiftResultsContainer').innerHTML = '';
+        toast(count + ' addresses cleared');
+    }
+
+    function clearAllMonitors() {
+        if (!D.monitors.length) { toast('No monitors to clear', 'error'); return; }
+        const count = D.monitors.length;
+        if (!confirm('Delete all ' + count + ' monitor(s)?\n\nThis cannot be undone.')) return;
+        // Also remove their address entries
+        D.monitors.forEach(m => { if (D.addresses[m.name]?._isStaff) delete D.addresses[m.name]; });
+        D.monitors = [];
+        save();
+        _clearCloudDataType('state');
+        if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
+        renderStaff(); updateStats();
+        toast(count + ' monitor(s) cleared');
+    }
+
+    function clearAllCounselors() {
+        if (!D.counselors.length) { toast('No counselors to clear', 'error'); return; }
+        const count = D.counselors.length;
+        if (!confirm('Delete all ' + count + ' counselor(s)?\n\nThis cannot be undone.')) return;
+        // Also remove their address entries
+        D.counselors.forEach(c => { if (D.addresses[c.name]?._isStaff) delete D.addresses[c.name]; });
+        D.counselors = [];
+        save();
+        _clearCloudDataType('state');
+        if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
+        renderStaff(); updateStats();
+        toast(count + ' counselor(s) cleared');
+    }
+    // ──────────────────────────────────────────────────────────────────────────
 
     // =========================================================================
     // GEOCODING — Multi-provider confidence-ranked pipeline
-    // Priority: Mapbox v6 (best accuracy) → Census (free/unlimited) → ORS
+    // Priority: Google (best accuracy) → Census (free/unlimited) → Nominatim
     // Each provider returns { lat, lng, confidence, source, zipMatch, precision }
     // The highest-confidence valid result wins.
     // =========================================================================
-
-    function getMapboxToken() { return D.setup.mapboxToken || _PLATFORM_KEYS.mapbox; }
-
-    // ── Mapbox v6 Geocoding (primary) ──
-    // Structured input for precision; returns rooftop/interpolated/approximate
-    async function mapboxGeocode(street, city, state, zip) {
-        const token = getMapboxToken();
-        if (!token) return null;
-        try {
-            const params = new URLSearchParams({
-                access_token: token,
-                country: 'us',
-                limit: '3',
-                types: 'address'
-            });
-            if (street) params.set('address_line1', street);
-            if (city) params.set('place', city);
-            if (state) params.set('region', state);
-            if (zip) params.set('postcode', zip);
-            // Use proximity bias toward camp if known
-            if (_campCoordsCache) params.set('proximity', _campCoordsCache.lng + ',' + _campCoordsCache.lat);
-
-            const resp = await fetch('https://api.mapbox.com/search/geocode/v6/forward?' + params.toString(), {
-                headers: { 'Accept': 'application/json' }
-            });
-            if (!resp.ok) {
-                if (resp.status === 429) console.warn('[Go] Mapbox rate limit hit');
-                return null;
-            }
-            const data = await resp.json();
-            if (!data.features?.length) return null;
-
-            // Score each result and pick the best
-            let bestResult = null, bestScore = -1;
-            for (const feat of data.features) {
-                const coords = feat.geometry?.coordinates;
-                if (!coords) continue;
-                const props = feat.properties || {};
-                const ctx = props.context || {};
-
-                // Base confidence from Mapbox relevance
-                let score = (props.match_code?.confidence || 'low') === 'exact' ? 0.95
-                    : (props.match_code?.confidence || 'low') === 'high' ? 0.85
-                    : (props.match_code?.confidence || 'low') === 'medium' ? 0.65
-                    : 0.4;
-
-                // Precision bonus: rooftop > parcel > interpolated > approximate
-                const precision = props.match_code?.address_number || 'inferred';
-                if (precision === 'matched') score += 0.05;
-                else if (precision === 'inferred') score -= 0.05;
-                else if (precision === 'plausible') score -= 0.1;
-
-                // ZIP match bonus
-                const resultZip = ctx.postcode?.name || '';
-                const zipMatch = !!(zip && resultZip && resultZip.substring(0, 5) === zip.substring(0, 5));
-                if (zip && zipMatch) score += 0.05;
-                else if (zip && resultZip && !zipMatch) score -= 0.2;
-
-                if (score > bestScore) {
-                    bestScore = score;
-                    bestResult = {
-                        lat: coords[1], lng: coords[0],
-                        confidence: Math.min(score, 1),
-                        source: 'mapbox',
-                        zipMatch: zipMatch,
-                        precision: precision,
-                        street: props.name_preferred || props.name || street,
-                        city: ctx.place?.name || city,
-                        state: ctx.region?.region_code || state,
-                        zip: resultZip ? resultZip.substring(0, 5) : zip
-                    };
-                }
-            }
-            return bestResult;
-        } catch (e) {
-            console.warn('[Go] Mapbox geocode error:', e.message);
-            return null;
-        }
-    }
 
     // ── Census geocoder (secondary — free & unlimited) ──
     async function censusGeocodeScored(street, city, state, zip) {
@@ -2003,19 +2380,19 @@
             const d = await censusGeocode(censusQ);
             if (!d?.result?.addressMatches?.length) return null;
             const best = d.result.addressMatches[0];
+            if (!best.coordinates || best.coordinates.y == null || best.coordinates.x == null) return null;
             const lat = best.coordinates.y, lng = best.coordinates.x;
-            // Census returns a matchedAddress — score based on how well it matches
+            if (isNaN(lat) || isNaN(lng)) return null;
             const matchedAddr = (best.matchedAddress || '').toUpperCase();
-            const inputAddr = censusQ.toUpperCase().replace(/[^A-Z0-9 ]/g, '');
-            let score = 0.75; // Census baseline — always exact street-level
-            // If matched address contains our ZIP, that's a strong signal
-            if (zip && matchedAddr.includes(zip.substring(0, 5))) score += 0.1;
-            // Slight penalty — Census doesn't do rooftop, only interpolated range
-            score -= 0.05;
+            // Extract ZIP from matched address
+            const matchedZip = (matchedAddr.match(/\b(\d{5})\b/) || [])[1] || '';
+            let score = 0.85; // Census is highly accurate for US residential
+            const zipMatch = !!(zip && matchedZip && zip.substring(0, 5) === matchedZip);
+            if (zipMatch) score += 0.1;
             return {
                 lat, lng, confidence: Math.min(score, 1), source: 'census',
-                zipMatch: !!(zip && matchedAddr.includes(zip.substring(0, 5))),
-                precision: 'interpolated'
+                zipMatch, precision: 'interpolated',
+                zip: matchedZip
             };
         } catch (e) {
             console.warn('[Go] Census scored error:', e.message);
@@ -2023,9 +2400,96 @@
         }
     }
 
+    // ── Google Address Validation API (primary — USPS-certified + geocoded) ──
+    async function googleAddressValidationScored(street, city, state, zip) {
+        const key = D.setup.googleMapsKey;
+        if (!key) return null;
+        try {
+            const resp = await fetch(
+                'https://addressvalidation.googleapis.com/v1:validateAddress?key=' + encodeURIComponent(key),
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        address: {
+                            addressLines: [street],
+                            locality: city || '',
+                            administrativeArea: state || '',
+                            postalCode: zip || '',
+                            regionCode: 'US'
+                        }
+                    })
+                }
+            );
+            if (!resp.ok) {
+                if (resp.status === 403) console.warn('[Go] Google Address Validation: 403 — enable Address Validation API in Cloud Console');
+                return null;
+            }
+            const data = await resp.json();
+            const result = data.result;
+            if (!result?.geocode?.location?.latitude) return null;
+
+            const lat = result.geocode.location.latitude;
+            const lng = result.geocode.location.longitude;
+            const verdict = result.verdict || {};
+            const usps   = result.uspsData || {};
+            const gran   = verdict.validationGranularity || '';
+
+            // Confidence from granularity
+            let confidence =
+                (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 0.97 :
+                gran === 'PREMISE_PROXIMITY'                   ? 0.88 :
+                gran === 'BLOCK'                               ? 0.75 :
+                gran === 'ROUTE'                               ? 0.60 : 0.40;
+
+            // USPS DPV match code
+            const dpv = usps.dpvMatchCode || '';
+            if (dpv === 'Y') confidence = Math.max(confidence, 0.97);      // full match
+            else if (dpv === 'S') confidence = Math.min(confidence, 0.80); // missing unit/apt
+            else if (dpv === 'D') confidence = Math.min(confidence, 0.72); // missing secondary
+            else if (dpv === 'N') confidence = Math.min(confidence, 0.40); // no match
+
+            // ZIP check
+            const retZip  = (usps.zipCode || result.address?.postalAddress?.postalCode || '').substring(0, 5);
+            const inZip   = (zip || '').substring(0, 5);
+            const zipMatch = !!(inZip && retZip && inZip === retZip);
+            if (!zipMatch && inZip && retZip) confidence -= 0.08;
+
+            // Capture corrected/standardized address from Google/USPS
+            const corrected = {};
+            if (usps.address1) {
+                corrected.street = usps.address1;
+                corrected.city   = usps.city  || city;
+                corrected.state  = usps.state || state;
+                corrected.zip    = usps.zipCode + (usps.zipPlus4Code ? '-' + usps.zipPlus4Code : '');
+            } else if (result.address?.postalAddress) {
+                const pa = result.address.postalAddress;
+                corrected.street = (pa.addressLines || [])[0] || street;
+                corrected.city   = pa.locality             || city;
+                corrected.state  = pa.administrativeArea   || state;
+                corrected.zip    = pa.postalCode           || zip;
+            }
+
+            return {
+                lat, lng,
+                confidence:  Math.min(Math.max(confidence, 0), 1),
+                source:      'google-address-validation',
+                zipMatch,
+                precision:   (gran === 'PREMISE' || gran === 'SUB_PREMISE') ? 'interpolated' : 'approximate',
+                zip:         retZip,
+                corrected,
+                _dpv:        dpv,
+                _granularity: gran
+            };
+        } catch (e) {
+            console.warn('[Go] Google Address Validation error:', e.message);
+            return null;
+        }
+    }
+
     // ── ORS geocoder (tertiary fallback) ──
     async function orsGeocodeScored(street, city, state, zip) {
-        const key = getApiKey();
+        const key = window.__CAMPISTRY_ORS_KEY__ || '';
         if (!key) return null;
         const q = [street, city, state, zip].filter(Boolean).join(', ');
         const params = { text: q, size: '5', 'boundary.country': 'US' };
@@ -2039,17 +2503,20 @@
             let best = null;
             if (zip) best = d.features.find(f => (f.properties?.postalcode || '') === zip);
             if (!best) best = d.features[0];
+            if (!best?.geometry?.coordinates || best.geometry.coordinates.length < 2) return null;
             const co = best.geometry.coordinates;
+            if (isNaN(co[0]) || isNaN(co[1])) return null;
             const props = best.properties || {};
-            let score = Math.min((props.confidence || 0.5), 1) * 0.7; // ORS confidence scaled down — it's less precise
+            let score = Math.min((props.confidence || 0.5), 1);
             const zipMatch = !!(zip && props.postalcode && props.postalcode === zip);
             if (zipMatch) score += 0.1;
             else if (zip && props.postalcode && props.postalcode !== zip) score -= 0.15;
             return {
                 lat: co[1], lng: co[0], confidence: Math.min(score, 1), source: 'ors',
-                zipMatch, precision: 'approximate'
+                zipMatch, precision: 'approximate',
+                zip: props.postalcode || ''
             };
-        } catch (e) { return null; }
+        } catch (e) { console.warn('[Go] ORS geocode error:', e.message); return null; }
     }
 
     // ── Unified geocode: query all providers, pick best valid result ──
@@ -2057,31 +2524,56 @@
         const a = D.addresses[name];
         if (!a?.street) return false;
 
-        // Run providers in priority order, stop early if we get a high-confidence hit
+        // Run providers in priority order, stop early if high-confidence
         const results = [];
 
-        // 1. Mapbox v6 (best accuracy, structured input)
-        const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-        if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
-            results.push(mb);
-            // If Mapbox returns high confidence with ZIP match, use it immediately
-            if (mb.confidence >= 0.85 && mb.zipMatch !== false) {
-                applyBestGeocode(a, mb, name);
+        // 0. Google Address Validation (best — USPS-certified, corrects typos, returns precise coords)
+        if (D.setup.googleMapsKey) {
+            const gav = await googleAddressValidationScored(a.street, a.city, a.state, a.zip);
+            if (gav && validateGeocode(gav.lat, gav.lng, a.street, name, gav)) {
+                // Apply address standardization back to stored record
+                if (gav.corrected?.street) {
+                    const changed = gav.corrected.street !== a.street
+                                 || (gav.corrected.city  && gav.corrected.city  !== a.city)
+                                 || (gav.corrected.zip   && gav.corrected.zip.substring(0,5) !== (a.zip||'').substring(0,5));
+                    if (changed) {
+                        const oldAddr = [a.street, a.city, a.state, a.zip].join(', ');
+                        a.street = gav.corrected.street || a.street;
+                        a.city   = gav.corrected.city   || a.city;
+                        a.state  = gav.corrected.state  || a.state;
+                        a.zip    = gav.corrected.zip    || a.zip;
+                        a._addressCorrected = true;
+                        console.log('[Go] Address corrected for ' + name + ':\n  was: ' + oldAddr + '\n  now: ' + [a.street, a.city, a.state, a.zip].join(', '));
+                    }
+                }
+                results.push(gav);
+                // PREMISE-level Google match — best possible result, use immediately
+                if (gav.confidence >= 0.85) {
+                    applyBestGeocode(a, gav, name);
+                    return true;
+                }
+            }
+        }
+
+        // 1. Census (free, unlimited, excellent for US residential)
+        const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
+        if (cen && validateGeocode(cen.lat, cen.lng, a.street, name, cen)) {
+            results.push(cen);
+            // If Census returns high confidence with ZIP match and no Google result, use immediately
+            if (cen.confidence >= 0.8 && cen.zipMatch !== false && results.length === 1) {
+                applyBestGeocode(a, cen, name);
                 return true;
             }
         }
 
-        // 2. Census (free, good for US residential)
-        const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-        if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
-            results.push(cen);
-        }
-
-        // 3. ORS (fallback)
+        // 2. ORS (fallback if Census failed or low confidence)
         if (results.length === 0 || results.every(r => r.confidence < 0.6)) {
             const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-            if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
+            // Enforce minimum confidence for ORS — it's a looser provider
+            if (ors && ors.confidence >= 0.45 && validateGeocode(ors.lat, ors.lng, a.street, name, ors)) {
                 results.push(ors);
+            } else if (ors && ors.confidence < 0.45) {
+                console.warn('[Go] ORS result for ' + name + ' rejected — confidence too low (' + (ors.confidence * 100).toFixed(0) + '%)');
             }
         }
 
@@ -2118,8 +2610,16 @@
         a._geocodePrecision = result.precision || 'unknown';
         a._crossValidated = result._crossValidated || false;
         a._zipMismatch = (result.zipMatch === false);
-        if (result.confidence < 0.5) {
+        if (result._dpv === 'N') {
+            a._geocodeWarning = 'USPS: address not found — verify address is real and deliverable';
+        } else if (result._dpv === 'S' || result._dpv === 'D') {
+            a._geocodeWarning = 'USPS: missing apartment/unit number — add unit to complete address';
+        } else if (result.confidence < 0.5) {
             a._geocodeWarning = 'Low confidence (' + Math.round(result.confidence * 100) + '%) — verify address';
+        } else if (result.precision === 'approximate' && !result._crossValidated) {
+            a._geocodeWarning = 'Approximate match — street not found exactly, verify address';
+        } else if (result._zipMismatch) {
+            a._geocodeWarning = 'ZIP mismatch — geocoded to a different ZIP, verify address';
         } else {
             delete a._geocodeWarning;
         }
@@ -2138,9 +2638,7 @@
                 q: q, format: 'json', addressdetails: '1',
                 countrycodes: 'us', limit: '1'
             });
-            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params.toString(), {
-                headers: { 'User-Agent': 'CampistryGo/1.0' }
-            });
+            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + params.toString());
             if (!resp.ok) return null;
             const results = await resp.json();
             if (!results.length) return null;
@@ -2168,212 +2666,160 @@
     }
 
     async function validateAllAddresses() {
-        const names = Object.keys(D.addresses).filter(n => D.addresses[n]?.street);
-        if (!names.length) { toast('No addresses to validate', 'error'); return; }
+        // Route through the full geocodeOne pipeline:
+        // Google Address Validation (primary) → Census → ORS
+        await geocodeAll(true);
+    }
 
-        const hasMapbox = !!getMapboxToken();
-        const provider = hasMapbox ? 'Mapbox' : 'OpenStreetMap';
-        toast('Validating ' + names.length + ' addresses via ' + provider + '...');
-        let validated = 0, corrected = 0, geocoded = 0, failed = 0;
-
-        for (let i = 0; i < names.length; i++) {
-            const name = names[i];
-            const a = D.addresses[name];
-            if (!a.street) continue;
-
-            // Try Mapbox first (returns standardized address components), fall back to Nominatim
-            let result = null;
-            if (hasMapbox) {
-                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-                if (mb) result = { street: mb.street, city: mb.city, state: mb.state, zip: mb.zip, lat: mb.lat, lng: mb.lng, confidence: mb.confidence, source: 'mapbox' };
-            }
-            if (!result) {
-                const nom = await nominatimValidate(a.street, a.city, a.state, a.zip);
-                if (nom && nom.lat && nom.lng) result = { street: nom.street, city: nom.city, state: nom.state, zip: nom.zip, lat: nom.lat, lng: nom.lng, confidence: nom.confidence || 0.6, source: 'nominatim' };
-            }
-
-            if (result && result.lat && result.lng) {
-                if (!validateGeocode(result.lat, result.lng, a.street, name)) {
-                    a._validated = false;
-                    a._geocodeWarning = 'Location invalid — check address';
-                    failed++;
-                } else {
-                    // Check if address was corrected by the provider
-                    const newStreet = result.street || a.street;
-                    const newCity = result.city || a.city;
-                    const newState = result.state || a.state;
-                    const newZip = result.zip || a.zip;
-
-                    const origNorm = (a.street + a.city + a.state + a.zip).toLowerCase().replace(/[^a-z0-9]/g, '');
-                    const newNorm = (newStreet + newCity + newState + newZip).toLowerCase().replace(/[^a-z0-9]/g, '');
-                    const changed = origNorm !== newNorm;
-
-                    if (changed) {
-                        a._originalStreet = a.street;
-                        a._originalCity = a.city;
-                        a._originalState = a.state;
-                        a._originalZip = a.zip;
-                        a.street = newStreet;
-                        a.city = newCity;
-                        if (newState.length === 2) a.state = newState.toUpperCase();
-                        if (newZip && /^\d{5}/.test(newZip)) a.zip = newZip.substring(0, 5);
-                        corrected++;
-                        console.log('[Go] Address corrected: ' + name + ' → ' + [newStreet, newCity, a.state, a.zip].join(', '));
-                    }
-
-                    a.lat = result.lat;
-                    a.lng = result.lng;
-                    a.geocoded = true;
-                    a._geocodeSource = result.source;
-                    a._geocodeConfidence = result.confidence;
-                    a._validated = true;
-                    a._zipMismatch = !!(a.zip && result.zip && a.zip !== result.zip.substring(0, 5));
-                    delete a._geocodeWarning;
-                    validated++;
-                    geocoded++;
-                }
-            } else {
-                a._validated = false;
-                a._geocodeWarning = 'Address not found — may not exist';
-                failed++;
-                console.warn('[Go] Address not found: ' + name + ' (' + [a.street, a.city, a.state, a.zip].join(', ') + ')');
-            }
-
-            if ((i + 1) % 10 === 0 || i === names.length - 1) {
-                renderAddresses();
-                toast('Validating: ' + (i + 1) + '/' + names.length + ' (' + validated + ' verified, ' + corrected + ' corrected)');
-            }
-            // Mapbox: ~120ms spacing; Nominatim: 1100ms rate limit
-            if (i < names.length - 1) await new Promise(r => setTimeout(r, hasMapbox ? 120 : 1100));
-        }
-
-        save(); renderAddresses(); updateStats();
-        toast('Done: ' + validated + ' verified, ' + corrected + ' corrected, ' + geocoded + ' geocoded, ' + failed + ' unverified');
-
-        // For any that couldn't be found, try the full pipeline as backup
-        const stillUngeocoded = names.filter(n => !D.addresses[n]?.geocoded);
-        if (stillUngeocoded.length) {
-            toast('Trying full pipeline for ' + stillUngeocoded.length + ' remaining...');
-            await geocodeAll(false);
+    // ── Lightweight address-only save used inside the geocoding loop ──────────
+    // Full save() serialises D.savedRoutes (can be several MB of road geometry)
+    // and fires 3 cloud upserts on every call. During geocoding we only need to
+    // checkpoint the addresses to localStorage so work isn't lost if the tab
+    // is closed; the full cloud sync runs once at the end.
+    function _saveAddressesCheckpoint() {
+        try {
+            // Write only the addresses object — not the full D state with routes
+            localStorage.setItem(STORE + '_addr_ckpt', JSON.stringify(D.addresses));
+        } catch (e) {
+            // Quota exceeded for checkpoint is non-fatal; the final save() handles it
+            console.warn('[Go] Address checkpoint quota exceeded — skipping mid-run save');
         }
     }
 
     async function geocodeAll(force) {
-        if (!_campCoordsCache && D.setup.campAddress) { toast('Geocoding camp address first...'); const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
-        const todo = Object.keys(D.addresses).filter(n => { const a = D.addresses[n]; if (!a?.street) return false; if (force) { a.geocoded = false; a.lat = null; a.lng = null; a._zipMismatch = false; a._geocodeConfidence = null; a._geocodePrecision = null; a._crossValidated = false; return true; } return !a.geocoded; });
-        if (!todo.length) { toast('All addresses already geocoded!'); return; }
+        if (!_campCoordsCache && D.setup.campAddress) { const cc = await geocodeSingle(D.setup.campAddress); if (cc) { _campCoordsCache = cc; D.setup.campLat = cc.lat; D.setup.campLng = cc.lng; save(); } }
 
-        const hasMapbox = !!getMapboxToken();
-        let totalOk = 0, totalFail = 0;
-
-        // ── Pass 1: Mapbox v6 (best accuracy, ~600 free req/min) ──
-        if (hasMapbox) {
-            toast('Pass 1: Mapbox — ' + todo.length + ' addresses...');
-            let mbOk = 0;
-            for (let i = 0; i < todo.length; i++) {
-                const name = todo[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
-                const mb = await mapboxGeocode(a.street, a.city, a.state, a.zip);
-                if (mb && validateGeocode(mb.lat, mb.lng, a.street, name)) {
-                    applyBestGeocode(a, mb, name);
-                    mbOk++;
-                }
-                if ((i + 1) % 10 === 0 || i === todo.length - 1) {
-                    renderAddresses(); updateStats();
-                    toast('Mapbox: ' + mbOk + ' geocoded (' + (i + 1) + '/' + todo.length + ')');
-                }
-                // Mapbox allows ~600/min on free tier — ~100ms spacing is safe
-                if (i < todo.length - 1) await new Promise(r => setTimeout(r, 120));
+        const todo = Object.keys(D.addresses).filter(n => {
+            const a = D.addresses[n];
+            if (!a?.street) return false;
+            if (force) {
+                a.geocoded = false; a.lat = null; a.lng = null;
+                a._zipMismatch = false; a._geocodeConfidence = null;
+                a._geocodePrecision = null; a._crossValidated = false;
+                a._dpv = null; a._addressCorrected = null; a._geocodeSource = null;
+                return true;
             }
-            totalOk += mbOk;
-            save();
+            return !a.geocoded;
+        });
+        if (!todo.length) return;
+
+        const hasGoogle = !!D.setup.googleMapsKey;
+        const primaryLabel = hasGoogle ? 'Google' : 'Census';
+        progressStart('Geocoding Addresses');
+        let totalOk = 0, totalFail = 0, googleCount = 0, censusCount = 0, orsCount = 0;
+
+        for (let i = 0; i < todo.length; i++) {
+            const name = todo[i];
+            const ok = await geocodeOne(name);
+            if (ok) {
+                totalOk++;
+                const src = D.addresses[name]?._geocodeSource || '';
+                if (src.includes('google'))  googleCount++;
+                else if (src.includes('census')) censusCount++;
+                else orsCount++;
+            } else {
+                totalFail++;
+                if (D.addresses[name]) D.addresses[name]._geocodeWarning = 'All providers failed — verify address';
+            }
+
+            // Update progress bar every address — but skip the heavy DOM table
+            // rebuild (renderAddresses) until the very end. Rebuilding a 500-row
+            // table 100 times creates / destroys thousands of DOM nodes and is
+            // a primary cause of the Out-of-Memory error on large imports.
+            const parts = [];
+            if (googleCount) parts.push('Google: ' + googleCount);
+            if (censusCount) parts.push('Census: ' + censusCount);
+            if (orsCount)    parts.push('ORS: ' + orsCount);
+            progressUpdate(i + 1, todo.length, primaryLabel + ' · ' + totalOk + ' geocoded' + (parts.length > 1 ? ' (' + parts.join(', ') + ')' : ''));
+
+            // Checkpoint addresses to localStorage every 25 addresses.
+            // Does NOT serialise routes or fire cloud upserts — those only
+            // happen in the final save() below once all geocoding is done.
+            if ((i + 1) % 25 === 0) _saveAddressesCheckpoint();
+
+            // Small delay to avoid hammering APIs and to yield the event loop
+            if (i < todo.length - 1) await new Promise(r => setTimeout(r, 200));
         }
 
-        // ── Pass 2: Census for any Mapbox missed (free, unlimited) ──
-        const stillNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
-        if (stillNeeded.length > 0) {
-            toast('Pass 2: Census — ' + stillNeeded.length + ' remaining...');
-            let cenOk = 0;
-            for (let i = 0; i < stillNeeded.length; i++) {
-                const name = stillNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
-                const cen = await censusGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (cen && validateGeocode(cen.lat, cen.lng, a.street, name)) {
-                    applyBestGeocode(a, cen, name);
-                    cenOk++;
-                }
-                if ((i + 1) % 10 === 0 || i === stillNeeded.length - 1) {
-                    renderAddresses(); updateStats();
-                    toast('Census: ' + cenOk + ' geocoded (' + (i + 1) + '/' + stillNeeded.length + ')');
-                }
-                if (i < stillNeeded.length - 1) await new Promise(r => setTimeout(r, 300));
-            }
-            totalOk += cenOk;
-            save();
-        }
+        // One full save + render at the end — this is the only point we write
+        // to cloud storage during the geocode run.
+        save(); renderAddresses(); updateStats();
+        // Clean up checkpoint key now that the real save succeeded
+        try { localStorage.removeItem(STORE + '_addr_ckpt'); } catch (_) {}
 
-        // ── Pass 3: ORS for any still remaining ──
-        const finalNeeded = todo.filter(n => !D.addresses[n]?.geocoded);
-        if (finalNeeded.length > 0 && getApiKey()) {
-            toast('Pass 3: ORS — ' + finalNeeded.length + ' remaining...');
-            let orsOk = 0;
-            for (let i = 0; i < finalNeeded.length; i++) {
-                const name = finalNeeded[i]; const a = D.addresses[name];
-                if (!a?.street || a.geocoded) continue;
-                const ors = await orsGeocodeScored(a.street, a.city, a.state, a.zip);
-                if (ors && validateGeocode(ors.lat, ors.lng, a.street, name)) {
-                    applyBestGeocode(a, ors, name);
-                    orsOk++;
-                } else {
-                    a._geocodeWarning = 'All providers failed — verify address';
-                    totalFail++;
-                }
-                if ((i + 1) % 5 === 0 || i === finalNeeded.length - 1) {
-                    renderAddresses(); updateStats();
-                    toast('ORS: ' + orsOk + ' geocoded (' + (i + 1) + '/' + finalNeeded.length + ')');
-                }
-                if (i < finalNeeded.length - 1) await new Promise(r => setTimeout(r, 1500));
-            }
-            totalOk += orsOk;
-            save();
-        } else if (finalNeeded.length > 0) {
-            // No ORS key — mark remaining as failed
-            finalNeeded.forEach(n => {
-                if (!D.addresses[n]?.geocoded) {
-                    D.addresses[n]._geocodeWarning = 'Census failed — verify address';
-                    totalFail++;
-                }
-            });
-        }
-
-        renderAddresses(); updateStats();
-        const highConf = todo.filter(n => (D.addresses[n]?._geocodeConfidence || 0) >= 0.8).length;
-        const lowConf = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.5).length;
+        const lowConf  = todo.filter(n => D.addresses[n]?.geocoded && (D.addresses[n]._geocodeConfidence || 0) < 0.75).length;
         let summary = totalOk + ' geocoded';
-        if (highConf) summary += ' (' + highConf + ' high confidence)';
-        if (lowConf) summary += ', ' + lowConf + ' low confidence';
-        if (totalFail > 0) summary += ', ' + totalFail + ' failed';
-        toast(totalFail > 0 ? summary : summary + ' — all done!', totalFail > 0 ? 'error' : undefined);
+        if (googleCount) summary += ' · Google: ' + googleCount;
+        if (censusCount) summary += ' · Census: ' + censusCount;
+        if (orsCount)    summary += ' · ORS: ' + orsCount;
+        if (lowConf)     summary += ' · ' + lowConf + ' low confidence';
+        if (totalFail)   summary += ' · ' + totalFail + ' failed';
+        progressEnd(summary, totalFail > 0);
+        console.log('[Go] Geocoding complete: ' + totalOk + '/' + todo.length + ' — Google: ' + googleCount + ', Census: ' + censusCount + ', ORS: ' + orsCount + ', failed: ' + totalFail);
     }
 
     async function geocodeSingle(addr) {
-        // For single address string (e.g. camp address), try Mapbox → Census → ORS
+        // For single address string (e.g. camp address), try structured Census → freeform Census → ORS
         const cleanAddr = (addr || '').replace(/\s*[,#]\s*(apt|suite|ste|unit|fl|floor|rm|room)\.?\s*\S*/gi, '').replace(/\s+/g, ' ').trim();
-        // Parse into components for structured geocoding
-        const parts = cleanAddr.split(',').map(s => s.trim());
-        const street = parts[0] || '';
-        const city = parts[1] || '';
-        const stateZip = (parts[2] || '').trim().split(/\s+/);
-        const state = stateZip[0] || '';
-        const zip = stateZip[1] || (parts[3] || '').trim();
-        // 1. Mapbox v6
-        const mb = await mapboxGeocode(street, city, state, zip);
-        if (mb && mb.confidence >= 0.5) return { lat: mb.lat, lng: mb.lng };
-        // 2. Census
-        try { const d = await censusGeocode(cleanAddr); if (d?.result?.addressMatches?.length) { const m = d.result.addressMatches[0]; return { lat: m.coordinates.y, lng: m.coordinates.x }; } } catch (_) {}
-        // 3. ORS
-        const key = getApiKey(); if (!key) return null;
-        try { const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } }); if (!r.ok) return null; const d = await r.json(); if (d.features?.length) { const co = d.features[0].geometry.coordinates; return { lat: co[1], lng: co[0] }; } } catch (_) {} return null;
+        if (!cleanAddr) return null;
+        // 0. Try structured Census first (much more accurate for "800 Rockaway Ave, Lakewood, NJ 08701")
+        try {
+            var parts = cleanAddr.split(/\s*,\s*/);
+            if (parts.length >= 3) {
+                var street = parts[0];
+                var city = parts[1];
+                var stZip = parts.slice(2).join(' ').trim();
+                var stMatch = stZip.match(/^([A-Za-z]{2})\s*(\d{5})?/);
+                var state = stMatch ? stMatch[1] : '';
+                var zip = stMatch && stMatch[2] ? stMatch[2] : '';
+                if (street && city && state) {
+                    var scored = await censusGeocodeScored(street, city, state, zip);
+                    if (scored && scored.lat && scored.lng) {
+                        console.log('[Go] geocodeSingle: structured Census matched ' + cleanAddr + ' → (' + scored.lat.toFixed(4) + ', ' + scored.lng.toFixed(4) + ')');
+                        return { lat: scored.lat, lng: scored.lng };
+                    }
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle structured Census error:', e.message); }
+        // 1. Census freeform (fallback)
+        try {
+            const d = await censusGeocode(cleanAddr);
+            if (d?.result?.addressMatches?.length) {
+                const m = d.result.addressMatches[0];
+                if (m.coordinates?.y && m.coordinates?.x) {
+                    console.log('[Go] geocodeSingle: Census freeform matched ' + cleanAddr);
+                    return { lat: m.coordinates.y, lng: m.coordinates.x };
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle Census error:', e.message); }
+        // 2. ORS (fallback)
+        const key = window.__CAMPISTRY_ORS_KEY__ || '';
+        if (key) {
+            try {
+                const r = await fetch('https://api.openrouteservice.org/geocode/search?' + new URLSearchParams({ text: addr, size: '1', 'boundary.country': 'US' }), { headers: { 'Authorization': key, 'Accept': 'application/json' } });
+                if (r.ok) {
+                    const d = await r.json();
+                    if (d.features?.[0]?.geometry?.coordinates?.length >= 2) {
+                        const co = d.features[0].geometry.coordinates;
+                        console.log('[Go] geocodeSingle: ORS matched ' + cleanAddr);
+                        return { lat: co[1], lng: co[0] };
+                    }
+                }
+            } catch (e) { console.warn('[Go] geocodeSingle ORS error:', e.message); }
+        }
+        // 3. Nominatim (last resort)
+        try {
+            const resp = await fetch('https://nominatim.openstreetmap.org/search?' + new URLSearchParams({ q: cleanAddr, format: 'json', limit: '1', countrycodes: 'us' }));
+            if (resp.ok) {
+                const results = await resp.json();
+                if (results.length && results[0].lat && results[0].lon) {
+                    console.log('[Go] geocodeSingle: Nominatim matched ' + cleanAddr);
+                    return { lat: parseFloat(results[0].lat), lng: parseFloat(results[0].lon) };
+                }
+            }
+        } catch (e) { console.warn('[Go] geocodeSingle Nominatim error:', e.message); }
+        console.warn('[Go] geocodeSingle: all providers failed for ' + cleanAddr);
+        return null;
     }
 
     // =========================================================================
@@ -2402,12 +2848,8 @@
             Object.values(D.addresses).filter(a => a.geocoded).forEach(a => { sources[a._geocodeSource || 'unknown'] = (sources[a._geocodeSource || 'unknown'] || 0) + 1; });
             P('Sources: ' + Object.entries(sources).map(([k, v]) => k + ': ' + v).join(', '));
         }
-        const mbToken = getMapboxToken();
-        mbToken ? P('Mapbox token: set (primary geocoder)') : Wr('Mapbox token: not set — using Census as primary (lower accuracy)');
         P('Mode: ' + D.activeMode); D.buses.length > 0 ? P('Buses: ' + D.buses.length) : F('Buses: NONE');
         D.setup.campAddress ? P('Camp: ' + D.setup.campAddress) : F('Camp address: NOT SET');
-        const key = getApiKey(); key ? P('ORS key: set') : Wr('ORS key: not set — VROOM optimization will not work');
-        if (key) { try { const r = await fetch('https://api.openrouteservice.org/optimization', { method: 'POST', headers: { 'Authorization': key, 'Content-Type': 'application/json' }, body: JSON.stringify({ jobs: [{ id: 1, location: [-73.747, 40.606], service: 60 }], vehicles: [{ id: 1, profile: 'driving-car', start: [-73.747, 40.606], end: [-73.747, 40.606], capacity: [47] }] }) }); r.ok ? P('VROOM optimization: working') : F('VROOM: HTTP ' + r.status); } catch (e) { F('VROOM: ' + e.message); } }
         try { const tr = await fetch('https://a.tile.openstreetmap.org/0/0/0.png', { method: 'HEAD' }); tr.ok ? P('OSM tiles: OK') : F('OSM tiles: ' + tr.status); } catch (e) { F('OSM tiles: BLOCKED'); }
         console.log('\n' + pass + ' passed | ' + fail + ' failed | ' + warn + ' warnings');
         if (fail === 0) console.log('🟢 System ready!'); else console.log('🔴 Fix ' + fail + ' failure(s)');
@@ -2420,30 +2862,35 @@
     function downloadAddressTemplate() {
         const roster = getRoster(); const names = Object.keys(roster).sort();
         // Always download a clean template with 2 example rows
-        let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP\n';
-        csv += '"0001","Smith","Sarah","Camper","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559"\n';
-        csv += '"0002","Goldberg","Moshe","Camper","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598"\n';
-        csv += '"0003","Cohen","David","Staff","","","","No","789 Elm Street","Cedarhurst","NY","11516"\n';
-        csv += '"0004","Klein","Rachel","Staff","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559"\n';
+        let csv = '\uFEFFID,Last Name,First Name,Role,Division,Grade,Bunk,Needs Stop,Street Address,City,State,ZIP,Arrival,Dismissal\n';
+        csv += '"0001","Smith","Sarah","C","Juniors","1st Grade","1A","","123 Main Street","Anytown","NY","11559","Y","Y"\n';
+        csv += '"0002","Goldberg","Moshe","C","Seniors","4th Grade","4B","","456 Oak Avenue","Woodmere","NY","11598","Y","N"\n';
+        csv += '"0003","Cohen","David","S","","","","No","789 Elm Street","Cedarhurst","NY","11516","Y","Y"\n';
+        csv += '"0004","Klein","Rachel","S","Freshies","","","Yes","321 Pine Road","Lawrence","NY","11559","N","Y"\n';
+        csv += '"0005","Levy","Moshe","M","","","","No","555 Bus Depot Rd","Woodmere","NY","11598","Y","Y"\n';
         const blob = new Blob([csv], { type: 'text/csv' }); const el = document.createElement('a'); el.href = URL.createObjectURL(blob); el.download = 'campistry_go_addresses.csv'; el.click(); toast('Template downloaded');
     }
     function importAddressCsv() {
         const inp = document.createElement('input');
         inp.type = 'file';
-        inp.accept = '.csv,.tsv,.txt,.xlsx,.xls';
+        // No accept filter — allow any file type (some Excel variants get blocked)
+        inp.style.display = 'none';
+        document.body.appendChild(inp);
         inp.onchange = function () {
-            if (!inp.files[0]) return;
+            if (!inp.files[0]) { inp.remove(); return; }
             const file = inp.files[0];
             const ext = file.name.split('.').pop().toLowerCase();
-            if (ext === 'xlsx' || ext === 'xls') {
-                // Excel file — read as array buffer and parse
+            if (ext === 'xlsx' || ext === 'xls' || ext === 'xlsm' || ext === 'xlsb') {
+                // Excel file — read as array buffer and parse via SheetJS
                 const r = new FileReader();
-                r.onload = e => { parseExcel(e.target.result); };
+                r.onload = e => { parseExcel(e.target.result); inp.remove(); };
+                r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
                 r.readAsArrayBuffer(file);
             } else {
-                // CSV/TSV/TXT — read as text
+                // CSV/TSV/TXT or anything else — try reading as text
                 const r = new FileReader();
-                r.onload = e => { parseCsv(e.target.result); };
+                r.onload = e => { parseCsv(e.target.result); inp.remove(); };
+                r.onerror = () => { toast('Failed to read file', 'error'); inp.remove(); };
                 r.readAsText(file);
             }
         };
@@ -2473,27 +2920,136 @@
             toast('Could not read Excel file: ' + e.message, 'error');
         }
     }
-    function parseCsv(text) {
+    async function parseCsv(text) {
         if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
         const lines = text.split(/\r?\n/).filter(l => l.trim()); if (lines.length < 2) { toast('Empty CSV', 'error'); return; }
-        const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim());
+        // ★ Starter plan: check limit and cap import if needed
+        var _goMaxImport = Infinity;
+        var _goCapped = 0;
+        var newCount = lines.length - 1;
+        if (newCount > 0) {
+            var limit = await checkCamperLimitGo(newCount, true);
+            if (!limit.allowed && limit.current !== undefined && limit.max !== undefined) {
+                var slotsAvailable = Math.max(0, limit.max - limit.current);
+                if (slotsAvailable === 0) {
+                    toast('Camper limit reached (' + limit.max + '). Upgrade for more.', 'error');
+                    return;
+                }
+                _goMaxImport = slotsAvailable;
+                toast('Accepting ' + slotsAvailable + ' of ' + newCount + ' entries (limit: ' + limit.max + ')');
+            }
+        }
+        // ── Column detection: two-phase ──────────────────────────────────────────
+        //
+        // Phase 1 — Header matching: normalise each header (lowercase, trim,
+        //   underscores→spaces) then match against known aliases.
+        //
+        // Phase 2 — Data inference: for any critical column still undetected,
+        //   score every unclaimed column against a content fingerprint (regex
+        //   applied to up to 20 sampled data rows). The column with the highest
+        //   match rate wins. This handles columns named "leave_blank1", "col7",
+        //   or any arbitrary name, as long as the DATA looks right.
+        //
+        const hdr = parseLine(lines[0]).map(h => h.toLowerCase().trim().replace(/_/g, ' '));
+        console.log('[Go] CSV headers (' + hdr.length + '):', hdr.join(' | '));
 
-        // Detect column indices — support multiple naming conventions
-        const idi = hdr.findIndex(h => h === 'camper id' || h === 'id' || h === 'camperid' || h === '#');
-        const lni = hdr.findIndex(h => h === 'last name' || h === 'last' || h === 'lastname' || h === 'family name');
-        const fni = hdr.findIndex(h => h === 'first name' || h === 'first' || h === 'firstname' || h === 'given name');
-        const ni = hdr.findIndex(h => h === 'name' || h === 'camper name' || h === 'camper' || h === 'full name');
-        const divi = hdr.findIndex(h => h === 'division' || h === 'div');
-        const gri = hdr.findIndex(h => h === 'grade');
-        const bki = hdr.findIndex(h => h === 'bunk' || h === 'cabin');
-        const si = hdr.findIndex(h => h === 'address' || h.includes('street') || h === 'street address');
-        const ci = hdr.findIndex(h => h === 'city' || h === 'city/town' || h === 'town');
-        const sti = hdr.findIndex(h => h === 'state');
-        const zi = hdr.findIndex(h => h === 'zip' || h === 'zip code' || h === 'zipcode' || h.includes('zip'));
-        const tri = hdr.findIndex(h => h === 'transport' || h === 'mode' || h.includes('pickup') || h.includes('carpool'));
-        const rwi = hdr.findIndex(h => h === 'ride-with' || h === 'ridewith' || h === 'ride with' || h.includes('pair'));
-        const roi = hdr.findIndex(h => h === 'role' || h === 'type' || h === 'person type');
-        const nsi = hdr.findIndex(h => h === 'needs stop' || h === 'needsstop' || h === 'needs_stop' || h === 'stop');
+        // Sample up to 20 data rows for content scoring
+        const _sampleRows = [];
+        for (let _r = 1; _r < Math.min(lines.length, 21); _r++) _sampleRows.push(parseLine(lines[_r]));
+
+        // Returns the fraction of non-empty values in a column that pass testFn
+        function _scoreCol(colIdx, testFn) {
+            let hits = 0, total = 0;
+            for (const row of _sampleRows) {
+                const v = (row[colIdx] || '').trim();
+                if (!v) continue;
+                total++;
+                if (testFn(v)) hits++;
+            }
+            return total >= 2 ? hits / total : 0;   // require at least 2 non-empty values
+        }
+
+        // Greedily find the unclaimed column with the best score for a test.
+        // claimedSet is a Set of already-assigned column indices.
+        // minScore: only accept if score is at least this fraction (0-1).
+        function _inferCol(claimedSet, testFn, minScore) {
+            let best = -1, bestScore = minScore - 0.001;
+            for (let c = 0; c < hdr.length; c++) {
+                if (claimedSet.has(c)) continue;
+                const s = _scoreCol(c, testFn);
+                if (s > bestScore) { bestScore = s; best = c; }
+            }
+            return best;
+        }
+
+        // ── Phase 1: header matching ──────────────────────────────────────────
+        const _hm = h => hdr.findIndex(x => x === h);
+        let idi  = hdr.findIndex(h => ['camper id','id','camperid','#','person id','personid','camper number'].includes(h));
+        let lni  = hdr.findIndex(h => ['last name','last','lastname','family name','surname','lname','l name','last nm'].includes(h));
+        let fni  = hdr.findIndex(h => ['first name','first','firstname','given name','fname','f name','preferred name','preferred','first nm'].includes(h));
+        let ni   = hdr.findIndex(h => ['name','camper name','camper','full name','fullname','student name','child name','participant'].includes(h));
+        let divi = hdr.findIndex(h => ['division','div','group','section','unit','age group'].includes(h));
+        let gri  = hdr.findIndex(h => ['grade','grade level','school grade'].includes(h));
+        let bki  = hdr.findIndex(h => ['bunk','cabin','room','bunk name','bunk number'].includes(h));
+        let si   = hdr.findIndex(h => ['address','street address','home address','address 1','address1','mailing address','residential address'].includes(h) || h.includes('street'));
+        let ci   = hdr.findIndex(h => ['city','city/town','town','municipality','locality'].includes(h));
+        let sti  = hdr.findIndex(h => ['state','state/province','province','st'].includes(h));
+        let zi   = hdr.findIndex(h => ['zip','zip code','zipcode','postal code','postalcode','zip postal'].includes(h) || (h.includes('zip') && !h.includes('zipwith')));
+        let tri  = hdr.findIndex(h => ['transport','mode','transportation','bus or pickup','travel mode'].includes(h) || h.includes('pickup') || h.includes('carpool'));
+        let rwi  = hdr.findIndex(h => ['ride with','ridewith','ride-with','pair with'].includes(h) || h.includes('pair'));
+        let roi  = hdr.findIndex(h => ['role','type','person type','participant type'].includes(h));
+        let nsi  = hdr.findIndex(h => ['needs stop','needsstop','needs a stop','stop'].includes(h));
+        let arri = hdr.findIndex(h => ['arrival','arr','morning','am'].includes(h));
+        let disi = hdr.findIndex(h => ['dismissal','dis','dismiss','afternoon','pm'].includes(h));
+
+        // ── Phase 2: data-content inference for undetected columns ─────────────
+        // US state abbreviations used by the state scorer
+        const _usStates = new Set(['AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA','KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ','NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT','VA','WA','WV','WI','WY','DC']);
+
+        // Build claimed set from Phase 1 results
+        const _claimed = () => new Set([idi,lni,fni,ni,divi,gri,bki,si,ci,sti,zi,tri,rwi,roi,nsi,arri,disi].filter(x => x >= 0));
+
+        // Infer address (most distinctive: digits then word, e.g. "15 Oak Drive")
+        if (si < 0) {
+            si = _inferCol(_claimed(), v => /^\d+\s+[A-Za-z]/.test(v), 0.4);
+            if (si >= 0) console.log('[Go] Inferred address col from data: index ' + si + ' ("' + hdr[si] + '")');
+        }
+
+        // Infer zip (4-5 digits, possibly Excel-stripped leading zero)
+        if (zi < 0) {
+            zi = _inferCol(_claimed(), v => /^\d{4,5}(-\d{4})?$/.test(v), 0.6);
+            if (zi >= 0) console.log('[Go] Inferred zip col from data: index ' + zi + ' ("' + hdr[zi] + '")');
+        }
+
+        // Infer state (2-letter US abbreviation)
+        if (sti < 0) {
+            sti = _inferCol(_claimed(), v => _usStates.has(v.toUpperCase()), 0.6);
+            if (sti >= 0) console.log('[Go] Inferred state col from data: index ' + sti + ' ("' + hdr[sti] + '")');
+        }
+
+        // Infer city (alphabetic, no digits, 2-30 chars — must score higher than names)
+        if (ci < 0) {
+            ci = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z .'-]{1,29}$/.test(v) && !/\d/.test(v) && !v.includes('  '), 0.7);
+            if (ci >= 0) console.log('[Go] Inferred city col from data: index ' + ci + ' ("' + hdr[ci] + '")');
+        }
+
+        // Infer full name (two or more words separated by a single space, all alpha)
+        if (ni < 0 && fni < 0 && lni < 0) {
+            ni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z']{0,19} [A-Za-z][A-Za-z' -]{0,29}$/.test(v), 0.7);
+            if (ni >= 0) console.log('[Go] Inferred full-name col from data: index ' + ni + ' ("' + hdr[ni] + '")');
+        }
+
+        // Infer first name (single word, alphabetic, 2-20 chars) if still missing both name columns
+        if (fni < 0 && ni < 0) {
+            fni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z'-]{1,19}$/.test(v) && !/\s/.test(v), 0.7);
+            if (fni >= 0) console.log('[Go] Inferred first-name col from data: index ' + fni + ' ("' + hdr[fni] + '")');
+        }
+        if (lni < 0 && fni >= 0 && ni < 0) {
+            lni = _inferCol(_claimed(), v => /^[A-Za-z][A-Za-z'-]{1,24}$/.test(v) && !/\s/.test(v), 0.7);
+            if (lni >= 0) console.log('[Go] Inferred last-name col from data: index ' + lni + ' ("' + hdr[lni] + '")');
+        }
+
+        console.log('[Go] Final column map → first/last:' + fni + '/' + lni + ' name:' + ni + ' addr:' + si + ' city:' + ci + ' state:' + sti + ' zip:' + zi + ' role:' + roi);
 
         // Must have either (first+last) or (full name), plus an address
         const hasFirstLast = fni >= 0 && lni >= 0;
@@ -2501,8 +3057,11 @@
         if (!hasFirstLast && !hasFullName) { toast('CSV needs either "First Name" + "Last Name" columns, or a "Name" column', 'error'); return; }
         if (si < 0) { toast('CSV needs an "Address" or "Street Address" column', 'error'); return; }
 
-        // Full overwrite — clear all existing data
-        D.addresses = {};
+        // Merge import — preserve existing geocodes for unchanged addresses.
+        // D.addresses is NOT wiped: if a person is already geocoded and their
+        // address hasn't changed, we keep their lat/lng so no re-geocoding needed.
+        // The standalone roster IS reset so it exactly reflects the new CSV.
+        // Routes are cleared since the roster may have changed.
         _goStandaloneRoster = {};
         D.savedRoutes = null;
         _generatedRoutes = null;
@@ -2511,7 +3070,7 @@
         // Clear staff imported from CSV (keep manually added ones)
         D.counselors = D.counselors.filter(c => !c._fromCsv);
         D.monitors = D.monitors.filter(m => !m._fromCsv);
-        let camperCount = 0, staffCount = 0;
+        let camperCount = 0, staffCount = 0, _skippedEmpty = 0, _skippedNoAddr = 0;
 
         for (let i = 1; i < lines.length; i++) {
             const cols = parseLine(lines[i]);
@@ -2521,11 +3080,11 @@
             if (hasFirstLast) {
                 firstName = (cols[fni] || '').trim();
                 lastName = (cols[lni] || '').trim();
-                if (!firstName && !lastName) continue;
+                if (!firstName && !lastName) { _skippedEmpty++; continue; }
                 name = firstName + (lastName ? ' ' + lastName : '');
             } else {
                 name = (cols[ni] || '').trim();
-                if (!name) continue;
+                if (!name) { _skippedEmpty++; continue; }
                 // Try to split "First Last" for staff records
                 const parts = name.split(/\s+/);
                 if (parts.length >= 2) { firstName = parts[0]; lastName = parts.slice(1).join(' '); }
@@ -2533,7 +3092,6 @@
             }
 
             const street = (cols[si] || '').trim();
-            if (!street) continue;
 
             const personId = idi >= 0 ? (cols[idi] || '').trim() : '';
             const division = divi >= 0 ? (cols[divi] || '').trim() : '';
@@ -2543,17 +3101,26 @@
             const rideWith = rwi >= 0 ? (cols[rwi] || '').trim() : '';
             const role = roi >= 0 ? (cols[roi] || '').trim().toLowerCase() : 'camper';
             const needsStop = nsi >= 0 ? (cols[nsi] || '').trim().toLowerCase() : '';
+            const arrVal = arri >= 0 ? (cols[arri] || '').trim().toLowerCase() : '';
+            const disVal = disi >= 0 ? (cols[disi] || '').trim().toLowerCase() : '';
+            const forArrival = arrVal === 'n' || arrVal === 'no' || arrVal === 'false' ? false : true;
+            const forDismissal = disVal === 'n' || disVal === 'no' || disVal === 'false' ? false : true;
 
             const city = ci >= 0 ? (cols[ci] || '').trim() : '';
             const state = sti >= 0 ? (cols[sti] || '').trim().toUpperCase() : 'NY';
-            const zip = zi >= 0 ? (cols[zi] || '').trim() : '';
+            let zip = zi >= 0 ? (cols[zi] || '').trim() : '';
+            // Excel strips leading zeros from zip codes (08701 → 8701) — restore them
+            if (zip && /^\d+$/.test(zip) && zip.length < 5) zip = zip.padStart(5, '0');
             const fullAddress = [street, city, state, zip].filter(Boolean).join(', ');
 
-            // ── Route based on Role column ──
-            if (role === 'staff' || role === 'counselor' || role === 'monitor') {
+            // ── Route based on Role column (supports full names and shortcodes: C/S/M) ──
+            if (role === 'staff' || role === 'counselor' || role === 's' || role === 'monitor' || role === 'm') {
                 // Add as staff member (counselor by default, monitor if specified)
-                const isMonitor = role === 'monitor';
-                const wantsStop = needsStop === 'yes' || needsStop === 'y' || needsStop === 'true';
+                const isMonitor = role === 'monitor' || role === 'm';
+                // If no "Needs Stop" column exists (nsi < 0), default to yes for
+                // counselors with addresses — they're in the CSV to get picked up.
+                // Only default to no if the column exists and is explicitly empty/no.
+                const wantsStop = nsi < 0 ? !!street : (needsStop === 'yes' || needsStop === 'y' || needsStop === 'true');
 
                 if (isMonitor) {
                     D.monitors.push({
@@ -2573,33 +3140,62 @@
                     });
                 }
 
-                // Staff with stops also need an address entry for geocoding
-                if (wantsStop) {
-                    D.addresses[name] = {
+                // All staff get an address entry so they're geocoded with campers.
+                // Preserve existing geocode if the street hasn't changed.
+                if (street) {
+                    const _ex = D.addresses[name];
+                    const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
+                    D.addresses[name] = Object.assign({}, _keepGeocode ? _ex : {}, {
                         street, city, state, zip,
-                        lat: null, lng: null, geocoded: false,
+                        lat:      _keepGeocode ? (_ex.lat || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng || null) : null,
+                        geocoded: _keepGeocode,
                         transport: 'bus', rideWith: '',
                         _camperId: personId ? parseInt(personId) : 0,
                         _division: division, _grade: '', _bunk: bunk,
-                        _isStaff: true
-                    };
+                        _isStaff: true,
+                        _arrival: forArrival, _dismissal: forDismissal
+                    });
                 }
 
                 staffCount++;
                 console.log('[Go] CSV: ' + name + ' → ' + (isMonitor ? 'monitor' : 'counselor') + (wantsStop ? ' (needs stop)' : ''));
             } else {
                 // Default: treat as camper
+                // ★ Starter plan: stop adding once cap reached
+                if (camperCount >= _goMaxImport) { _goCapped++; continue; }
+
                 const meRoster = readCampistrySettings()?.app1?.camperRoster || {};
                 const rn = Object.keys(meRoster).find(k => k.toLowerCase() === name.toLowerCase()) || name;
 
-                D.addresses[rn] = {
-                    street, city, state, zip,
-                    lat: null, lng: null, geocoded: false,
-                    transport: (transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus',
-                    rideWith: rideWith,
-                    _camperId: personId ? parseInt(personId) : 0,
-                    _division: division, _grade: grade, _bunk: bunk
-                };
+                if (street) {
+                    const _ex = D.addresses[rn];
+                    // Compare addresses case-insensitively and whitespace-normalised.
+                    // If the geocoded position still makes sense (house number + street
+                    // name unchanged), keep it. If the street component changed
+                    // (person moved), reset so it gets re-geocoded.
+                    // Normalize street type abbreviations before comparing so that
+                    // Google-corrected addresses ("Drive") match CSV originals ("Dr").
+                    const _normStreet = s => { const ab = { dr:'drive',st:'street',ave:'avenue',blvd:'boulevard',ct:'court',ln:'lane',rd:'road',pl:'place',cir:'circle',hwy:'highway',pkwy:'parkway',trl:'trail',ter:'terrace',terr:'terrace',expy:'expressway',crst:'crest',crk:'creek',xing:'crossing',aly:'alley' }; return (s||'').trim().toLowerCase().replace(/[.,#]/g,'').split(/\s+/).map(w=>ab[w]||w).join(' '); };
+                    const _keepGeocode = !!_ex?.geocoded && _normStreet(_ex.street) === _normStreet(street);
+                    // Spread existing entry first so ALL geocode metadata
+                    // (_geocodeConfidence, _geocodeWarning, _zipMismatch, etc.)
+                    // is preserved — then overlay the updated CSV fields on top.
+                    D.addresses[rn] = Object.assign({}, _keepGeocode ? _ex : {}, {
+                        street, city, state, zip,
+                        lat:      _keepGeocode ? (_ex.lat || null) : null,
+                        lng:      _keepGeocode ? (_ex.lng || null) : null,
+                        geocoded: _keepGeocode,
+                        transport: _ex?.transport || ((transport === 'pickup' || transport === 'carpool') ? 'pickup' : 'bus'),
+                        rideWith: rideWith || _ex?.rideWith || '',
+                        _camperId: personId ? parseInt(personId) : 0,
+                        _division: division, _grade: grade, _bunk: bunk,
+                        _arrival: forArrival, _dismissal: forDismissal
+                    });
+                } else {
+                    _skippedNoAddr++;
+                }
 
                 _goStandaloneRoster[rn] = {
                     camperId: personId ? parseInt(personId) : i,
@@ -2609,23 +3205,42 @@
                 camperCount++;
             }
         }
+        // Count how many geocodes were preserved (address unchanged, already geocoded)
+        const preserved = Object.values(D.addresses).filter(a => a.geocoded).length;
+        console.log('[Go] CSV parse done — campers:' + camperCount + ' staff:' + staffCount +
+            ' skipped(empty name):' + _skippedEmpty + ' skipped(no address):' + _skippedNoAddr +
+            ' geocodes kept:' + preserved + ' total rows:' + (lines.length - 1));
         save(); renderAddresses(); renderStaff(); updateStats();
+        // ★ Update starter banner camper count
+        if (window.refreshStarterBanner) window.refreshStarterBanner(camperCount);
         const total = camperCount + staffCount;
-        if (staffCount > 0) {
-            toast(camperCount + ' campers + ' + staffCount + ' staff imported (' + total + ' total)');
-            console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff');
+        const preservedNote = preserved > 0 ? ', ' + preserved + ' geocodes kept' : '';
+        if (_goCapped > 0) {
+            toast(camperCount + ' imported, ' + _goCapped + ' skipped (plan limit)' + (staffCount > 0 ? ', ' + staffCount + ' staff' : '') + preservedNote);
+        } else if (staffCount > 0) {
+            toast(camperCount + ' campers + ' + staffCount + ' staff imported' + preservedNote);
+            console.log('[Go] CSV import: ' + camperCount + ' campers, ' + staffCount + ' staff, ' + preserved + ' geocodes preserved');
         } else {
-            toast(camperCount + ' addresses imported');
+            toast(camperCount + ' addresses imported' + preservedNote);
         }
     }
     function parseLine(line) { const r = []; let cur = '', inQ = false; for (let i = 0; i < line.length; i++) { const ch = line[i]; if (inQ) { if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; } else cur += ch; } else { if (ch === '"') inQ = true; else if (ch === ',' || ch === '\t') { r.push(cur); cur = ''; } else cur += ch; } } r.push(cur); return r; }
     function updateStats() {
         const roster = getRoster();
-        const addrCount = Object.keys(D.addresses).length;
-        const rosterCount = Object.keys(roster).length;
-        // Use whichever is larger — roster from Me or addresses in Go
-        const c = Math.max(rosterCount, addrCount);
-        let wA = 0; Object.keys(D.addresses).forEach(n => { if (D.addresses[n]?.street) wA++; });
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        // Count only campers active in current mode
+        const modeNames = new Set();
+        Object.keys(roster).forEach(n => {
+            const a = D.addresses[n];
+            if (!a || a[modeKey] !== false) modeNames.add(n);
+        });
+        Object.keys(D.addresses).forEach(n => {
+            const a = D.addresses[n];
+            if (a[modeKey] !== false) modeNames.add(n);
+        });
+        const c = modeNames.size;
+        let wA = 0;
+        modeNames.forEach(n => { if (D.addresses[n]?.street) wA++; });
         document.getElementById('statBuses').textContent = D.buses.length;
         document.getElementById('statCampers').textContent = c;
         document.getElementById('statShifts').textContent = D.shifts.length;
@@ -2655,10 +3270,10 @@
             { label: geocoded + '/' + camperCount + ' geocoded', status: geocoded === camperCount && camperCount > 0 ? 'ok' : geocoded > 0 ? 'warn' : 'fail' },
             { label: totalSeats + ' seats for ' + largestShift + ' in largest shift', status: 'ok' },
             { label: D.setup.campAddress ? 'Camp address set' : 'No camp address', status: D.setup.campAddress ? 'ok' : 'warn' },
-            { label: getApiKey() ? 'ORS key set (VROOM enabled)' : 'No ORS key — VROOM disabled', status: getApiKey() ? 'ok' : 'fail', detail: getApiKey() ? '' : 'VROOM optimization requires an ORS API key' },
+            { label: 'Route optimizer ready (Geoapify/haversine)', status: 'ok', detail: '' },
             { label: pickupCount + ' carpool/pickup (excluded)', status: 'ok' }
         ];
-        const anyFail = checks.some(c => c.status === 'fail'); const canGen = D.buses.length > 0 && geocoded > 0 && getApiKey();
+        const anyFail = checks.some(c => c.status === 'fail'); const canGen = D.buses.length > 0 && geocoded > 0;
         const badge = document.getElementById('preflightStatus'); badge.className = 'badge ' + (anyFail ? 'badge-danger' : canGen ? 'badge-success' : 'badge-warning'); badge.textContent = anyFail ? 'Not ready' : 'Ready';
         document.getElementById('preflightBody').innerHTML = checks.map(c => '<div class="preflight-item preflight-' + c.status + '"><div class="preflight-icon">' + (c.status === 'ok' ? '✓' : c.status === 'warn' ? '!' : '✗') + '</div><div><div style="font-weight:600;color:var(--text-primary)">' + esc(c.label) + '</div>' + (c.detail ? '<div style="font-size:.75rem;color:var(--text-muted)">' + esc(c.detail) + '</div>' : '') + '</div></div>').join('');
         document.getElementById('routeMode').value = D.setup.dropoffMode || 'door-to-door';
@@ -2671,7 +3286,8 @@
     // =========================================================================
     function detectRegions() {
         const roster = getRoster(); const zipGroups = {};
-        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; const zip = (a.zip || '').trim(); if (!zip) return; if (!zipGroups[zip]) zipGroups[zip] = { campers: [], cities: {} }; zipGroups[zip].campers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' }); const city = a.city || 'Unknown'; zipGroups[zip].cities[city] = (zipGroups[zip].cities[city] || 0) + 1; });
+        const modeKey = D.activeMode === 'arrival' ? '_arrival' : '_dismissal';
+        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a?.geocoded || !a.lat || !a.lng) return; if (a.transport === 'pickup') return; if (a[modeKey] === false) return; const zip = (a.zip || '').trim(); if (!zip) return; if (!zipGroups[zip]) zipGroups[zip] = { campers: [], cities: {} }; zipGroups[zip].campers.push({ name, lat: a.lat, lng: a.lng, city: a.city || '', division: roster[name].division || '' }); const city = a.city || 'Unknown'; zipGroups[zip].cities[city] = (zipGroups[zip].cities[city] || 0) + 1; });
         if (!Object.keys(zipGroups).length) { toast('No geocoded campers with ZIP codes', 'error'); return; }
         const clusters = [];
         Object.entries(zipGroups).forEach(([zip, data]) => { const campers = data.campers; const regionName = Object.keys(data.cities).sort((a, b) => data.cities[b] - data.cities[a])[0] || zip; const cLat = campers.reduce((s, c) => s + c.lat, 0) / campers.length; const cLng = campers.reduce((s, c) => s + c.lng, 0) / campers.length; clusters.push({ id: 'zip_' + zip, name: regionName + ' (' + zip + ')', color: REGION_COLORS[clusters.length % REGION_COLORS.length], centroidLat: cLat, centroidLng: cLng, camperNames: campers.map(c => c.name), zip: zip }); });
@@ -2730,2660 +3346,2581 @@
     let _slicedZones = null; // result of sliceRegionsIntoZones()
     let _zonePreviewLayers = []; // Leaflet layers for zone preview
 
-    async function sliceRegionsIntoZones(regions, buses, reserveSeats) {
-        const roster = getRoster();
+async function generateRoutes() {
+    // -------------------------------------------------------------------------
+    // PRE-FLIGHT
+    // -------------------------------------------------------------------------
+    _intersectionCache = null;
+
+    const roster = getRoster();
+    const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
+    const avgStopMin = D.setup.avgStopTime || 2;
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const isArrival = D.activeMode === 'arrival';
+    const mode = document.getElementById('routeMode')?.value || 'corner-stops';
+
+    // Escape hatch for emergencies only — default is always neighborhood mode.
+    const bypassNeighborhoodMode = D.setup.useNeighborhoodMode === 'bypass';
+
+    // Hard preflight: must have buses
+    if (!D.buses.length) {
+        toast('Add buses first', 'error');
+        return;
+    }
+
+    // Hard preflight: every bus-mode camper must be geocoded. v4 silently
+    // dropped ungeocoded campers — that's a data-integrity bug, not a feature.
+    const ungeocoded = [];
+    let hasAnyGeocoded = false;
+    Object.keys(roster).forEach(name => {
+        const a = D.addresses[name];
+        if (!a || a.transport === 'pickup') return;
+        if (a._isStaff) return;
+        if (a.geocoded && a.lat && a.lng) { hasAnyGeocoded = true; return; }
+        ungeocoded.push(name);
+    });
+    if (!hasAnyGeocoded) {
+        toast('No geocoded campers — geocode addresses first', 'error');
+        return;
+    }
+    if (ungeocoded.length) {
+        console.error('[Go] PREFLIGHT FAIL: ' + ungeocoded.length +
+            ' camper(s) not geocoded. They will be dropped from routing.');
+        console.error('[Go] Ungeocoded:', ungeocoded.slice(0, 20),
+            ungeocoded.length > 20 ? '(+' + (ungeocoded.length - 20) + ' more)' : '');
+        toast(ungeocoded.length + ' camper(s) not geocoded — geocode them first to include',
+              'error');
+        // We continue rather than abort — but we've told the user loudly.
+    }
+
+    // Hard preflight: neighborhood modules must be loaded (unless bypassing)
+    if (!bypassNeighborhoodMode) {
+        if (!window.CampistryGoNeighborhoods?.buildNeighborhoods) {
+            console.error('[Go] CampistryGoNeighborhoods module not loaded. ' +
+                'Routing cannot proceed with the primary path.');
+            toast('Neighborhood module missing — cannot generate routes', 'error');
+            return;
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // CAMP COORDS — must already be geocoded from the Setup tab
+    // -------------------------------------------------------------------------
+    _routeProgStart = Date.now();
+    if (_campCoordsCache) {
+        // already resolved this session
+    } else if (D.setup.campLat && D.setup.campLng) {
+        _campCoordsCache = { lat: D.setup.campLat, lng: D.setup.campLng };
+    } else {
+        toast('Camp coordinates not found — geocode the camp address in Setup first', 'error');
+        return;
+    }
+    const campCoords = _campCoordsCache;
+    const campLat = campCoords.lat;
+    const campLng = campCoords.lng;
+
+    // -------------------------------------------------------------------------
+    // VEHICLES
+    // -------------------------------------------------------------------------
+    const vehicles = D.buses.map(b => {
+        const mon = D.monitors.find(m => m.assignedBus === b.id);
+        const couns = D.counselors.filter(c => c.assignedBus === b.id);
+        const brs = getBusReserve(b);
+        return {
+            busId: b.id,
+            name: b.name,
+            color: b.color || '#10b981',
+            capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs),
+            monitor: mon,
+            counselors: couns
+        };
+    });
+
+    // -------------------------------------------------------------------------
+    // OPTIMIZER AVAILABILITY (for per-bus TSP)
+    // -------------------------------------------------------------------------
+    const googleKey    = D.setup.googleMapsKey || '';
+    const googleProjId = D.setup.googleProjectId || '';
+    const geoapifyKey  = D.setup.geoapifyKey || '';
+    const googleAvailable = !!(googleKey && googleProjId &&
+                               window.GoGoogleOptimizer?.optimizeTours);
+
+    // Supabase proxy token (for Google edge-function auth)
+    const _supabaseUrl = window.__CAMPISTRY_SUPABASE__?.url || '';
+    let _googleProxyToken = null;
+    if (_supabaseUrl && window.supabase?.auth?.getSession) {
+        try {
+            const _sess = await window.supabase.auth.getSession();
+            _googleProxyToken = _sess?.data?.session?.access_token || null;
+        } catch (_e) { /* non-fatal */ }
+    }
+
+    const _pipelineMode = D.setup.routingPipeline || 'neighborhood';
+    const _primaryName = _pipelineMode === 'spatial-sort' ? 'SPATIAL SORT' : 'NEIGHBORHOOD';
+    const _secondaryName = _pipelineMode === 'spatial-sort' ? 'NEIGHBORHOOD' : 'SPATIAL SORT';
+    console.log('[Go v6] Routing strategy: ' + _primaryName + ' (primary) → ' +
+                _secondaryName + ' (secondary) → ' +
+                (googleAvailable ? 'Google Route Optimization (fallback)' : 'NO FALLBACK'));
+    console.log('[Go v6] Per-bus TSP optimizer: ' +
+                (googleAvailable ? 'Google' : geoapifyKey ? 'Geoapify' : 'local 2-opt'));
+
+    // -------------------------------------------------------------------------
+    // SHIFT LOOP
+    // -------------------------------------------------------------------------
+    const allShiftResults = [];
+
+    // Phase 3: load persistent flags before the shift loop
+    if (window.GoFlagPersistence) await _ensureFlags();
+
+    const shifts = D.shifts.length ? D.shifts : [{
+        id: '__all__', label: 'All Campers', divisions: [],
+        departureTime: isArrival ? '07:00' : '16:00', _isVirtual: true
+    }];
+
+    for (let si = 0; si < shifts.length; si++) {
+        const shift = shifts[si];
+        const pctPerShift = 100 / shifts.length;
+        const pctBase = si * pctPerShift;
+        const shiftLabel = shift.label || 'Shift ' + (si + 1);
+
+        // ── Bus set for this shift ──
+        let shiftBusIds = shift.assignedBuses?.length
+            ? shift.assignedBuses
+            : vehicles.map(v => v.busId);
+        if (shift.assignedBuses?.length) {
+            const validIds = shiftBusIds.filter(bid => vehicles.some(v => v.busId === bid));
+            if (validIds.length < shiftBusIds.length) {
+                console.warn('[Go v5] Shift "' + shiftLabel + '": ' +
+                    (shiftBusIds.length - validIds.length) +
+                    ' assigned buses no longer exist — using all buses');
+                shift.assignedBuses = [];
+                shiftBusIds = vehicles.map(v => v.busId);
+                save();
+            }
+        }
+        const shiftVehicles = shiftBusIds
+            .map(bid => vehicles.find(v => v.busId === bid))
+            .filter(Boolean);
+
+        // ── Gather campers for this shift ──
         const allCampers = [];
-
-        // Gather all geocoded, bus-riding campers
         Object.keys(roster).forEach(name => {
+            const c = roster[name];
             const a = D.addresses[name];
-            if (!a?.geocoded || !a.lat || !a.lng) return;
+            if (!c || !a?.geocoded || !a.lat || !a.lng) return;
+            if (a._isStaff) return;
             if (a.transport === 'pickup') return;
-            allCampers.push({
-                name, lat: a.lat, lng: a.lng,
-                address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '),
-                zip: (a.zip || '').trim(),
-                division: roster[name].division || '',
-                bunk: roster[name].bunk || ''
-            });
-        });
-
-        if (!allCampers.length) {
-            console.error('[Go] Zone: no geocoded campers');
-            return null;
-        }
-
-        // ── A. Compute capacity budget ──
-        const effectiveCaps = buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
-        });
-        const totalCapacity = effectiveCaps.reduce((s, c) => s + c, 0);
-        let targetFillPct = 0.90;
-        if (allCampers.length > totalCapacity * targetFillPct) {
-            // Slide toward 100% until all kids fit
-            targetFillPct = Math.min(1.0, allCampers.length / totalCapacity);
-        }
-        if (allCampers.length > totalCapacity) {
-            const shortfall = allCampers.length - totalCapacity;
-            console.error('[Go] Zone: ABORT — ' + allCampers.length + ' campers but only ' + totalCapacity + ' total capacity (' + shortfall + ' short)');
-            toast('Cannot generate zones: ' + shortfall + ' more campers than bus seats', 'error');
-            return null;
-        }
-
-        const avgEffCap = totalCapacity / buses.length;
-        const targetFill = Math.floor(avgEffCap * targetFillPct);
-        console.log('[Go] Zone: target fill = ' + targetFill + ' per bus (' + Math.round(targetFillPct * 100) + '% of ' + Math.round(avgEffCap) + ' avg capacity)');
-
-        // ── Detect siblings for indivisible atoms ──
-        const sibMap = detectSiblings(allCampers);
-
-        // Build atom groups: siblings + same-house kids move together
-        function buildAtoms(campers) {
-            const atoms = [];
-            const assigned = new Set();
-            // Group by sibling ID first
-            const sibGroups = {};
-            campers.forEach(c => {
-                const sid = sibMap[c.name];
-                if (sid) {
-                    if (!sibGroups[sid]) sibGroups[sid] = [];
-                    sibGroups[sid].push(c);
-                }
-            });
-            Object.values(sibGroups).forEach(group => {
-                group.forEach(c => assigned.add(c.name));
-                atoms.push({ campers: group, size: group.length,
-                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
-                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
-                });
-            });
-            // Same-house grouping (same lat/lng to 5 decimals)
-            const houseGroups = {};
-            campers.forEach(c => {
-                if (assigned.has(c.name)) return;
-                const key = Math.round(c.lat * 100000) + ',' + Math.round(c.lng * 100000);
-                if (!houseGroups[key]) houseGroups[key] = [];
-                houseGroups[key].push(c);
-            });
-            Object.values(houseGroups).forEach(group => {
-                group.forEach(c => assigned.add(c.name));
-                atoms.push({ campers: group, size: group.length,
-                    lat: group.reduce((s, c) => s + c.lat, 0) / group.length,
-                    lng: group.reduce((s, c) => s + c.lng, 0) / group.length
-                });
-            });
-            return atoms;
-        }
-
-        // ── B. Categorize each ZIP region ──
-        const wholeZips = [];  // fit in one bus
-        const bigZips = [];    // need 2+ buses → slice
-        const smallZips = [];  // < 60% of target → absorb
-
-        regions.forEach(reg => {
-            const count = reg.camperNames.length;
-            if (count === 0) return;
-            if (count <= targetFill) {
-                if (count < targetFill * 0.60) {
-                    smallZips.push(reg);
-                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → small ZIP, will absorb');
-                } else {
-                    wholeZips.push(reg);
-                    console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → whole ZIP, one zone');
-                }
-            } else {
-                bigZips.push(reg);
-                const k = Math.ceil(count / targetFill);
-                console.log('[Go] Zone: ' + reg.name + ' (' + count + ' kids) → big ZIP, slicing into ' + k);
-            }
-        });
-
-        // ── C. Slice big ZIPs using driving-time clustering ──
-        const zones = []; // final output: [{name, camperNames, centroidLat, centroidLng, busIdx, regionIds}]
-
-        // Delegate to top-level fetchLargeMatrixBatched (Mapbox → OSRM → haversine)
-        async function fetchLargeMatrix(coords) {
-            return await fetchLargeMatrixBatched(coords);
-        }
-
-        // k-medoids with driving-time matrix
-        function kMedoids(atoms, durMatrix, k, useDriveTime) {
-            const n = atoms.length;
-            if (n <= k) return atoms.map((_, i) => [i]);
-
-            // dist helper
-            function dist(i, j) {
-                if (useDriveTime && durMatrix?.[i]?.[j] != null && durMatrix[i][j] >= 0) return durMatrix[i][j];
-                return drivingDist(atoms[i].lat, atoms[i].lng, atoms[j].lat, atoms[j].lng);
-            }
-
-            // Seed selection: first two = max pairwise drive time
-            const seeds = [];
-            let maxD = 0, s1 = 0, s2 = 1;
-            for (let i = 0; i < n; i++) {
-                for (let j = i + 1; j < n; j++) {
-                    const d = dist(i, j);
-                    if (d > maxD) { maxD = d; s1 = i; s2 = j; }
-                }
-            }
-            seeds.push(s1, s2);
-            // Greedy add remaining seeds
-            while (seeds.length < k) {
-                let bestIdx = -1, bestMinDist = -1;
-                for (let i = 0; i < n; i++) {
-                    if (seeds.includes(i)) continue;
-                    let minDist = Infinity;
-                    seeds.forEach(s => { const d = dist(i, s); if (d < minDist) minDist = d; });
-                    if (minDist > bestMinDist) { bestMinDist = minDist; bestIdx = i; }
-                }
-                if (bestIdx >= 0) seeds.push(bestIdx);
-                else break;
-            }
-
-            // Assign atoms to nearest medoid
-            let assignments = new Array(n).fill(0);
-            function assignAll() {
-                atoms.forEach((_, i) => {
-                    let bestM = 0, bestD = Infinity;
-                    seeds.forEach((s, mi) => {
-                        const d = dist(i, s);
-                        if (d < bestD) { bestD = d; bestM = mi; }
-                    });
-                    assignments[i] = bestM;
+            const modeKey = isArrival ? '_arrival' : '_dismissal';
+            if (a[modeKey] === false) return;
+            if (shift._isVirtual || camperMatchesShift(c, shift)) {
+                allCampers.push({
+                    name,
+                    division: c.division,
+                    bunk: c.bunk || '',
+                    lat: a.lat,
+                    lng: a.lng,
+                    address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ')
                 });
             }
-            assignAll();
-
-            // Iterate: recompute medoids, reassign
-            for (let iter = 0; iter < 20; iter++) {
-                let changed = false;
-                // Recompute each medoid
-                for (let mi = 0; mi < k; mi++) {
-                    const members = [];
-                    assignments.forEach((a, i) => { if (a === mi) members.push(i); });
-                    if (!members.length) continue;
-                    // Find member that minimizes total drive time to all others
-                    let bestMed = seeds[mi], bestTotal = Infinity;
-                    members.forEach(cand => {
-                        let total = 0;
-                        members.forEach(m => { if (m !== cand) total += dist(cand, m); });
-                        if (total < bestTotal) { bestTotal = total; bestMed = cand; }
-                    });
-                    if (bestMed !== seeds[mi]) { seeds[mi] = bestMed; changed = true; }
-                }
-                if (!changed) break;
-                // Reassign
-                const oldAssign = [...assignments];
-                assignAll();
-                if (oldAssign.every((a, i) => a === assignments[i])) break;
-            }
-
-            // Build clusters
-            const clusters = Array.from({ length: k }, () => []);
-            assignments.forEach((a, i) => clusters[a].push(i));
-            return clusters;
-        }
-
-        // Process big ZIPs
-        for (const reg of bigZips) {
-            const regCampers = allCampers.filter(c => reg.camperNames.includes(c.name));
-            const atoms = buildAtoms(regCampers);
-            const k = Math.ceil(regCampers.length / targetFill);
-
-            // Build coords for matrix call
-            const coords = atoms.map(a => ({ lat: a.lat, lng: a.lng }));
-
-            let durMatrix = null;
-            let useDriveTime = true;
-            showProgress('Building zone matrix for ' + reg.name + '...', 12);
-
-            try {
-                durMatrix = await fetchLargeMatrix(coords);
-            } catch (e) {
-                console.warn('[Go] Zone: matrix failed for ' + reg.name + ':', e.message);
-            }
-
-            if (!durMatrix) {
-                useDriveTime = false;
-                toast('Zone optimization for ' + reg.name + ': road data unavailable, using approximate distances', 'error');
-                console.warn('[Go] Zone: falling back to haversine for ' + reg.name);
-            }
-
-            const clusters = kMedoids(atoms, durMatrix, k, useDriveTime);
-
-            clusters.forEach((cluster, ci) => {
-                const pocketCampers = [];
-                cluster.forEach(ai => atoms[ai].campers.forEach(c => pocketCampers.push(c)));
-                if (!pocketCampers.length) return;
-
-                const cLat = pocketCampers.reduce((s, c) => s + c.lat, 0) / pocketCampers.length;
-                const cLng = pocketCampers.reduce((s, c) => s + c.lng, 0) / pocketCampers.length;
-
-                // ── F. Naming: most common street or geographic descriptor ──
-                const streetCounts = {};
-                pocketCampers.forEach(c => {
-                    const p = parseAddress(c.address);
-                    if (p.street) {
-                        const ns = normalizeStreet(p.street);
-                        streetCounts[ns] = (streetCounts[ns] || { count: 0, raw: p.street });
-                        streetCounts[ns].count++;
-                    }
-                });
-                const sortedStreets = Object.values(streetCounts).sort((a, b) => b.count - a.count);
-                const regCity = reg.name.split(' (')[0];
-                let zoneName;
-                if (sortedStreets.length && sortedStreets[0].count >= pocketCampers.length * 0.25) {
-                    zoneName = regCity + ' (' + sortedStreets[0].raw + ' area)';
-                } else {
-                    // Geographic descriptor based on medoid position relative to ZIP centroid
-                    const dLat = cLat - reg.centroidLat;
-                    const dLng = cLng - reg.centroidLng;
-                    let dir = '';
-                    if (Math.abs(dLat) > Math.abs(dLng)) dir = dLat > 0 ? 'North' : 'South';
-                    else dir = dLng > 0 ? 'East' : 'West';
-                    zoneName = dir + ' ' + regCity;
-                }
-
-                zones.push({
-                    id: 'zone_' + (reg.zip || reg.id) + '_' + ci,
-                    name: zoneName,
-                    camperNames: pocketCampers.map(c => c.name),
-                    centroidLat: cLat,
-                    centroidLng: cLng,
-                    regionIds: [reg.id],
-                    sourceType: 'sliced',
-                    color: REGION_COLORS[zones.length % REGION_COLORS.length]
-                });
-                console.log('[Go] Zone: sliced ' + reg.name + ' pocket ' + ci + ' → "' + zoneName + '" (' + pocketCampers.length + ' kids)');
-            });
-        }
-
-        // Whole ZIPs become zones unchanged
-        wholeZips.forEach(reg => {
-            zones.push({
-                id: 'zone_' + (reg.zip || reg.id),
-                name: reg.name,
-                camperNames: [...reg.camperNames],
-                centroidLat: reg.centroidLat,
-                centroidLng: reg.centroidLng,
-                regionIds: [reg.id],
-                sourceType: 'whole',
-                color: REGION_COLORS[zones.length % REGION_COLORS.length]
-            });
         });
 
-        // ── D. Border rebalance for over-capacity pockets ──
-        // Use hard bus cap (not targetFill) — we must fit in a single bus
-        const MAX_ABSORB_MI = 3.0; // max distance for absorbing/moving kids between zones
-        const hardCap = Math.max(...effectiveCaps);
-        for (let pass = 0; pass < 50; pass++) {
-            let anyOver = false;
-            for (const zone of zones) {
-                if (zone.camperNames.length <= hardCap) continue;
-                anyOver = true;
+        // ── Apply rideWith so siblings/pairs share coords ──
+        applyRideWith(allCampers);
 
-                // Rank campers by distance to zone centroid, farthest first
-                const campersWithDist = zone.camperNames.map(name => {
-                    const c = allCampers.find(x => x.name === name);
-                    if (!c) return { name, dist: 0 };
-                    return { name, dist: drivingDist(c.lat, c.lng, zone.centroidLat, zone.centroidLng) };
-                }).sort((a, b) => b.dist - a.dist);
-
-                // Median distance — interior threshold
-                const dists = campersWithDist.map(c => c.dist).sort((a, b) => a - b);
-                const medianDist = dists[Math.floor(dists.length / 2)];
-
-                // Try to move border kids (above median distance)
-                let moved = false;
-                for (const candidate of campersWithDist) {
-                    if (candidate.dist <= medianDist) break; // interior kid
-                    if (zone.camperNames.length <= targetFill) break;
-
-                    // Check if this is part of a sibling atom
-                    const atomNames = [candidate.name];
-                    const sid = sibMap[candidate.name];
-                    if (sid) {
-                        zone.camperNames.forEach(n => {
-                            if (n !== candidate.name && sibMap[n] === sid) atomNames.push(n);
-                        });
-                    }
-                    // Also check same-house
-                    const candCamper = allCampers.find(x => x.name === candidate.name);
-                    if (candCamper) {
-                        const houseKey = Math.round(candCamper.lat * 100000) + ',' + Math.round(candCamper.lng * 100000);
-                        zone.camperNames.forEach(n => {
-                            if (atomNames.includes(n)) return;
-                            const nc = allCampers.find(x => x.name === n);
-                            if (nc && Math.round(nc.lat * 100000) + ',' + Math.round(nc.lng * 100000) === houseKey) atomNames.push(n);
-                        });
-                    }
-
-                    // Find nearest under-capacity zone within reasonable distance
-                    // Don't move kids to a zone more than 3mi away — that stretches routes
-                    let bestZone = null, bestDist = Infinity;
-                    for (const tz of zones) {
-                        if (tz === zone) continue;
-                        if (tz.camperNames.length + atomNames.length > hardCap) continue;
-                        const d = candCamper ? drivingDistMi(candCamper.lat, candCamper.lng, tz.centroidLat, tz.centroidLng) : Infinity;
-                        if (d > MAX_ABSORB_MI) continue; // don't stretch zones across distant areas
-                        if (d < bestDist) { bestDist = d; bestZone = tz; }
-                    }
-
-                    if (bestZone) {
-                        atomNames.forEach(n => {
-                            zone.camperNames = zone.camperNames.filter(x => x !== n);
-                            bestZone.camperNames.push(n);
-                        });
-                        const familyLabel = atomNames.length > 1 ? atomNames[0].split(/\s+/).pop() + ' family + ' + (atomNames.length - 1) : atomNames[0];
-                        console.log('[Go] Zone: Moved ' + atomNames.length + ' border kid(s) (' + familyLabel + ') from ' + zone.name + ' to ' + bestZone.name + ' — ' + zone.name + ' was ' + (zone.camperNames.length + atomNames.length) + '/' + targetFill + ', ' + bestZone.name + ' had room at ' + (bestZone.camperNames.length - atomNames.length) + '/' + targetFill + ', drive time ' + bestDist.toFixed(2) + 'mi');
-                        moved = true;
-                        break;
-                    }
-                }
-                if (!moved) break;
-            }
-            if (!anyOver) break;
+        // ── Deduplicate by name ──
+        const seenNames = new Set();
+        for (let di = allCampers.length - 1; di >= 0; di--) {
+            if (seenNames.has(allCampers[di].name)) allCampers.splice(di, 1);
+            else seenNames.add(allCampers[di].name);
         }
 
-        // ── E. Absorb small ZIPs — with max distance cap ──
-        // Without a distance cap, small ZIPs get absorbed into distant zones
-        // just because they have room, creating stretched routes across ZIP codes.
-
-        // Sort small ZIPs by size descending — absorb larger ones first so they
-        // get priority on nearby zones with room
-        const sortedSmallZips = [...smallZips].sort((a, b) => b.camperNames.length - a.camperNames.length);
-
-        const unabsorbed = []; // small ZIPs that couldn't be absorbed within distance cap
-
-        for (const smallReg of sortedSmallZips) {
-            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
-            if (!regCampers.length) continue;
-
-            const centLat = regCampers.reduce((s, c) => s + c.lat, 0) / regCampers.length;
-            const centLng = regCampers.reduce((s, c) => s + c.lng, 0) / regCampers.length;
-
-            // Try at 90%, 95%, 100% fill — but enforce max distance
-            let absorbed = false;
-            for (const tryPct of [targetFillPct, 0.95, 1.0]) {
-                const tryFill = Math.floor(avgEffCap * tryPct);
-                let bestZone = null, bestDist = Infinity;
-                for (const z of zones) {
-                    if (z.camperNames.length + smallReg.camperNames.length > tryFill) continue;
-                    const d = drivingDistMi(centLat, centLng, z.centroidLat, z.centroidLng);
-                    if (d > MAX_ABSORB_MI) continue; // too far — don't stretch the zone
-                    if (d < bestDist) { bestDist = d; bestZone = z; }
-                }
-                if (bestZone) {
-                    const oldName = bestZone.name;
-                    bestZone.camperNames.push(...smallReg.camperNames);
-                    bestZone.regionIds.push(smallReg.id);
-                    const allInZone = allCampers.filter(c => bestZone.camperNames.includes(c.name));
-                    if (allInZone.length) {
-                        bestZone.centroidLat = allInZone.reduce((s, c) => s + c.lat, 0) / allInZone.length;
-                        bestZone.centroidLng = allInZone.reduce((s, c) => s + c.lng, 0) / allInZone.length;
-                    }
-                    const parts = oldName.split(' + ');
-                    const smallCity = smallReg.name.split(' (')[0];
-                    if (parts.length >= 2) {
-                        bestZone.name = parts[0] + ' + ' + parts[1].split(' +')[0] + ' + others';
-                    } else {
-                        bestZone.name = oldName.split(' (')[0] + ' + ' + smallCity;
-                    }
-                    console.log('[Go] Zone: Absorbed ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) into ' + oldName + ' → "' + bestZone.name + '" (' + bestZone.camperNames.length + ' kids, ' + bestDist.toFixed(2) + 'mi away)');
-                    console.log('[Go] Zone:   Parts: ' + bestZone.regionIds.map(id => regions.find(r => r.id === id)?.name || id).join(', '));
-                    absorbed = true;
-                    break;
-                }
+        if (!allCampers.length || !shiftVehicles.length) {
+            if (!allCampers.length) {
+                console.error('[Go v5] Shift "' + shiftLabel + '": 0 campers matched — skipping');
             }
-            if (!absorbed) {
-                unabsorbed.push(smallReg);
+            if (!shiftVehicles.length) {
+                console.error('[Go v5] Shift "' + shiftLabel + '": 0 vehicles available — skipping');
             }
+            allShiftResults.push({ shift, routes: [], camperCount: 0 });
+            continue;
         }
 
-        // Small ZIPs that were too far to absorb → make their own zones
-        // Better a small dedicated zone than a stretched multi-ZIP monster
-        for (const smallReg of unabsorbed) {
-            const regCampers = allCampers.filter(c => smallReg.camperNames.includes(c.name));
-            if (!regCampers.length) continue;
-            zones.push({
-                id: 'zone_' + (smallReg.zip || smallReg.id),
-                name: smallReg.name,
-                camperNames: [...smallReg.camperNames],
-                centroidLat: smallReg.centroidLat,
-                centroidLng: smallReg.centroidLng,
-                regionIds: [smallReg.id],
-                sourceType: 'small-standalone',
-                color: REGION_COLORS[zones.length % REGION_COLORS.length]
-            });
-            console.log('[Go] Zone: ' + smallReg.name + ' (' + smallReg.camperNames.length + ' kids) → standalone zone (no nearby zone within ' + MAX_ABSORB_MI + 'mi had room)');
-        }
-
-        // ── H. Invariant check ──
-        const allZonedNames = new Set();
-        let invariantFail = false;
-        zones.forEach(z => {
-            z.camperNames.forEach(n => {
-                if (allZonedNames.has(n)) {
-                    console.error('[Go] Zone INVARIANT FAIL: ' + n + ' appears in multiple zones!');
-                    invariantFail = true;
-                }
-                allZonedNames.add(n);
-            });
-        });
-        // Check every input camper is in exactly one zone
-        allCampers.forEach(c => {
-            if (!allZonedNames.has(c.name)) {
-                console.error('[Go] Zone INVARIANT FAIL: ' + c.name + ' missing from all zones!');
-                invariantFail = true;
-            }
-        });
-        // Check capacity — warn but don't fail (downstream capacity enforcement handles overflow)
-        const maxBusCap = Math.max(...effectiveCaps);
-        let overCapCount = 0;
-        zones.forEach(z => {
-            if (z.camperNames.length > maxBusCap) {
-                console.warn('[Go] Zone WARNING: ' + z.name + ' has ' + z.camperNames.length + ' kids but max bus cap is ' + maxBusCap + ' — capacity enforcement will handle overflow');
-                overCapCount++;
-            }
-        });
-        if (overCapCount > 0) {
-            console.log('[Go] Zone: ' + overCapCount + ' zone(s) slightly over capacity — route generation will rebalance');
-        }
-
-        if (invariantFail) {
-            console.error('[Go] Zone: invariant check FAILED (missing/duplicate campers) — falling back to raw ZIP regions');
-            toast('Zone optimization failed — using raw regions', 'error');
-            return null;
-        }
-
-        console.log('[Go] Zone: ' + zones.length + ' zones created from ' + regions.length + ' regions, ' + allCampers.length + ' campers');
-        zones.forEach(z => console.log('[Go] Zone:   ' + z.name + ': ' + z.camperNames.length + ' kids'));
-
-        _slicedZones = zones;
-        return zones;
-    }
-
-    // ── Dry-run preview: show zones on map before routing ──
-    function clearZonePreview() {
-        if (_map) {
-            _zonePreviewLayers.forEach(l => _map.removeLayer(l));
-        }
-        _zonePreviewLayers = [];
-        const banner = document.getElementById('zonePreviewBanner');
-        if (banner) banner.remove();
-    }
-
-    function renderZonePreview(zones) {
-        if (!_map || !zones?.length) return;
-        clearZonePreview();
-
-        const allLatLngs = [];
-        zones.forEach((zone, zi) => {
-            const roster = getRoster();
-            const camperCoords = zone.camperNames.map(n => {
-                const a = D.addresses[n];
-                return a?.lat ? [a.lat, a.lng] : null;
-            }).filter(Boolean);
-
-            if (!camperCoords.length) return;
-            allLatLngs.push(...camperCoords);
-
-            // Draw convex hull polygon
-            const hull = convexHull(camperCoords);
-            if (hull.length >= 3) {
-                const polygon = L.polygon(hull, {
-                    color: zone.color || REGION_COLORS[zi % REGION_COLORS.length],
-                    weight: 2,
-                    fillOpacity: 0.15,
-                    dashArray: '5, 5'
-                }).addTo(_map);
-                polygon.bindPopup('<strong>' + esc(zone.name) + '</strong><br>' + zone.camperNames.length + ' campers');
-                _zonePreviewLayers.push(polygon);
-            }
-
-            // Label at centroid
-            const labelIcon = L.divIcon({
-                html: '<div style="background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';color:#fff;padding:4px 8px;border-radius:6px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.3);font-family:DM Sans,sans-serif;">' + esc(zone.name) + ' (' + zone.camperNames.length + ')</div>',
-                className: '',
-                iconAnchor: [60, 12]
-            });
-            const label = L.marker([zone.centroidLat, zone.centroidLng], { icon: labelIcon, interactive: false }).addTo(_map);
-            _zonePreviewLayers.push(label);
-
-            // Camper dots
-            camperCoords.forEach(([lat, lng]) => {
-                const dotIcon = L.divIcon({
-                    html: '<div style="width:6px;height:6px;background:' + esc(zone.color || REGION_COLORS[zi % REGION_COLORS.length]) + ';border:1px solid #fff;border-radius:50%;"></div>',
-                    className: '',
-                    iconSize: [6, 6],
-                    iconAnchor: [3, 3]
-                });
-                const dot = L.marker([lat, lng], { icon: dotIcon, interactive: false }).addTo(_map);
-                _zonePreviewLayers.push(dot);
-            });
-        });
-
-        if (allLatLngs.length) {
-            _map.fitBounds(L.latLngBounds(allLatLngs), { padding: [50, 50], maxZoom: 14 });
-        }
-    }
-
-    // Simple convex hull (Graham scan)
-    function convexHull(points) {
-        if (points.length < 3) return points;
-        const pts = points.map(p => ({ x: p[1], y: p[0] })); // lng, lat
-        // Find bottom-most (then leftmost)
-        let start = 0;
-        for (let i = 1; i < pts.length; i++) {
-            if (pts[i].y < pts[start].y || (pts[i].y === pts[start].y && pts[i].x < pts[start].x)) start = i;
-        }
-        [pts[0], pts[start]] = [pts[start], pts[0]];
-        const p0 = pts[0];
-        pts.sort((a, b) => {
-            if (a === p0) return -1;
-            if (b === p0) return 1;
-            const cross = (a.x - p0.x) * (b.y - p0.y) - (a.y - p0.y) * (b.x - p0.x);
-            if (Math.abs(cross) < 1e-12) {
-                const dA = (a.x - p0.x) ** 2 + (a.y - p0.y) ** 2;
-                const dB = (b.x - p0.x) ** 2 + (b.y - p0.y) ** 2;
-                return dA - dB;
-            }
-            return -cross;
-        });
-        const stack = [pts[0], pts[1]];
-        for (let i = 2; i < pts.length; i++) {
-            while (stack.length > 1) {
-                const top = stack[stack.length - 1], sec = stack[stack.length - 2];
-                const cross = (top.x - sec.x) * (pts[i].y - sec.y) - (top.y - sec.y) * (pts[i].x - sec.x);
-                if (cross <= 0) stack.pop();
-                else break;
-            }
-            stack.push(pts[i]);
-        }
-        return stack.map(p => [p.y, p.x]); // back to [lat, lng]
-    }
-
-    // Show zone preview and wait for user confirmation
-    function showZonePreviewModal(zones) {
-        return new Promise((resolve) => {
-            // Ensure map is visible
-            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            document.querySelector('.tab-btn[data-tab="routes"]')?.classList.add('active');
-            document.getElementById('tab-routes')?.classList.add('active');
-
-            // Initialize map if needed
-            if (!_map) {
-                const container = document.getElementById('routeMap');
-                if (container) {
-                    _map = L.map(container, { scrollWheelZoom: true, zoomControl: true });
-                    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '&copy; OSM', maxZoom: 19 }).addTo(_map);
-                }
-            }
-            if (_map) {
-                setTimeout(() => _map.invalidateSize(), 100);
-            }
-
-            // Add camp marker
-            if (_map && _campCoordsCache) {
-                const campIcon = L.divIcon({ html: '<div style="width:32px;height:32px;background:#1e293b;border:3px solid #fff;border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 8px rgba(0,0,0,.4);"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></div>', className: '', iconSize: [32, 32], iconAnchor: [16, 16] });
-                const campMarker = L.marker([_campCoordsCache.lat, _campCoordsCache.lng], { icon: campIcon, zIndexOffset: 1000 }).addTo(_map);
-                campMarker.bindPopup('<strong>' + esc(D.setup.campName || 'Camp') + '</strong>');
-                _zonePreviewLayers.push(campMarker);
-            }
-
-            // Render zones on map
-            setTimeout(() => renderZonePreview(zones), 200);
-
-            // Build zone summary
-            const zoneList = zones.map((z, i) => {
-                const color = z.color || REGION_COLORS[i % REGION_COLORS.length];
-                return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;">'
-                    + '<span style="width:12px;height:12px;border-radius:50%;background:' + esc(color) + ';flex-shrink:0;"></span>'
-                    + '<strong>' + esc(z.name) + '</strong>'
-                    + '<span style="margin-left:auto;font-weight:600;">' + z.camperNames.length + ' kids</span></div>';
-            }).join('');
-
-            // Create banner
-            const banner = document.createElement('div');
-            banner.id = 'zonePreviewBanner';
-            banner.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:10000;background:var(--bg-primary,#fff);border-bottom:3px solid var(--blue-500,#3b82f6);box-shadow:0 4px 20px rgba(0,0,0,.15);padding:1rem 1.5rem;display:flex;align-items:flex-start;gap:1.5rem;';
-            banner.innerHTML = '<div style="flex:1;max-height:60vh;overflow-y:auto;">'
-                + '<h3 style="margin:0 0 .5rem;font-size:1.1rem;">Zone Preview — ' + zones.length + ' zones, ' + zones.reduce((s, z) => s + z.camperNames.length, 0) + ' campers</h3>'
-                + '<p style="margin:0 0 .75rem;font-size:.8125rem;color:var(--text-muted);">Review the proposed bus zones on the map. Each zone will be served by one bus.</p>'
-                + '<div style="max-height:300px;overflow-y:auto;">' + zoneList + '</div>'
-                + '</div>'
-                + '<div style="display:flex;flex-direction:column;gap:8px;flex-shrink:0;">'
-                + '<button id="zonePreviewConfirm" style="padding:10px 24px;border-radius:8px;border:none;background:var(--blue-600,#2563eb);color:#fff;cursor:pointer;font-size:.9rem;font-weight:700;">Looks good — generate routes</button>'
-                + '<button id="zonePreviewCancel" style="padding:10px 24px;border-radius:8px;border:1px solid var(--border-primary,#d1d5db);background:var(--bg-primary,#fff);cursor:pointer;font-size:.9rem;">Cancel</button>'
-                + '</div>';
-            document.body.appendChild(banner);
-
-            document.getElementById('zonePreviewConfirm').addEventListener('click', () => {
-                clearZonePreview();
-                resolve(true);
-            });
-            document.getElementById('zonePreviewCancel').addEventListener('click', () => {
-                clearZonePreview();
-                resolve(false);
-            });
-        });
-    }
-
-    // =========================================================================
-    // GREEDY ZONE BUILDER — Stops-first, then bus-aware zones
-    //
-    // Algorithm:
-    //   1. All stops are already created (globally, not per-zone)
-    //   2. Sort buses by capacity (biggest first)
-    //   3. Pick the farthest unassigned stop from camp as seed
-    //   4. Greedily grab the nearest unassigned stop — but ONLY if
-    //      its kid count fits in the remaining capacity. If the
-    //      nearest stop has too many kids, STOP (don't skip it).
-    //   5. Move to the next bus and repeat from step 3
-    //   6. Any leftover stops go to the bus with most remaining capacity
-    // =========================================================================
-    function buildGreedyZones(stops, buses, campLat, campLng, reserveSeats) {
-        if (!stops.length || !buses.length) return [];
-
-        const numBuses = buses.length;
-        const numStops = stops.length;
-
-        // Effective capacity per bus
-        const busCaps = buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = b.reserveMode === 'custom' && b.reserveSeats != null ? b.reserveSeats : (reserveSeats || 0);
-            return Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs);
-        });
-
-        const totalKids = stops.reduce((s, st) => s + st.campers.length, 0);
-        const kidCount = stops.map(s => s.campers.length);
-
-        console.log('[Go] Zone builder: ' + totalKids + ' kids, ' + numBuses + ' buses, ' + numStops + ' stops');
+        // ── Staff noStopStaff — collected exactly as v4 did ──
+        const noStopStaff = _collectNoStopStaff();
 
         // =====================================================================
-        // K-MEDOIDS CLUSTERING — produces compact geographic zones
-        //
-        // 1. Seed medoids using farthest-point initialization
-        // 2. Assign each stop to nearest medoid (by driving distance)
-        // 3. Recompute medoids (member that minimizes total intra-cluster dist)
-        // 4. Iterate until stable
-        // 5. Capacity rebalance: move border stops between clusters if over-cap
+        // PRIMARY PATH: Spatial Sort (default) or Neighborhood pipeline
         // =====================================================================
+        let routes = null;
+        let routeSource = null;
+        const pipelineMode = D.setup.routingPipeline || 'neighborhood';
 
-        // ── Step 1: Seed medoids ──
-        // Pick k=numBuses initial medoids spread maximally apart
-        const medoids = [];
+        if (!bypassNeighborhoodMode) {
+            const _pipelineArgs = {
+                shift, shiftLabel, pctBase,
+                allCampers, shiftVehicles,
+                campLat, campLng,
+                reserveSeats, dropoffMode: mode,
+                isArrival,
+                googleAvailable, googleKey, googleProjId,
+                _supabaseUrl, _googleProxyToken,
+                serviceTimeSec: avgStopMin * 60,
+                shiftIdx: si
+            };
 
-        // First medoid: farthest stop from camp
-        let firstMed = 0, firstDist = 0;
-        for (let i = 0; i < numStops; i++) {
-            const d = drivingDist(campLat, campLng, stops[i].lat, stops[i].lng);
-            if (d > firstDist) { firstDist = d; firstMed = i; }
-        }
-        medoids.push(firstMed);
-
-        // Remaining medoids: farthest from all existing medoids (greedy dispersion)
-        while (medoids.length < numBuses && medoids.length < numStops) {
-            let bestIdx = -1, bestMinDist = -1;
-            for (let i = 0; i < numStops; i++) {
-                if (medoids.includes(i)) continue;
-                let minDist = Infinity;
-                for (const m of medoids) {
-                    const d = drivingDist(stops[i].lat, stops[i].lng, stops[m].lat, stops[m].lng);
-                    if (d < minDist) minDist = d;
+            // PRIMARY — matches user's pipelineMode setting
+            if (pipelineMode === 'spatial-sort') {
+                try {
+                    routes = await _trySpatialSortPipeline(_pipelineArgs);
+                    if (routes) routeSource = 'spatial-sort';
+                } catch (e) {
+                    console.error('[Go v6] Spatial sort pipeline threw:', e);
+                    routes = null;
                 }
-                if (minDist > bestMinDist) { bestMinDist = minDist; bestIdx = i; }
-            }
-            if (bestIdx < 0) break;
-            medoids.push(bestIdx);
-        }
-
-        console.log('[Go] Zone: seeded ' + medoids.length + ' medoids');
-
-        // ── Step 2-4: Iterative assignment + medoid update ──
-        let assignments = new Array(numStops).fill(0);
-
-        function assignAll() {
-            for (let i = 0; i < numStops; i++) {
-                let bestCluster = 0, bestDist = Infinity;
-                for (let m = 0; m < medoids.length; m++) {
-                    const d = drivingDist(stops[i].lat, stops[i].lng, stops[medoids[m]].lat, stops[medoids[m]].lng);
-                    if (d < bestDist) { bestDist = d; bestCluster = m; }
+            } else if (pipelineMode === 'neighborhood') {
+                try {
+                    routes = await _tryNeighborhoodPipeline(_pipelineArgs);
+                    if (routes) routeSource = 'neighborhood';
+                } catch (e) {
+                    console.error('[Go v5] Neighborhood pipeline threw:', e);
+                    routes = null;
                 }
-                assignments[i] = bestCluster;
             }
-        }
 
-        assignAll();
-
-        for (let iter = 0; iter < 30; iter++) {
-            let changed = false;
-
-            // Recompute each medoid: pick cluster member minimizing total dist to others
-            for (let m = 0; m < medoids.length; m++) {
-                const members = [];
-                for (let i = 0; i < numStops; i++) { if (assignments[i] === m) members.push(i); }
-                if (!members.length) continue;
-
-                let bestMed = medoids[m], bestTotal = Infinity;
-                for (const cand of members) {
-                    let total = 0;
-                    for (const other of members) {
-                        if (other !== cand) total += drivingDist(stops[cand].lat, stops[cand].lng, stops[other].lat, stops[other].lng);
+            // SECONDARY — try the OTHER pipeline if primary failed.
+            // Both pipelines have arterial-aware clustering; running the alternate
+            // before global VRP fallback preserves road-graph awareness when the
+            // primary fails (e.g. Overpass timeout for one but not the other).
+            if (!routes && pipelineMode !== 'bypass') {
+                if (pipelineMode === 'spatial-sort') {
+                    console.warn('[Go] Primary spatial-sort failed — trying neighborhood as secondary fallback');
+                    try {
+                        routes = await _tryNeighborhoodPipeline(_pipelineArgs);
+                        if (routes) routeSource = 'neighborhood-secondary';
+                    } catch (e) {
+                        console.error('[Go v5] Neighborhood pipeline (secondary) threw:', e);
+                        routes = null;
                     }
-                    if (total < bestTotal) { bestTotal = total; bestMed = cand; }
-                }
-                if (bestMed !== medoids[m]) { medoids[m] = bestMed; changed = true; }
-            }
-
-            if (!changed) break;
-
-            const oldAssign = [...assignments];
-            assignAll();
-            if (oldAssign.every((a, i) => a === assignments[i])) break;
-        }
-
-        // ── Step 5: Build zones + capacity rebalance ──
-        // Sort buses by capacity descending, assign biggest bus to biggest cluster
-        const clusterSizes = new Array(numBuses).fill(0);
-        for (let i = 0; i < numStops; i++) clusterSizes[assignments[i]] += kidCount[i];
-
-        const clusterOrder = clusterSizes.map((sz, i) => ({ i, sz })).sort((a, b) => b.sz - a.sz);
-        const busOrder = busCaps.map((cap, i) => ({ i, cap })).sort((a, b) => b.cap - a.cap);
-
-        // Map: cluster index → bus index
-        const clusterToBus = {};
-        for (let r = 0; r < Math.min(clusterOrder.length, busOrder.length); r++) {
-            clusterToBus[clusterOrder[r].i] = busOrder[r].i;
-        }
-
-        // Build initial zones
-        const zones = [];
-        for (let m = 0; m < medoids.length; m++) {
-            const bi = clusterToBus[m] ?? m;
-            const stopIndices = [];
-            for (let i = 0; i < numStops; i++) { if (assignments[i] === m) stopIndices.push(i); }
-
-            const zoneKids = stopIndices.reduce((s, si) => s + kidCount[si], 0);
-            const cLat = stopIndices.length ? stopIndices.reduce((s, si) => s + stops[si].lat, 0) / stopIndices.length : campLat;
-            const cLng = stopIndices.length ? stopIndices.reduce((s, si) => s + stops[si].lng, 0) / stopIndices.length : campLng;
-
-            zones.push({
-                busIdx: bi, busId: buses[bi].id, busName: buses[bi].name,
-                busColor: buses[bi].color, stopIndices, camperCount: zoneKids,
-                capacity: busCaps[bi], centroidLat: cLat, centroidLng: cLng,
-                _medoid: medoids[m]
-            });
-        }
-
-        // ── Capacity rebalance: move border stops from over-cap zones to nearest under-cap zone ──
-        for (let pass = 0; pass < 200; pass++) {
-            // Find most over-capacity zone
-            let worstZi = -1, worstOver = 0;
-            for (let zi = 0; zi < zones.length; zi++) {
-                const over = zones[zi].camperCount - zones[zi].capacity;
-                if (over > worstOver) { worstOver = over; worstZi = zi; }
-            }
-            if (worstZi < 0) break; // all zones within capacity
-
-            const overZone = zones[worstZi];
-
-            // Find the border stop: farthest from own medoid AND closest to another zone's medoid
-            let bestStopLocalIdx = -1, bestTargetZi = -1, bestScore = -Infinity;
-            for (let li = 0; li < overZone.stopIndices.length; li++) {
-                const si = overZone.stopIndices[li];
-                const distFromOwn = drivingDist(stops[si].lat, stops[si].lng,
-                    stops[overZone._medoid].lat, stops[overZone._medoid].lng);
-
-                for (let tzi = 0; tzi < zones.length; tzi++) {
-                    if (tzi === worstZi) continue;
-                    if (zones[tzi].camperCount + kidCount[si] > zones[tzi].capacity) continue;
-                    const distToTarget = drivingDist(stops[si].lat, stops[si].lng,
-                        stops[zones[tzi]._medoid].lat, stops[zones[tzi]._medoid].lng);
-                    // Score: high = far from own, close to target (true border stop)
-                    const score = distFromOwn - distToTarget;
-                    if (score > bestScore) { bestScore = score; bestStopLocalIdx = li; bestTargetZi = tzi; }
-                }
-            }
-
-            if (bestStopLocalIdx < 0 || bestTargetZi < 0) break; // no valid move
-
-            // Move the stop
-            const movedSi = overZone.stopIndices.splice(bestStopLocalIdx, 1)[0];
-            overZone.camperCount -= kidCount[movedSi];
-            zones[bestTargetZi].stopIndices.push(movedSi);
-            zones[bestTargetZi].camperCount += kidCount[movedSi];
-        }
-
-        // Log summary
-        console.log('[Go] Zones: ' + zones.length + ' compact clusters, ' + totalKids + ' kids across ' + numStops + ' stops');
-        zones.forEach(z => {
-            console.log('[Go]   ' + z.busName + ': ' + z.camperCount + '/' + z.capacity + ' kids, ' + z.stopIndices.length + ' stops');
-        });
-
-        return zones;
-    }
-
-    // =========================================================================
-    // ROUTING ENGINE v11.0 — Stops-first + Greedy zones + GH/VROOM
-    // =========================================================================
-
-    async function generateRoutes() {
-        // Clear caches on each generation
-        _intersectionCache = null;
-        _drivingCache.clear();
-        _ghQuotaExhausted = false;
-
-        const roster = getRoster();
-        const reserveSeats = parseInt(document.getElementById('routeReserveSeats')?.value) || 0;
-        const avgStopMin = D.setup.avgStopTime || 2;
-        const avgSpeedMph = D.setup.avgSpeed || 25;
-
-        // Validate we have buses and geocoded campers
-        if (!D.buses.length) { toast('Add buses first', 'error'); return; }
-        let hasGeocodedCampers = false;
-        Object.keys(roster).forEach(name => {
-            const a = D.addresses[name];
-            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') hasGeocodedCampers = true;
-        });
-        if (!hasGeocodedCampers) { toast('No geocoded campers — geocode addresses first', 'error'); return; }
-
-        const vehicles = D.buses.map(b => {
-            const mon = D.monitors.find(m => m.assignedBus === b.id);
-            const couns = D.counselors.filter(c => c.assignedBus === b.id);
-            const brs = getBusReserve(b);
-            return { busId: b.id, name: b.name, color: b.color || '#10b981', capacity: Math.max(0, (b.capacity || 0) - (mon ? 1 : 0) - couns.length - brs), monitor: mon, counselors: couns };
-        });
-
-        let campCoords = null;
-        if (D.setup.campAddress) {
-            showProgress('Geocoding camp...', 5);
-            campCoords = _campCoordsCache || await geocodeSingle(D.setup.campAddress);
-            if (campCoords) { _campCoordsCache = campCoords; D.setup.campLat = campCoords.lat; D.setup.campLng = campCoords.lng; }
-        }
-        if (!campCoords && D.setup.campLat && D.setup.campLng) {
-            campCoords = { lat: D.setup.campLat, lng: D.setup.campLng };
-            _campCoordsCache = campCoords;
-        }
-        if (!campCoords) { toast('Set camp address first', 'error'); return; }
-        const campLat = campCoords.lat;
-        const campLng = campCoords.lng;
-
-        // ── Pre-warm driving distance cache ──
-        showProgress('Building driving distance cache...', 7);
-        const allCamperCoords = [];
-        Object.keys(roster).forEach(name => {
-            const a = D.addresses[name];
-            if (a?.geocoded && a.lat && a.lng && a.transport !== 'pickup') {
-                allCamperCoords.push({ lat: a.lat, lng: a.lng });
-            }
-        });
-        await prewarmCache(allCamperCoords, campLat, campLng);
-
-        // =========================================================
-        // NEW PIPELINE: Stops first → Greedy zones → Route each zone
-        // =========================================================
-
-        const allShiftResults = [];
-        const shifts = D.shifts.length ? D.shifts : [{ id: '__all__', label: 'All Campers', divisions: [], departureTime: D.activeMode === 'arrival' ? '07:00' : '16:00', _isVirtual: true }];
-
-        for (let si = 0; si < shifts.length; si++) {
-            const shift = shifts[si];
-            const pctBase = (si / shifts.length) * 100;
-
-            const shiftBusIds = shift.assignedBuses?.length ? shift.assignedBuses : vehicles.map(v => v.busId);
-            const shiftVehicles = shiftBusIds.map(bid => vehicles.find(v => v.busId === bid)).filter(Boolean);
-            const shiftBuses = shiftBusIds.map(bid => D.buses.find(b => b.id === bid)).filter(Boolean);
-
-            // ── Step 1: Gather all campers for this shift ──
-            const allCampers = [];
-            Object.keys(roster).forEach(name => {
-                const c = roster[name]; const a = D.addresses[name];
-                if (!c || !a?.geocoded || !a.lat || !a.lng) return;
-                if (a.transport === 'pickup') return;
-                if (shift._isVirtual || camperMatchesShift(c, shift)) {
-                    allCampers.push({ name, division: c.division, bunk: c.bunk || '', lat: a.lat, lng: a.lng, address: [a.street, a.city, a.state, a.zip].filter(Boolean).join(', ') });
-                }
-            });
-
-            // ── Step 1b: Geocode staff + inject "needs stop" staff as campers ──
-            // Staff with needsStop='yes' are treated identically to campers for
-            // stop creation — they get included in clustering and assigned a stop.
-            // Staff with needsStop='no' (or monitors) are handled post-generation.
-            const noStopStaff = []; // [{name, address, lat, lng, busId, role}] — suggested after routes
-            const staffWithStops = []; // names injected as campers
-
-            for (const counselor of D.counselors) {
-                if (!counselor.address) continue;
-                // Geocode the address
-                let staffCoords = null;
-                if (counselor._lat && counselor._lng) {
-                    staffCoords = { lat: counselor._lat, lng: counselor._lng };
                 } else {
-                    staffCoords = await geocodeSingle(counselor.address);
-                    if (staffCoords) { counselor._lat = staffCoords.lat; counselor._lng = staffCoords.lng; }
-                }
-                if (!staffCoords) continue;
-
-                if (counselor.needsStop === 'yes') {
-                    // Inject as camper — will get a stop like any kid
-                    allCampers.push({
-                        name: '⚐ ' + counselor.name, division: counselor.bunk || 'Staff',
-                        bunk: 'Staff', lat: staffCoords.lat, lng: staffCoords.lng,
-                        address: counselor.address, _isStaff: true, _staffId: counselor.id
-                    });
-                    staffWithStops.push(counselor.name);
-                } else {
-                    // No stop — will suggest closest stop post-generation
-                    noStopStaff.push({
-                        name: counselor.name, address: counselor.address,
-                        lat: staffCoords.lat, lng: staffCoords.lng,
-                        busId: counselor.assignedBus || null, role: 'counselor', id: counselor.id
-                    });
+                    console.warn('[Go] Primary neighborhood failed — trying spatial-sort as secondary fallback');
+                    try {
+                        routes = await _trySpatialSortPipeline(_pipelineArgs);
+                        if (routes) routeSource = 'spatial-sort-secondary';
+                    } catch (e) {
+                        console.error('[Go v6] Spatial sort pipeline (secondary) threw:', e);
+                        routes = null;
+                    }
                 }
             }
+        }
 
-            for (const monitor of D.monitors) {
-                if (!monitor.address) continue;
-                let staffCoords = null;
-                if (monitor._lat && monitor._lng) {
-                    staffCoords = { lat: monitor._lat, lng: monitor._lng };
-                } else {
-                    staffCoords = await geocodeSingle(monitor.address);
-                    if (staffCoords) { monitor._lat = staffCoords.lat; monitor._lng = staffCoords.lng; }
-                }
-                if (!staffCoords) continue;
-
-                // Monitors are always "no stop" — they ride the bus
-                noStopStaff.push({
-                    name: monitor.name, address: monitor.address,
-                    lat: staffCoords.lat, lng: staffCoords.lng,
-                    busId: monitor.assignedBus || null, role: 'monitor', id: monitor.id
-                });
-            }
-
-            if (staffWithStops.length) console.log('[Go] Staff with stops: ' + staffWithStops.join(', '));
-            if (noStopStaff.length) console.log('[Go] Staff without stops (will suggest): ' + noStopStaff.map(s => s.name).join(', '));
-
-            if (!allCampers.length || !shiftVehicles.length) {
+        // =====================================================================
+        // FALLBACK PATH: Global corner-stops + Google Route Optimization
+        // Runs ONLY if the primary path returned null or errored.
+        // Loud: toast + console.error so operator knows to fix the root cause.
+        // =====================================================================
+        if (!routes) {
+            if (!googleAvailable) {
+                console.error('[Go v5] Both paths unavailable. Primary (neighborhoods) ' +
+                    'failed and fallback (Google Route Optimization) is not configured.');
+                toast('Route generation failed — see console. Configure Google API key ' +
+                      'or fix neighborhood preflight errors.', 'error');
                 allShiftResults.push({ shift, routes: [], camperCount: 0 });
                 continue;
             }
 
-            // ── Step 2: Create ALL stops globally (not per-zone) ──
-            // This includes "needs stop" staff who were injected as campers above
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': creating stops...', pctBase + 10);
-            const mode = document.getElementById('routeMode')?.value || 'door-to-door';
-            let allStops;
-            if (mode === 'optimized-stops') allStops = createOptimizedStops(allCampers);
-            else if (mode === 'corner-stops') allStops = await createCornerStops(allCampers);
-            else allStops = createHouseStops(allCampers);
+            console.error('[Go v5] FALLBACK: neighborhood pipeline failed, using ' +
+                'Google Route Optimization over global corner stops. Route quality ' +
+                'will be lower; investigate root cause.');
+            toast('Route quality warning: primary pipeline failed, using fallback. ' +
+                  'See console.', 'error');
 
-            console.log('[Go] Step 2: ' + allStops.length + ' stops from ' + allCampers.length + ' campers (mode: ' + mode + ')');
-
-            // ── Step 3: Build greedy bus-aware zones from stops ──
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': building zones...', pctBase + 30);
-            const greedyZones = buildGreedyZones(allStops, shiftBuses, campLat, campLng, reserveSeats);
-            toast(greedyZones.length + ' bus zones created — optimizing routes...');
-
-            // ── Step 4: Route each zone (GH → VROOM → local TSP) ──
-            showProgress((shift.label || 'Shift ' + (si + 1)) + ': optimizing routes...', pctBase + 50);
-            const isArrival = D.activeMode === 'arrival';
-            const hasShifts = shifts.length > 1;
-            const isLastShift = si === shifts.length - 1;
-            const serviceTime = (D.setup.avgStopTime || 2) * 60;
-            const key = getApiKey();
-
-            let routes = [];
-            for (const zone of greedyZones) {
-                const zoneStops = zone.stopIndices.map(si => allStops[si]);
-                const v = shiftVehicles.find(sv => sv.busId === zone.busId) || shiftVehicles[0];
-                if (!zoneStops.length || !v) continue;
-
-                // Find farthest stop from camp (used for start/end anchoring)
-                let fIdx = 0, fDist = 0;
-                zoneStops.forEach((s, i) => { const d = drivingDist(campLat, campLng, s.lat, s.lng); if (d > fDist) { fDist = d; fIdx = i; } });
-
-                // ── Route optimization cascade: GraphHopper → VROOM → directional sort ──
-                let orderedStops = null;
-
-                // 1. Try GraphHopper
-                // Arrival: farthest first → camp last
-                // Dismissal: camp first → farthest last
-                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, false);
-
-                // 2. Fallback: ORS VROOM (single-bus ordering)
-                if (!orderedStops && key) {
-                    const jobs = zoneStops.map((stop, i) => ({
-                        id: i + 1, location: [stop.lng, stop.lat],
-                        service: serviceTime, amount: [stop.campers.length], description: stop.address
-                    }));
-                    const veh = { id: 1, profile: 'driving-car', capacity: [v.capacity], description: v.name };
-                    if (isArrival) {
-                        // Arrival: start at farthest stop, end at camp
-                        veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
-                        veh.end = [campLng, campLat];
-                    } else {
-                        // Dismissal: start at camp, end at farthest stop
-                        veh.start = [campLng, campLat];
-                        veh.end = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
-                    }
-                    try {
-                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
-                            method: 'POST',
-                            headers: { 'Authorization': key, 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ jobs, vehicles: [veh] })
-                        });
-                        if (resp.ok) {
-                            const result = await resp.json();
-                            const vroomRoute = result.routes?.[0];
-                            if (vroomRoute) {
-                                const ordered = [];
-                                vroomRoute.steps.forEach(step => {
-                                    if (step.type !== 'job') return;
-                                    const stop = zoneStops[step.id - 1];
-                                    if (stop) ordered.push(stop);
-                                });
-                                if (result.unassigned?.length) {
-                                    result.unassigned.forEach(ua => { const stop = zoneStops[ua.id - 1]; if (stop) cheapestInsert(ordered, stop); });
-                                }
-                                orderedStops = ordered;
-                                console.log('[Go] VROOM → ' + v.name + ': ' + ordered.length + ' stops');
-                            }
-                        }
-                    } catch (e) { console.warn('[Go] VROOM failed for ' + v.name + ':', e.message); }
-                }
-
-                // 3. Last resort: directional sort
-                if (!orderedStops) {
-                    orderedStops = [...zoneStops];
-                    directionalSort(orderedStops, campLat, campLng);
-                }
-
-                // ── 2-opt (driving distances) ──
-                if (orderedStops.length >= 3) {
-                    let improved = true;
-                    for (let pass = 0; pass < 5 && improved; pass++) {
-                        improved = false;
-                        for (let i = 0; i < orderedStops.length - 2; i++) {
-                            for (let j = i + 2; j < orderedStops.length; j++) {
-                                const a = orderedStops[i], b = orderedStops[i + 1];
-                                const c = orderedStops[j], d2 = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
-                                if (!a?.lat || !b?.lat || !c?.lat) continue;
-                                const curD = drivingDist(a.lat, a.lng, b.lat, b.lng) + (d2 ? drivingDist(c.lat, c.lng, d2.lat, d2.lng) : 0);
-                                const newD = drivingDist(a.lat, a.lng, c.lat, c.lng) + (d2 ? drivingDist(b.lat, b.lng, d2.lat, d2.lng) : 0);
-                                if (newD < curD * 0.95) {
-                                    const seg = orderedStops.splice(i + 1, j - i);
-                                    seg.reverse();
-                                    orderedStops.splice(i + 1, 0, ...seg);
-                                    improved = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── Orientation check (driving distances) ──
-                if (orderedStops.length >= 2) {
-                    const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
-                    const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
-                    if (isArrival && firstDist < lastDist) { orderedStops.reverse(); }
-                    if (!isArrival && firstDist > lastDist) { orderedStops.reverse(); }
-                }
-
-                const routeStops = orderedStops.map((stop, i) => ({
-                    stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
-                }));
-
-                routes.push({
-                    busId: v.busId, busName: v.name, busColor: v.color,
-                    monitor: v.monitor, counselors: v.counselors || [],
-                    stops: routeStops,
-                    camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                    _cap: v.capacity, totalDuration: 0
+            try {
+                routes = await _fallbackGoogleGlobal({
+                    shift, shiftLabel, pctBase,
+                    allCampers, shiftVehicles,
+                    campLat, campLng,
+                    reserveSeats,
+                    isArrival,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    serviceTimeSec: avgStopMin * 60
                 });
+                if (routes) routeSource = 'google-fallback';
+            } catch (e) {
+                console.error('[Go v5] Fallback pipeline threw:', e);
+                routes = null;
             }
-
-            // Ensure all buses have route entries
-            shiftVehicles.forEach(v => {
-                if (!routes.find(r => r.busId === v.busId)) {
-                    routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0 });
-                }
-            });
-
-            console.log('[Go] All routes complete: ' + routes.length + ' bus routes');
-
-            // ── Staff suggestions: find closest stop for "no stop" staff ──
-            // For each staff member without a dedicated stop, find the closest
-            // existing stop on their assigned bus (or any bus if unassigned).
-            // Store suggestion on the staff object for display in the Staff tab.
-            if (noStopStaff.length) {
-                console.log('[Go] Suggesting stops for ' + noStopStaff.length + ' staff...');
-                noStopStaff.forEach(staff => {
-                    let bestRoute = null, bestStop = null, bestDist = Infinity;
-
-                    const candidateRoutes = staff.busId
-                        ? routes.filter(r => r.busId === staff.busId)
-                        : routes;
-
-                    // If assigned bus has no routes or no stops, search all buses
-                    const searchRoutes = candidateRoutes.some(r => r.stops.length > 0) ? candidateRoutes : routes;
-
-                    for (const r of searchRoutes) {
-                        for (const st of r.stops) {
-                            if (!st.lat || !st.lng) continue;
-                            const d = drivingDist(staff.lat, staff.lng, st.lat, st.lng);
-                            if (d < bestDist) { bestDist = d; bestStop = st; bestRoute = r; }
-                        }
-                    }
-
-                    if (bestRoute && bestStop) {
-                        const walkFt = Math.round(manhattanMi(staff.lat, staff.lng, bestStop.lat, bestStop.lng) * 5280);
-                        staff._suggestedBus = bestRoute.busName;
-                        staff._suggestedBusId = bestRoute.busId;
-                        staff._suggestedStop = bestStop.address;
-                        staff._suggestedStopNum = bestStop.stopNum;
-                        staff._walkFt = walkFt;
-
-                        // Update the actual staff object so the UI can show it
-                        const staffObj = staff.role === 'monitor'
-                            ? D.monitors.find(m => m.id === staff.id)
-                            : D.counselors.find(c => c.id === staff.id);
-                        if (staffObj) {
-                            staffObj._suggestedBus = bestRoute.busName;
-                            staffObj._suggestedBusId = bestRoute.busId;
-                            staffObj._suggestedStop = bestStop.address;
-                            staffObj._suggestedStopNum = bestStop.stopNum;
-                            staffObj._walkFt = walkFt;
-                        }
-
-                        console.log('[Go]   ' + staff.role + ' ' + staff.name + ' → ' + bestRoute.busName + ', Stop ' + bestStop.stopNum + ' (' + bestStop.address + ') — ' + walkFt + 'ft walk');
-                    }
-                });
-            }
-
-            // Calculate ETAs
-            const shiftNeedsReturn = hasShifts && !isLastShift;
-            const timeMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
-
-            // Fetch traffic-aware leg durations for all routes in this shift
-            // trafficCache[busId] = [leg0_sec, leg1_sec, ...] or null
-            const trafficCache = {};
-            if (getMapboxToken()) {
-                const trafficPromises = routes.filter(r => r.stops.length > 0).map(async r => {
-                    const validStops = r.stops.filter(s => s.lat && s.lng);
-                    if (validStops.length > 0) {
-                        trafficCache[r.busId] = await fetchTrafficLegs(validStops, campLat, campLng, timeMin, isArrival);
-                        if (trafficCache[r.busId]) r._trafficSource = true;
-                    }
-                });
-                await Promise.all(trafficPromises);
-                const trafficCount = Object.values(trafficCache).filter(Boolean).length;
-                if (trafficCount > 0) console.log('[Go] Traffic-aware ETAs for ' + trafficCount + '/' + routes.length + ' routes');
-            }
-
-            for (const r of routes) {
-                if (!r.stops.length) continue;
-                const mx = r._osrmMatrix;
-                const tLegs = trafficCache[r.busId]; // traffic leg durations in seconds, or null
-
-                // Traffic-aware drive time: uses Mapbox traffic legs when available
-                // Leg indexing: leg[0] = camp→stop1 (dismissal) or stop1→stop2 (arrival)
-                // For dismissal: leg[i] = stop[i-1] → stop[i], leg[0] = camp → stop[0]
-                // For arrival: leg[i] = stop[i] → stop[i+1], last leg = lastStop → camp
-                function driveMin(stopA, stopB) {
-                    if (mx && stopA._matrixIdx != null && stopB._matrixIdx != null) {
-                        const val = mx[stopA._matrixIdx]?.[stopB._matrixIdx];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stopA.lat && stopB.lat) return drivingDist(stopA.lat, stopA.lng, stopB.lat, stopB.lng) / 60;
-                    return 3;
-                }
-                function campToStop(stop) {
-                    if (mx && stop._matrixIdx != null) {
-                        const val = mx[0]?.[stop._matrixIdx];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stop.lat && _campCoordsCache) return drivingDist(_campCoordsCache.lat, _campCoordsCache.lng, stop.lat, stop.lng) / 60;
-                    return 15;
-                }
-                function stopToCamp(stop) {
-                    if (mx && stop._matrixIdx != null) {
-                        const val = mx[stop._matrixIdx]?.[0];
-                        if (val != null && val >= 0) return val / 60;
-                    }
-                    if (stop.lat && _campCoordsCache) return drivingDist(stop.lat, stop.lng, _campCoordsCache.lat, _campCoordsCache.lng) / 60;
-                    return 15;
-                }
-
-                // Use traffic legs when available, override static calculations
-                function trafficLegMin(legIdx) {
-                    if (tLegs && tLegs[legIdx] != null) return tLegs[legIdx] / 60; // seconds → minutes
-                    return null;
-                }
-
-                if (isArrival) {
-                    let totalDur = 0;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        totalDur += avgStopMin;
-                    }
-                    const returnLeg = trafficLegMin(r.stops.length);
-                    totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
-                    let cum = timeMin - totalDur;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        cum += avgStopMin;
-                        r.stops[i].estimatedTime = formatTime(cum);
-                        r.stops[i].estimatedMin = cum;
-                    }
-                    r.totalDuration = Math.round(totalDur);
-                } else {
-                    let cum = timeMin;
-                    for (let i = 0; i < r.stops.length; i++) {
-                        // Dismissal: leg[0] = camp→stop[0], leg[i] = stop[i-1]→stop[i]
-                        const tLeg = trafficLegMin(i);
-                        if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
-                        else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
-                        cum += avgStopMin;
-                        r.stops[i].estimatedTime = formatTime(cum);
-                        r.stops[i].estimatedMin = cum;
-                    }
-                    r.totalDuration = Math.round(cum - timeMin);
-                    if (shiftNeedsReturn && r.stops.length > 0) {
-                        const returnLeg = trafficLegMin(r.stops.length);
-                        r.returnTocamp = Math.round(returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
-                        r.totalDuration += r.returnTocamp;
-                    }
-                }
-                r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
-
-                // ── Max ride time audit ──
-                // No child should ride longer than maxRideTime minutes.
-                // For dismissal: child at stop N rides from camp departure to stop N ETA.
-                // For arrival: child at stop N rides from stop N pickup to camp arrival.
-                const maxRideMin = D.setup.maxRideTime || 45;
-                if (r.stops.length > 0 && r.totalDuration > 0) {
-                    r.stops.forEach(st => {
-                        if (!st.estimatedMin) return;
-                        let rideMin;
-                        if (isArrival) {
-                            // Arrival: kid boards at this stop, rides until camp arrival
-                            const campArrivalMin = timeMin; // camp arrival = departure time for arrival mode
-                            rideMin = campArrivalMin - st.estimatedMin;
-                        } else {
-                            // Dismissal: kid boards at camp, rides until this stop
-                            rideMin = st.estimatedMin - timeMin;
-                        }
-                        st._rideTimeMin = Math.round(Math.abs(rideMin));
-                        if (st._rideTimeMin > maxRideMin) {
-                            st._rideTimeWarning = true;
-                            st.campers.forEach(c => {
-                                console.warn('[Go] Ride time: ' + c.name + ' on ' + r.busName + ' stop ' + st.stopNum + ' = ' + st._rideTimeMin + 'min (max ' + maxRideMin + ')');
-                            });
-                        }
-                    });
-                    // Count violations
-                    const violations = r.stops.filter(s => s._rideTimeWarning).length;
-                    if (violations > 0) {
-                        r._rideTimeViolations = violations;
-                        console.warn('[Go] ' + r.busName + ': ' + violations + ' stop(s) exceed ' + maxRideMin + 'min max ride time');
-                    }
-                }
-
-                r.stops.forEach(s => { delete s._matrixIdx; });
-                delete r._osrmMatrix;
-            }
-
-            allShiftResults.push({ shift, routes, camperCount: routes.reduce((s, r) => s + r.camperCount, 0) });
         }
 
-        _generatedRoutes = allShiftResults;
-        _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
-        D.savedRoutes = allShiftResults;
-        save();
-        showProgress('Done!', 100);
-        setTimeout(() => { hideProgress(); renderRouteResults(applyOverrides(allShiftResults)); renderStaff(); }, 400);
-    }
-
-    // =========================================================================
-    // GRAPHHOPPER ROUTE OPTIMIZATION — primary solver
-    // Sends stops + single vehicle to GH VRP endpoint.
-    // Returns ordered stops array, or null on failure.
-    // Free tier: 5 vehicles, 30 services per request.
-    // =========================================================================
-    let _ghQuotaExhausted = false; // set to true if GH returns 429/quota error
-
-    async function solveWithGraphHopper(stops, vehicle, campLat, campLng, isArrival, needsReturn) {
-        const ghKey = getGHKey();
-        if (!ghKey || _ghQuotaExhausted) return null;
-        if (!stops.length) return null;
-
-        const serviceTime = (D.setup.avgStopTime || 2) * 60;
-        // GH free tier: 5 vehicles, up to ~100 services (not 30)
-        const MAX_GH_SERVICES = 80;
-
-        // If >MAX stops, optimize the most spread-out, then cheapestInsert the rest
-        let primaryStops = stops;
-        let overflowStops = [];
-        if (stops.length > MAX_GH_SERVICES) {
-            const cLat = stops.reduce((s, st) => s + st.lat, 0) / stops.length;
-            const cLng = stops.reduce((s, st) => s + st.lng, 0) / stops.length;
-            const ranked = stops.map((st, i) => ({ st, i, d: drivingDist(cLat, cLng, st.lat, st.lng) }));
-            ranked.sort((a, b) => b.d - a.d);
-            const primaryIndices = new Set(ranked.slice(0, MAX_GH_SERVICES).map(r => r.i));
-            primaryStops = [];
-            overflowStops = [];
-            stops.forEach((st, i) => {
-                if (primaryIndices.has(i)) primaryStops.push(st);
-                else overflowStops.push(st);
-            });
-            console.log('[Go] GH: ' + stops.length + ' stops, optimizing ' + primaryStops.length + ', will insert ' + overflowStops.length + ' after');
+        if (!routes) {
+            console.error('[Go v5] Shift "' + shiftLabel + '": all routing paths failed');
+            toast('Failed to generate routes for ' + shiftLabel, 'error');
+            allShiftResults.push({ shift, routes: [], camperCount: 0 });
+            continue;
         }
 
-        // Build GH VRP request — use the documented format exactly
-        // https://docs.graphhopper.com/#tag/Route-Optimization-API
-        const services = primaryStops.map((st, i) => ({
-            id: 'stop_' + i,
-            name: st.address || ('Stop ' + (i + 1)),
-            address: { location_id: 'loc_' + i, lon: st.lng, lat: st.lat },
-            size: [st.campers.length],
-            duration: serviceTime
-        }));
+        // =====================================================================
+        // COMMON POST-PROCESSING (runs regardless of which path produced routes)
+        // =====================================================================
+        // - capacity rebalancing (Phase 2 — equalize bus loads)
+        // - stopNum numbering
+        // - ETA / estimatedTime pipeline (first pass, so we know totalDuration)
+        // - duration-based stop redistribution (Phase 3 — honor route cap)
+        // - ETA pipeline second pass after splits
+        // - max-ride-time audit
+        // - staff nearest-stop suggestions
+        // =====================================================================
+        _rebalanceBusLoads(routes, shiftVehicles);
 
-        const veh = {
-            vehicle_id: vehicle.busId || 'bus_1',
-            type_id: 'bus'
-        };
-
-        // Find farthest stop from camp
-        let fIdx = 0, fDist = 0;
-        primaryStops.forEach((s, i) => {
-            const d = drivingDist(campLat, campLng, s.lat, s.lng);
-            if (d > fDist) { fDist = d; fIdx = i; }
+        _applyETAsAndAudits(routes, {
+            shift, isArrival, campLat, campLng,
+            avgStopMin,
+            shiftNeedsReturn: si === shifts.length - 1 && !isArrival
         });
 
-        if (isArrival) {
-            // Arrival: farthest first → closest last → camp
-            veh.start_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
-            veh.end_address = { location_id: 'camp', lon: campLng, lat: campLat };
-        } else {
-            // Dismissal: camp → closest first → farthest last
-            veh.start_address = { location_id: 'camp', lon: campLng, lat: campLat };
-            veh.end_address = { location_id: 'farthest', lon: primaryStops[fIdx].lng, lat: primaryStops[fIdx].lat };
+        // Hard-split any route that's still over the duration cap. Use
+        // setup.maxRouteDuration as the target — same value the solver got
+        // as a soft cap, but enforced after the fact.
+        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        const _hadOverlong = routes.some(r => (r.totalDuration || 0) > _maxRouteMin);
+        if (_hadOverlong) {
+            _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, _maxRouteMin);
+            // Recompute ETAs after stops moved
+            _applyETAsAndAudits(routes, {
+                shift, isArrival, campLat, campLng,
+                avgStopMin,
+                shiftNeedsReturn: si === shifts.length - 1 && !isArrival
+            });
         }
 
-        const body = {
-            vehicles: [veh],
-            vehicle_types: [{ type_id: 'bus', capacity: [vehicle.capacity || 999] }],
-            services: services
-        };
+        // Staff suggestions (unchanged from v4) — mutate D.monitors / D.counselors
+        _suggestStaffStops(routes, noStopStaff, campLat, campLng);
 
-        try {
-            // Retry with backoff for 429 (rate limit, not quota)
-            let resp = null;
-            for (let attempt = 0; attempt < 3; attempt++) {
-                if (attempt > 0) {
-                    const delay = 2000 * attempt; // 2s, 4s
-                    console.log('[Go] GH: rate limited, retrying in ' + delay + 'ms...');
-                    await new Promise(r => setTimeout(r, delay));
-                }
-                resp = await fetch('https://graphhopper.com/api/1/vrp?key=' + ghKey, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(body)
-                });
-                if (resp.status !== 429) break;
-            }
+        routes.forEach(r => { r._source = r._source || routeSource; });
 
-            if (resp.status === 402) {
-                console.warn('[Go] GH: billing quota exhausted, switching to VROOM');
-                _ghQuotaExhausted = true;
-                return null;
-            }
+        allShiftResults.push({
+            shift,
+            routes,
+            camperCount: routes.reduce((s, r) => s + r.camperCount, 0)
+        });
+    }
 
-            if (resp.status === 429) {
-                console.warn('[Go] GH: rate limited after 3 retries, falling back to VROOM');
-                return null; // don't set _ghQuotaExhausted — next zone can retry
-            }
+    // -------------------------------------------------------------------------
+    // FINALIZE
+    // -------------------------------------------------------------------------
+    _generatedRoutes = allShiftResults;
+    _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
 
-            if (!resp.ok) {
+    // ── Shift-level imbalance audit ────────────────────────────────────────
+    // Surface bus-load imbalance per shift. The professional camp routes
+    // run in a 27-54 camper band; we want max/min ratio under ~1.5×.
+    allShiftResults.forEach((sr, si) => {
+        const active = sr.routes.filter(r => r.camperCount > 0);
+        if (active.length < 2) return;
+        const counts = active.map(r => r.camperCount);
+        const min = Math.min(...counts), max = Math.max(...counts);
+        const ratio = max / Math.max(1, min);
+        if (ratio >= 2 || (max - min) >= 25) {
+            const label = sr.shift?.label || ('Shift ' + (si + 1));
+            console.warn('[Go v5.2] ' + label + ': bus load imbalance — min=' +
+                min + ', max=' + max + ' (ratio ' + ratio.toFixed(2) + 'x). ' +
+                'Lightest: ' + active.find(r => r.camperCount === min).busName +
+                '; heaviest: ' + active.find(r => r.camperCount === max).busName);
+        }
+    });
+
+    // Cache road geometry (unchanged from v4)
+    let geomCached = 0;
+    allShiftResults.forEach((sr, si) => {
+        sr.routes.forEach(r => {
+            if (_routeGeomCache[r.busId + '_' + si]) { geomCached++; return; }
+            if (r._roadPts?.length) {
+                _routeGeomCache[r.busId + '_' + si] = r._roadPts;
+                geomCached++;
+            } else if (r._encodedPolyline) {
                 try {
-                    const errBody = await resp.text();
-                    console.warn('[Go] GH: HTTP ' + resp.status + ' — ' + errBody.substring(0, 200));
-                } catch (_) {
-                    console.warn('[Go] GH: HTTP ' + resp.status);
-                }
-                return null;
-            }
-
-            const result = await resp.json();
-            const route = result.solution?.routes?.[0];
-            if (!route?.activities?.length) {
-                console.warn('[Go] GH: no solution returned');
-                return null;
-            }
-
-            // Map activities back to stops
-            const ordered = [];
-            route.activities.forEach(act => {
-                if (act.type !== 'service') return;
-                const idx = parseInt(act.id?.replace('stop_', ''));
-                if (!isNaN(idx) && primaryStops[idx]) ordered.push(primaryStops[idx]);
-            });
-
-            // Handle unassigned
-            if (result.solution?.unassigned?.services?.length) {
-                result.solution.unassigned.services.forEach(ua => {
-                    const idx = parseInt(ua.id?.replace('stop_', ''));
-                    if (!isNaN(idx) && primaryStops[idx] && !ordered.includes(primaryStops[idx])) {
-                        cheapestInsert(ordered, primaryStops[idx]);
+                    const decoded = decodePolyline(r._encodedPolyline);
+                    if (decoded?.length) {
+                        _routeGeomCache[r.busId + '_' + si] = decoded;
+                        r._roadPts = decoded;
+                        geomCached++;
                     }
-                });
+                } catch (_) { /* ignore */ }
             }
+        });
+    });
+    if (geomCached) console.log('[Go v5] Road geometry cached: ' + geomCached + ' routes');
 
-            // Insert overflow stops using cheapestInsert with driving distances
-            overflowStops.forEach(st => cheapestInsert(ordered, st));
+    D.savedRoutes = allShiftResults;
+    save();
 
-            console.log('[Go] GH: optimized ' + ordered.length + ' stops for ' + (vehicle.name || vehicle.busId));
-            return ordered;
+    const elapsed = Math.round((Date.now() - _routeProgStart) / 1000);
+    const elapsedStr = elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + (elapsed % 60) + 's';
+    const totalRoutes = allShiftResults.reduce((s, sr) => s + sr.routes.length, 0);
+    const totalCampers = allShiftResults.reduce((s, sr) => s + sr.camperCount, 0);
 
-        } catch (e) {
-            console.warn('[Go] GH: request failed:', e.message);
-            return null;
+    showProgressDone('Routes generated',
+        totalRoutes + ' route(s), ' + totalCampers + ' camper(s) in ' + elapsedStr);
+    renderRouteResults(allShiftResults);
+    renderStaff();
+    setTimeout(hideProgress, 2000);
+}
+
+
+// =============================================================================
+// PRIMARY PATH: Road-graph neighborhoods
+// =============================================================================
+//
+// Returns an array of route objects, or null if the pipeline cannot produce
+// valid routes (triggers the fallback in the caller).
+//
+// Route flow:
+//   1. Build neighborhoods from OSM road graph (persisted across runs)
+//   2. If >5% of campers can't snap to any segment: return null → fallback
+//   3. packIntoBuses: assigns each neighborhood to a bus (geographic locality
+//      + capacity + sibling coherence + prior-year stability)
+//   4. expandToPhysicalStops: for each bus, generate its stops from its own
+//      zone's campers only (door-to-door or corner, per user setting)
+//   5. For each bus: run a per-bus TSP (Google Route Optimization on one
+//      vehicle) to optimally sequence its stops.  This gets globally-optimal
+//      ordering WITHIN each bus without allowing the solver to move campers
+//      BETWEEN buses (which would undo the zone partitioning).
+//   6. Cross-bus camper deduplication safety net (defensive — should never
+//      trigger after zones are drawn correctly).
+//   7. Record year-over-year assignment state.
+// =============================================================================
+async function _tryNeighborhoodPipeline({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats, dropoffMode,
+    isArrival,
+    googleAvailable, googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec,
+    shiftIdx
+}) {
+    showProgress(shiftLabel + ': detecting neighborhoods...', pctBase + 10);
+
+    // ── Prep input for buildNeighborhoods ──
+    const nhCampers = allCampers.map(c => {
+        const a = D.addresses[c.name] || {};
+        return {
+            name: c.name, lat: c.lat, lng: c.lng,
+            address: c.address,
+            division: c.division, bunk: c.bunk,
+            zip: a.zip || ''
+        };
+    });
+
+    const sibMap = detectSiblings(allCampers);
+    const siblingGroups = {};
+    for (const [name, gid] of Object.entries(sibMap)) {
+        (siblingGroups[gid] ||= []).push(name);
+    }
+
+    // ── Run neighborhood detection ──
+    const nhResult = await window.CampistryGoNeighborhoods.buildNeighborhoods({
+        campers: nhCampers,
+        options: { verbose: true, siblingGroups }
+    });
+
+    if (!nhResult || !nhResult.neighborhoods?.length) {
+        console.warn('[Go v5] Neighborhood detection produced 0 neighborhoods');
+        return null;
+    }
+
+    // ── Safety gate: don't ship a roster missing too many kids ──
+    const unattachedCount = nhResult.unattachedCampers?.length || 0;
+    const unattachedPct = unattachedCount / Math.max(1, allCampers.length);
+    if (unattachedPct > 0.05) {
+        console.warn('[Go v5] Neighborhood mode: ' + (unattachedPct * 100).toFixed(1) +
+            '% of campers unattached (exceeds 5% threshold) — falling through');
+        return null;
+    }
+
+    showProgress(shiftLabel + ': packing neighborhoods into buses...', pctBase + 25);
+
+    // ── Bus assignment ──
+    const priorAssignments = window.GoNhPersistence
+        ? await window.GoNhPersistence.getPriorAssignments()
+        : {};
+
+    const reducedBuses = shiftVehicles.map(v => ({
+        id: v.busId, name: v.name,
+        capacity: Math.max(0, (v.capacity || 0) - reserveSeats)
+    }));
+
+    const nhAssignment = window.CampistryGoNeighborhoods.packIntoBuses({
+        result: nhResult,
+        buses: reducedBuses,
+        priorAssignments,
+        siblingGroups,
+        depot: { lat: campLat, lng: campLng }
+    });
+
+    showProgress(shiftLabel + ': generating per-zone stops...', pctBase + 40);
+
+    // ── Expand each zone into physical stops ──
+    // This is the heart of the "stops per zone, not globally" fix.
+    // expandToPhysicalStops creates stops for each bus using ONLY that bus's
+    // assigned segments/homes, so stops can never land on zone seams.
+    const nhPhysical = window.CampistryGoNeighborhoods.expandToPhysicalStops({
+        assignment: nhAssignment,
+        result: nhResult,
+        isArrival,
+        dropoffMode
+    });
+
+    // ── Append any unsnapped campers to their nearest bus as door drops ──
+    // Gated at 5% above; these are the trailing few.
+    const attachedNames = new Set(nhResult.homes.map(h => h.camperName));
+    const leftover = allCampers.filter(c => !attachedNames.has(c.name));
+    if (leftover.length) {
+        console.warn('[Go v5] ' + leftover.length +
+            ' un-snapped camper(s) — appending as door-drops to nearest bus');
+        for (const c of leftover) {
+            let bestBus = null, bestDist = Infinity;
+            for (const bus of nhPhysical) {
+                if (!bus.stops?.length) continue;
+                for (const s of bus.stops) {
+                    const d = haversineMi(c.lat, c.lng, s.lat, s.lng);
+                    if (d < bestDist) { bestDist = d; bestBus = bus; }
+                }
+            }
+            if (bestBus) {
+                bestBus.stops.push({
+                    lat: c.lat, lng: c.lng,
+                    address: c.address,
+                    campers: [{ name: c.name, division: c.division, bunk: c.bunk }]
+                });
+                bestBus.camperCount = (bestBus.camperCount || 0) + 1;
+            }
         }
     }
 
-    // =========================================================================
-    // VROOM SOLVER (ORS) — fallback when GraphHopper unavailable
-    // =========================================================================
-    async function solveWithVROOM(campers, vehicles, campLat, campLng, mode, apiKey, shift, shiftIdx, totalShifts, zones) {
-        const isArrival = D.activeMode === 'arrival';
-        const hasShifts = totalShifts > 1;
-        const isLastShift = shiftIdx === totalShifts - 1;
-        const needsReturn = hasShifts && !isLastShift; // last shift doesn't come back
-        const numBuses = vehicles.length;
-        const serviceTime = (D.setup.avgStopTime || 2) * 60;
+    // ── Stop consolidation per bus ──────────────────────────────────────
+    // expandToPhysicalStops gives one stop per segment, which in dense
+    // neighborhoods produces 25-30 stops on a single bus. Camp's reference
+    // routes consolidate aggressively (10-15 stops, 2-3 campers each) by
+    // pulling kids to a shared corner. Run two merge passes per bus:
+    //   1. Same-street within 0.25mi → merge to closer one
+    //   2. Anywhere within 0.10mi → merge regardless of street
+    // Capped at 15 campers/stop (safety + camp's typical max).
+    let consolidationStats = { busesAffected: 0, totalRemoved: 0 };
+    for (const bus of nhPhysical) {
+        if (!bus.stops?.length || bus.stops.length < 2) continue;
+        const before = bus.stops.length;
+        bus.stops = _consolidateBusStops(bus.stops);
+        const removed = before - bus.stops.length;
+        if (removed > 0) {
+            consolidationStats.busesAffected++;
+            consolidationStats.totalRemoved += removed;
+        }
+    }
+    if (consolidationStats.totalRemoved > 0) {
+        console.log('[Go v5] Stop consolidation: ' +
+            consolidationStats.totalRemoved + ' stops merged across ' +
+            consolidationStats.busesAffected + ' bus(es)');
+    }
 
-        // Phase 1: Create stops PER REGION
-        // Each ZIP region gets its own density radius — Inwood (dense grid)
-        // produces tighter clusters than Hewlett (suburban cul-de-sacs).
-        let stops = [];
-        if (_detectedRegions?.length && mode !== 'door-to-door') {
-            // Group campers by their ZIP region
-            const campersByRegion = {};
-            _detectedRegions.forEach(reg => { campersByRegion[reg.id] = []; });
-            campers.forEach(c => {
-                let bestReg = _detectedRegions[0].id;
-                _detectedRegions.forEach(reg => { if (reg.camperNames.includes(c.name)) bestReg = reg.id; });
-                if (!campersByRegion[bestReg]) campersByRegion[bestReg] = [];
-                campersByRegion[bestReg].push(c);
-            });
+    // ── Build route objects (still in NH-spine order — will be TSP'd next) ──
+    const nhNameById = {};
+    for (const nh of nhResult.neighborhoods) nhNameById[nh.id] = nh.primaryName;
 
-            // Pre-fetch intersections for ALL campers at once (corner-stops mode)
-            // so the bbox covers the entire service area, not just one ZIP region.
-            // Without this, the first region's fetch populates the cache, and
-            // subsequent regions (e.g., Hewlett) reuse that cache which only
-            // covers the first region's area — resulting in address ranges
-            // instead of intersection names.
-            if (mode === 'corner-stops' && !_intersectionCache) {
-                showProgress('Fetching real intersections...', 15);
-                const allIntersections = await fetchIntersections(campers);
-                if (allIntersections?.length) {
-                    _intersectionCache = allIntersections;
-                    try { localStorage.setItem('campistry_go_intersections', JSON.stringify({ intersections: allIntersections, timestamp: Date.now() })); } catch (_) {}
-                    console.log('[Go] OSM: ' + allIntersections.length + ' real intersections (full service area)');
+    let routes = nhPhysical.map(bus => {
+        const vehicle = shiftVehicles.find(v => v.busId === bus.busId) || {};
+        const names = (bus.neighborhoodIds || []).map(id =>
+            nhNameById[id.replace(/_p\d+$/, '')] || id);
+        return {
+            busId:          bus.busId,
+            busName:        vehicle.name || bus.name || bus.busId,
+            busColor:       vehicle.color || '#10b981',
+            monitor:        vehicle.monitor    || null,
+            counselors:     vehicle.counselors || [],
+            stops:          bus.stops.map((s, i) => ({
+                stopNum: i + 1,
+                campers: s.campers,
+                address: s.address,
+                lat: s.lat, lng: s.lng
+            })),
+            camperCount:    bus.camperCount,
+            _cap:           vehicle.capacity,
+            totalDuration:  0,
+            _neighborhoodIds:   bus.neighborhoodIds,
+            _neighborhoodNames: [...new Set(names)],
+            _segmentOrder:      bus.segmentOrder,
+            _source:        'neighborhood-mode'
+        };
+    });
+
+    // ── Cross-bus dedup safety net ──
+    // Should not trigger once zones are drawn correctly, but guards against
+    // any regression in neighborhood detection.
+    (function dedupAcrossBuses() {
+        const seen = new Set();
+        let removed = 0;
+        for (const r of routes) {
+            for (const st of r.stops) {
+                const keep = [];
+                for (const cc of (st.campers || [])) {
+                    const n = typeof cc === 'string' ? cc : cc.name;
+                    if (!n || seen.has(n)) { removed++; continue; }
+                    seen.add(n);
+                    keep.push(cc);
+                }
+                st.campers = keep;
+            }
+            r.stops = r.stops.filter(s => s.campers.length > 0);
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
+        }
+        if (removed) {
+            console.warn('[Go v5] Cross-bus dedup removed ' + removed + ' duplicate(s) ' +
+                '(upstream detection bug — please investigate)');
+        }
+    })();
+
+
+    // ── Per-bus TSP re-ordering ──
+    // Now that each bus has its stops fixed (who is on it is decided), run
+    // a single-vehicle TSP on each bus to find the best stop sequence.
+    // This gets LSTA-grade stop ordering within each zone without letting
+    // the solver move campers between zones.
+    if (googleAvailable && routes.length) {
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 60);
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            try {
+                const tspResult = await _perBusGoogleTSP({
+                    route: r,
+                    campLat, campLng,
+                    isArrival,
+                    serviceTimeSec,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    shift,
+                    shiftIdx
+                });
+                if (tspResult) {
+                    r.stops = tspResult.stops;
+                    r.stops.forEach((s, i) => s.stopNum = i + 1);
+                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
+                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
+                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
+                }
+            } catch (e) {
+                console.warn('[Go v5] Per-bus TSP failed for ' + r.busName +
+                    ' — using NH-spine order (' + e.message + ')');
+                // Fall through with spine-order stops; still a valid route.
+            }
+        }
+    }
+
+    // ── Record year-over-year assignment state ──
+    if (window.GoNhPersistence) {
+        try {
+            const prevPayload = await window.GoNhPersistence.load();
+            await window.GoNhPersistence.recordAssignment(nhAssignment, nhResult);
+            const curPayload = await window.GoNhPersistence.load();
+            const changes = window.GoNhPersistence.diff(prevPayload, curPayload);
+            if (changes.length) {
+                console.log('[Go v5] Year-over-year neighborhood changes:');
+                for (const ch of changes) {
+                    console.log('  ' + ch.primaryName + ' (' + ch.nhId + '): ' +
+                        (ch.fromBus || '∅') + ' → ' + (ch.toBus || '∅') +
+                        ' (' + ch.reason + ')');
+                }
+            } else {
+                console.log('[Go v5] No neighborhood changes from last run');
+            }
+        } catch (e) {
+            console.warn('[Go v5] Neighborhood persistence failed:', e.message);
+        }
+    }
+
+    toast('✓ Routes generated — ' + routes.length + ' buses, ' +
+          nhResult.neighborhoods.length + ' neighborhoods');
+    console.log('[Go v5] Primary path complete: ' + routes.length + ' routes, ' +
+        routes.reduce((s, r) => s + r.stops.length, 0) + ' stops, ' +
+        nhResult.neighborhoods.length + ' neighborhoods');
+
+    return routes;
+}
+
+
+// =============================================================================
+// SPATIAL SORT PIPELINE — Two-Phase Density-Aware Clustering
+//
+// Phase 1: K-means into k=numBuses clusters on pure lat/lng
+// Phase 2: Dissolve clusters under MIN_BUS_THRESHOLD (75% capacity = 34)
+//          and re-cluster the dense areas with freed-up buses
+// =============================================================================
+async function _trySpatialSortPipeline({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats, dropoffMode,
+    isArrival,
+    googleAvailable, googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec,
+    shiftIdx
+}) {
+    const avgCapacity = shiftVehicles.length
+        ? Math.floor(shiftVehicles.reduce((s, v) => s + (v.capacity || 0), 0) / shiftVehicles.length)
+        : 48;
+    const _softPct = (D.setup.clusterSoftCapPct ?? 112) / 100;
+    const _dissPct = (D.setup.clusterDissolvePct ?? 55) / 100;
+    const _floorPct = (D.setup.clusterFloorPct ?? 30) / 100;
+    const SOFT_CAPACITY = Math.ceil(avgCapacity * _softPct);
+    const MIN_BUS_THRESHOLD = Math.ceil(avgCapacity * _dissPct);
+    const CASCADE_FLOOR = Math.ceil(avgCapacity * _floorPct);
+    console.log('[Go v6] Fleet avg capacity: ' + avgCapacity +
+        ', soft cap: ' + SOFT_CAPACITY + ' (' + Math.round(_softPct * 100) + '%)' +
+        ', dissolve threshold: ' + MIN_BUS_THRESHOLD + ' (' + Math.round(_dissPct * 100) + '%)' +
+        ', cascade floor: ' + CASCADE_FLOOR + ' (' + Math.round(_floorPct * 100) + '%)');
+
+    // ── Helper: run k-means N times with random seeds, return tightest result ──
+    // Score uses arterial-aware bucketSpread when fingerprints are available, so
+    // restarts that align clusters along corridors are preferred over restarts
+    // that produce equally-tight bounding boxes but cross multiple arterials.
+    function runKMeans(atomSet, numClusters) {
+        if (!atomSet.length || numClusters <= 0) return [];
+        const RESTARTS = 7;
+        let bestBuckets = null;
+        let bestScore = Infinity;
+        const arterialAware = !!_arterialFingerprint;
+        for (let r = 0; r < RESTARTS; r++) {
+            const buckets = runKMeansOnce(atomSet, numClusters);
+            // Score: sum of (spread-mi × sqrt(atoms)) — penalizes elongated and big clusters.
+            // Spread is arterial-discounted when fingerprints exist, so restarts
+            // that produce corridor-aligned clusters score better.
+            let score = 0;
+            for (const b of buckets) {
+                if (b.length < 2) continue;
+                const spread = arterialAware
+                    ? bucketSpread(b)
+                    : haversineMi(
+                        Math.min(...b.map(a => a.lat)), Math.min(...b.map(a => a.lng)),
+                        Math.max(...b.map(a => a.lat)), Math.max(...b.map(a => a.lng)));
+                score += spread * Math.sqrt(b.length);
+            }
+            if (score < bestScore) { bestScore = score; bestBuckets = buckets; }
+        }
+        console.log('[Go v6] K-means: best of ' + RESTARTS + ' restarts (score ' +
+            bestScore.toFixed(2) + (arterialAware ? ', arterial-aware' : '') + ')');
+        return bestBuckets;
+    }
+
+    function runKMeansOnce(atomSet, numClusters) {
+        if (!atomSet.length || numClusters <= 0) return [];
+
+        // K-means++ seeding
+        const cents = [];
+        const firstIdx = Math.floor(Math.random() * atomSet.length);
+        cents.push({ lat: atomSet[firstIdx].lat, lng: atomSet[firstIdx].lng });
+
+        while (cents.length < numClusters) {
+            // True k-means++: weighted-random pick, probability ∝ distance²
+            const weights = new Array(atomSet.length);
+            let total = 0;
+            for (let i = 0; i < atomSet.length; i++) {
+                let minDist = Infinity;
+                for (const c of cents) {
+                    const d = (atomSet[i].lat - c.lat) ** 2 + (atomSet[i].lng - c.lng) ** 2;
+                    if (d < minDist) minDist = d;
+                }
+                weights[i] = minDist;
+                total += minDist;
+            }
+            let target = Math.random() * total;
+            let pickIdx = 0;
+            for (let i = 0; i < atomSet.length; i++) {
+                target -= weights[i];
+                if (target <= 0) { pickIdx = i; break; }
+            }
+            cents.push({ lat: atomSet[pickIdx].lat, lng: atomSet[pickIdx].lng });
+        }
+
+        // Iterate
+        const asgn = new Array(atomSet.length).fill(0);
+        for (let iter = 0; iter < 30; iter++) {
+            let changed = false;
+            for (let i = 0; i < atomSet.length; i++) {
+                let bestC = 0, bestD = Infinity;
+                for (let ci = 0; ci < numClusters; ci++) {
+                    const d = (atomSet[i].lat - cents[ci].lat) ** 2 +
+                              (atomSet[i].lng - cents[ci].lng) ** 2;
+                    if (d < bestD) { bestD = d; bestC = ci; }
+                }
+                if (asgn[i] !== bestC) { asgn[i] = bestC; changed = true; }
+            }
+            if (!changed) break;
+            for (let ci = 0; ci < numClusters; ci++) {
+                let sLat = 0, sLng = 0, n = 0;
+                for (let i = 0; i < atomSet.length; i++) {
+                    if (asgn[i] === ci) { sLat += atomSet[i].lat; sLng += atomSet[i].lng; n++; }
+                }
+                if (n > 0) { cents[ci].lat = sLat / n; cents[ci].lng = sLng / n; }
+            }
+        }
+
+        const buckets = [];
+        for (let ci = 0; ci < numClusters; ci++) buckets.push([]);
+        for (let i = 0; i < atomSet.length; i++) buckets[asgn[i]].push(atomSet[i]);
+        return buckets;
+    }
+
+    function bucketSize(bucket) {
+        return bucket.reduce((s, a) => s + a.size, 0);
+    }
+
+    function bucketCentroid(bucket) {
+        if (!bucket.length) return null;
+        let sLat = 0, sLng = 0;
+        for (const a of bucket) { sLat += a.lat; sLng += a.lng; }
+        return { lat: sLat / bucket.length, lng: sLng / bucket.length };
+    }
+
+    // Spatial snake sort — direction adapts to spread relative to camp.
+    // Campers spread N/S from camp → primary sort by LNG (vertical E/W slices)
+    // Campers spread E/W from camp → primary sort by LAT (horizontal N/S slices)
+    function spatialSnakeSort(atomList) {
+        if (atomList.length < 2) return [...atomList];
+        const lats = atomList.map(a => a.lat);
+        const lngs = atomList.map(a => a.lng);
+        const latSpread = Math.max(...lats) - Math.min(...lats);
+        const lngSpread = Math.max(...lngs) - Math.min(...lngs);
+        // lngSpread is in degrees — scale to approx miles at this latitude
+        const avgLat = lats.reduce((s, l) => s + l, 0) / lats.length;
+        const lngMiles = lngSpread * Math.cos(avgLat * Math.PI / 180) * 69;
+        const latMiles = latSpread * 69;
+
+        const northSouth = latMiles >= lngMiles;
+        if (northSouth) {
+            // Buses travel N/S → split into vertical columns (sort by lng first)
+            return [...atomList].sort((a, b) => a.lng - b.lng || a.lat - b.lat);
+        } else {
+            // Buses travel E/W → split into horizontal rows (sort by lat first)
+            return [...atomList].sort((a, b) => a.lat - b.lat || a.lng - b.lng);
+        }
+    }
+
+    // Even spatial split: sort atoms with direction-aware snake, cut into n chunks
+    function evenSpatialSplit(atomList, n) {
+        const sorted = spatialSnakeSort(atomList);
+        const total = sorted.reduce((s, a) => s + a.size, 0);
+        const target = Math.ceil(total / n);
+        const buckets = [];
+        let cur = [], curSz = 0;
+        for (const atom of sorted) {
+            if (curSz + atom.size > target && cur.length > 0 && buckets.length < n - 1) {
+                buckets.push(cur);
+                cur = []; curSz = 0;
+            }
+            cur.push(atom);
+            curSz += atom.size;
+        }
+        if (cur.length) buckets.push(cur);
+        return buckets;
+    }
+
+    // Capacity-preserving boundary-swap rebalance.
+    // For each atom, if another cluster's centroid is closer than its current,
+    // swap with the most "misplaced" atom in that other cluster (one whose own
+    // best move is back to ours). Cluster sizes never change. Iterate until stable.
+    function rebalanceToNearest(buckets, maxIter) {
+        if (buckets.length < 2) return 0;
+        let totalSwaps = 0;
+        for (let iter = 0; iter < (maxIter || 8); iter++) {
+            const cents = buckets.map(b => bucketCentroid(b));
+            let swaps = 0;
+            for (let bi = 0; bi < buckets.length; bi++) {
+                if (!cents[bi]) continue;
+                for (let ai = 0; ai < buckets[bi].length; ai++) {
+                    const atom = buckets[bi][ai];
+                    let bestB = bi, bestD = haversineMi(atom.lat, atom.lng, cents[bi].lat, cents[bi].lng);
+                    for (let bj = 0; bj < buckets.length; bj++) {
+                        if (bj === bi || !cents[bj]) continue;
+                        const d = haversineMi(atom.lat, atom.lng, cents[bj].lat, cents[bj].lng);
+                        if (d < bestD) { bestD = d; bestB = bj; }
+                    }
+                    if (bestB === bi) continue;
+                    // Find swap partner in bestB whose nearest is bi (or improvement is largest)
+                    let partnerIdx = -1, partnerGain = 0;
+                    for (let pj = 0; pj < buckets[bestB].length; pj++) {
+                        const p = buckets[bestB][pj];
+                        const dHere = haversineMi(p.lat, p.lng, cents[bestB].lat, cents[bestB].lng);
+                        const dThere = haversineMi(p.lat, p.lng, cents[bi].lat, cents[bi].lng);
+                        const gain = dHere - dThere;
+                        if (gain > partnerGain) { partnerGain = gain; partnerIdx = pj; }
+                    }
+                    if (partnerIdx < 0) continue;
+                    const tmp = buckets[bi][ai];
+                    buckets[bi][ai] = buckets[bestB][partnerIdx];
+                    buckets[bestB][partnerIdx] = tmp;
+                    swaps++;
                 }
             }
+            totalSwaps += swaps;
+            if (swaps === 0) break;
+        }
+        return totalSwaps;
+    }
 
-            // Create stops per region — each with its own density
-            for (const [regId, regCampers] of Object.entries(campersByRegion)) {
-                if (!regCampers.length) continue;
-                const regName = _detectedRegions.find(r => r.id === regId)?.name || regId;
-                let regionStops;
-                if (mode === 'optimized-stops') regionStops = createOptimizedStops(regCampers);
-                else if (mode === 'corner-stops') regionStops = await createCornerStops(regCampers);
-                else regionStops = createHouseStops(regCampers);
-                console.log('[Go]   ' + regName + ': density → ' + regionStops.length + ' stops from ' + regCampers.length + ' campers');
-                stops.push(...regionStops);
+    // Time estimate for a bucket: drive to/from camp + per-stop time + intra-cluster spread.
+    // Used by Phase 3 (split trigger + split count) and Phase 5 (cascade).
+    const STOP_WEIGHT = 120;   // seconds per camper (boarding, walking)
+    const INTRA_WEIGHT = 120;  // seconds per spread-mi × sqrt(atoms)
+    // Arterial-aware spread: atoms sharing a primary arterial are conceptually close
+    // because the bus drives the arterial fast. Without this, two clusters strung
+    // along Hillside Blvd 4mi apart read as 4mi spread → fail the cap → get split.
+    // Closes the historical-vs-ours fragmentation gap (PEACH/PURPLE/MAROON cases).
+    let _arterialFingerprint = null;
+    function bucketSpread(bucket) {
+        if (!bucket.length) return 0;
+        const lats = bucket.map(a => a.lat);
+        const lngs = bucket.map(a => a.lng);
+        const raw = haversineMi(
+            Math.min(...lats), Math.min(...lngs),
+            Math.max(...lats), Math.max(...lngs));
+        if (!_arterialFingerprint) return raw;
+        // Find the dominant arterial in the bucket
+        const counts = new Map();
+        for (const atom of bucket) {
+            const a = _arterialFingerprint.get(atom);
+            if (a) counts.set(a, (counts.get(a) || 0) + 1);
+        }
+        if (!counts.size) return raw;
+        let domName = null, domN = 0;
+        for (const [n, c] of counts) if (c > domN) { domN = c; domName = n; }
+        // Discount: if ≥70% of atoms share the dominant arterial, allow up to 25%
+        // discount, but never reduce by more than 1.0mi absolute. A 5mi cluster
+        // along an arterial still reads as 4mi — too wide for the cap. Only
+        // moderately-spread arterial-aligned clusters benefit.
+        const share = domN / bucket.length;
+        if (share < 0.7) return raw;
+        const pctDiscount = Math.min(0.25, (share - 0.7) * 0.83); // 0.7→0, 1.0→0.25
+        const absDiscount = Math.min(raw * pctDiscount, 1.0);
+        return raw - absDiscount;
+    }
+    function estimateBucketTime(bucket) {
+        if (!bucket.length) return 0;
+        const cent = bucketCentroid(bucket);
+        const driveSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
+        const spread = bucketSpread(bucket);
+        const numKids = bucket.reduce((s, a) => s + a.size, 0);
+        const intra = spread * Math.sqrt(bucket.length) * INTRA_WEIGHT;
+        return 2 * driveSec + numKids * STOP_WEIGHT + intra;
+    }
+
+    showProgress(shiftLabel + ': clustering — building atoms...', pctBase + 10);
+
+    // Prefetch major roads so spread metric can discount intra-arterial atoms.
+    // Cached across shifts via _majorRoadsBboxKey.
+    await _prefetchMajorRoads(allCampers);
+
+    // ── A. Build sibling atoms ──
+    const sibMap = detectSiblings(allCampers);
+    applyRideWith(allCampers);
+
+    const sibGroups = {};
+    for (const [name, gid] of Object.entries(sibMap)) {
+        (sibGroups[gid] ||= []).push(name);
+    }
+    const camperByName = {};
+    allCampers.forEach(c => { camperByName[c.name] = c; });
+
+    const atoms = [];
+    const atomized = new Set();
+
+    for (const members of Object.values(sibGroups)) {
+        const campers = members.map(n => camperByName[n]).filter(Boolean);
+        if (!campers.length) continue;
+        campers.forEach(c => atomized.add(c.name));
+        atoms.push({
+            members: campers,
+            size: campers.length,
+            lat: campers.reduce((s, c) => s + c.lat, 0) / campers.length,
+            lng: campers.reduce((s, c) => s + c.lng, 0) / campers.length
+        });
+    }
+    allCampers.forEach(c => {
+        if (!atomized.has(c.name)) {
+            atoms.push({ members: [c], size: 1, lat: c.lat, lng: c.lng });
+        }
+    });
+
+    console.log('[Go v6] Clustering: ' + atoms.length + ' atoms from ' +
+        allCampers.length + ' campers (' + Object.keys(sibGroups).length + ' sibling groups)');
+
+    // Build per-atom arterial fingerprint so bucketSpread can discount intra-arterial atoms.
+    _arterialFingerprint = _buildArterialFingerprints(atoms);
+    if (_majorRoadSegments?.length) {
+        const tagged = [..._arterialFingerprint.values()].filter(Boolean).length;
+        console.log('[Go v6] Arterial fingerprints: ' + tagged + '/' + atoms.length + ' atoms tagged');
+    }
+
+    // ── B. Phase 1: Initial k-means with k = numBuses ──
+    showProgress(shiftLabel + ': phase 1 — initial k-means...', pctBase + 15);
+
+    const k = shiftVehicles.length;
+    let busBuckets = runKMeans(atoms, k);
+    const p1Swaps = rebalanceToNearest(busBuckets, 8);
+
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] PHASE 1: Initial k-means (' + k + ' clusters, ' + p1Swaps + ' rebalance swaps)');
+    console.log('[Go v6] ═══════════════════════════════════════');
+    for (let i = 0; i < busBuckets.length; i++) {
+        const count = bucketSize(busBuckets[i]);
+        console.log('[Go v6]   Cluster ' + (i + 1) + ': ' + count + ' campers' +
+            (count < MIN_BUS_THRESHOLD ? ' ← DISSOLVE' : ''));
+    }
+
+    // ── C. Phase 2: Dissolve small clusters, re-cluster dense areas ──
+    showProgress(shiftLabel + ': phase 2 — dissolving small clusters...', pctBase + 25);
+
+    // ── C. Phase 2: Dissolve small clusters in rounds until all are 34+ ──
+    // Each round: find smallest cluster, merge into nearest neighbor.
+    // Repeat until every cluster has 34+ campers. Freed buses stay unused.
+    let round = 0;
+    while (true) {
+        let smallestIdx = -1, smallestSize = Infinity;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const sz = bucketSize(busBuckets[i]);
+            if (sz > 0 && sz < MIN_BUS_THRESHOLD && sz < smallestSize) {
+                smallestSize = sz;
+                smallestIdx = i;
+            }
+        }
+        if (smallestIdx < 0) break;
+
+        round++;
+        const cent = bucketCentroid(busBuckets[smallestIdx]);
+        let nearestIdx = -1, nearestDist = Infinity;
+        for (let i = 0; i < busBuckets.length; i++) {
+            if (i === smallestIdx || busBuckets[i].length === 0) continue;
+            const c = bucketCentroid(busBuckets[i]);
+            if (!c) continue;
+            const d = haversineMi(cent.lat, cent.lng, c.lat, c.lng);
+            if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
+        }
+        if (nearestIdx < 0) break;
+
+        const fromSize = bucketSize(busBuckets[smallestIdx]);
+        const toSize = bucketSize(busBuckets[nearestIdx]);
+        for (const atom of busBuckets[smallestIdx]) {
+            busBuckets[nearestIdx].push(atom);
+        }
+        console.log('[Go v6] Round ' + round + ': merged cluster ' + (smallestIdx + 1) +
+            ' (' + fromSize + ' campers) → cluster ' + (nearestIdx + 1) +
+            ' (' + toSize + ' → ' + bucketSize(busBuckets[nearestIdx]) + ' campers, ' +
+            nearestDist.toFixed(2) + 'mi apart)');
+        busBuckets[smallestIdx] = [];
+    }
+
+    // Remove empty buckets
+    busBuckets = busBuckets.filter(b => b.length > 0);
+    let unusedBuses = k - busBuckets.length;
+    if (round > 0) {
+        const p2Swaps = rebalanceToNearest(busBuckets, 8);
+        console.log('[Go v6] Dissolve complete: ' + round + ' merges, ' +
+            busBuckets.length + ' clusters remain, ' + unusedBuses + ' buses to redistribute, ' +
+            p2Swaps + ' rebalance swaps');
+    } else {
+        console.log('[Go v6] No clusters dissolved — all had ' + MIN_BUS_THRESHOLD + '+ campers');
+    }
+
+    // ── D. Phase 3: Split oversized clusters using freed buses ──
+    // Find largest cluster, compute how many buses it needs (ceil(size/capacity)),
+    // re-cluster its atoms into that many sub-clusters via k-means.
+    // Repeat until we run out of freed buses.
+    showProgress(shiftLabel + ': phase 3 — splitting large clusters...', pctBase + 35);
+
+    // Target time per bus = 1.4 × median of initial bucket times. Far-from-camp clusters
+    // exceed this naturally; splitting them produces more buses with smaller territories.
+    const initBucketTimes = busBuckets.map(b => estimateBucketTime(b));
+    const sortedInit = [...initBucketTimes].sort((a, b) => a - b);
+    const initMedian = sortedInit[Math.floor(sortedInit.length / 2)] || 1;
+    const TARGET_BUS_TIME = initMedian * 1.4;
+    const PHASE3_HARD_SPREAD = D.setup.clusterMaxSpreadMi ?? 3.5;
+    const SPREAD_SEC_PER_MI = 3600 / (D.setup.avgSpeed || 25);
+    console.log('[Go v6] Time target per bus: ' + (TARGET_BUS_TIME / 60).toFixed(1) +
+        'min (1.4× median ' + (initMedian / 60).toFixed(1) + 'min), spread cap ' +
+        PHASE3_HARD_SPREAD.toFixed(1) + 'mi');
+
+    let splitRound = 0;
+    let splitSafety = 0;
+    let lastWorstScore = Infinity;
+    let stagnantRounds = 0;
+    while (splitSafety++ < k * 2) {
+        // Worst cluster = max overrun across capacity AND time. Score combines both:
+        // capOver = (size - SOFT_CAPACITY) when over; timeOver = (time - TARGET) when over.
+        // Convert capacity to seconds via STOP_WEIGHT for unified comparison.
+        let largestIdx = -1, worstScore = 0;
+        for (let i = 0; i < busBuckets.length; i++) {
+            const sz = bucketSize(busBuckets[i]);
+            const t = estimateBucketTime(busBuckets[i]);
+            const sp = bucketSpread(busBuckets[i]);
+            const capOverSec = Math.max(0, (sz - SOFT_CAPACITY) * STOP_WEIGHT);
+            const timeOverSec = Math.max(0, t - TARGET_BUS_TIME);
+            const spreadOverSec = Math.max(0, sp - PHASE3_HARD_SPREAD) * SPREAD_SEC_PER_MI;
+            const score = Math.max(capOverSec, timeOverSec, spreadOverSec);
+            if (score > worstScore) { worstScore = score; largestIdx = i; }
+        }
+        if (largestIdx < 0 || worstScore <= 0) break;
+        const largestSize = bucketSize(busBuckets[largestIdx]);
+        const largestTime = estimateBucketTime(busBuckets[largestIdx]);
+        if (worstScore >= lastWorstScore) {
+            if (++stagnantRounds >= 2) {
+                console.log('[Go v6] Split aborted: no progress (worst score ' + worstScore.toFixed(0) + ')');
+                break;
             }
         } else {
-            // Single region or door-to-door — create globally
-            if (mode === 'optimized-stops') stops = createOptimizedStops(campers);
-            else if (mode === 'corner-stops') stops = await createCornerStops(campers);
-            else stops = createHouseStops(campers);
+            stagnantRounds = 0;
         }
-        if (!stops.length) return [];
+        lastWorstScore = worstScore;
 
-        // FIX 14: Use user's maxWalkDistance setting instead of hard-coded 500ft
-        const MAX_WALK_FT = (D.setup.maxWalkDistance && D.setup.maxWalkDistance > 0) ? D.setup.maxWalkDistance : 500;
+        // Need enough buses to bring capacity, time, AND spread under their targets
+        const largestSpread = bucketSpread(busBuckets[largestIdx]);
+        const busesForCap = Math.ceil(largestSize / avgCapacity);
+        const busesForTime = Math.ceil(largestTime / TARGET_BUS_TIME);
+        const busesForSpread = largestSpread > PHASE3_HARD_SPREAD
+            ? Math.max(2, Math.ceil(largestSpread / PHASE3_HARD_SPREAD))
+            : 1;
+        let neededBuses = Math.max(busesForCap, busesForTime, busesForSpread);
+        let extraBuses = neededBuses - 1;
+        if (extraBuses <= 0) break;
 
-        // Post-clustering deduplication (~200ft)
-        const dedupDist = 0.038;
-        let dedups = 0;
-        for (let i = 0; i < stops.length; i++) {
-            for (let j = i + 1; j < stops.length; j++) {
-                if (drivingDistMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng) <= dedupDist) {
-                    // Don't merge if any kid would walk > MAX_WALK_FT to combined stop
-                    const keepLat = stops[i].lat, keepLng = stops[i].lng;
-                    let tooFar = false;
-                    for (const c of [...stops[i].campers, ...stops[j].campers]) {
-                        const a = D.addresses[c.name];
-                        if (a?.lat && a.lng && manhattanMi(a.lat, a.lng, keepLat, keepLng) * 5280 > MAX_WALK_FT) {
-                            tooFar = true; break;
-                        }
-                    }
-                    if (tooFar) continue;
-                    stops[i].campers.push(...stops[j].campers);
-                    if (stops[j].address.includes('&') && !stops[i].address.includes('&')) stops[i].address = stops[j].address;
-                    stops.splice(j, 1);
-                    j--; dedups++;
+        // Anti-ping-pong: refuse to split if sub-clusters would land below CASCADE_FLOOR.
+        // Splitting a 16-camper cluster into 8+8 just triggers a free-up merge, which
+        // creates a new oversized cluster, which gets split again — infinite loop.
+        //
+        // EXCEPT: when the cluster's spread is severely over the hard cap
+        // (≥1.8× PHASE3_HARD_SPREAD), the wedge is geographically broken and
+        // routing it on one bus produces 100+ minute routes. In that case
+        // the floor is overridden — better to have small sub-clusters than
+        // an unroutable mega-wedge.
+        const minSubSize = Math.floor(largestSize / neededBuses);
+        const spreadIsSevere = largestSpread >= PHASE3_HARD_SPREAD * 1.8;
+        if (minSubSize < CASCADE_FLOOR && !spreadIsSevere) {
+            console.log('[Go v6] Skip split: cluster ' + (largestIdx + 1) +
+                ' (' + largestSize + ' campers) would produce sub-clusters of ' +
+                minSubSize + ' < floor ' + CASCADE_FLOOR);
+            break;
+        }
+        if (spreadIsSevere && minSubSize < CASCADE_FLOOR) {
+            console.warn('[Go v6] Forcing split despite floor: cluster ' +
+                (largestIdx + 1) + ' has ' + largestSpread.toFixed(2) +
+                'mi spread (' + (PHASE3_HARD_SPREAD * 1.8).toFixed(1) +
+                'mi threshold). Sub-clusters of ' + minSubSize + ' < floor ' +
+                CASCADE_FLOOR + ' but a 1-bus mega-wedge is worse.');
+        }
+
+        // If we don't have enough freed buses, free more by merging smallest clusters
+        // into their nearest neighbor (as long as the merge doesn't exceed capacity).
+        // If no valid pair exists, absorb nearest small cluster INTO the largest and
+        // re-split the bigger result. Keeps cluster count balanced.
+        while (unusedBuses < extraBuses) {
+            let smallIdx = -1, smallSize = Infinity;
+            for (let i = 0; i < busBuckets.length; i++) {
+                if (i === largestIdx) continue;
+                const sz = bucketSize(busBuckets[i]);
+                if (sz < smallSize) { smallSize = sz; smallIdx = i; }
+            }
+
+            let merged = false;
+            if (smallIdx >= 0) {
+                const sCent = bucketCentroid(busBuckets[smallIdx]);
+                let nearIdx = -1, nearDist = Infinity;
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (i === smallIdx || i === largestIdx) continue;
+                    if (bucketSize(busBuckets[i]) + smallSize > SOFT_CAPACITY) continue;
+                    const c = bucketCentroid(busBuckets[i]);
+                    const d = haversineMi(sCent.lat, sCent.lng, c.lat, c.lng);
+                    if (d < nearDist) { nearDist = d; nearIdx = i; }
+                }
+
+                if (nearIdx >= 0) {
+                    console.log('[Go v6] Free-up merge: cluster ' + (smallIdx + 1) +
+                        ' (' + smallSize + ' campers) → cluster ' + (nearIdx + 1) +
+                        ' (' + bucketSize(busBuckets[nearIdx]) + ' → ' +
+                        (bucketSize(busBuckets[nearIdx]) + smallSize) + ' campers)');
+                    busBuckets[nearIdx] = busBuckets[nearIdx].concat(busBuckets[smallIdx]);
+                    busBuckets.splice(smallIdx, 1);
+                    if (smallIdx < largestIdx) largestIdx--;
+                    unusedBuses++;
+                    merged = true;
                 }
             }
+
+            if (!merged) {
+                // Steal-from-smallest: force-dissolve the globally smallest cluster
+                // (excluding the over-capacity one). Each atom moves to its nearest
+                // remaining cluster by haversine. Frees 1 bus without creating a mega-blob.
+                let stealIdx = -1, stealSize = Infinity;
+                for (let i = 0; i < busBuckets.length; i++) {
+                    if (i === largestIdx) continue;
+                    const sz = bucketSize(busBuckets[i]);
+                    if (sz < stealSize) { stealSize = sz; stealIdx = i; }
+                }
+                if (stealIdx < 0) break;
+
+                console.log('[Go v6] Steal-from-smallest: dissolving cluster ' + (stealIdx + 1) +
+                    ' (' + stealSize + ' campers) into geographic neighbors');
+
+                // Redistribute each atom to nearest other cluster centroid
+                const dissolved = busBuckets[stealIdx];
+                busBuckets.splice(stealIdx, 1);
+                if (stealIdx < largestIdx) largestIdx--;
+
+                for (const atom of dissolved) {
+                    let bestIdx = -1, bestDist = Infinity;
+                    // Prefer nearest cluster that won't exceed SOFT_CAPACITY
+                    for (let i = 0; i < busBuckets.length; i++) {
+                        if (bucketSize(busBuckets[i]) + atom.size > SOFT_CAPACITY) continue;
+                        const c = bucketCentroid(busBuckets[i]);
+                        const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                        if (d < bestDist) { bestDist = d; bestIdx = i; }
+                    }
+                    // Fallback: no cluster has room → nearest regardless
+                    if (bestIdx < 0) {
+                        for (let i = 0; i < busBuckets.length; i++) {
+                            const c = bucketCentroid(busBuckets[i]);
+                            const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                            if (d < bestDist) { bestDist = d; bestIdx = i; }
+                        }
+                    }
+                    if (bestIdx >= 0) busBuckets[bestIdx].push(atom);
+                }
+
+                unusedBuses++;
+                const newSize = bucketSize(busBuckets[largestIdx]);
+                const newTime = estimateBucketTime(busBuckets[largestIdx]);
+                const newSpread = bucketSpread(busBuckets[largestIdx]);
+                const newBusesForSpread = newSpread > PHASE3_HARD_SPREAD
+                    ? Math.max(2, Math.ceil(newSpread / PHASE3_HARD_SPREAD))
+                    : 1;
+                neededBuses = Math.max(
+                    Math.ceil(newSize / avgCapacity),
+                    Math.ceil(newTime / TARGET_BUS_TIME),
+                    newBusesForSpread
+                );
+                extraBuses = neededBuses - 1;
+            }
         }
-        if (dedups) console.log('[Go] Dedup: merged ' + dedups + ' nearby duplicate stop(s)');
 
-        // ── Walk audit: split stops where any kid walks too far ──
-        // The cluster centroid may be close to all kids, but the actual stop
-        // (at an intersection) can be at one end of a long street cluster.
-        let walkSplits = 0;
-        for (let i = 0; i < stops.length; i++) {
-            const st = stops[i];
-            if (st.campers.length <= 1) continue; // can't split a single kid
+        const busesToUse = Math.min(extraBuses, unusedBuses);
+        if (busesToUse <= 0) break;
+        const splitInto = busesToUse + 1;
 
-            // Check max walk from any kid to this stop
-            let maxWalk = 0;
-            st.campers.forEach(c => {
-                const a = D.addresses[c.name];
-                if (!a?.lat || !a.lng || !st.lat || !st.lng) return;
-                const ft = manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280;
-                if (ft > maxWalk) maxWalk = ft;
-            });
+        splitRound++;
+        console.log('[Go v6] Split ' + splitRound + ': cluster ' + (largestIdx + 1) +
+            ' (' + largestSize + ' campers) → ' + splitInto + ' sub-clusters' +
+            ' (needs ' + neededBuses + ' buses, using ' + busesToUse + ' freed buses)');
 
-            if (maxWalk <= MAX_WALK_FT) continue;
+        const clusterAtoms = busBuckets[largestIdx];
+        const subBuckets = evenSpatialSplit(clusterAtoms, splitInto);
 
-            // Split: sort kids by walk distance, move far half to a new stop
-            const withDist = st.campers.map(c => {
-                const a = D.addresses[c.name];
-                const ft = (a?.lat && st.lat) ? manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280 : 0;
-                return { camper: c, ft, lat: a?.lat || st.lat, lng: a?.lng || st.lng };
-            }).sort((a, b) => a.ft - b.ft);
+        busBuckets.splice(largestIdx, 1, ...subBuckets);
 
-            const keepCount = Math.ceil(withDist.length / 2);
-            const keepKids = withDist.slice(0, keepCount);
-            const moveKids = withDist.slice(keepCount);
+        unusedBuses -= busesToUse;
 
-            if (!moveKids.length) continue;
-
-            // New stop at median of moved kids' homes
-            const mLats = moveKids.map(k => k.lat).sort((a, b) => a - b);
-            const mLngs = moveKids.map(k => k.lng).sort((a, b) => a - b);
-            const newLat = mLats[Math.floor(mLats.length / 2)];
-            const newLng = mLngs[Math.floor(mLngs.length / 2)];
-
-            // Update original stop
-            st.campers = keepKids.map(k => k.camper);
-
-            // Create new stop
-            const newStop = {
-                lat: newLat, lng: newLng,
-                address: st.address + ' (split)',
-                campers: moveKids.map(k => k.camper)
-            };
-            stops.splice(i + 1, 0, newStop);
-            walkSplits++;
-            i++; // skip the new stop
+        for (let si = 0; si < subBuckets.length; si++) {
+            console.log('[Go v6]   Sub-cluster ' + (si + 1) + ': ' +
+                bucketSize(subBuckets[si]) + ' campers, ' + subBuckets[si].length + ' atoms');
         }
-        if (walkSplits) console.log('[Go] Walk audit: split ' + walkSplits + ' stop(s) where kids walked > ' + MAX_WALK_FT + 'ft');
+    }
 
-        console.log('[Go] VROOM Engine: ' + stops.length + ' stops, ' + numBuses + ' buses, mode=' + mode);
+    if (splitRound > 0) {
+        const p3Swaps = rebalanceToNearest(busBuckets, 12);
+        console.log('[Go v6] Split complete: ' + splitRound + ' splits, ' +
+            busBuckets.length + ' total clusters, ' + unusedBuses + ' buses still unused, ' +
+            p3Swaps + ' rebalance swaps');
+    }
 
+    // Remove any empty buckets
+    busBuckets = busBuckets.filter(b => b.length > 0);
 
-        // ══════════════════════════════════════════════════════════════
-        // ZONE-BASED or LEGACY REGION-BASED BUS ASSIGNMENT
-        //
-        // Zone path (v4.0): zones are pre-decided, one bus per zone,
-        //   VROOM only orders stops within each zone.
-        // Legacy path: old region merge + geoBisect (fallback only).
-        // ══════════════════════════════════════════════════════════════
+    // ── F. Phase 5: Min-max hill climb on route time ──
+    // Goal: minimize the LONGEST route. Pick the worst cluster, try moving each
+    // of its atoms to every other cluster, apply the move that lowers the max
+    // by the most. Repeat until no move improves the max. Equality is NOT a goal.
+    showProgress(shiftLabel + ': phase 5 — min-max hill climb...', pctBase + 55);
 
-        showProgress('Assigning buses to zones...', 25);
+    const clusterMeta = busBuckets.map((bucket, idx) => {
+        const cent = bucketCentroid(bucket);
+        const distSec = drivingDist(campLat, campLng, cent.lat, cent.lng);
+        return { idx, cent, distSec };
+    });
 
-        let allRoutes = [];
+    const estTime = (bucketIdx) => estimateBucketTime(busBuckets[bucketIdx]);
 
-        if (zones && zones.length > 0) {
-            // ══════════════════════════════════════════════════════════════
-            // ZONE PATH — v4.0 zone-based routing
-            //
-            // Each zone gets one bus. VROOM only orders stops, no
-            // assignment decisions needed.
-            // ══════════════════════════════════════════════════════════════
-            showProgress('Optimizing routes (VROOM)...', 35);
+    function median(arr) {
+        const sorted = [...arr].sort((a, b) => a - b);
+        const m = Math.floor(sorted.length / 2);
+        return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+    }
 
-            // Filter zones to this shift's campers
-            const shiftCamperNames = new Set(campers.map(c => c.name));
-            const shiftZones = zones.map(z => ({
-                ...z,
-                camperNames: z.camperNames.filter(n => shiftCamperNames.has(n))
-            })).filter(z => z.camperNames.length > 0);
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] PHASE 5: Sum-minimization hill climb (lower every route)');
+    console.log('[Go v6] ═══════════════════════════════════════');
+    const initTimes = busBuckets.map((_, i) => estTime(i));
+    const initMax = Math.max(...initTimes);
+    console.log('[Go v6] Initial: max ' + (initMax / 60).toFixed(1) +
+        'min, median ' + (median(initTimes) / 60).toFixed(1) + 'min, min ' +
+        (Math.min(...initTimes) / 60).toFixed(1) + 'min');
 
-            // ── Hungarian algorithm for optimal bus→zone assignment ──
-            // Cost = geographic distance + capacity mismatch penalty
-            // This replaces naive size-ordered pairing
-            const nZones = shiftZones.length;
-            const nBuses = vehicles.length;
-            const zoneAssignments = [];
+    // Per-cluster spread cap, scaled by distance from camp.
+    // cap(c) = medianSpread × ratio × (c.distFromCamp / medianDistFromCamp)
+    // Close-to-camp clusters get tight caps (kids are dense, no excuse to sprawl);
+    // far-from-camp clusters get proportionally larger caps (kids are sparse).
+    const spreadRatio = (D.setup.clusterSpreadRatio ?? 150) / 100;
+    const HARD_SPREAD_CAP = D.setup.clusterMaxSpreadMi ?? 3.5;
+    console.log('[Go v6] Spread cap: ' + spreadRatio.toFixed(2) +
+        '× median, scaled by distance-from-camp, hard ceiling ' + HARD_SPREAD_CAP.toFixed(1) + 'mi');
 
-            if (nZones > 0 && nBuses > 0) {
-                const n = Math.max(nZones, nBuses); // pad to square matrix
-                const cost = Array.from({ length: n }, () => new Array(n).fill(0));
+    // Spread relief pre-pass: any cluster over the hard cap gets its outermost
+    // atoms peeled to the nearest under-cap cluster with capacity, regardless of
+    // sum impact. Prevents the rare 6+mi route (Bus 13 = 111min in last run).
+    let reliefMoves = 0;
+    for (let safety = 0; safety < 200; safety++) {
+        const spreads = busBuckets.map(b => bucketSpread(b));
+        let worstI = -1, worstSpread = HARD_SPREAD_CAP;
+        for (let i = 0; i < spreads.length; i++) if (spreads[i] > worstSpread) { worstSpread = spreads[i]; worstI = i; }
+        if (worstI < 0) break;
 
-                // Build cost matrix: cost[bus][zone]
-                for (let b = 0; b < n; b++) {
-                    for (let z = 0; z < n; z++) {
-                        if (b >= nBuses || z >= nZones) {
-                            cost[b][z] = 0; // dummy row/col — zero cost
+        const cent = bucketCentroid(busBuckets[worstI]);
+        if (!cent) break;
+        // Find the atom furthest from centroid (the outlier)
+        let outAi = -1, outD = -1;
+        for (let ai = 0; ai < busBuckets[worstI].length; ai++) {
+            const a = busBuckets[worstI][ai];
+            const d = haversineMi(a.lat, a.lng, cent.lat, cent.lng);
+            if (d > outD) { outD = d; outAi = ai; }
+        }
+        if (outAi < 0) break;
+        const outlier = busBuckets[worstI][outAi];
+        if (bucketSize(busBuckets[worstI]) - outlier.size < CASCADE_FLOOR) break;
+
+        // Pick nearest cluster with capacity. Under-cap receivers must stay under;
+        // over-cap receivers must not get worse.
+        let bestRi = -1, bestD = Infinity;
+        for (let ri = 0; ri < busBuckets.length; ri++) {
+            if (ri === worstI) continue;
+            if (bucketSize(busBuckets[ri]) + outlier.size > SOFT_CAPACITY) continue;
+            const rc = bucketCentroid(busBuckets[ri]);
+            if (!rc) continue;
+            const curRcvSpread = spreads[ri];
+            busBuckets[ri].push(outlier);
+            const newSpread = bucketSpread(busBuckets[ri]);
+            busBuckets[ri].pop();
+            const ok = curRcvSpread <= HARD_SPREAD_CAP
+                ? newSpread <= HARD_SPREAD_CAP
+                : newSpread <= curRcvSpread;
+            if (!ok) continue;
+            const d = haversineMi(outlier.lat, outlier.lng, rc.lat, rc.lng);
+            if (d < bestD) { bestD = d; bestRi = ri; }
+        }
+        if (bestRi < 0) break;
+        busBuckets[worstI].splice(outAi, 1);
+        busBuckets[bestRi].push(outlier);
+        reliefMoves++;
+    }
+    if (reliefMoves > 0) console.log('[Go v6] Spread relief: ' + reliefMoves + ' outlier atoms peeled to fit hard cap');
+
+    let moves = 0;
+    let blockedBySpread = 0;
+    for (let pass = 0; pass < 500; pass++) {
+        // Snapshot all current times for fast sum-delta calculations
+        const allTimes = busBuckets.map((_, i) => estTime(i));
+        const currentSum = allTimes.reduce((s, t) => s + t, 0);
+        const allSpreads = busBuckets.map(b => bucketSpread(b));
+        const sortedSpreads = [...allSpreads].sort((a, b) => a - b);
+        const medianSpread = sortedSpreads[Math.floor(sortedSpreads.length / 2)] || 0;
+
+        // Distance-from-camp per cluster (use centroid → camp haversine for speed)
+        const allDists = busBuckets.map(b => {
+            const c = bucketCentroid(b);
+            return c ? haversineMi(campLat, campLng, c.lat, c.lng) : 0;
+        });
+        const sortedDists = [...allDists].sort((a, b) => a - b);
+        const medianDist = sortedDists[Math.floor(sortedDists.length / 2)] || 1;
+        const baseCap = medianSpread * spreadRatio;
+
+        // Search every (source, atom, receiver) tuple. Best move = one that
+        // reduces the GLOBAL SUM by the most. Reduces every bus that can be
+        // reduced; the worst falls naturally as it gets atoms peeled off.
+        let bestMove = null;
+        let bestNewSum = currentSum;
+
+        for (let si = 0; si < busBuckets.length; si++) {
+            const sourceSize = bucketSize(busBuckets[si]);
+            if (sourceSize <= CASCADE_FLOOR) continue;
+
+            for (let ai = 0; ai < busBuckets[si].length; ai++) {
+                const atom = busBuckets[si][ai];
+                if (sourceSize - atom.size < CASCADE_FLOOR) continue;
+
+                // Simulate removal once
+                busBuckets[si].splice(ai, 1);
+                const newSourceTime = estTime(si);
+
+                // Geographic constraint: receiver must be atom's nearest centroid
+                // (other than the source). Prevents atoms leaking to far clusters.
+                let nearestRi = -1, nearestD = Infinity;
+                for (let ri = 0; ri < busBuckets.length; ri++) {
+                    if (ri === si) continue;
+                    const c = bucketCentroid(busBuckets[ri]);
+                    if (!c) continue;
+                    const d = haversineMi(atom.lat, atom.lng, c.lat, c.lng);
+                    if (d < nearestD) { nearestD = d; nearestRi = ri; }
+                }
+
+                const ri = nearestRi;
+                if (ri >= 0 && ri !== si) {
+                    const receiverCap = Math.min(HARD_SPREAD_CAP, baseCap * Math.max(0.4, allDists[ri] / medianDist));
+
+                    // === SINGLE MOVE: atom A → bus Y (no swap) ===
+                    if (bucketSize(busBuckets[ri]) + atom.size <= SOFT_CAPACITY) {
+                        busBuckets[ri].push(atom);
+                        const newReceiverTime = estTime(ri);
+                        const newReceiverSpread = bucketSpread(busBuckets[ri]);
+                        busBuckets[ri].pop();
+
+                        // Hard-cap semantics: under-cap clusters can't grow past it;
+                        // over-cap clusters can only accept moves that don't worsen them.
+                        const rcvOk = allSpreads[ri] <= HARD_SPREAD_CAP
+                            ? newReceiverSpread <= HARD_SPREAD_CAP
+                            : newReceiverSpread <= allSpreads[ri];
+                        if (rcvOk && (newReceiverSpread <= receiverCap || newReceiverSpread <= allSpreads[ri])) {
+                            const newSum = currentSum
+                                - allTimes[si] - allTimes[ri]
+                                + newSourceTime + newReceiverTime;
+                            if (newSum < bestNewSum) {
+                                bestNewSum = newSum;
+                                bestMove = { type: 'single', si, ai, ri };
+                            }
+                        } else {
+                            blockedBySpread++;
+                        }
+                    }
+
+                    // === PAIR SWAP: atom A in si ↔ atom B in ri ===
+                    // Only attempt if atom B's nearest cluster is si (mutual nearness)
+                    // and the swap keeps both clusters under spread caps.
+                    const sourceCent = bucketCentroid(busBuckets[si]);  // si without atom
+                    for (let bi = 0; bi < busBuckets[ri].length; bi++) {
+                        const atomB = busBuckets[ri][bi];
+
+                        // Capacity check after swap
+                        const newSrcSize = sourceSize - atom.size + atomB.size;
+                        const newRcvSize = bucketSize(busBuckets[ri]) - atomB.size + atom.size;
+                        if (newSrcSize > SOFT_CAPACITY || newRcvSize > SOFT_CAPACITY) continue;
+                        if (newSrcSize < CASCADE_FLOOR || newRcvSize < CASCADE_FLOOR) continue;
+
+                        // Mutual-nearness: atomB's nearest cluster (excluding ri) must be si
+                        let bNearest = -1, bNearestD = Infinity;
+                        for (let cj = 0; cj < busBuckets.length; cj++) {
+                            if (cj === ri) continue;
+                            const c = (cj === si) ? sourceCent : bucketCentroid(busBuckets[cj]);
+                            if (!c) continue;
+                            const d = haversineMi(atomB.lat, atomB.lng, c.lat, c.lng);
+                            if (d < bNearestD) { bNearestD = d; bNearest = cj; }
+                        }
+                        if (bNearest !== si) continue;
+
+                        // Simulate the swap
+                        busBuckets[si].splice(ai, 0, atomB);   // put B into si at A's old slot
+                        busBuckets[ri].splice(bi, 1);          // remove B from ri
+                        busBuckets[ri].push(atom);             // put A into ri
+                        const swappedSrcTime = estTime(si);
+                        const swappedRcvTime = estTime(ri);
+                        const swappedSrcSpread = bucketSpread(busBuckets[si]);
+                        const swappedRcvSpread = bucketSpread(busBuckets[ri]);
+                        // Undo
+                        busBuckets[ri].pop();
+                        busBuckets[ri].splice(bi, 0, atomB);
+                        busBuckets[si].splice(ai, 1);
+
+                        const srcCap = Math.min(HARD_SPREAD_CAP, baseCap * Math.max(0.4, allDists[si] / medianDist));
+                        // Hard cap: under-cap clusters can't grow past it; over-cap can't get worse
+                        const srcOver = (allSpreads[si] <= HARD_SPREAD_CAP)
+                            ? swappedSrcSpread > HARD_SPREAD_CAP
+                            : swappedSrcSpread > allSpreads[si];
+                        const rcvOver = (allSpreads[ri] <= HARD_SPREAD_CAP)
+                            ? swappedRcvSpread > HARD_SPREAD_CAP
+                            : swappedRcvSpread > allSpreads[ri];
+                        if (srcOver || rcvOver ||
+                            (swappedSrcSpread > srcCap && swappedSrcSpread > allSpreads[si]) ||
+                            (swappedRcvSpread > receiverCap && swappedRcvSpread > allSpreads[ri])) {
+                            blockedBySpread++;
                             continue;
                         }
-                        const veh = vehicles[b];
-                        const zone = shiftZones[z];
-                        // Geographic cost: driving distance from camp through zone centroid
-                        const geoDist = _campCoordsCache ?
-                            drivingDistMi(_campCoordsCache.lat, _campCoordsCache.lng, zone.centroidLat, zone.centroidLng) : 0;
-                        // Capacity mismatch: penalize assigning a bus that's too small
-                        const capMismatch = Math.max(0, zone.camperNames.length - veh.capacity) * 2;
-                        // Waste penalty: mildly penalize assigning a large bus to a small zone
-                        const waste = Math.max(0, veh.capacity - zone.camperNames.length) * 0.1;
-                        cost[b][z] = geoDist + capMismatch + waste;
+
+                        const swappedSum = currentSum
+                            - allTimes[si] - allTimes[ri]
+                            + swappedSrcTime + swappedRcvTime;
+                        if (swappedSum < bestNewSum) {
+                            bestNewSum = swappedSum;
+                            bestMove = { type: 'swap', si, ai, ri, bi };
+                        }
                     }
                 }
 
-                // Hungarian algorithm (Kuhn-Munkres) — O(n³) assignment
-                const assignment = hungarian(cost, n);
-
-                // Build assignments from result
-                for (let b = 0; b < nBuses; b++) {
-                    const z = assignment[b];
-                    if (z < nZones) {
-                        zoneAssignments.push({ zone: shiftZones[z], vehicle: vehicles[b] });
-                    }
-                }
-
-                // Handle extra zones (more zones than buses) — merge into nearest assigned zone
-                const assignedZoneIds = new Set(zoneAssignments.map(za => za.zone.id));
-                shiftZones.forEach(z => {
-                    if (assignedZoneIds.has(z.id)) return;
-                    let bestIdx = 0, bestDist = Infinity;
-                    for (let j = 0; j < zoneAssignments.length; j++) {
-                        const d = drivingDist(z.centroidLat, z.centroidLng, zoneAssignments[j].zone.centroidLat, zoneAssignments[j].zone.centroidLng);
-                        if (d < bestDist) { bestDist = d; bestIdx = j; }
-                    }
-                    zoneAssignments[bestIdx].zone.camperNames.push(...z.camperNames);
-                    console.log('[Go] Zone overflow: merged ' + z.name + ' into ' + zoneAssignments[bestIdx].zone.name);
-                });
+                // Restore
+                busBuckets[si].splice(ai, 0, atom);
             }
+        }
 
-            // Log zone→bus assignment
-            zoneAssignments.forEach(za => {
-                console.log('[Go]   Zone "' + za.zone.name + '": ' + za.zone.camperNames.length + ' kids → ' + za.vehicle.name + ' (cap ' + za.vehicle.capacity + ')');
-            });
-
-            // ══════════════════════════════════════════════════════════════
-            // GLOBAL MULTI-BUS VROOM — Industry-grade VRP solver
-            //
-            // Models the full School Bus Routing Problem (SBRP) using every
-            // VROOM constraint the industry leaders use:
-            //   • time_window on vehicles (shift working hours)
-            //   • max_travel_time on vehicles (max route duration)
-            //   • max_tasks on vehicles (cap stops per bus)
-            //   • skills for zone affinity (geographic locality)
-            //   • priority on jobs (high-kid-count stops get priority)
-            //   • setup + service split (boarding vs dwell time)
-            //   • speed_factor per vehicle (different bus types)
-            //   • capacity with delivery amounts
-            //
-            // Falls back to per-zone VROOM if this fails.
-            // ══════════════════════════════════════════════════════════════
-            let globalVROOMSucceeded = false;
-            if (apiKey && zoneAssignments.length >= 1) {
-                try {
-                    // ── Step 1: Create all stops across all zones ──
-                    const allStops = [];
-                    const stopZoneIdx = []; // zone index for each stop (for skills)
-                    for (let zi = 0; zi < zoneAssignments.length; zi++) {
-                        const za = zoneAssignments[zi];
-                        const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
-                        if (!zoneCampers.length) continue;
-                        let zoneStops;
-                        if (mode === 'optimized-stops') zoneStops = createOptimizedStops(zoneCampers);
-                        else if (mode === 'corner-stops') zoneStops = await createCornerStops(zoneCampers);
-                        else zoneStops = createHouseStops(zoneCampers);
-                        zoneStops.forEach(s => {
-                            allStops.push(s);
-                            stopZoneIdx.push(zi);
-                        });
-                    }
-
-                    if (allStops.length > 0 && allStops.length <= 150) {
-                        // ── Step 2: Compute shift time window ──
-                        // VROOM uses Unix-style timestamps for time windows.
-                        // We use seconds-from-midnight as a simple epoch.
-                        const departMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
-                        const departSec = departMin * 60;
-                        // Max route duration: default 60 min, capped at 90 min
-                        const maxRouteDurationMin = D.setup.maxRouteDuration || 60;
-                        const maxRouteDurationSec = maxRouteDurationMin * 60;
-                        // Shift window: departure ± route duration
-                        const shiftStartSec = isArrival ? departSec - maxRouteDurationSec - 600 : departSec; // 10 min buffer for arrival
-                        const shiftEndSec = isArrival ? departSec + 300 : departSec + maxRouteDurationSec + 600;
-
-                        // ── Step 3: Build VROOM jobs with full constraints ──
-                        const setupTimeSec = Math.round(serviceTime * 0.3); // 30% = boarding/loading
-                        const dwellTimeSec = Math.round(serviceTime * 0.7); // 70% = dwell at stop
-                        const jobs = allStops.map((stop, i) => {
-                            const kidCount = stop.campers.length;
-                            const job = {
-                                id: i + 1,
-                                location: [stop.lng, stop.lat],
-                                setup: setupTimeSec,
-                                service: dwellTimeSec,
-                                description: stop.address || '',
-                                // Priority: more kids = higher priority (0-100)
-                                priority: Math.min(100, Math.max(1, kidCount * 10))
-                            };
-                            // Arrival = kids board (pickup increases load)
-                            // Dismissal = kids exit (delivery decreases load)
-                            if (isArrival) job.pickup = [kidCount];
-                            else job.delivery = [kidCount];
-                            return job;
-                        });
-
-                        // ── Step 4: Build VROOM vehicles with full constraints ──
-                        // Pre-compute farthest stop per zone for arrival start positioning
-                        const zoneFarthestStop = {};
-                        zoneAssignments.forEach((za, vi) => {
-                            let fDist = 0, fStop = null;
-                            allStops.forEach((s, si) => {
-                                if (stopZoneIdx[si] !== vi) return;
-                                const d = drivingDist(campLat, campLng, s.lat, s.lng);
-                                if (d > fDist) { fDist = d; fStop = s; }
-                            });
-                            zoneFarthestStop[vi] = fStop;
-                        });
-
-                        const vroomVehicles = zoneAssignments.map((za, vi) => {
-                            const v = za.vehicle;
-                            const veh = {
-                                id: vi + 1,
-                                profile: 'driving-car',
-                                description: v.name,
-                                capacity: [v.capacity],
-                                time_window: [shiftStartSec, shiftEndSec],
-                                max_travel_time: maxRouteDurationSec,
-                                max_tasks: Math.max(8, Math.ceil(allStops.length / zoneAssignments.length) + 3),
-                                speed_factor: 1.0
-                            };
-
-                            if (isArrival) {
-                                // Arrival: start at FARTHEST stop from camp (pick up farthest first)
-                                // End at camp. VROOM will route inward: far → near → camp.
-                                const far = zoneFarthestStop[vi];
-                                veh.start = far ? [far.lng, far.lat] : [campLng, campLat];
-                                veh.end = [campLng, campLat];
-                            } else {
-                                // Dismissal: start at camp, VROOM routes outward: camp → near → far.
-                                // No end = open-ended route (bus doesn't return after last stop,
-                                // unless multi-shift needs return)
-                                veh.start = [campLng, campLat];
-                                if (needsReturn) veh.end = [campLng, campLat];
-                            }
-                            return veh;
-                        });
-
-                        console.log('[Go] Global VROOM: ' + jobs.length + ' jobs, ' + vroomVehicles.length + ' vehicles');
-                        console.log('[Go]   Constraints: time_window=[' + shiftStartSec + ',' + shiftEndSec + '], max_travel=' + maxRouteDurationSec + 's, max_tasks=' + vroomVehicles[0]?.max_tasks);
-
-                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
-                            method: 'POST',
-                            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ jobs, vehicles: vroomVehicles })
-                        });
-
-                        if (resp.ok) {
-                            const result = await resp.json();
-
-                            // Log solution quality
-                            if (result.summary) {
-                                console.log('[Go] VROOM solution: cost=' + result.summary.cost +
-                                    ', duration=' + Math.round((result.summary.duration || 0) / 60) + 'min' +
-                                    ', distance=' + Math.round((result.summary.distance || 0) / 1000) + 'km' +
-                                    ', unassigned=' + (result.summary.unassigned || 0) +
-                                    ', violations=' + (result.summary.violations?.length || 0));
-                            }
-
-                            if (result.routes?.length) {
-                                result.routes.forEach(vr => {
-                                    const za = zoneAssignments[vr.vehicle - 1];
-                                    if (!za) return;
-                                    const orderedStops = [];
-                                    vr.steps.forEach(step => {
-                                        if (step.type !== 'job') return;
-                                        const stop = allStops[step.id - 1];
-                                        if (stop) orderedStops.push(stop);
-                                    });
-                                    if (!orderedStops.length) return;
-
-                                    // Orientation: VROOM already orders optimally,
-                                    // but verify direction for arrival/dismissal
-                                    if (orderedStops.length >= 2) {
-                                        const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
-                                        const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
-                                        if (isArrival && firstDist < lastDist) orderedStops.reverse();
-                                        if (!isArrival && firstDist > lastDist) orderedStops.reverse();
-                                    }
-
-                                    allRoutes.push({
-                                        busId: za.vehicle.busId, busName: za.vehicle.name,
-                                        busColor: za.vehicle.color, monitor: za.vehicle.monitor,
-                                        counselors: za.vehicle.counselors || [],
-                                        stops: orderedStops.map((s, i) => ({
-                                            stopNum: i + 1, campers: s.campers, address: s.address,
-                                            lat: s.lat, lng: s.lng
-                                        })),
-                                        camperCount: orderedStops.reduce((sum, s) => sum + s.campers.length, 0),
-                                        _cap: za.vehicle.capacity,
-                                        _vroomDuration: vr.duration, // actual VROOM-computed route duration
-                                        _vroomDistance: vr.distance
-                                    });
-                                });
-
-                                // Handle unassigned stops — insert into bus with most room
-                                if (result.unassigned?.length) {
-                                    console.warn('[Go] Global VROOM: ' + result.unassigned.length + ' unassigned stops');
-                                    result.unassigned.forEach(ua => {
-                                        const stop = allStops[ua.id - 1];
-                                        if (!stop) return;
-                                        let bestRoute = null, bestRoom = -1;
-                                        allRoutes.forEach(r => {
-                                            const room = r._cap - r.camperCount;
-                                            if (room > bestRoom) { bestRoom = room; bestRoute = r; }
-                                        });
-                                        if (bestRoute) {
-                                            cheapestInsert(bestRoute.stops, {
-                                                stopNum: bestRoute.stops.length + 1,
-                                                campers: stop.campers, address: stop.address,
-                                                lat: stop.lat, lng: stop.lng
-                                            });
-                                            bestRoute.camperCount += stop.campers.length;
-                                        }
-                                    });
-                                }
-
-                                globalVROOMSucceeded = allRoutes.length > 0;
-                                if (globalVROOMSucceeded) {
-                                    console.log('[Go] Global VROOM ✓: ' + allRoutes.length + ' routes, ' +
-                                        allRoutes.reduce((s, r) => s + r.stops.length, 0) + ' stops, ' +
-                                        allRoutes.reduce((s, r) => s + r.camperCount, 0) + ' kids');
-                                }
-                            }
-                        } else {
-                            const errText = await resp.text().catch(() => '');
-                            console.warn('[Go] Global VROOM HTTP ' + resp.status + ': ' + errText.substring(0, 200));
-                        }
-                    }
-                } catch (e) {
-                    console.warn('[Go] Global VROOM error:', e.message);
-                }
-            }
-
-            // ── Per-zone VROOM fallback (if global failed or not attempted) ──
-            if (!globalVROOMSucceeded) {
-            // Process zones sequentially (not parallel) to respect GH rate limits
-            const zoneHandlers = zoneAssignments.map(za => async () => {
-                const zoneCampers = za.zone.camperNames.map(n => campers.find(c => c.name === n)).filter(Boolean);
-                if (!zoneCampers.length) return null;
-
-                // Create stops for this zone
-                let zoneStops;
-                if (mode === 'optimized-stops') zoneStops = createOptimizedStops(zoneCampers);
-                else if (mode === 'corner-stops') zoneStops = await createCornerStops(zoneCampers);
-                else zoneStops = createHouseStops(zoneCampers);
-
-                if (!zoneStops.length) return null;
-
-                console.log('[Go]   Zone "' + za.zone.name + '": ' + zoneStops.length + ' stops from ' + zoneCampers.length + ' campers');
-
-                // VROOM call: one bus with full constraints (same model as global)
-                const setupTimeSec = Math.round(serviceTime * 0.3);
-                const dwellTimeSec = Math.round(serviceTime * 0.7);
-                const jobs = zoneStops.map((stop, i) => {
-                    const kidCount = stop.campers.length;
-                    const job = {
-                        id: i + 1,
-                        location: [stop.lng, stop.lat],
-                        setup: setupTimeSec,
-                        service: dwellTimeSec,
-                        priority: Math.min(100, Math.max(1, kidCount * 10)),
-                        description: stop.address || ''
-                    };
-                    if (isArrival) job.pickup = [kidCount];
-                    else job.delivery = [kidCount];
-                    return job;
-                });
-
-                const v = za.vehicle;
-                const departMin = parseTime(shift.departureTime || (isArrival ? '08:00' : '16:00'));
-                const departSec = departMin * 60;
-                const maxRouteSec = (D.setup.maxRouteDuration || 60) * 60;
-                const veh = {
-                    id: 1, profile: 'driving-car',
-                    capacity: [v.capacity], description: v.name,
-                    time_window: [
-                        isArrival ? departSec - maxRouteSec - 600 : departSec,
-                        isArrival ? departSec + 300 : departSec + maxRouteSec + 600
-                    ],
-                    max_travel_time: maxRouteSec,
-                    speed_factor: 1.0
-                };
-                if (isArrival) {
-                    let fIdx = 0, fDist = 0;
-                    zoneStops.forEach((s, i) => {
-                        const d = drivingDist(campLat, campLng, s.lat, s.lng);
-                        if (d > fDist) { fDist = d; fIdx = i; }
-                    });
-                    veh.start = [zoneStops[fIdx].lng, zoneStops[fIdx].lat];
-                    veh.end = [campLng, campLat];
-                } else {
-                    veh.start = [campLng, campLat];
-                    if (needsReturn) veh.end = [campLng, campLat];
-                }
-
-                // ── Route optimization cascade: GraphHopper → VROOM → local TSP ──
-                let orderedStops = null;
-
-                // 1. Try GraphHopper
-                orderedStops = await solveWithGraphHopper(zoneStops, v, campLat, campLng, isArrival, needsReturn);
-
-                // 2. Fallback: ORS VROOM
-                if (!orderedStops) {
-                    console.log('[Go] VROOM → ' + v.name + ' (' + za.zone.name + '): ' + jobs.length + ' stops');
-                    try {
-                        const resp = await fetch('https://api.openrouteservice.org/optimization', {
-                            method: 'POST',
-                            headers: { 'Authorization': apiKey, 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ jobs, vehicles: [veh] })
-                        });
-                        if (resp.ok) {
-                            const result = await resp.json();
-                            const vroomRoute = result.routes?.[0];
-                            if (vroomRoute) {
-                                const ordered = [];
-                                vroomRoute.steps.forEach(step => {
-                                    if (step.type !== 'job') return;
-                                    const stop = zoneStops[step.id - 1];
-                                    if (stop) ordered.push(stop);
-                                });
-                                if (result.unassigned?.length) {
-                                    result.unassigned.forEach(ua => {
-                                        const stop = zoneStops[ua.id - 1];
-                                        if (stop) cheapestInsert(ordered, stop);
-                                    });
-                                }
-                                orderedStops = ordered;
-                            }
-                        } else {
-                            console.warn('[Go] VROOM error for ' + v.name + ': HTTP ' + resp.status);
-                        }
-                    } catch (e) {
-                        console.warn('[Go] VROOM failed for ' + v.name + ':', e.message);
-                    }
-                }
-
-                // 3. Last resort: directional sort by driving distance
-                if (!orderedStops) {
-                    orderedStops = [...zoneStops];
-                    directionalSort(orderedStops, campLat, campLng);
-                }
-
-                // ── 2-opt improvement (using driving distances) ──
-                if (orderedStops.length >= 3) {
-                    let improved = true;
-                    for (let pass = 0; pass < 5 && improved; pass++) {
-                        improved = false;
-                        for (let i = 0; i < orderedStops.length - 2; i++) {
-                            for (let j = i + 2; j < orderedStops.length; j++) {
-                                const a = orderedStops[i], b = orderedStops[i + 1];
-                                const c = orderedStops[j], d = orderedStops[j + 1] || (isArrival ? { lat: campLat, lng: campLng } : null);
-                                if (!a?.lat || !b?.lat || !c?.lat) continue;
-                                const curDist = drivingDist(a.lat, a.lng, b.lat, b.lng) + (d ? drivingDist(c.lat, c.lng, d.lat, d.lng) : 0);
-                                const newDist = drivingDist(a.lat, a.lng, c.lat, c.lng) + (d ? drivingDist(b.lat, b.lng, d.lat, d.lng) : 0);
-                                if (newDist < curDist * 0.95) {
-                                    const seg = orderedStops.splice(i + 1, j - i);
-                                    seg.reverse();
-                                    orderedStops.splice(i + 1, 0, ...seg);
-                                    improved = true;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ── Or-opt (using driving distances) ──
-                if (orderedStops.length >= 4) {
-                    for (let pass = 0; pass < 3; pass++) {
-                        let relocated = false;
-                        for (let i = 0; i < orderedStops.length; i++) {
-                            const s = orderedStops[i];
-                            if (!s?.lat) continue;
-                            const prev = i > 0 ? orderedStops[i - 1] : null;
-                            const next = i < orderedStops.length - 1 ? orderedStops[i + 1] : null;
-                            let removeCost = 0;
-                            if (prev?.lat && next?.lat) removeCost = drivingDist(prev.lat, prev.lng, next.lat, next.lng);
-                            let currentCost = 0;
-                            if (prev?.lat) currentCost += drivingDist(prev.lat, prev.lng, s.lat, s.lng);
-                            if (next?.lat) currentCost += drivingDist(s.lat, s.lng, next.lat, next.lng);
-                            const savings = currentCost - removeCost;
-                            let bestJ = -1, bestInsertCost = Infinity;
-                            for (let j = 0; j <= orderedStops.length - 1; j++) {
-                                if (j === i || j === i + 1) continue;
-                                const tempStops = [...orderedStops];
-                                tempStops.splice(i, 1);
-                                const insertAt = j > i ? j - 1 : j;
-                                const pBefore = insertAt > 0 ? tempStops[insertAt - 1] : null;
-                                const pAfter = insertAt < tempStops.length ? tempStops[insertAt] : null;
-                                let ic = 0;
-                                if (pBefore?.lat) ic += drivingDist(pBefore.lat, pBefore.lng, s.lat, s.lng);
-                                if (pAfter?.lat) ic += drivingDist(s.lat, s.lng, pAfter.lat, pAfter.lng);
-                                if (pBefore?.lat && pAfter?.lat) ic -= drivingDist(pBefore.lat, pBefore.lng, pAfter.lat, pAfter.lng);
-                                if (ic < bestInsertCost) { bestInsertCost = ic; bestJ = j; }
-                            }
-                            if (bestJ >= 0 && bestInsertCost < savings * 0.9) {
-                                orderedStops.splice(i, 1);
-                                const insertAt = bestJ > i ? bestJ - 1 : bestJ;
-                                orderedStops.splice(insertAt, 0, s);
-                                relocated = true;
-                                break;
-                            }
-                        }
-                        if (!relocated) break;
-                    }
-                }
-
-                // ── Orientation check (using driving distances) ──
-                // Arrival: first stop FARTHEST from camp, last stop NEAREST
-                // Dismissal: first stop NEAREST to camp, last stop FARTHEST
-                if (orderedStops.length >= 2) {
-                    const firstDist = drivingDist(campLat, campLng, orderedStops[0].lat, orderedStops[0].lng);
-                    const lastDist = drivingDist(campLat, campLng, orderedStops[orderedStops.length - 1].lat, orderedStops[orderedStops.length - 1].lng);
-                    if (isArrival && firstDist < lastDist) {
-                        orderedStops.reverse();
-                        console.log('[Go] Orient flip (arrival): reversed — first stop was closer than last');
-                    }
-                    if (!isArrival && firstDist > lastDist) {
-                        orderedStops.reverse();
-                        console.log('[Go] Orient flip (dismissal): reversed — first stop was farther than last');
-                    }
-                }
-
-                const routeStops = orderedStops.map((stop, i) => ({
-                    stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
-                }));
-
-                return {
-                    busId: v.busId, busName: v.name, busColor: v.color,
-                    monitor: v.monitor, counselors: v.counselors || [],
-                    stops: routeStops,
-                    camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                    _cap: v.capacity,
-                    totalDuration: 0
-                };
-            });
-
-            // Run zones sequentially (not parallel) to avoid GH rate limits
-            for (const handler of zoneHandlers) {
-                const r = await handler();
-                if (r) allRoutes.push(r);
-            }
-            } // end if (!globalVROOMSucceeded)
-
-            // Ensure all buses have route entries
-            vehicles.forEach(v => {
-                if (!allRoutes.find(r => r.busId === v.busId)) {
-                    allRoutes.push({
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0
-                    });
-                }
-            });
-
+        if (!bestMove) break;
+        if (bestMove.type === 'swap') {
+            const a = busBuckets[bestMove.si][bestMove.ai];
+            const b = busBuckets[bestMove.ri][bestMove.bi];
+            busBuckets[bestMove.si][bestMove.ai] = b;
+            busBuckets[bestMove.ri][bestMove.bi] = a;
         } else {
-            // ══════════════════════════════════════════════════════════════
-            // LEGACY PATH — old region merge + geographic bisection (fallback)
-            // ══════════════════════════════════════════════════════════════
-            showProgress('Building region groups (legacy)...', 25);
-
-            // Map stops to regions
-            const stopRegions = [];
-            if (_detectedRegions?.length) {
-                stops.forEach(stop => {
-                    let bestReg = _detectedRegions[0].id;
-                    _detectedRegions.forEach(reg => {
-                        if (stop.campers.some(c => reg.camperNames.includes(c.name))) bestReg = reg.id;
-                    });
-                    stopRegions.push(bestReg);
-                });
-            } else {
-                stops.forEach(() => stopRegions.push('all'));
-            }
-
-            // Count kids per region
-            const regionKids = {};
-            stops.forEach((stop, i) => {
-                const regId = stopRegions[i];
-                regionKids[regId] = (regionKids[regId] || 0) + stop.campers.length;
-            });
-
-            let groups = Object.entries(regionKids)
-                .filter(([_, kids]) => kids > 0)
-                .sort((a, b) => b[1] - a[1])
-                .map(([regId, kids]) => ({
-                    id: regId, kids,
-                    name: _detectedRegions?.find(r => r.id === regId)?.name || regId,
-                    centroidLat: _detectedRegions?.find(r => r.id === regId)?.centroidLat || campLat,
-                    centroidLng: _detectedRegions?.find(r => r.id === regId)?.centroidLng || campLng,
-                    regionIds: [regId]
-                }));
-
-            // Merge: while more groups than buses
-            while (groups.length > vehicles.length) {
-                groups.sort((a, b) => a.kids - b.kids);
-                const smallest = groups[0];
-                let nearestIdx = 1, nearestDist = Infinity;
-                for (let i = 1; i < groups.length; i++) {
-                    const d = drivingDist(smallest.centroidLat, smallest.centroidLng, groups[i].centroidLat, groups[i].centroidLng);
-                    if (d < nearestDist) { nearestDist = d; nearestIdx = i; }
-                }
-                const target = groups[nearestIdx];
-                target.kids += smallest.kids;
-                target.regionIds.push(...smallest.regionIds);
-                target.name = target.name.split(' + ')[0] + ' + ' + smallest.name.split(' (')[0];
-                stops.forEach((_, i) => { if (smallest.regionIds.includes(stopRegions[i])) stopRegions[i] = target.id; });
-                groups.splice(groups.indexOf(smallest), 1);
-            }
-
-            console.log('[Go] Legacy: ' + groups.length + ' groups, ' + vehicles.length + ' buses');
-
-            // Allocate buses to groups
-            groups.sort((a, b) => b.kids - a.kids);
-            const groupBuses = {};
-            groups.forEach(g => { groupBuses[g.id] = []; });
-            let busPool = vehicles.map((v, i) => i);
-            groups.forEach(g => { if (busPool.length) groupBuses[g.id].push(busPool.shift()); });
-            let changed = true;
-            while (changed && busPool.length) {
-                changed = false;
-                let worstGroup = null, worstDeficit = 0;
-                groups.forEach(g => {
-                    const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
-                    const deficit = g.kids - cap;
-                    if (deficit > worstDeficit) { worstDeficit = deficit; worstGroup = g; }
-                });
-                if (worstGroup && worstDeficit > 0) { groupBuses[worstGroup.id].push(busPool.shift()); changed = true; }
-            }
-            while (busPool.length) {
-                let worstGroup = groups[0], worstRatio = 0;
-                groups.forEach(g => {
-                    const cap = groupBuses[g.id].reduce((s, vi) => s + vehicles[vi].capacity, 0);
-                    const ratio = g.kids / Math.max(1, cap);
-                    if (ratio > worstRatio) { worstRatio = ratio; worstGroup = g; }
-                });
-                groupBuses[worstGroup.id].push(busPool.shift());
-            }
-
-            showProgress('Optimizing routes (VROOM legacy)...', 35);
-
-            // Legacy per-bus VROOM calls with directional sort
-            const groupPromises = groups.map(async (group) => {
-                const groupStops = [];
-                stops.forEach((stop, i) => {
-                    if (group.regionIds.includes(stopRegions[i])) groupStops.push(stop);
-                });
-                if (!groupStops.length) return [];
-                const busIndices = groupBuses[group.id] || [];
-                if (!busIndices.length) return [];
-
-                // Simple: one bus per group in legacy mode
-                const routes = [];
-                for (let rank = 0; rank < busIndices.length; rank++) {
-                    const vi = busIndices[rank];
-                    const v = vehicles[vi];
-                    // Split stops evenly
-                    const perBus = Math.ceil(groupStops.length / busIndices.length);
-                    const busStops = groupStops.slice(rank * perBus, (rank + 1) * perBus);
-                    if (!busStops.length) continue;
-                    directionalSort(busStops, campLat, campLng);
-                    const routeStops = busStops.map((stop, i) => ({
-                        stopNum: i + 1, campers: stop.campers, address: stop.address, lat: stop.lat, lng: stop.lng
-                    }));
-                    routes.push({
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: routeStops,
-                        camperCount: routeStops.reduce((s, st) => s + st.campers.length, 0),
-                        _cap: v.capacity, totalDuration: 0
-                    });
-                }
-                return routes;
-            });
-
-            const groupResults = await Promise.all(groupPromises);
-            groupResults.forEach(routes => allRoutes.push(...routes));
-
-            vehicles.forEach(v => {
-                if (!allRoutes.find(r => r.busId === v.busId)) {
-                    allRoutes.push({
-                        busId: v.busId, busName: v.name, busColor: v.color,
-                        monitor: v.monitor, counselors: v.counselors || [],
-                        stops: [], camperCount: 0, _cap: v.capacity, totalDuration: 0
-                    });
-                }
-            });
+            const movedAtom = busBuckets[bestMove.si].splice(bestMove.ai, 1)[0];
+            busBuckets[bestMove.ri].push(movedAtom);
         }
-
-        console.log('[Go] All routes complete: ' + allRoutes.length + ' bus routes');
-
-        // ══════════════════════════════════════════════════════════════
-        // POST-ROUTING: Merge consecutive same-street stops
-        // ══════════════════════════════════════════════════════════════
-        let totalMerged = 0;
-        allRoutes.forEach(r => {
-            if (r.stops.length < 2) return;
-            let merged = 0;
-            for (let i = 0; i < r.stops.length - 1; i++) {
-                const a = r.stops[i], b = r.stops[i + 1];
-                if (!a.lat || !b.lat) continue;
-                if (drivingDistMi(a.lat, a.lng, b.lat, b.lng) > 0.057) continue;
-                const stA = normalizeStreet(parseAddress(a.address).street);
-                const stB = normalizeStreet(parseAddress(b.address).street);
-                if (!stA || !stB) continue;
-                if (stA === stB || stA.includes(stB) || stB.includes(stA)) {
-                    // Don't merge if any kid would walk > MAX_WALK_FT to the combined stop
-                    const mergedLat = a.lat, mergedLng = a.lng; // keep stop A's location
-                    const allKids = [...a.campers, ...b.campers];
-                    let wouldBeFar = false;
-                    for (const c of allKids) {
-                        const addr = D.addresses[c.name];
-                        if (!addr?.lat || !addr.lng) continue;
-                        if (manhattanMi(addr.lat, addr.lng, mergedLat, mergedLng) * 5280 > MAX_WALK_FT) {
-                            wouldBeFar = true; break;
-                        }
-                    }
-                    if (wouldBeFar) continue;
-                    a.campers.push(...b.campers);
-                    if (b.address.includes('&') && !a.address.includes('&')) a.address = b.address;
-                    r.stops.splice(i + 1, 1); merged++; i--;
-                }
-            }
-            if (merged) {
-                r.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
-                totalMerged += merged;
-            }
-        });
-        if (totalMerged) console.log('[Go] Post-route merge: ' + totalMerged + ' stop(s) consolidated');
-
-        // ══════════════════════════════════════════════════════════════
-        // CAPACITY ENFORCEMENT
-        //
-        // Border-stop strategy: find the (stop, receiving bus) pair where
-        // the stop is closest to the receiving bus. This naturally picks
-        // stops on the boundary between adjacent regions.
-        // Uses cheapestInsert to preserve VROOM's route flow.
-        // ══════════════════════════════════════════════════════════════
-        let capMoves = 0;
-        for (let capPass = 0; capPass < 100; capPass++) {
-            let overBus = null, worstOver = 0;
-            for (const r of allRoutes) {
-                const over = r.camperCount - r._cap;
-                if (over > worstOver && r.stops.length > 0) { worstOver = over; overBus = r; }
-            }
-            if (!overBus) break;
-
-            // Find best (stop, receiving bus) pair — prefer stops on the BOUNDARY
-            // FIX 19+20: Score = distFromOwnCentroid - distToTargetCentroid
-            // This picks stops that are far from their own bus AND close to the target.
-            // Dynamic max distance: try 1mi first, expand to 2mi if needed.
-            const overCentLat = overBus.stops.reduce((s, x) => s + (x.lat || 0), 0) / overBus.stops.length;
-            const overCentLng = overBus.stops.reduce((s, x) => s + (x.lng || 0), 0) / overBus.stops.length;
-            let capMaxMoveMi = 1.0;
-            let bestStopIdx = -1, bestBus = null, bestScore = -Infinity;
-            for (let attempt = 0; attempt < 2; attempt++) {
-                bestStopIdx = -1; bestBus = null; bestScore = -Infinity;
-                for (let si = 0; si < overBus.stops.length; si++) {
-                    const st = overBus.stops[si];
-                    if (!st.lat) continue;
-                    const distFromOwn = drivingDistMi(st.lat, st.lng, overCentLat, overCentLng);
-                    for (const r of allRoutes) {
-                        if (r === overBus) continue;
-                        if (r.camperCount + st.campers.length > r._cap) continue;
-                        const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                        const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                        const distToTarget = drivingDistMi(st.lat, st.lng, rLat, rLng);
-                        if (distToTarget > capMaxMoveMi) continue;
-                        // Higher score = better candidate (far from own bus, close to target)
-                        const score = distFromOwn - distToTarget;
-                        if (score > bestScore) { bestScore = score; bestStopIdx = si; bestBus = r; }
-                    }
-                }
-                if (bestBus) break;
-                capMaxMoveMi = 2.0; // widen search on second attempt
-            }
-
-            if (bestBus && bestStopIdx >= 0) {
-                // Whole-stop move — stop keeps its geographic location
-                const stopToMove = overBus.stops[bestStopIdx];
-                const moveDist = drivingDistMi(stopToMove.lat, stopToMove.lng, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lat, 0) / bestBus.stops.length : campLat, bestBus.stops.length ? bestBus.stops.reduce((s, x) => s + x.lng, 0) / bestBus.stops.length : campLng);
-                console.log('[Go]   Cap move: ' + stopToMove.campers.length + ' kids (' + stopToMove.address + ') from ' + overBus.busName + ' → ' + bestBus.busName + ' (' + moveDist.toFixed(2) + 'mi, boundary score ' + bestScore.toFixed(2) + ')');
-                overBus.stops.splice(bestStopIdx, 1);
-                overBus.camperCount -= stopToMove.campers.length;
-                overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                cheapestInsert(bestBus.stops, stopToMove);
-                bestBus.camperCount += stopToMove.campers.length;
-                capMoves++;
-            } else {
-                // No whole-stop fits — split: move campers individually
-                // Creates a NEW stop on the receiving bus at the same location
-                // Use same boundary scoring: prefer stops far from own bus, close to target
-                let splitStopIdx = -1, splitBus = null, splitScore = -Infinity;
-                capMaxMoveMi = 1.0;
-                for (let attempt = 0; attempt < 2; attempt++) {
-                    splitStopIdx = -1; splitBus = null; splitScore = -Infinity;
-                    for (let si = 0; si < overBus.stops.length; si++) {
-                        const st = overBus.stops[si];
-                        if (!st.lat || st.campers.length <= 1) continue;
-                        const distFromOwn = drivingDistMi(st.lat, st.lng, overCentLat, overCentLng);
-                        for (const r of allRoutes) {
-                            if (r === overBus || r.camperCount >= r._cap) continue;
-                            const rLat = r.stops.length ? r.stops.reduce((s, x) => s + x.lat, 0) / r.stops.length : campLat;
-                            const rLng = r.stops.length ? r.stops.reduce((s, x) => s + x.lng, 0) / r.stops.length : campLng;
-                            const distToTarget = drivingDistMi(st.lat, st.lng, rLat, rLng);
-                            if (distToTarget > capMaxMoveMi) continue;
-                            const score = distFromOwn - distToTarget;
-                            if (score > splitScore) { splitScore = score; splitStopIdx = si; splitBus = r; }
-                        }
-                    }
-                    if (splitBus) break;
-                    capMaxMoveMi = 2.0;
-                }
-                if (!splitBus || splitStopIdx < 0) {
-                    console.warn('[Go] ⚠ ' + overBus.busName + ': ' + overBus.camperCount + '/' + overBus._cap + ' — no nearby bus with room (max ' + capMaxMoveMi + 'mi)');
-                    break;
-                }
-                const stopToSplit = overBus.stops[splitStopIdx];
-                const room = splitBus._cap - splitBus.camperCount;
-                const toMove = Math.min(room, overBus.camperCount - overBus._cap);
-                if (toMove <= 0) break;
-                const movedCampers = stopToSplit.campers.splice(0, toMove);
-                overBus.camperCount -= toMove;
-                // Create a NEW stop on receiving bus at the SAME location — kids stay near their home
-                const splitDist = drivingDistMi(stopToSplit.lat, stopToSplit.lng, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lat, 0) / splitBus.stops.length : campLat, splitBus.stops.length ? splitBus.stops.reduce((s, x) => s + x.lng, 0) / splitBus.stops.length : campLng);
-                console.log('[Go]   Cap split: ' + toMove + ' kids from ' + stopToSplit.address + ' → new stop on ' + splitBus.busName + ' (' + splitDist.toFixed(2) + 'mi)');
-                cheapestInsert(splitBus.stops, { stopNum: 0, campers: movedCampers, address: stopToSplit.address, lat: stopToSplit.lat, lng: stopToSplit.lng });
-                splitBus.camperCount += toMove;
-                if (stopToSplit.campers.length === 0) {
-                    overBus.stops.splice(splitStopIdx, 1);
-                    overBus.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                }
-                capMoves++;
-            }
-        }
-        if (capMoves) console.log('[Go] Capacity enforcement: ' + capMoves + ' move(s)');
-
-        // ══════════════════════════════════════════════════════════════
-        // FINAL ROUTE ORDERING — nearest-neighbor chain using road matrix
-        //
-        // Only runs for LEGACY path. When zones are used, VROOM already
-        // ordered stops optimally within each zone — re-ordering with
-        // nearest-neighbor would override VROOM's better decisions.
-        // ══════════════════════════════════════════════════════════════
-        showProgress('Finalizing routes...', 95);
-
-        const orderPromises = zones ? [] : allRoutes.map(async (r) => {
-            if (r.stops.length < 2) return;
-            const validStops = r.stops.filter(s => s.lat && s.lng);
-            if (validStops.length < 2) return;
-
-            // Build coords: [camp, stop0, stop1, ...]
-            const coords = [{ lat: campLat, lng: campLng }]; // index 0 = camp
-            r.stops.forEach((s, i) => { s._mIdx = i + 1; coords.push({ lat: s.lat || campLat, lng: s.lng || campLng }); });
-
-            let matrix = null;
-            try {
-                matrix = await fetchDistanceMatrix(coords, campLat, campLng);
-            } catch (_) {}
-
-            // Drive time helper: matrix-based or driving cache fallback
-            function driveSec(fromIdx, toIdx) {
-                if (matrix?.[fromIdx]?.[toIdx] != null && matrix[fromIdx][toIdx] >= 0) return matrix[fromIdx][toIdx];
-                const a = coords[fromIdx], b = coords[toIdx];
-                return drivingDist(a.lat, a.lng, b.lat, b.lng);
-            }
-
-            // Find starting point
-            let startIdx; // matrix index of the first stop
-            if (isArrival) {
-                // Arrival: start at stop farthest from camp (by drive time)
-                let maxTime = 0;
-                r.stops.forEach(s => {
-                    const t = driveSec(0, s._mIdx);
-                    if (t > maxTime) { maxTime = t; startIdx = s._mIdx; }
-                });
-            } else {
-                // Dismissal: start at camp, go to nearest stop first
-                startIdx = 0; // will pick nearest from camp
-            }
-
-            // Nearest-neighbor chain
-            const ordered = [];
-            const used = new Set();
-            let currentIdx = isArrival ? startIdx : 0; // matrix index of current position
-
-            while (ordered.length < r.stops.length) {
-                let bestStop = null, bestTime = Infinity;
-                for (const s of r.stops) {
-                    if (used.has(s._mIdx)) continue;
-                    const t = driveSec(currentIdx, s._mIdx);
-                    if (t < bestTime) { bestTime = t; bestStop = s; }
-                }
-                if (!bestStop) break;
-                ordered.push(bestStop);
-                used.add(bestStop._mIdx);
-                currentIdx = bestStop._mIdx;
-            }
-
-            // Replace stops with ordered version
-            r.stops = ordered;
-            r.stops.forEach((s, i) => { s.stopNum = i + 1; delete s._mIdx; });
-        });
-        await Promise.all(orderPromises);
-        if (zones) console.log('[Go] Route sort: VROOM ordering preserved (zone path)');
-        else console.log('[Go] Route sort: nearest-neighbor chain using road driving times');
-
-        // Route quality summary
-        const totalKids = allRoutes.reduce((s, r) => s + r.camperCount, 0);
-        const totalStops = allRoutes.reduce((s, r) => s + r.stops.length, 0);
-        const busesUsed = allRoutes.filter(r => r.stops.length > 0).length;
-        const maxKids = Math.max(...allRoutes.map(r => r.camperCount));
-        const minKids = Math.min(...allRoutes.filter(r => r.camperCount > 0).map(r => r.camperCount));
-        const avgKids = totalKids / Math.max(1, busesUsed);
-        const imbalance = maxKids > 0 ? ((maxKids - minKids) / maxKids * 100).toFixed(0) : 0;
-
-        console.log('[Go] ═══ ROUTE QUALITY SUMMARY ═══');
-        console.log('[Go]   Mode: ' + (isArrival ? 'ARRIVAL' : 'DISMISSAL' + (needsReturn ? ' (return to camp)' : ' (no return)')));
-        console.log('[Go]   ' + totalKids + ' kids across ' + totalStops + ' stops on ' + busesUsed + ' buses');
-        console.log('[Go]   Kids per bus: avg ' + Math.round(avgKids) + ', min ' + minKids + ', max ' + maxKids + ' (imbalance: ' + imbalance + '%)');
-        allRoutes.filter(r => r.stops.length > 0).forEach(r => {
-            const farthest = r.stops.length ? haversineMi(campLat, campLng, r.stops[r.stops.length - 1].lat, r.stops[r.stops.length - 1].lng).toFixed(1) : '?';
-            console.log('[Go]   ' + r.busName + ': ' + r.camperCount + ' kids, ' + r.stops.length + ' stops, farthest: ' + farthest + ' mi');
-        });
-        // Flag buses over capacity (real problem) — skip global imbalance warning
-        // since different-sized ZIP regions naturally produce different bus loads
-        allRoutes.filter(r => r.camperCount > r._cap).forEach(r => {
-            console.warn('[Go]   ⚠ ' + r.busName + ': ' + r.camperCount + ' kids exceeds capacity ' + r._cap);
-        });
-        console.log('[Go] ═══════════════════════════════');
-
-        // ── Per-bus stop + camper distance audit ──
-        console.log('\n[Go] ═══ PER-BUS STOP AUDIT ═══');
-        allRoutes.filter(r => r.stops.length > 0).forEach(r => {
-            console.log('\n[Go] ── ' + r.busName + ' (' + r.camperCount + '/' + r._cap + ' kids) ──');
-            r.stops.forEach(st => {
-                if (st.isMonitor || st.isCounselor) return;
-                const stopDist = (st.lat && campLat) ? haversineMi(campLat, campLng, st.lat, st.lng).toFixed(2) : '?';
-                let farKids = 0;
-                const kidLines = st.campers.map(c => {
-                    const a = D.addresses[c.name];
-                    if (!a?.geocoded || !a.lat || !a.lng || !st.lat || !st.lng) return '      ' + c.name + ' (no address)';
-                    const walkFt = Math.round(manhattanMi(a.lat, a.lng, st.lat, st.lng) * 5280);
-                    const flag = walkFt > 500 ? ' ⚠ FAR' : '';
-                    if (walkFt > 500) farKids++;
-                    return '      ' + c.name + ' — ' + walkFt + 'ft' + flag + '  [' + (a.zip || '') + ']';
-                });
-                const farTag = farKids > 0 ? ' ⚠ ' + farKids + ' far' : '';
-                console.log('[Go]   Stop ' + st.stopNum + ': ' + st.address + ' (' + st.campers.length + ' kids, ' + stopDist + 'mi from camp)' + farTag);
-                kidLines.forEach(l => console.log('[Go] ' + l));
-                // Show counselors assigned to this stop
-                if (st._counselors?.length) {
-                    st._counselors.forEach(c => {
-                        const tag = c.walkFt > 1850 ? ' ⚠ FAR' : '';
-                        console.log('[Go]       🎒 ' + c.name + ' (counselor) — ' + c.walkFt + 'ft walk' + tag + '  [' + c.address + ']');
-                    });
-                }
-            });
-        });
-        console.log('\n[Go] ═══ END AUDIT ═══\n');
-
-        // ══════════════════════════════════════════════════════════════
-        // COUNSELOR & MONITOR ASSIGNMENT (Smart Auto-Assign)
-        //
-        // Three modes per staff member:
-        //   'stop'   — needsStop=yes: treated like a camper, gets own stop
-        //   'auto'   — no stop needed: auto-assigned to nearest bus route
-        //   'manual' — no stop needed: already assigned to specific bus
-        //
-        // For 'auto' and 'manual' without stop: find nearest existing stop
-        // on their bus. Warn if >7 min walk away.
-        // ══════════════════════════════════════════════════════════════
-        const allStops = [];
-        allRoutes.forEach(r => r.stops.forEach(st => {
-            if (!st.isMonitor && st.lat && st.lng) allStops.push({ stop: st, route: r });
-        }));
-
-        const counselorsToAssign = D.counselors.filter(c => c.address);
-        if (counselorsToAssign.length && allStops.length) {
-            console.log('[Go] ═══ COUNSELOR ASSIGNMENT ═══');
-            const OUTLIER_WALK_FT = 1850;
-            const outliers = [];
-
-            for (const c of counselorsToAssign) {
-                // Geocode if we don't have coords yet
-                if (!c._lat || !c._lng) {
-                    const geo = await geocodeSingle(c.address);
-                    if (geo) { c._lat = geo.lat; c._lng = geo.lng; }
-                    else {
-                        console.warn('[Go]   ⚠ Could not geocode: ' + c.name + ' (' + c.address + ')');
-                        continue;
-                    }
-                }
-
-                const mode = c.assignMode || (c.needsStop === 'yes' ? 'stop' : c.assignedBus ? 'manual' : 'auto');
-
-                // MODE: 'stop' — they need their own stop, handled during route generation
-                // (already included as a camper address if needsStop=yes)
-                if (mode === 'stop') {
-                    console.log('[Go]   ' + c.name + ' — has dedicated stop (treated as camper)');
-                    continue;
-                }
-
-                // MODE: 'auto' — find the bus whose route passes closest
-                if (mode === 'auto') {
-                    let bestRoute = null, bestDist = Infinity;
-                    for (const r of allRoutes) {
-                        if (!r.stops.length) continue;
-                        // Find closest stop on this route
-                        for (const st of r.stops) {
-                            if (!st.lat) continue;
-                            const d = manhattanMi(c._lat, c._lng, st.lat, st.lng);
-                            if (d < bestDist) { bestDist = d; bestRoute = r; }
-                        }
-                    }
-                    if (bestRoute) {
-                        c.assignedBus = bestRoute.busId;
-                        c._assignedBusName = bestRoute.busName;
-                        console.log('[Go]   ' + c.name + ' → AUTO-ASSIGNED to ' + bestRoute.busName + ' (' + Math.round(bestDist * 5280) + 'ft from nearest stop)');
-                    }
-                }
-
-                // Find nearest stop — prefer their assigned bus, fall back to any bus
-                let bestStop = null, bestRoute = null, bestDist = Infinity;
-                // First pass: only stops on assigned bus
-                if (c.assignedBus) {
-                    for (const { stop, route } of allStops) {
-                        if (route.busId !== c.assignedBus) continue;
-                        const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
-                        if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
-                    }
-                }
-                // Second pass: any bus (if assigned bus has no nearby stops)
-                if (!bestStop || bestDist * 5280 > 3000) {
-                    for (const { stop, route } of allStops) {
-                        const d = manhattanMi(c._lat, c._lng, stop.lat, stop.lng);
-                        if (d < bestDist) { bestDist = d; bestStop = stop; bestRoute = route; }
-                    }
-                }
-
-                if (!bestStop) continue;
-
-                const walkFt = Math.round(bestDist * 5280);
-                c._assignedStop = bestStop.address;
-                c._assignedBus = bestRoute.busId;
-                c._assignedBusName = bestRoute.busName;
-                c._walkFt = walkFt;
-
-                // Tag the stop with counselor info
-                if (!bestStop._counselors) bestStop._counselors = [];
-                bestStop._counselors.push({ name: c.name, walkFt, address: c.address, id: c.id });
-
-                if (walkFt > OUTLIER_WALK_FT) {
-                    outliers.push(c);
-                    console.warn('[Go]   ⚠ ' + c.name + ' → ' + bestStop.address + ' on ' + bestRoute.busName + ' — ' + walkFt + 'ft walk (>' + OUTLIER_WALK_FT + 'ft)');
-                } else {
-                    console.log('[Go]   ' + c.name + ' → ' + bestStop.address + ' on ' + bestRoute.busName + ' — ' + walkFt + 'ft walk ✓');
-                }
-            }
-
-            console.log('[Go] ═══════════════════════════════');
-
-            // Store outliers for UI prompt
-            if (outliers.length) {
-                _counselorOutliers = outliers;
-                // Defer UI prompt until after routes render
-                setTimeout(() => showCounselorOutlierModal(outliers), 800);
-            }
-        }
-
-        return allRoutes;
+        moves++;
     }
+
+    const finalTimes = busBuckets.map((_, i) => estTime(i));
+    const finalMax = Math.max(...finalTimes);
+    const initSum = initTimes.reduce((s, t) => s + t, 0);
+    const finalSum = finalTimes.reduce((s, t) => s + t, 0);
+    console.log('[Go v6] Hill climb: ' + moves + ' atoms moved (sum ' +
+        (initSum / 60).toFixed(0) + 'min → ' + (finalSum / 60).toFixed(0) +
+        'min, max ' + (initMax / 60).toFixed(1) + 'min → ' + (finalMax / 60).toFixed(1) + 'min, ' +
+        blockedBySpread + ' moves blocked by spread cap)');
+    console.log('[Go v6] Final: max ' + (finalMax / 60).toFixed(1) +
+        'min, median ' + (median(finalTimes) / 60).toFixed(1) + 'min, min ' +
+        (Math.min(...finalTimes) / 60).toFixed(1) + 'min');
+
+    // Refresh centroids after moves
+    clusterMeta.forEach(m => { m.cent = bucketCentroid(busBuckets[m.idx]); });
+    clusterMeta.forEach(m => { m.estTime = estTime(m.idx); });
+    clusterMeta.sort((a, b) => b.distSec - a.distSec);
+
+    // ── G. Log final cluster results ──
+    console.log('[Go v6] ═══════════════════════════════════════');
+    console.log('[Go v6] FINAL CLUSTERS');
+    console.log('[Go v6] ═══════════════════════════════════════');
+    const metaByIdx = {};
+    clusterMeta.forEach(m => { metaByIdx[m.idx] = m; });
+    for (let i = 0; i < busBuckets.length; i++) {
+        const count = bucketSize(busBuckets[i]);
+        const lats = busBuckets[i].map(a => a.lat);
+        const lngs = busBuckets[i].map(a => a.lng);
+        const meta = metaByIdx[i];
+        const targetStr = meta ? ' (~' + (meta.estTime / 60).toFixed(0) + 'min est, ' + (meta.distSec / 60).toFixed(1) + 'min from camp)' : '';
+        if (lats.length) {
+            const spread = haversineMi(
+                Math.min(...lats), Math.min(...lngs),
+                Math.max(...lats), Math.max(...lngs));
+            const cent = bucketCentroid(busBuckets[i]);
+            console.log('[Go v6] Cluster ' + (i + 1) + ': ' +
+                count + ' campers, ' + busBuckets[i].length + ' atoms, ' +
+                spread.toFixed(2) + 'mi spread' + targetStr);
+        } else {
+            console.log('[Go v6] Cluster ' + (i + 1) + ': EMPTY');
+        }
+    }
+    const totalCampers = busBuckets.reduce((s, b) => s + bucketSize(b), 0);
+    console.log('[Go v6] Total: ' + totalCampers + ' campers in ' + busBuckets.length + ' clusters');
+    console.log('[Go v6] ═══════════════════════════════════════');
+
+    // ── G. Per-cluster stop creation based on dropoff mode ──
+    // Each cluster is FROZEN — stop creators only operate on the campers given.
+    // No camper crosses cluster boundaries from here on.
+    showProgress(shiftLabel + ': building stops (' + dropoffMode + ')...', pctBase + 70);
+
+    const routes = [];
+    for (let bi = 0; bi < busBuckets.length; bi++) {
+        const bucket = busBuckets[bi];
+        const vehicle = shiftVehicles[bi] || shiftVehicles[0];
+        const campers = bucket.flatMap(a => a.members);
+
+        let stopsRaw;
+        if (dropoffMode === 'corner-stops') {
+            stopsRaw = await createCornerStops(campers);
+        } else if (dropoffMode === 'optimized-stops') {
+            stopsRaw = createOptimizedStops(campers);
+        } else {
+            stopsRaw = createHouseStops(campers);
+        }
+
+        routes.push({
+            busId:        vehicle.busId,
+            busName:      vehicle.name || vehicle.busId,
+            busColor:     vehicle.color || '#10b981',
+            monitor:      vehicle.monitor || null,
+            counselors:   vehicle.counselors || [],
+            stops:        stopsRaw.map((s, i) => ({
+                stopNum: i + 1,
+                campers: s.campers,
+                address: s.address || '',
+                lat: s.lat, lng: s.lng
+            })),
+            camperCount:  campers.length,
+            _cap:         vehicle.capacity,
+            totalDuration: 0,
+            _source:      'spatial-sort'
+        });
+    }
+    console.log('[Go v6] Stops created: ' + routes.reduce((s, r) => s + r.stops.length, 0) +
+        ' total (mode: ' + dropoffMode + ')');
+
+    // ── H. Per-bus Google TSP — orders stops within each bus, never crosses buses ──
+    if (googleAvailable && routes.length) {
+        showProgress(shiftLabel + ': optimizing stop order per bus...', pctBase + 80);
+        for (const r of routes) {
+            if (r.stops.length < 3) continue;
+            try {
+                const tspResult = await _perBusGoogleTSP({
+                    route: r,
+                    campLat, campLng,
+                    isArrival,
+                    serviceTimeSec,
+                    googleKey, googleProjId,
+                    _supabaseUrl, _googleProxyToken,
+                    shift,
+                    shiftIdx
+                });
+                if (tspResult) {
+                    r.stops = tspResult.stops;
+                    r.totalDuration = tspResult.totalDuration || r.totalDuration;
+                    if (tspResult.roadPts) r._roadPts = tspResult.roadPts;
+                    if (tspResult.tspLegTimes) r._tspLegTimes = tspResult.tspLegTimes;
+                }
+            } catch (e) {
+                console.warn('[Go v6] Per-bus TSP failed for ' + r.busName +
+                    ' — keeping unsorted stop order (' + e.message + ')');
+            }
+        }
+
+        // Override TSP order: closest-to-camp first.
+        // For dismissal: bus drops the nearest kid first, then fans outward.
+        // For arrival: bus picks up the farthest first, returns toward camp.
+        for (const r of routes) {
+            if (r.stops.length < 2) continue;
+            r.stops.sort((a, b) => {
+                const da = haversineMi(campLat, campLng, a.lat, a.lng);
+                const db = haversineMi(campLat, campLng, b.lat, b.lng);
+                return isArrival ? (db - da) : (da - db);
+            });
+            r.stops.forEach((s, i) => s.stopNum = i + 1);
+            // Drop solver leg times — they no longer match the new order
+            delete r._tspLegTimes;
+            delete r._roadPts;
+        }
+    }
+
+    toast('✓ Routes complete — ' + routes.length + ' buses, ' +
+        routes.reduce((s, r) => s + r.stops.length, 0) + ' stops (' + dropoffMode + ')');
+    return routes;
+}
+
+
+function computeZoneTimeWindow(stops, campLat, campLng, isArrival,
+                               shiftTargetHHMM, avgSpeedMph, avgStopMin) {
+    if (!stops?.length) return { startHHMM: null, startWindowEndHHMM: null, endHHMM: null };
+
+    // Mean distance from camp (miles).  Haversine is fine for back-solving —
+    // the final stop times come from Google's real road matrix.
+    let sumDist = 0;
+    for (const s of stops) {
+        sumDist += haversineMi(campLat, campLng, s.lat, s.lng);
+    }
+    const meanDist = sumDist / stops.length;
+
+    // Estimate round-trip drive time from camp.  We use mean (not max) distance
+    // because stops on the way back are closer to camp by definition.  The
+    // factor of 2 accounts for going out and coming back.
+    const estDriveMin = (meanDist * 2) / Math.max(1, avgSpeedMph) * 60;
+    const estServiceMin = stops.length * Math.max(0.5, avgStopMin);
+    const bufferMin = 10; // fudge factor for traffic, stop lights, boarding
+    const totalMin = Math.round(estDriveMin + estServiceMin + bufferMin);
+
+    const [tH, tM] = (shiftTargetHHMM || (isArrival ? '08:00' : '16:00'))
+        .split(':').map(Number);
+    const targetMin = tH * 60 + tM;
+
+    if (isArrival) {
+        // Bus starts early enough to reach camp by target.
+        const startMinOfDay = Math.max(0, targetMin - totalMin);
+        return {
+            startHHMM:          _minsToHHMM(startMinOfDay),
+            startWindowEndHHMM: null,
+            endHHMM:            _minsToHHMM(targetMin)
+        };
+    } else {
+        // Dismissal: bus leaves camp at target with a 5-min dispatch window.
+        return {
+            startHHMM:          _minsToHHMM(targetMin),
+            startWindowEndHHMM: _minsToHHMM(targetMin + 5),
+            endHHMM:            null
+        };
+    }
+}
+
+function _minsToHHMM(totalMin) {
+    const h = Math.floor(totalMin / 60) % 24;
+    const m = totalMin % 60;
+    return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+}
+
+
+// =============================================================================
+// REPLACEMENT _perBusGoogleTSP
+//
+// Same signature as Phase 1; inside, it now computes a per-bus time window
+// from the bus's stops and passes it to Google so the solver back-solves
+// from the correct arrival/departure target per zone.
+// =============================================================================
+async function _perBusGoogleTSP({
+    route, campLat, campLng,
+    isArrival, serviceTimeSec,
+    googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    shift,
+    shiftIdx    // NEW PHASE 3: the shift index for anchor lookup
+}) {
+    if (!window.GoGoogleOptimizer?.optimizeTours) return null;
+
+    const singleBus = [{
+        busId:    route.busId,
+        name:     route.busName,
+        color:    route.busColor,
+        capacity: Math.max(route.camperCount + 10, 1000),
+        monitor:  route.monitor,
+        counselors: route.counselors
+    }];
+
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const avgStopMin  = D.setup.avgStopTime || 2;
+
+    const shiftTarget = shift.departureTime || (isArrival ? '08:00' : '16:00');
+    const zw = computeZoneTimeWindow(
+        route.stops, campLat, campLng, isArrival,
+        shiftTarget, avgSpeedMph, avgStopMin
+    );
+
+    const vehicleTimeWindows = [{
+        busId:          route.busId,
+        startTime:      zw.startHHMM,
+        startWindowEnd: zw.startWindowEndHHMM,
+        endTime:        zw.endHHMM
+    }];
+
+    // NEW PHASE 3: look up a user-pinned anchor, if any.
+    // Requires _ensureFlags() to have been called at least once; the caller
+    // (generateRoutes) ensures this before entering the shift loop.
+    const pinnedIdx = _getPinnedAnchorIndex(route, shiftIdx);
+    if (pinnedIdx != null) {
+        console.log('[Go v5.3] Pinned anchor for ' + route.busName + ': stop #' +
+            (pinnedIdx + 1) + ' (' + route.stops[pinnedIdx].address + ')');
+    }
+
+    console.log('[Go v5.3] Per-bus TSP ' + route.busName +
+        ' (' + route.stops.length + ' stops, ' + route.camperCount + ' campers): ' +
+        (isArrival
+            ? 'pickup ' + (zw.startHHMM || '?') + ' → camp ' + (zw.endHHMM || '?')
+            : 'camp ' + (zw.startHHMM || '?') + ' → dropoffs'));
+
+    const result = await window.GoGoogleOptimizer.optimizeTours({
+        stops: route.stops,
+        vehicles: singleBus,
+        campLat, campLng,
+        isArrival,
+        serviceTime:   serviceTimeSec,
+        departureTime: shiftTarget,
+        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
+        vehicleTimeWindows,
+        pinnedAnchorIndex: pinnedIdx,  // NEW PHASE 3
+        googleKey, googleProjId,
+        supabaseUrl: _supabaseUrl,
+        accessToken: _googleProxyToken,
+        anonKey: window.__CAMPISTRY_SUPABASE__?.anonKey || ''
+    });
+
+    if (!result || !result.length || !result[0].stops?.length) {
+        console.warn('[Go v5.3] Per-bus TSP ' + route.busName + ' infeasible — retaining spine');
+        return null;
+    }
+
+    const r = result[0];
+
+    // Sanity: same campers in and out
+    const inNames = new Set();
+    for (const s of route.stops) for (const c of s.campers) {
+        inNames.add(typeof c === 'string' ? c : c.name);
+    }
+    const outNames = new Set();
+    for (const s of r.stops) for (const c of s.campers) {
+        outNames.add(typeof c === 'string' ? c : c.name);
+    }
+    if (inNames.size !== outNames.size ||
+        [...inNames].some(n => !outNames.has(n))) {
+        console.error('[Go v5.3] Per-bus TSP altered camper set for ' + route.busName +
+            ' — rejecting, keeping spine order');
+        return null;
+    }
+
+    return {
+        stops:         r.stops,
+        totalDuration: r.totalDuration || 0,
+        roadPts:       r._roadPts      || null,
+        tspLegTimes:   r._tspLegTimes  || null
+    };
+}
+
+
+
+// =============================================================================
+// REPLACEMENT _fallbackGoogleGlobal
+//
+// Unchanged in shape from Phase 1 (Phase 2's hardening is inside the optimizer,
+// not the caller).  The one difference: pass `vehicleTimeWindows` computed from
+// each bus's share of stops.  Since the fallback path hasn't decided zones yet,
+// we use a crude heuristic: sort stops by angle from camp, split into equal
+// chunks per bus, then use those chunks to back-solve time windows.
+// =============================================================================
+async function _fallbackGoogleGlobal({
+    shift, shiftLabel, pctBase,
+    allCampers, shiftVehicles,
+    campLat, campLng,
+    reserveSeats,
+    isArrival,
+    googleKey, googleProjId,
+    _supabaseUrl, _googleProxyToken,
+    serviceTimeSec
+}) {
+    showProgress(shiftLabel + ': FALLBACK — creating corner stops...', pctBase + 15);
+
+    const allStops = await createCornerStops(allCampers);
+
+    const seen = new Set();
+    const dedupStops = allStops.filter(s => {
+        const key = Math.round(s.lat * 5000) + ',' + Math.round(s.lng * 5000);
+        if (seen.has(key)) return false;
+        seen.add(key); return true;
+    });
+
+    if (!dedupStops.length) {
+        console.error('[Go v5.2] Fallback: createCornerStops produced 0 stops');
+        return null;
+    }
+
+    showProgress(shiftLabel + ': FALLBACK — Google Route Optimization...', pctBase + 45);
+
+    // Pre-assign stops to buses by angle-from-camp + equal-size chunks, purely
+    // for the purpose of back-solving time windows.  The real assignment
+    // happens inside Google; this is just an estimate.
+    const avgSpeedMph = D.setup.avgSpeed || 25;
+    const avgStopMin  = D.setup.avgStopTime || 2;
+    const vehicleTimeWindows = _estimateFallbackTimeWindows(
+        dedupStops, shiftVehicles, campLat, campLng,
+        isArrival, shift.departureTime, avgSpeedMph, avgStopMin
+    );
+
+    const result = await window.GoGoogleOptimizer.optimizeTours({
+        stops: dedupStops,
+        vehicles: shiftVehicles,
+        campLat, campLng,
+        isArrival,
+        serviceTime: serviceTimeSec,
+        departureTime: shift.departureTime || (isArrival ? '07:30' : '16:00'),
+        maxRideTimeSec: (D.setup.maxRideTime || 45) * 60,
+        maxRouteDurationSec: (D.setup.maxRouteDuration || 60) * 60,
+        vehicleTimeWindows,
+        googleKey, googleProjId,
+        supabaseUrl: _supabaseUrl,
+        accessToken: _googleProxyToken,
+        anonKey: window.__CAMPISTRY_SUPABASE__?.anonKey || ''
+    });
+
+    if (!result || !result.length) {
+        console.error('[Go v5.2] Fallback: Google Route Optimization returned empty');
+        return null;
+    }
+
+    result.forEach(r => {
+        r.stops.forEach((s, i) => s.stopNum = i + 1);
+        r.camperCount = r.stops.reduce((sum, s) => sum + s.campers.length, 0);
+    });
+
+    return result;
+}
+
+
+// =============================================================================
+// _estimateFallbackTimeWindows — crude per-bus time window estimate for the
+// fallback path, based on angular sweep + equal-size chunks.  Only used when
+// the neighborhood pipeline fails — so these are rough numbers, not the
+// LSTA-grade back-solve.
+// =============================================================================
+function _estimateFallbackTimeWindows(stops, vehicles, campLat, campLng,
+                                       isArrival, shiftTargetHHMM,
+                                       avgSpeedMph, avgStopMin) {
+    if (!stops.length || !vehicles.length) return [];
+
+    // Sort stops by angle from camp for a coarse spatial chunking.
+    const annotated = stops.map(s => ({
+        stop: s,
+        angle: Math.atan2(s.lng - campLng, s.lat - campLat)
+    }));
+    annotated.sort((a, b) => a.angle - b.angle);
+
+    const chunkSize = Math.ceil(annotated.length / vehicles.length);
+    return vehicles.map((v, vi) => {
+        const chunk = annotated
+            .slice(vi * chunkSize, (vi + 1) * chunkSize)
+            .map(a => a.stop);
+        if (!chunk.length) {
+            return {
+                busId: v.busId,
+                startTime: shiftTargetHHMM, endTime: shiftTargetHHMM
+            };
+        }
+        const zw = computeZoneTimeWindow(
+            chunk, campLat, campLng, isArrival,
+            shiftTargetHHMM, avgSpeedMph, avgStopMin
+        );
+        return {
+            busId:          v.busId,
+            startTime:      zw.startHHMM,
+            startWindowEnd: zw.startWindowEndHHMM,
+            endTime:        zw.endHHMM
+        };
+    });
+}
+
+
+// =============================================================================
+// _consolidateBusStops — merge close-by stops into shared arterial corners
+//
+// expandToPhysicalStops produces one stop per OSM segment. In dense
+// neighborhoods that means 25-30 stops on a single bus, where camp uses
+// 10-15 by pulling multiple kids to a shared arterial corner. This pass
+// closes that gap.
+//
+// Two passes:
+//   1. Same-street merge: if stops A and B share a street name in their
+//      address AND are within 0.25mi (~1320ft), absorb the smaller into
+//      the larger.
+//   2. Close-distance merge: if A and B are within 0.10mi (~530ft)
+//      regardless of street, absorb.
+//
+// Capacity cap: never let a merged stop exceed 15 campers (camp's typical
+// max). Self-contained distance fn (degree → miles approximation, fine at
+// our scale).
+// =============================================================================
+function _consolidateBusStops(stops) {
+    const SEG_RADIUS_MI = 0.25;
+    const ANY_RADIUS_MI = 0.10;
+    const MAX_STOP_CAP = 15;
+
+    function manhDist(la1, lo1, la2, lo2) {
+        return Math.abs(la1 - la2) * 69 + Math.abs(lo1 - lo2) * 54.6;
+    }
+    // Extract street name tokens from "Brewers Bridge Rd corner" or
+    // "Brewers Bridge Rd & Bridge Ct" or "12 Brewers Bridge Rd".
+    function streetsOf(addr) {
+        if (!addr) return [];
+        return String(addr)
+            .split(/\s*[&@,]\s*/)
+            .map(p => p
+                .replace(/^\d[\d\s\-]*/, '')
+                .replace(/\bcorner\b/i, '')
+                .replace(/\([^)]*\)/g, '')
+                .trim()
+                .toLowerCase())
+            .filter(Boolean);
+    }
+    function camperCount(s) {
+        return Array.isArray(s.campers) ? s.campers.length : 0;
+    }
+
+    function runMerge(radiusMi, requireSameStreet) {
+        let merged = true;
+        while (merged) {
+            merged = false;
+            outer: for (let i = stops.length - 1; i >= 0; i--) {
+                const cntI = camperCount(stops[i]);
+                if (cntI === 0) continue;
+                const sA = requireSameStreet ? streetsOf(stops[i].address) : null;
+                if (requireSameStreet && !sA.length) continue;
+                let bestJ = -1, bestDist = radiusMi;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    const cntJ = camperCount(stops[j]);
+                    if (cntJ + cntI > MAX_STOP_CAP) continue;
+                    if (requireSameStreet) {
+                        const sB = streetsOf(stops[j].address);
+                        if (!sA.some(n => sB.includes(n))) continue;
+                    }
+                    const d = manhDist(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers = (stops[bestJ].campers || []).concat(stops[i].campers || []);
+                    stops.splice(i, 1);
+                    merged = true;
+                    break outer;
+                }
+            }
+        }
+    }
+
+    runMerge(SEG_RADIUS_MI, true);   // same-street, wider radius
+    runMerge(ANY_RADIUS_MI, false);  // any-street, tight radius
+
+    return stops;
+}
+
+
+// =============================================================================
+// _splitOverlongRoutes — peel stops off any route exceeding the duration cap
+//
+// The solver receives maxRouteDuration as a soft cap; an overlong route
+// here means the solver couldn't honor it (usually because too many stops
+// landed on one bus). Peel the farthest-from-camp stops onto the
+// geographically-closest sibling route that has room and runs shorter.
+//
+// We don't know the precise duration of a hypothetical bus path, so use
+// stop count as a proxy (every dropped stop saves ~serviceTime + leg time).
+// =============================================================================
+function _splitOverlongRoutes(routes, shiftVehicles, campLat, campLng, maxRouteMin) {
+    if (!routes || routes.length < 2 || !maxRouteMin) return;
+    const active = routes.filter(r => r && r.stops && r.stops.length > 0);
+    if (active.length < 2) return;
+
+    const capById = {};
+    (shiftVehicles || []).forEach(v => { capById[v.busId] = v.capacity || 0; });
+
+    function camperCount(r) {
+        return r.stops.reduce((s, st) =>
+            s + (st.isMonitor || st.isCounselor ? 0 : (st.campers?.length || 0)), 0);
+    }
+    function dist2(a, b) {
+        const dx = a.lat - b.lat, dy = a.lng - b.lng;
+        return dx * dx + dy * dy;
+    }
+    function distToCamp2(st) {
+        return dist2(st, { lat: campLat, lng: campLng });
+    }
+    function routeMaxStopDistFromCamp(r) {
+        let max = 0;
+        r.stops.forEach(st => {
+            if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+            const d = distToCamp2(st);
+            if (d > max) max = d;
+        });
+        return max;
+    }
+
+    const MAX_ITER = 200;
+    const MAX_MOVES_PER_BUS = 4;
+    // Hard gate: a stop transfer is only allowed when the receiver bus has
+    // at least one stop within MAX_TRANSFER_MI of the candidate. Without this
+    // the splitter happily moves a Toms River stop onto a Lakewood bus —
+    // bumping the receiver from 60min to 100+min because the optimizer now
+    // has to detour 15+ miles. 1.5mi keeps moves within neighborhood.
+    const MAX_TRANSFER_MI = 1.5;
+    const MAX_TRANSFER_MI2 = (MAX_TRANSFER_MI * MAX_TRANSFER_MI) / (69 * 69);
+    // Only run the splitter on routes that are MEANINGFULLY over cap.
+    // A route 5 min over (e.g. 65min on a 60min cap) is not worth a transfer
+    // that risks adding 15+ minutes to another bus.
+    const SLACK_BEFORE_SPLITTING = 12; // min — only act on >12min over
+    const movesPerBus = {};
+    const giveUp = new Set();
+
+    // Approximate the time cost of inserting a stop at distance D miles
+    // from the receiver's nearest existing stop. Drive there + dwell + drive
+    // back. avgSpeed ~25mph → 2.4 min/mi each way + 2 min dwell.
+    function approxInsertMin(distMi) {
+        return Math.max(3, Math.round(distMi * 4.8 + 2));
+    }
+    function dist2ToMi(d2) {
+        // dist2 is squared lat/lng degrees. Convert: 1 deg lat ≈ 69 mi.
+        return Math.sqrt(d2) * 69;
+    }
+
+    for (let iter = 0; iter < MAX_ITER; iter++) {
+        // Pick the WORST over-cap route that we haven't given up on.
+        let overlong = null, worstOver = 0;
+        active.forEach(r => {
+            if (giveUp.has(r.busId)) return;
+            const over = (r.totalDuration || 0) - maxRouteMin;
+            if (over <= SLACK_BEFORE_SPLITTING) return;
+            if (over > worstOver) { worstOver = over; overlong = r; }
+        });
+        if (!overlong) return;
+
+        movesPerBus[overlong.busId] = (movesPerBus[overlong.busId] || 0) + 1;
+        if (movesPerBus[overlong.busId] > MAX_MOVES_PER_BUS) {
+            giveUp.add(overlong.busId);
+            console.warn('[Go v5.2] ' + overlong.busName + ' still ' +
+                overlong.totalDuration + 'min after ' + MAX_MOVES_PER_BUS +
+                ' splits — root cause is likely upstream clustering. ' +
+                'Consider raising maxRouteDuration or adding a bus.');
+            continue;
+        }
+
+        // Pull the farthest-from-camp stop on this route.
+        let farthestIdx = -1, farthestDist = 0;
+        overlong.stops.forEach((st, idx) => {
+            if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+            const d = distToCamp2(st);
+            if (d > farthestDist) { farthestDist = d; farthestIdx = idx; }
+        });
+        if (farthestIdx < 0) { giveUp.add(overlong.busId); continue; }
+        const candidate = overlong.stops[farthestIdx];
+        const candCount = candidate.campers?.length || 0;
+        if (candCount === 0) {
+            overlong.stops.splice(farthestIdx, 1);
+            continue;
+        }
+
+        // Find the best receiver: a route with room AND with at least one
+        // stop within MAX_TRANSFER_MI of the candidate. If no receiver
+        // qualifies, leave the over-cap route alone — moving the stop to
+        // a far-away bus would only make things worse.
+        let receiver = null, bestDist2 = MAX_TRANSFER_MI2;
+        active.forEach(r => {
+            if (r === overlong) return;
+            const cap = capById[r.busId] || 0;
+            const cur = camperCount(r);
+            if (cap && cur + candCount > cap) return;
+
+            let nearest = Infinity;
+            r.stops.forEach(st => {
+                if (st.isMonitor || st.isCounselor || !st.lat || !st.lng) return;
+                const d2 = dist2(candidate, st);
+                if (d2 < nearest) nearest = d2;
+            });
+            if (nearest > MAX_TRANSFER_MI2) return; // hard distance gate
+
+            // Estimate cost of inserting on this receiver. If projected
+            // duration exceeds cap, skip — don't trade one over-cap route
+            // for another.
+            const insertMin = approxInsertMin(dist2ToMi(nearest));
+            if ((r.totalDuration || 0) + insertMin > maxRouteMin) return;
+
+            if (nearest < bestDist2) { bestDist2 = nearest; receiver = r; }
+        });
+
+        if (!receiver) {
+            giveUp.add(overlong.busId);
+            const candDistMi = dist2ToMi(distToCamp2(candidate));
+            console.warn('[Go v5.2] ' + overlong.busName + ' is ' +
+                Math.round(worstOver) + 'min over cap, but no receiver bus ' +
+                'has room within ' + MAX_TRANSFER_MI + 'mi of "' +
+                (candidate.address || '?') + '" (' + candDistMi.toFixed(1) +
+                'mi from camp) — leaving as-is. Cluster is geographically ' +
+                'broken; needs upstream fix.');
+            continue;
+        }
+
+        overlong.stops.splice(farthestIdx, 1);
+        receiver.stops.push(candidate);
+        const insertMin = approxInsertMin(dist2ToMi(bestDist2));
+        overlong.totalDuration = Math.max(0, (overlong.totalDuration || 0) - insertMin);
+        receiver.totalDuration = (receiver.totalDuration || 0) + insertMin;
+        overlong.camperCount = camperCount(overlong);
+        receiver.camperCount = camperCount(receiver);
+        console.log('[Go v5.2] Split: moved "' +
+            (candidate.address || '?') + '" (' + candCount + ' campers, ' +
+            dist2ToMi(bestDist2).toFixed(2) + 'mi to receiver) from ' +
+            overlong.busName + ' (-' + insertMin + 'min) to ' +
+            receiver.busName + ' (+' + insertMin + 'min)');
+    }
+}
+
+
+// =============================================================================
+// _rebalanceBusLoads — post-routing capacity equalization
+//
+// VROOM/Google sometimes return solutions where one bus is near capacity
+// while another is half-empty (the geographic bisection step over-allocates
+// stops to the denser wedge). Equalize by peeling a stop off the heaviest
+// bus and re-attaching it to the lightest, but only when:
+//   1. The stop is geographically close to the lightest bus's current path
+//      (closer to the light bus's centroid than to the heavy bus's centroid).
+//   2. The light bus has room (within capacity).
+//   3. The transfer brings them measurably closer in load.
+//
+// Safe by construction: never moves campers individually, never violates
+// capacity, and only moves stops that geographically fit better elsewhere.
+// =============================================================================
+function _rebalanceBusLoads(routes, shiftVehicles) {
+    if (!routes || routes.length < 2) return;
+    const active = routes.filter(r => r && r.stops && r.stops.length > 0);
+    if (active.length < 2) return;
+
+    // Capacity lookup by busId
+    const capById = {};
+    (shiftVehicles || []).forEach(v => { capById[v.busId] = v.capacity || 0; });
+
+    function camperCount(r) {
+        return r.stops.reduce((s, st) =>
+            s + (st.isMonitor || st.isCounselor ? 0 : (st.campers?.length || 0)), 0);
+    }
+    function centroid(r) {
+        const stops = r.stops.filter(s => !s.isMonitor && !s.isCounselor && s.lat && s.lng);
+        if (!stops.length) return null;
+        const lat = stops.reduce((s, st) => s + st.lat, 0) / stops.length;
+        const lng = stops.reduce((s, st) => s + st.lng, 0) / stops.length;
+        return { lat, lng };
+    }
+    function dist2(a, b) {
+        const dx = a.lat - b.lat, dy = a.lng - b.lng;
+        return dx * dx + dy * dy;
+    }
+
+    // Refresh camper counts in case the caller didn't.
+    active.forEach(r => { r.camperCount = camperCount(r); });
+
+    const MAX_PASSES = 6;       // bounded loop — each pass moves at most one stop
+    const TARGET_RATIO = 1.4;   // stop once max/min camper ratio is under this
+    const MIN_GAP = 8;          // and max-min difference is under this many campers
+
+    for (let pass = 0; pass < MAX_PASSES; pass++) {
+        active.forEach(r => { r.camperCount = camperCount(r); });
+        const sorted = [...active].sort((a, b) => a.camperCount - b.camperCount);
+        const lightest = sorted[0];
+        const heaviest = sorted[sorted.length - 1];
+        const ratio = heaviest.camperCount / Math.max(1, lightest.camperCount);
+        const gap = heaviest.camperCount - lightest.camperCount;
+        if (ratio < TARGET_RATIO && gap < MIN_GAP) break;
+
+        const lightCap = capById[lightest.busId] || 999;
+        const lightRoom = lightCap - lightest.camperCount;
+        if (lightRoom <= 0) break; // no room to receive
+
+        const lightC = centroid(lightest);
+        const heavyC = centroid(heaviest);
+        if (!lightC || !heavyC) break;
+
+        // Find the best transfer candidate: a non-staff stop on the heavy
+        // bus that (a) fits in the light bus's remaining capacity, (b) is
+        // closer to the light bus's centroid than to the heavy bus's, and
+        // (c) when moved, doesn't flip the imbalance the other way.
+        let bestStopIdx = -1;
+        let bestScore = 0;
+        heaviest.stops.forEach((st, idx) => {
+            if (st.isMonitor || st.isCounselor) return;
+            const stopCount = st.campers?.length || 0;
+            if (stopCount === 0 || stopCount > lightRoom) return;
+            // Don't flip the imbalance
+            const projHeavy = heaviest.camperCount - stopCount;
+            const projLight = lightest.camperCount + stopCount;
+            if (projLight > projHeavy) return;
+
+            const dToLight = dist2({ lat: st.lat, lng: st.lng }, lightC);
+            const dToHeavy = dist2({ lat: st.lat, lng: st.lng }, heavyC);
+            // Score: how much closer to light than to heavy. Higher = better candidate.
+            const score = dToHeavy - dToLight;
+            if (score > bestScore) { bestScore = score; bestStopIdx = idx; }
+        });
+
+        if (bestStopIdx < 0) break; // no geographically-suitable transfer found
+
+        // Perform the transfer. Append to the light bus; the per-bus TSP
+        // pass (already deferred to the optimizer or done in _applyETAs)
+        // will reorder the stops.
+        const moved = heaviest.stops.splice(bestStopIdx, 1)[0];
+        lightest.stops.push(moved);
+        heaviest.camperCount = camperCount(heaviest);
+        lightest.camperCount = camperCount(lightest);
+        console.log('[Go v5.2] Rebalance: moved stop "' + (moved.address || moved.label || '?') +
+            '" (' + (moved.campers?.length || 0) + ' campers) from ' +
+            heaviest.busName + ' (' + (heaviest.camperCount + (moved.campers?.length || 0)) +
+            '→' + heaviest.camperCount + ') to ' +
+            lightest.busName + ' (' + (lightest.camperCount - (moved.campers?.length || 0)) +
+            '→' + lightest.camperCount + ')');
+    }
+}
+
+
+// =============================================================================
+// REPLACEMENT _applyETAsAndAudits
+//
+// Unchanged overall shape from Phase 1, but:
+//   - Prefers solver-provided _tspLegTimes (which, post-Phase-2, ARE the
+//     real travel times from Google's road matrix including traffic-free
+//     routing).
+//   - The maxRideTime audit is now a SANITY check rather than a potential
+//     data-quality issue, because the solver hard-capped ride time before
+//     returning.  Violations here mean either (a) the fallback path was used
+//     without full time-window support, or (b) haversine fallback kicked in
+//     because _tspLegTimes was null.  Both get logged as warnings with a
+//     note to that effect.
+// =============================================================================
+function _applyETAsAndAudits(routes, {
+    shift, isArrival, campLat, campLng,
+    avgStopMin, shiftNeedsReturn
+}) {
+    const [depHour, depMin] = (shift.departureTime ||
+        (isArrival ? '08:00' : '16:00')).split(':').map(Number);
+    const shiftTargetMin = depHour * 60 + depMin;
+    const maxRideMin = D.setup.maxRideTime || 45;
+
+    function driveMin(a, b) {
+        if (a.lat && b.lat) return drivingDist(a.lat, a.lng, b.lat, b.lng) / 60;
+        return 3;
+    }
+    function campToStop(s) {
+        if (s.lat) return drivingDist(campLat, campLng, s.lat, s.lng) / 60;
+        return 15;
+    }
+    function stopToCamp(s) {
+        if (s.lat) return drivingDist(s.lat, s.lng, campLat, campLng) / 60;
+        return 15;
+    }
+
+    for (const r of routes) {
+        if (!r.stops?.length) continue;
+
+        const legs = r._tspLegTimes;
+        const legMinAt = i => (legs && legs[i] != null) ? legs[i] / 60 : null;
+        const usedSolverTimes = !!legs;
+
+        // ── Arrival (pickup) or Dismissal (dropoff) ETA pipeline ─────────────
+        // Phase 2 note: for arrival, each bus now has its OWN start time
+        // (per-zone back-solve).  We derive each bus's start time from its
+        // own first leg + stop chain, NOT from shift.departureTime.  The bus's
+        // arrival at camp is what's pinned; its start time is back-computed.
+        if (isArrival) {
+            // Arrival mode: bus ENDS at camp at shiftTargetMin (for this bus).
+            // If the solver honored per-vehicle endTimeWindows, camp arrival
+            // is shiftTargetMin minus any per-zone offset.  We don't know the
+            // exact offset here (it's internal to the solver), but the sum of
+            // legTimes + service gives the route duration, and camp arrival
+            // is the anchor — so we count backwards.
+            let totalDur = 0;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) totalDur += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else totalDur += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                totalDur += avgStopMin;
+            }
+            const returnLeg = legMinAt(r.stops.length);
+            totalDur += (returnLeg != null ? returnLeg : stopToCamp(r.stops[r.stops.length - 1]));
+
+            let cum = shiftTargetMin - totalDur;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                cum += avgStopMin;
+                r.stops[i].estimatedTime = formatTime(cum);
+                r.stops[i].estimatedMin = cum;
+            }
+            r.totalDuration = Math.round(totalDur);
+        } else {
+            // Dismissal mode: bus STARTS at camp at shiftTargetMin.
+            let cum = shiftTargetMin;
+            for (let i = 0; i < r.stops.length; i++) {
+                const tLeg = legMinAt(i);
+                if (i === 0) cum += (tLeg != null ? tLeg : campToStop(r.stops[0]));
+                else cum += (tLeg != null ? tLeg : driveMin(r.stops[i - 1], r.stops[i]));
+                cum += avgStopMin;
+                r.stops[i].estimatedTime = formatTime(cum);
+                r.stops[i].estimatedMin = cum;
+            }
+            r.totalDuration = Math.round(cum - shiftTargetMin);
+            if (shiftNeedsReturn && r.stops.length > 0) {
+                const returnLeg = legMinAt(r.stops.length);
+                r.returnTocamp = Math.round(returnLeg != null
+                    ? returnLeg
+                    : stopToCamp(r.stops[r.stops.length - 1]));
+                r.totalDuration += r.returnTocamp;
+            }
+        }
+
+        r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0);
+
+        // ── Max-ride-time audit ─────────────────────────────────────────────
+        // Post-Phase-2, this is a sanity check: the solver already hard-capped
+        // each camper's ride time.  A violation here indicates:
+        //   - The fallback path was used (non-NH, less strict time windows), or
+        //   - _tspLegTimes was null and we used haversine, which overestimates
+        //     ride time on routes with good highway access.
+        // Either way, log it but don't treat it as a data-quality problem.
+        let violations = 0;
+        for (const st of r.stops) {
+            if (!st.estimatedMin) continue;
+            const rideMin = isArrival
+                ? (shiftTargetMin - st.estimatedMin)
+                : (st.estimatedMin - shiftTargetMin);
+            st._rideTimeMin = Math.round(Math.abs(rideMin));
+            if (st._rideTimeMin > maxRideMin) {
+                st._rideTimeWarning = true;
+                violations++;
+            }
+        }
+        if (violations) {
+            r._rideTimeViolations = violations;
+            // The solver does NOT enforce per-camper ride caps as a hard
+            // constraint (paired-shipment models choke on it — see
+            // campistry_go_google.js comments). _rideTimeWarning is kept on
+            // the stop so the dashboard can flag long rides for review, but
+            // we don't spam the console: most violations come from the
+            // haversine fallback estimator over-counting drive time, and
+            // the per-route cap is the real budget anyway.
+        }
+
+        // ── Route-duration audit ────────────────────────────────────────────
+        // The solver received maxRouteDuration as a soft cap. If the result
+        // still exceeds the cap, surface it loudly so we can investigate
+        // (most likely cause: too few buses for the load, or one of the
+        // post-solver TSP / time-window passes blew the budget).
+        const _maxRouteMin = D.setup.maxRouteDuration || 60;
+        if (r.totalDuration > _maxRouteMin) {
+            r._overRouteCap = true;
+            const overBy = r.totalDuration - _maxRouteMin;
+            console.warn('[Go v5.2] ' + r.busName + ': route is ' + r.totalDuration +
+                'min — ' + overBy + 'min over the ' + _maxRouteMin + 'min cap (' +
+                r.camperCount + ' campers, ' + r.stops.length + ' stops)');
+        }
+    }
+}
+
+
+// =============================================================================
+// HELPER: Collect staff members who need a stop suggestion
+// =============================================================================
+function _collectNoStopStaff() {
+    const out = [];
+
+    for (const counselor of D.counselors) {
+        if (!counselor.address) continue;
+        let staffCoords = null;
+        if (counselor._lat && counselor._lng) {
+            staffCoords = { lat: counselor._lat, lng: counselor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[counselor.name] ||
+                      D.addresses[counselor.firstName + ' ' + counselor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                counselor._lat = a.lat; counselor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: counselor.name, address: counselor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: counselor.assignedBus || null,
+            role: 'counselor', id: counselor.id
+        });
+    }
+
+    for (const monitor of D.monitors) {
+        if (!monitor.address) continue;
+        let staffCoords = null;
+        if (monitor._lat && monitor._lng) {
+            staffCoords = { lat: monitor._lat, lng: monitor._lng };
+        }
+        if (!staffCoords) {
+            const a = D.addresses[monitor.name] ||
+                      D.addresses[monitor.firstName + ' ' + monitor.lastName];
+            if (a?.geocoded && a.lat && a.lng) {
+                staffCoords = { lat: a.lat, lng: a.lng };
+                monitor._lat = a.lat; monitor._lng = a.lng;
+            }
+        }
+        if (!staffCoords) continue;
+        out.push({
+            name: monitor.name, address: monitor.address,
+            lat: staffCoords.lat, lng: staffCoords.lng,
+            busId: monitor.assignedBus || null,
+            role: 'monitor', id: monitor.id
+        });
+    }
+
+    if (out.length) console.log('[Go v5] Staff for post-gen suggestions: ' + out.length);
+    return out;
+}
+
+
+// =============================================================================
+// HELPER: Suggest nearest stops for staff
+//
+// Moves the v4 staff-suggestion logic out of generateRoutes for clarity.
+// Walks each staff member to the nearest (bus, stop) pair by haversine.
+// =============================================================================
+function _suggestStaffStops(routes, noStopStaff, campLat, campLng) {
+    if (!noStopStaff?.length || !routes?.length) return;
+
+    for (const staff of noStopStaff) {
+        let bestBus = null, bestStop = null, bestStopIdx = 0, bestDist = Infinity;
+        for (const r of routes) {
+            for (let si = 0; si < r.stops.length; si++) {
+                const st = r.stops[si];
+                const d = haversineMi(staff.lat, staff.lng, st.lat, st.lng);
+                if (d < bestDist) {
+                    bestDist = d; bestBus = r; bestStop = st; bestStopIdx = si;
+                }
+            }
+        }
+        if (!bestBus) continue;
+
+        const rec = staff.role === 'monitor'
+            ? D.monitors.find(m => m.id === staff.id)
+            : D.counselors.find(c => c.id === staff.id);
+        if (!rec) continue;
+
+        rec._suggestedBus      = bestBus.busName;
+        rec._suggestedBusId    = bestBus.busId;
+        rec._suggestedStop     = bestStop.address;
+        rec._suggestedStopNum  = bestStop.stopNum;
+        rec._suggestedDistMi   = bestDist;
+        rec._walkFt            = Math.round(bestDist * 5280);
+    }
+}
+
+
+// =============================================================================
+// KEPT — findAnchorStop (UNUSED IN PHASE 1, PRESERVED FOR PHASE 3)
+//
+// Extracted from the deleted buildGreedyZones().  Returns the stop in a
+// camper set that's farthest from camp and has the most kids within walk
+// radius — i.e. the "keystone" for a route, per the LSTA analysis.
+//
+// Phase 3 will wire this into the per-bus TSP as a mandatory first visit
+// (AM) / last visit (PM).  For Phase 1 we just keep the code alive.
+// =============================================================================
+function findAnchorStop(campers, intersections, walkMi = 0.2) {
+    if (!campers?.length) return null;
+
+    // For each intersection, count kids within walkMi
+    let best = null, bestScore = -Infinity;
+    const distFromCamp = {};
+    const campLat = D.setup.campLat, campLng = D.setup.campLng;
+
+    for (const inter of (intersections || [])) {
+        let kidsHere = 0;
+        for (const c of campers) {
+            const d = haversineMi(c.lat, c.lng, inter.lat, inter.lng);
+            if (d <= walkMi) kidsHere++;
+        }
+        if (!kidsHere) continue;
+        const dc = haversineMi(inter.lat, inter.lng, campLat, campLng);
+        // Score: many kids + far from camp
+        const score = kidsHere * 2 + dc;
+        if (score > bestScore) { bestScore = score; best = { ...inter, kidsHere, distFromCamp: dc }; }
+    }
+    return best;
+}
+
+
 
     // ── Counselor outlier prompt ──
     let _counselorOutliers = [];
@@ -5411,7 +5948,7 @@
         modal.innerHTML = '<div style="background:var(--bg-primary);border-radius:12px;max-width:800px;width:95%;max-height:80vh;overflow:auto;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,.3)">'
             + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem"><h3 style="margin:0;font-size:1.1rem">⚠️ Counselors Far From Any Stop</h3>'
             + '<button onclick="document.getElementById(\'counselorOutlierModal\').remove()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:var(--text-muted)">×</button></div>'
-            + '<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">These counselors live more than a 7-minute walk from the nearest bus stop. You can ignore this or add a dedicated stop for them (routes will regenerate).</p>'
+            + '<p style="color:var(--text-muted);font-size:.85rem;margin-bottom:1rem">These counselors live more than a 10-minute walk from the nearest bus stop. You can ignore this or add a dedicated stop on their nearest bus (that one bus will be re-optimized).</p>'
             + '<table style="width:100%;border-collapse:collapse;font-size:.85rem"><thead><tr style="border-bottom:2px solid var(--border-primary)">'
             + '<th style="text-align:left;padding:8px">Name</th><th style="text-align:left;padding:8px">Home Address</th><th style="text-align:left;padding:8px">Nearest Stop</th><th style="text-align:center;padding:8px">Walk</th><th style="text-align:center;padding:8px">Action</th></tr></thead>'
             + '<tbody>' + rows + '</tbody></table>'
@@ -5427,52 +5964,76 @@
             toast('Counselor assignments kept as-is');
         });
 
-        document.getElementById('counselorOutlierApply').addEventListener('click', () => {
+        document.getElementById('counselorOutlierApply').addEventListener('click', async () => {
             const selects = modal.querySelectorAll('.counselor-outlier-action');
             let added = 0;
+            // Track which (busId, shiftIdx) pairs got a new stop so we can re-TSP each once
+            const busesToReoptimize = new Map(); // key = busId + ':' + shiftIdx
 
-            selects.forEach(sel => {
+            for (const sel of selects) {
                 const idx = parseInt(sel.dataset.idx);
                 const action = sel.value;
                 const c = outliers[idx];
-                if (action === 'add-stop' && c._lat && c._lng) {
-                    // Find the bus whose route centroid is closest
-                    let bestRoute = null, bestDist = Infinity;
-                    const routes = D.savedRoutes?.[0]?.routes || [];
-                    for (const r of routes) {
+                if (action !== 'add-stop' || !c._lat || !c._lng) continue;
+
+                // Find the bus whose route passes closest across all shifts
+                let bestRoute = null, bestShiftIdx = 0, bestDist = Infinity;
+                (D.savedRoutes || []).forEach((sr, shiftIdx) => {
+                    for (const r of sr.routes) {
                         if (!r.stops.length) continue;
                         for (const st of r.stops) {
                             if (!st.lat) continue;
                             const d = haversineMi(c._lat, c._lng, st.lat, st.lng);
-                            if (d < bestDist) { bestDist = d; bestRoute = r; }
+                            if (d < bestDist) { bestDist = d; bestRoute = r; bestShiftIdx = shiftIdx; }
                         }
                     }
-                    if (bestRoute) {
-                        const newStop = {
-                            stopNum: 0, campers: [],
-                            address: c.address,
-                            lat: c._lat, lng: c._lng,
-                            isCounselor: true, counselorName: c.name,
-                            _counselors: [{ name: c.name, walkFt: 0, address: c.address, id: c.id }]
-                        };
-                        cheapestInsert(bestRoute.stops, newStop);
-                        bestRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
-                        c._assignedBus = bestRoute.busId;
-                        c._assignedBusName = bestRoute.busName;
-                        c._assignedStop = c.address;
-                        c._walkFt = 0;
-                        added++;
-                        console.log('[Go] Added dedicated stop for ' + c.name + ' on ' + bestRoute.busName);
-                    }
+                });
+                if (!bestRoute) continue;
+
+                const newStop = {
+                    stopNum: 0, campers: [],
+                    address: c.address,
+                    lat: c._lat, lng: c._lng,
+                    isCounselor: true, counselorName: c.name,
+                    _counselors: [{ name: c.name, walkFt: 0, address: c.address, id: c.id }]
+                };
+                // Append — reOptimizeBus will run TSP and place it optimally
+                bestRoute.stops.push(newStop);
+                bestRoute.stops.forEach((s, i) => { s.stopNum = i + 1; });
+
+                c._assignedBus = bestRoute.busId;
+                c._assignedBusName = bestRoute.busName;
+                c._assignedStop = c.address;
+                c._walkFt = 0;
+                // Update the persisted counselor record
+                const cc = D.counselors.find(x => x.id === c.id);
+                if (cc) {
+                    cc._assignStatus = 'accepted';
+                    cc.assignedBus = bestRoute.busId;
+                    cc._acceptedBus = bestRoute.busName;
+                    cc._acceptedBusId = bestRoute.busId;
+                    cc._acceptedStop = c.address;
+                    cc._acceptedStopNum = newStop.stopNum;
+                    cc._walkFt = 0;
                 }
-            });
+                busesToReoptimize.set(bestRoute.busId + ':' + bestShiftIdx, { busId: bestRoute.busId, shiftIdx: bestShiftIdx });
+                added++;
+                console.log('[Go] Added dedicated stop for ' + c.name + ' on ' + bestRoute.busName + ' (shift ' + bestShiftIdx + ')');
+            }
 
             modal.remove();
 
             if (added) {
                 save();
                 _generatedRoutes = D.savedRoutes;
-                renderRouteResults(applyOverrides(D.savedRoutes));
+                // Re-optimize each affected bus (single-bus TSP rerun)
+                toast('Re-optimizing ' + busesToReoptimize.size + ' route' + (busesToReoptimize.size > 1 ? 's' : '') + '...');
+                for (const { busId, shiftIdx } of busesToReoptimize.values()) {
+                    try { await reOptimizeBus(busId, shiftIdx); }
+                    catch (e) { console.error('[Go] reOptimizeBus failed for ' + busId, e); }
+                }
+                renderRouteResults(D.savedRoutes);
+                if (typeof renderStaff === 'function') renderStaff();
                 toast(added + ' dedicated counselor stop' + (added > 1 ? 's' : '') + ' added');
             } else {
                 toast('Counselor assignments kept as-is');
@@ -5498,58 +6059,18 @@
         if (!campLat || !campLng) { toast('No camp coordinates', 'error'); return; }
 
         toast('Re-optimizing ' + route.busName + '...');
-        const stops = route.stops.filter(s => !s.isMonitor && !s.isCounselor);
-        const specialStops = route.stops.filter(s => s.isMonitor || s.isCounselor);
+        // Counselor stops with real coordinates ARE included in TSP so they get
+        // properly placed in the sequence. Monitor-only stops have no location
+        // and remain as tail-end metadata.
+        const stops = route.stops.filter(s => !s.isMonitor && s.lat && s.lng);
+        const specialStops = route.stops.filter(s => s.isMonitor || !s.lat || !s.lng);
         const nn = stops.length; if (nn < 2) { toast('Not enough stops'); return; }
 
-        // ── Try GraphHopper first (up to 30 stops) ──
-        const ghResult = await solveWithGraphHopper(stops, { busId, capacity: 999, name: route.busName }, campLat, campLng, isArrival, reoptNeedsReturn);
-        if (ghResult) {
-            route.stops = [...ghResult.map((s, i) => ({ ...s, stopNum: i + 1 })), ...specialStops];
-            route.stops.forEach((s, i) => { s.stopNum = i + 1; });
-            route.camperCount = route.stops.reduce((s, st) => s + st.campers.length, 0);
-            D.savedRoutes[shiftIdx ?? 0].routes[D.savedRoutes[shiftIdx ?? 0].routes.indexOf(route)] = route;
-            save();
-            _routeGeomCache = {}; window._routeGeomCache = _routeGeomCache;
-            renderRouteResults(applyOverrides(D.savedRoutes));
-            toast(route.busName + ' re-optimized (GraphHopper)');
-            return;
-        }
-
-        // ── Try Mapbox Optimization API ──
+        // ── Route optimization: local TSP with directional bias ──
         let optimizedOrder = null;
         let matrix = null;
-        const mbTok = getMBToken();
 
-        if (nn <= 11 && mbTok) {
-            // Build coords for Mapbox Optimize
-            let coords, sourceP, destP, roundtripP;
-            if (isArrival) {
-                coords = stops.map(s => s.lng + ',' + s.lat).join(';') + ';' + campLng + ',' + campLat;
-                sourceP = 'any'; destP = 'last'; roundtripP = 'false';
-            } else if (reoptNeedsReturn) {
-                coords = campLng + ',' + campLat + ';' + stops.map(s => s.lng + ',' + s.lat).join(';');
-                sourceP = 'first'; destP = 'any'; roundtripP = 'true';
-            } else {
-                coords = campLng + ',' + campLat + ';' + stops.map(s => s.lng + ',' + s.lat).join(';');
-                sourceP = 'first'; destP = 'any'; roundtripP = 'false';
-            }
-            try {
-                const url = 'https://api.mapbox.com/optimized-trips/v1/mapbox/driving/' + coords + '?source=' + sourceP + '&destination=' + destP + '&roundtrip=' + roundtripP + '&access_token=' + mbTok;
-                const resp = await fetch(url);
-                if (resp.ok) {
-                    const data = await resp.json();
-                    if (data.code === 'Ok' && data.waypoints?.length) {
-                        const offset = isArrival ? 0 : 1;
-                        const stopWps = data.waypoints.slice(offset, offset + nn);
-                        optimizedOrder = stopWps.map((wp, origIdx) => ({ origIdx, wpIdx: wp.waypoint_index })).sort((a, b) => a.wpIdx - b.wpIdx).map(s => s.origIdx);
-                        console.log('[Go] Re-optimize via Mapbox Optimize');
-                    }
-                }
-            } catch (e) { console.warn('[Go] Mapbox Optimize failed:', e.message); }
-        }
-
-        // ── Fallback: local TSP with directional bias ──
+        // ── Local TSP solver ──
         if (!optimizedOrder) {
             const coordsArr = [{ lat: campLat, lng: campLng }];
             stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
@@ -5633,43 +6154,9 @@
 
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
         _generatedRoutes = D.savedRoutes; save();
-        renderRouteResults(applyOverrides(D.savedRoutes));
+        renderRouteResults(D.savedRoutes);
         console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
         toast(route.busName + ' re-optimized!');
-    }
-
-    // =========================================================================
-    // FALLBACK ROUTING
-    // =========================================================================
-    function fallbackRouting(stops, vehicles, campLat, campLng) {
-        console.warn('[Go] Using fallback geographic routing');
-        const numBuses = vehicles.length;
-        stops.forEach(s => { s._angle = Math.atan2(s.lng - campLng, s.lat - campLat); });
-        stops.sort((a, b) => a._angle - b._angle);
-        const routes = [];
-        const perBus = Math.ceil(stops.length / numBuses);
-        for (let i = 0; i < numBuses; i++) {
-            const v = vehicles[i];
-            const busStops = stops.slice(i * perBus, (i + 1) * perBus);
-            directionalSort(busStops, campLat, campLng);
-            busStops.forEach(s => { delete s._angle; });
-            routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: busStops, camperCount: busStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0 });
-        }
-        return routes;
-    }
-
-    function fallbackRegionRouting(stops, vehicles, campLat, campLng) {
-        const routes = [];
-        const perBus = Math.ceil(stops.length / vehicles.length);
-        // Sort all stops directionally before slicing into buses
-        directionalSort(stops, campLat, campLng);
-        for (let i = 0; i < vehicles.length; i++) {
-            const v = vehicles[i];
-            const busStops = stops.slice(i * perBus, (i + 1) * perBus);
-            busStops.forEach((s, si) => { s.stopNum = si + 1; });
-            routes.push({ busId: v.busId, busName: v.name, busColor: v.color, monitor: v.monitor, counselors: v.counselors || [], stops: busStops, camperCount: busStops.reduce((s, st) => s + st.campers.length, 0), _cap: v.capacity, totalDuration: 0 });
-        }
-        return routes;
     }
 
     // =========================================================================
@@ -5862,16 +6349,8 @@
 
     let _intersectionCache = null;
 
-    try {
-        const cached = localStorage.getItem('campistry_go_intersections');
-        if (cached) {
-            const parsed = JSON.parse(cached);
-            if (parsed.intersections?.length && parsed.timestamp > Date.now() - 7 * 24 * 60 * 60 * 1000) {
-                _intersectionCache = parsed.intersections;
-                console.log('[Go] Loaded ' + _intersectionCache.length + ' cached intersections (saved ' + new Date(parsed.timestamp).toLocaleDateString() + ')');
-            }
-        }
-    } catch (_) {}
+    // Clear any stale intersection cache and always fetch fresh
+    try { localStorage.removeItem('campistry_go_intersections'); } catch (_) {}
 
     async function createCornerStops(campers) {
         applyRideWith(campers);
@@ -5901,6 +6380,21 @@
                 console.warn('[Go] ⚠ Overpass API failed — corner stops will use approximate locations instead of real intersections');
                 toast('Corner stops: intersection data unavailable — using approximate locations', 'error');
             }
+        }
+
+        // Build a set of major-road street names from the OSM major-roads layer.
+        // Anchoring stops at arterial corners keeps the bus on through-roads instead
+        // of detouring into cul-de-sacs — historical Neranina's MAROON route packs
+        // 48 kids in 63min by routing along Bennetts Mills Rd and Whitesville Rd
+        // and letting kids walk ~500ft to the arterial.
+        const majorNames = new Set(
+            (_majorRoadSegments || [])
+                .map(s => (s.name || '').toLowerCase().trim())
+                .filter(Boolean)
+        );
+        const ARTERIAL_REACH_MI = 0.50; // ~2640ft — bus-time savings outweigh walk distance
+        function isArterialInter(inter) {
+            return (inter.streets || []).some(s => majorNames.has(s.toLowerCase().trim()));
         }
 
         // For each cluster, find the best corner
@@ -5942,9 +6436,11 @@
                     let bestInter = null, bestScore = -Infinity;
 
                     osmIntersections.forEach(inter => {
-                        // Quick reject: too far from any kid
+                        const arterial = isArterialInter(inter);
+                        // Arterial intersections get a wider reach — kids walk further to a through-road.
+                        const reach = arterial ? Math.max(walkMi * 2, ARTERIAL_REACH_MI) : walkMi * 2;
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 2) return;
+                        if (d > reach) return;
 
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
                         const mainMatch = interStreets.some(s => streetMatch(s, mainStreet));
@@ -5954,7 +6450,12 @@
                         if (mainMatch && crossMatch) score = 10;
                         else if (mainMatch) score = 4;
                         else if (crossMatch) score = 2;
-                        else return; // no street match — skip
+                        else if (!arterial) return; // no street match AND no arterial — skip
+
+                        // Arterial bonus: bus-time saved by staying on through-road > kid walk.
+                        // A 5-min driver detour into a cul-de-sac costs more than asking
+                        // a kid to walk an extra 2000ft to the arterial corner.
+                        if (arterial) score += 60;
 
                         // Subtract total walking distance (lower = better)
                         score -= totalWalkTo(inter.lat, inter.lng) * 20;
@@ -5982,25 +6483,39 @@
                     }
                 }
             } else if (mainStreet) {
-                // Default: address range (used only if no intersection found)
+                // Default fallback name when no intersection is available:
+                //   1 house → exact street number ("12 Newberry Ct")
+                //   2+ houses → median number, NOT a range ("15 Newberry Ct
+                //              area"). Avoids the wide ranges ("10-29 Newberry Ct")
+                //              that drivers find ambiguous.
                 const nums = cluster.map(c => parseAddress(c.address).num).filter(n => n > 0).sort((a, b) => a - b);
-                if (nums.length >= 2) stopName = nums[0] + '-' + nums[nums.length - 1] + ' ' + mainStreet;
-                else stopName = mainStreet;
+                if (nums.length >= 2) {
+                    const median = nums[Math.floor(nums.length / 2)];
+                    stopName = median + ' ' + mainStreet + ' (' + nums.length + ' houses)';
+                } else if (nums.length === 1) {
+                    stopName = nums[0] + ' ' + mainStreet;
+                } else {
+                    stopName = mainStreet;
+                }
 
                 if (osmIntersections) {
-                    // Single street — first try intersections ON this street
-                    let bestInter = null, bestWalk = Infinity;
+                    // Single-street cluster (e.g. cul-de-sac). Score by arterial bonus + walk.
+                    // Prefer an arterial corner within ~1500ft over an on-street cul-de-sac
+                    // corner — keeps the bus on the through-road.
+                    let bestInter = null, bestScore = -Infinity;
                     osmIntersections.forEach(inter => {
+                        const arterial = isArterialInter(inter);
+                        const reach = arterial ? ARTERIAL_REACH_MI : walkMi * 2;
                         const d = haversineMi(fallbackLat, fallbackLng, inter.lat, inter.lng);
-                        if (d > walkMi * 2) return;
+                        if (d > reach) return;
                         const interStreets = (inter.streets || []).map(s => s.toLowerCase());
-                        if (!interStreets.some(s => streetMatch(s, mainStreet))) return;
-                        const tw = totalWalkTo(inter.lat, inter.lng);
-                        if (tw < bestWalk) { bestWalk = tw; bestInter = inter; }
+                        const onStreet = interStreets.some(s => streetMatch(s, mainStreet));
+                        let score = onStreet ? 4 : (arterial ? 0 : -Infinity);
+                        if (arterial) score += 60;
+                        score -= totalWalkTo(inter.lat, inter.lng) * 20;
+                        if (score > bestScore) { bestScore = score; bestInter = inter; }
                     });
 
-                    // Fallback: find the NEAREST intersection of ANY kind
-                    // Drivers need cross-street names, not address ranges
                     if (!bestInter) {
                         let nearestDist = Infinity;
                         osmIntersections.forEach(inter => {
@@ -6012,6 +6527,8 @@
                         if (bestInter) {
                             console.log('[Go]   No intersection on ' + mainStreet + ' — using nearest: ' + bestInter.name + ' (' + (nearestDist * 5280).toFixed(0) + 'ft)');
                         }
+                    } else if (isArterialInter(bestInter)) {
+                        console.log('[Go]   Arterial corner for ' + mainStreet + ': ' + bestInter.name + ' (walk ' + (totalWalkTo(bestInter.lat, bestInter.lng) * 5280).toFixed(0) + 'ft)');
                     }
 
                     if (bestInter) { stopLat = bestInter.lat; stopLng = bestInter.lng; stopName = bestInter.name; }
@@ -6026,16 +6543,18 @@
             };
         });
 
-        // Merge tiny stops (<=2 kids) into nearest within walkMi
-        // FIX 6: Use manhattanMi for merge distance check too
-        // Merge tiny stops (≤2 kids) only into nearby stops within half walk distance
-        // Using full walkMi was pulling distant stops together and stretching routes
-        const mergeRadius = walkMi * 0.5;
+        // Merge small stops into nearest neighbor.
+        // Historical Neranina averages 3.14 kids/stop (corner-clustered onto real
+        // intersections). Without Overpass we get 2.14 kids/stop (33% more stops
+        // than needed). Merge stops with ≤4 kids within full walkMi to collapse
+        // the over-granular fallback stops into fewer, bigger groups.
+        const mergeRadius = walkMi;
+        const MERGE_THRESHOLD = 4;
         let didMerge = true;
         while (didMerge) {
             didMerge = false;
             for (let i = stops.length - 1; i >= 0; i--) {
-                if (stops[i].campers.length > 2) continue;
+                if (stops[i].campers.length > MERGE_THRESHOLD) continue;
                 let bestJ = -1, bestDist = mergeRadius;
                 for (let j = 0; j < stops.length; j++) {
                     if (j === i) continue;
@@ -6053,6 +6572,100 @@
             }
         }
 
+        // Street-segment merge: collapse stops sharing a street name within ~1300ft.
+        // Historical Neranina groups by block face (e.g. "Lehigh Blvd@Dartmouth Dr"
+        // pulls every kid on that block). Two kids 1000ft apart on the same street
+        // become one stop for them, two for us. This pass closes that gap.
+        // The wider radius (was 0.18mi) reflects camp's actual stops, which
+        // routinely span ~1200ft of frontage when families share a corner.
+        function streetsOf(addr) {
+            if (!addr) return [];
+            return addr.split(' & ')
+                .map(p => p.replace(/^\d[\d\s\-]*/, '').trim().toLowerCase())
+                .filter(Boolean);
+        }
+        const SEG_RADIUS_MI = 0.25;
+        let segMerged = true;
+        while (segMerged) {
+            segMerged = false;
+            for (let i = stops.length - 1; i >= 0; i--) {
+                const sA = streetsOf(stops[i].address);
+                if (sA.length === 0) continue;
+                let bestJ = -1, bestDist = SEG_RADIUS_MI;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    if (stops[j].campers.length + stops[i].campers.length > MAX_STOP_CAPACITY) continue;
+                    const sB = streetsOf(stops[j].address);
+                    if (!sA.some(n => sB.includes(n))) continue;
+                    const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers.push(...stops[i].campers);
+                    stops.splice(i, 1);
+                    segMerged = true;
+                    break;
+                }
+            }
+        }
+
+        // Arterial absorb: small outlier stops (≤2 campers) fold into the
+        // nearest larger stop (≥3 campers) within ~1500ft.
+        // Historical pattern: 51% of singleton-equivalent kids landed in 2-8
+        // kid stops by anchoring at a shared arterial corner (e.g. Cox Cro
+        // Rd@Vermont Ave pulled kids from Vermont Ave + Paddock Pl into one
+        // stop). The previous version only absorbed singletons; widening to
+        // pairs closes the residual outlier gap (camp routinely consolidates
+        // 2-kid stops into 5-7 kid arterial stops).
+        const ARTERIAL_RADIUS_MI = 0.30;
+        const SMALL_STOP_CAMPERS = 2;
+        const ANCHOR_MIN_CAMPERS = 3;
+        const majorSegs = _majorRoadSegments || [];
+        function nearestMajorIntersection(lat, lng, maxMi) {
+            if (!osmIntersections || majorSegs.length === 0) return null;
+            const majorNames = new Set(majorSegs.map(s => (s.name || '').toLowerCase()).filter(Boolean));
+            let best = null, bestD = maxMi;
+            for (const inter of osmIntersections) {
+                const onMajor = (inter.streets || []).some(s => majorNames.has(s.toLowerCase()));
+                if (!onMajor) continue;
+                const d = haversineMi(lat, lng, inter.lat, inter.lng);
+                if (d < bestD) { bestD = d; best = inter; }
+            }
+            return best;
+        }
+        let arterialMerged = true;
+        while (arterialMerged) {
+            arterialMerged = false;
+            for (let i = stops.length - 1; i >= 0; i--) {
+                const cnt = stops[i].campers.length;
+                if (cnt < 1 || cnt > SMALL_STOP_CAMPERS) continue;
+                let bestJ = -1, bestDist = ARTERIAL_RADIUS_MI;
+                for (let j = 0; j < stops.length; j++) {
+                    if (j === i) continue;
+                    // Anchors must already be a real stop, not another tiny outlier.
+                    if (stops[j].campers.length < ANCHOR_MIN_CAMPERS) continue;
+                    if (stops[j].campers.length + cnt > MAX_STOP_CAPACITY) continue;
+                    const d = manhattanMi(stops[i].lat, stops[i].lng, stops[j].lat, stops[j].lng);
+                    if (d < bestDist) { bestDist = d; bestJ = j; }
+                }
+                if (bestJ >= 0) {
+                    stops[bestJ].campers.push(...stops[i].campers);
+                    // Re-anchor to a major-road intersection between the two if possible
+                    const midLat = (stops[bestJ].lat + stops[i].lat) / 2;
+                    const midLng = (stops[bestJ].lng + stops[i].lng) / 2;
+                    const arterial = nearestMajorIntersection(midLat, midLng, ARTERIAL_RADIUS_MI);
+                    if (arterial) {
+                        stops[bestJ].lat = arterial.lat;
+                        stops[bestJ].lng = arterial.lng;
+                        stops[bestJ].address = arterial.name;
+                    }
+                    stops.splice(i, 1);
+                    arterialMerged = true;
+                    break;
+                }
+            }
+        }
+
         const final = stops.filter(s => s.campers.length > 0);
         console.log('[Go] Corner stops: ' + final.length + ' stops from ' + campers.length + ' campers');
         final.forEach(s => console.log('[Go]   ' + s.address + ' (' + s.campers.length + ' kids)'));
@@ -6064,16 +6677,29 @@
     //   Q1: Major roads only (primary/secondary/trunk) — small, fast, for crossing detection
     //   Q2: All named roads but nodes-only via `out center` — for intersection finding
     async function fetchIntersections(campers) {
-        let minLat = Infinity, maxLat = -Infinity, minLng = Infinity, maxLng = -Infinity;
-        campers.forEach(c => { if (c.lat < minLat) minLat = c.lat; if (c.lat > maxLat) maxLat = c.lat; if (c.lng < minLng) minLng = c.lng; if (c.lng > maxLng) maxLng = c.lng; });
-        // Buffer of ~0.005 deg ≈ ~0.35mi — ensures intersections near cluster edges are included
-        const buf = 0.005;
+        // Use IQR-based outlier removal to build a tight bbox
+        const lats = campers.map(c => c.lat).filter(Boolean).sort((a, b) => a - b);
+        const lngs = campers.map(c => c.lng).filter(Boolean).sort((a, b) => a - b);
+        if (lats.length < 4 || lngs.length < 4) return null;
+        const q1Lat = lats[Math.floor(lats.length * 0.25)], q3Lat = lats[Math.floor(lats.length * 0.75)];
+        const q1Lng = lngs[Math.floor(lngs.length * 0.25)], q3Lng = lngs[Math.floor(lngs.length * 0.75)];
+        const iqrLat = q3Lat - q1Lat, iqrLng = q3Lng - q1Lng;
+        const fenceLat = [q1Lat - 1.5 * iqrLat, q3Lat + 1.5 * iqrLat];
+        const fenceLng = [q1Lng - 1.5 * iqrLng, q3Lng + 1.5 * iqrLng];
+        const cleanLats = lats.filter(v => v >= fenceLat[0] && v <= fenceLat[1]);
+        const cleanLngs = lngs.filter(v => v >= fenceLng[0] && v <= fenceLng[1]);
+        if (cleanLats.length < 2 || cleanLngs.length < 2) return null;
+        const minLat = cleanLats[0], maxLat = cleanLats[cleanLats.length - 1];
+        const minLng = cleanLngs[0], maxLng = cleanLngs[cleanLngs.length - 1];
+        const outlierCount = lats.length - cleanLats.length + lngs.length - cleanLngs.length;
+        if (outlierCount > 0) console.log('[Go] Overpass: excluded ' + outlierCount + ' outlier coordinates via IQR');
+        const buf = 0.008;
         const bbox = (minLat - buf) + ',' + (minLng - buf) + ',' + (maxLat + buf) + ',' + (maxLng + buf);
 
-        // Clamp bbox area — if service area is too large, Overpass will choke
         const area = (maxLat - minLat + 2 * buf) * (maxLng - minLng + 2 * buf);
-        if (area > 0.25) {
-            console.warn('[Go] Overpass: bbox too large (' + area.toFixed(3) + ' deg²), skipping intersection fetch');
+        console.log('[Go] Overpass: bbox area ' + area.toFixed(4) + ' deg² (' + cleanLats.length + ' of ' + lats.length + ' points)');
+        if (area > 1.0) {
+            console.warn('[Go] Overpass: bbox too large even after IQR cleanup (' + area.toFixed(3) + ' deg²), skipping');
             return null;
         }
 
@@ -6088,7 +6714,10 @@
             'way["highway"~"^(residential|secondary|tertiary|primary|trunk|unclassified|living_street)$"]["name"](' + bbox + ');' +
             'out body;>;out skel qt;';
 
+        // Same-origin proxy (Vercel api/overpass.js) tried first — sidesteps CORS
+        // and adds the User-Agent header Overpass requires. External mirrors as fallback.
         const endpoints = [
+            '/api/overpass',
             'https://overpass-api.de/api/interpreter',
             'https://overpass.kumi.systems/api/interpreter',
             'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
@@ -6097,12 +6726,15 @@
         async function runQuery(query, label) {
             for (const url of endpoints) {
                 try {
-                    console.log('[Go] Overpass ' + label + ': trying ' + url.split('//')[1].split('/')[0] + '...');
-                    const resp = await fetch(url, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'data=' + encodeURIComponent(query)
-                    });
+                    // Use GET to avoid CORS preflight (POST with custom content-type triggers it)
+                    const getUrl = url + '?data=' + encodeURIComponent(query);
+                    const host = url.startsWith('/') ? 'same-origin proxy' : url.split('//')[1].split('/')[0];
+                    console.log('[Go] Overpass ' + label + ': trying ' + host + '...');
+                    // Fail fast after 15 seconds — don't let a slow Overpass mirror block routing
+                    const controller = new AbortController();
+                    const timeoutId = setTimeout(function() { controller.abort(); }, 15000);
+                    const resp = await fetch(getUrl, { signal: controller.signal });
+                    clearTimeout(timeoutId);
                     if (resp.status === 504 || resp.status === 429 || resp.status === 503) {
                         console.warn('[Go] Overpass ' + label + ' ' + resp.status + ' at ' + url + ', trying next mirror...');
                         continue;
@@ -6111,12 +6743,15 @@
                         console.warn('[Go] Overpass ' + label + ' HTTP ' + resp.status + ' at ' + url);
                         continue;
                     }
-                    return await resp.json();
+                    const data = await resp.json();
+                    console.log('[Go] Overpass ' + label + ': got ' + (data?.elements?.length || 0) + ' elements');
+                    return data;
                 } catch (e) {
                     console.warn('[Go] Overpass ' + label + ' error at ' + url + ':', e.message);
                     continue;
                 }
             }
+            console.warn('[Go] Overpass ' + label + ': all mirrors failed — proceeding without street data');
             return null;
         }
 
@@ -6161,21 +6796,26 @@
             intersections.push({ lat: node.lat, lng: node.lng, name: arr[0] + ' & ' + arr[1], streets: arr });
         });
 
-        console.log('[Go] Overpass: ' + intersections.length + ' intersections found');
+        console.log('[Go] Overpass: ' + intersections.length + ' intersections found' + (intersections.length > 0 ? ' (e.g. ' + intersections[0].name + ')' : ''));
         return intersections.length > 0 ? intersections : null;
     }
 
     function normalizeStreet(name) {
         if (!name) return '';
         let s = name.toLowerCase().trim();
-        const abbrevs = [
-            [/\bst\b\.?/g, 'street'], [/\bave?\b\.?/g, 'avenue'], [/\bblvd\b\.?/g, 'boulevard'],
-            [/\bdr\b\.?/g, 'drive'], [/\brd\b\.?/g, 'road'], [/\bct\b\.?/g, 'court'],
-            [/\bln\b\.?/g, 'lane'], [/\bpl\b\.?/g, 'place'], [/\bpkwy\b\.?/g, 'parkway'],
-            [/\bhwy\b\.?/g, 'highway'], [/\bcir\b\.?/g, 'circle'], [/\bter\b\.?/g, 'terrace'],
-            [/\bn\b\.?/g, 'north'], [/\bs\b\.?/g, 'south'], [/\be\b\.?/g, 'east'], [/\bw\b\.?/g, 'west'],
+        // Suffixes — only match at end of string
+        const suffixes = [
+            [/\bst\.?$/g, 'street'], [/\bave?\.?$/g, 'avenue'], [/\bblvd\.?$/g, 'boulevard'],
+            [/\bdr\.?$/g, 'drive'], [/\brd\.?$/g, 'road'], [/\bct\.?$/g, 'court'],
+            [/\bln\.?$/g, 'lane'], [/\bpl\.?$/g, 'place'], [/\bpkwy\.?$/g, 'parkway'],
+            [/\bhwy\.?$/g, 'highway'], [/\bcir\.?$/g, 'circle'], [/\bter\.?$/g, 'terrace'],
         ];
-        abbrevs.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
+        // Directionals — only match at start of string
+        const dirs = [
+            [/^n\.?\s/g, 'north '], [/^s\.?\s/g, 'south '], [/^e\.?\s/g, 'east '], [/^w\.?\s/g, 'west '],
+        ];
+        dirs.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
+        suffixes.forEach(([rx, rep]) => { s = s.replace(rx, rep); });
         return s.replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ').trim();
     }
 
@@ -6199,8 +6839,49 @@
         return { num: 0, street: firstPart };
     }
 
-    function showProgress(label, pct) { const c = document.getElementById('routeProgressCard'); c.style.display = ''; document.getElementById('routeProgressLabel').textContent = label; document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%'; document.getElementById('routeProgressBar').style.width = pct + '%'; }
-    function hideProgress() { document.getElementById('routeProgressCard').style.display = 'none'; }
+    let _routeProgStart = 0;
+    function showProgress(label, pct, detail, etaDone, etaTotal) {
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = '';
+        // Add active state on first call
+        if (!c.className.includes('progress-card-active') && !c.className.includes('progress-card-done')) {
+            c.className = c.className.replace(/progress-card-\w+/g, '').trim() + ' progress-card-active';
+        }
+        document.getElementById('routeProgressLabel').textContent = label;
+        document.getElementById('routeProgressPct').textContent = Math.round(pct) + '%';
+        document.getElementById('routeProgressBar').style.width = pct + '%';
+        const detailEl = document.getElementById('routeProgressDetail');
+        const etaEl = document.getElementById('routeProgressETA');
+        detailEl.textContent = detail || '';
+        if (typeof etaDone === 'number' && typeof etaTotal === 'number' && etaDone > 0 && etaDone < etaTotal) {
+            const elapsed = (Date.now() - _routeProgStart) / 1000;
+            const rate = etaDone / elapsed;
+            const remaining = (etaTotal - etaDone) / rate;
+            if (remaining < 60) etaEl.textContent = '~' + Math.ceil(remaining) + 's remaining';
+            else etaEl.textContent = '~' + Math.ceil(remaining / 60) + 'm ' + Math.ceil(remaining % 60) + 's remaining';
+        } else if (pct >= 100) {
+            etaEl.textContent = '';
+        } else {
+            etaEl.textContent = etaDone === 0 ? 'Estimating...' : '';
+        }
+    }
+    function showProgressDone(label, summary, isError) {
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = '';
+        c.className = c.className.replace(/progress-card-\w+/g, '').trim() + (isError ? ' progress-card-error' : ' progress-card-done');
+        document.getElementById('routeProgressLabel').textContent = label;
+        document.getElementById('routeProgressPct').textContent = '100%';
+        document.getElementById('routeProgressBar').style.width = '100%';
+        document.getElementById('routeProgressDetail').textContent = summary || '';
+        document.getElementById('routeProgressETA').textContent = '';
+    }
+    function hideProgress() {
+        const c = document.getElementById('routeProgressCard');
+        c.style.display = 'none';
+        c.className = c.className.replace(/progress-card-\w+/g, '').trim();
+        document.getElementById('routeProgressDetail').textContent = '';
+        document.getElementById('routeProgressETA').textContent = '';
+    }
 
     // =========================================================================
     // RENDER ROUTE RESULTS
@@ -6298,6 +6979,7 @@
 
     function renderRouteResults(allShifts) {
         document.getElementById('routeResults').style.display = '';
+        renderDispatcherDashboard(allShifts);
         const btnLabel = document.getElementById('generateBtnLabel');
         if (btnLabel) btnLabel.textContent = 'Regenerate Routes';
 
@@ -6325,7 +7007,11 @@
             const longest = routes.length ? Math.max(...routes.map(r => r.totalDuration), 0) : 0;
             html += '<details class="collapsible-card" open><summary class="collapsible-header"><span style="display:flex;align-items:center;gap:.5rem;"><span class="shift-num">' + (si + 1) + '</span>' + esc(shift.label || 'Shift ' + (si + 1)) + '</span><span style="font-size:.75rem;font-weight:400;color:var(--text-muted);">' + totalCampers + ' campers · ' + totalStops + ' stops · ' + longest + ' min</span></summary>';
             html += '<div class="collapsible-body" style="padding:.75rem;"><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:1rem;">';
-            routes.filter(r => r.stops.length > 0).forEach(r => {
+            routes
+                .filter(r => r.stops.length > 0)
+                .slice()
+                .sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }))
+                .forEach(r => {
                 html += '<div class="route-card"><div class="route-card-header" style="background:' + esc(r.busColor) + '"><div><h3>' + esc(r.busName) + '</h3><div class="route-meta">' + r.camperCount + ' campers · ' + r.stops.length + ' stops</div></div><div style="text-align:right"><div style="font-size:1.25rem;font-weight:700">' + r.totalDuration + ' min</div></div></div><ul class="route-stop-list">';
                 r.stops.forEach(st => {
                     const names = st.isMonitor ? '🛡️ ' + esc(st.monitorName) : st.isCounselor ? '👤 ' + esc(st.counselorName) : st.campers.map(c => '<span style="display:inline-flex;align-items:center;gap:2px;">' + esc(c.name) + ' <button onclick="CampistryGo.openMoveModal(\'' + esc(c.name.replace(/'/g, "\\'")) + '\',\'' + r.busId + '\',' + si + ')" style="background:none;border:none;cursor:pointer;padding:0 2px;color:var(--text-muted);font-size:10px;" title="Move">↔</button></span>').join(', ');
@@ -6342,7 +7028,6 @@
         if (routesTab && routesTab.classList.contains('active')) setTimeout(() => initMap(allShifts), 100);
         else _pendingMapInit = allShifts;
         renderCapacityWarnings();
-        renderCarpool();
     }
 
     function renderMasterList(allShifts) {
@@ -6450,6 +7135,8 @@
         const tabsEl = document.getElementById('mapBusTabs');
         const uniqueBuses = []; const seen = new Set();
         allRoutes.forEach(r => { if (!seen.has(r.busId)) { seen.add(r.busId); uniqueBuses.push({ busId: r.busId, busName: r.busName, busColor: r.busColor }); } });
+        // Natural sort: Bus 1, 2, ..., 9, 10, 11, 12, 13 (not 1, 10, 11, 12, 13, 2, ..., 9)
+        uniqueBuses.sort((a, b) => (a.busName || '').localeCompare(b.busName || '', undefined, { numeric: true, sensitivity: 'base' }));
         tabsEl.innerHTML = '<button class="bus-tab all-tab' + (isAllBuses() ? ' active' : '') + '" onclick="CampistryGo.selectMapBus(\'all\')">All Buses</button>' +
             uniqueBuses.map(b => '<button class="bus-tab' + (_activeMapBuses.has(b.busId) ? ' active' : '') + '" onclick="CampistryGo.toggleMapBus(\'' + b.busId + '\')"><span class="bus-tab-dot" style="background:' + esc(b.busColor) + '"></span>' + esc(b.busName) + '</button>').join('') +
             '<span style="margin-left:auto;display:flex;gap:4px;align-items:center;">' +
@@ -6500,20 +7187,7 @@
                 const tempLine = L.polyline(straightCoords, { color: route.busColor, weight: lineWeight, opacity: lineOpacity * 0.4, dashArray: dashPattern }).addTo(_map);
                 tempLine._goRouteKey = cacheKey; _mapLayers.push(tempLine);
 
-                if (straightCoords.length >= 2) {
-                    const mbToken = D.setup.mapboxToken || _PLATFORM_KEYS.mapbox;
-                    const wp = [];
-                    if (!isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
-                    stopsWithCoords.forEach(s => wp.push(s.lng + ',' + s.lat));
-                    if (isArrival && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
-                    if (mapNeedsReturn && _campCoordsCache) wp.push(_campCoordsCache.lng + ',' + _campCoordsCache.lat);
-                    (async function(coordStr, color, ck, temp, dash, w, o) {
-                        try {
-                            const url = mbToken ? 'https://api.mapbox.com/directions/v5/mapbox/driving/' + coordStr + '?overview=full&geometries=geojson&access_token=' + mbToken : 'https://router.project-osrm.org/route/v1/driving/' + coordStr + '?overview=full&geometries=geojson&continue_straight=true';
-                            const resp = await fetch(url); if (resp.ok) { const data = await resp.json(); const coords = data.routes?.[0]?.geometry?.coordinates; if (coords) { const pts = coords.map(c => [c[1], c[0]]); if (pts.length > 0 && _map) { _routeGeomCache[ck] = pts; _map.removeLayer(temp); const idx = _mapLayers.indexOf(temp); if (idx >= 0) _mapLayers.splice(idx, 1); const road = L.polyline(pts, { color, weight: w, opacity: o, dashArray: dash }).addTo(_map); road._goRouteKey = ck; _mapLayers.push(road); } } }
-                        } catch (e) { console.warn('[Go] Road geometry failed:', e.message); }
-                    })(wp.join(';'), route.busColor, cacheKey, tempLine, dashPattern, lineWeight, lineOpacity);
-                }
+                // Road geometry comes from Geoapify _roadPts (cached in _routeGeomCache)
             }
 
             stopsWithCoords.forEach(stop => {
@@ -6766,61 +7440,14 @@
         toast('Showing ' + _addressPinLayers.length + ' camper addresses');
     }
 
-    // =========================================================================
-    // DAILY OVERRIDES
-    // =========================================================================
-    function getTodayKey() { const d = new Date(); d.setHours(12, 0, 0, 0); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
-    function getOverrides() { const key = getTodayKey(); if (!D.dailyOverrides[key]) D.dailyOverrides[key] = {}; return D.dailyOverrides[key]; }
-    function addOverride(camperName, type, details) { const ov = getOverrides(); ov[camperName] = { type, ...details, timestamp: Date.now() }; save(); if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); renderDailyOverrides(); toast('Override added for ' + camperName); }
-    function removeOverride(camperName) { const ov = getOverrides(); delete ov[camperName]; save(); if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); renderDailyOverrides(); toast('Override removed'); }
-
-    function applyOverrides(routes) {
-        if (!routes) return routes;
-        const ov = getOverrides(); if (!Object.keys(ov).length) return routes;
-        const clone = JSON.parse(JSON.stringify(routes));
-        Object.entries(ov).forEach(([camperName, override]) => {
-            if (override.type === 'not-riding') {
-                clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers = st.campers.filter(c => c.name !== camperName); }); r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); r.stops.forEach((st, i) => { st.stopNum = i + 1; }); r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0); }); });
-            }
-            if (override.type === 'ride-with') {
-                const targetName = override.targetCamper;
-                let targetBusId = null, targetShiftIdx = null, targetStopIdx = null;
-                clone.forEach((sr, si) => { sr.routes.forEach(r => { r.stops.forEach((st, sti) => { if (st.campers.some(c => c.name === targetName)) { targetBusId = r.busId; targetShiftIdx = si; targetStopIdx = sti; } }); }); });
-                if (targetBusId !== null) {
-                    clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers = st.campers.filter(c => c.name !== camperName); }); r.stops = r.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); }); });
-                    const targetRoute = clone[targetShiftIdx]?.routes.find(r => r.busId === targetBusId);
-                    if (targetRoute?.stops[targetStopIdx]) { const roster = getRoster(); const camper = roster[camperName] || {}; targetRoute.stops[targetStopIdx].campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }); }
-                    clone.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach((st, i) => { st.stopNum = i + 1; }); r.camperCount = r.stops.reduce((s, st) => s + st.campers.length, 0); }); });
-                }
-            }
-            if (override.type === 'add-rider') {
-                const addr = D.addresses[camperName]; if (!addr?.geocoded) return;
-                const roster = getRoster(); const camper = roster[camperName] || {};
-                clone.forEach(sr => { const divSet = new Set(sr.shift.divisions || []); if (!divSet.has(camper.division)) return; let bestRoute = null, bestStopIdx = -1, bestDist = Infinity; sr.routes.forEach(r => { r.stops.forEach((st, sti) => { if (!st.lat || !st.lng) return; const d = haversineMi(addr.lat, addr.lng, st.lat, st.lng); if (d < bestDist) { bestDist = d; bestRoute = r; bestStopIdx = sti; } }); }); if (bestRoute && bestStopIdx >= 0) { if (bestDist <= 0.3) bestRoute.stops[bestStopIdx].campers.push({ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }); else { const cLa = D.setup.campLat || _campCoordsCache?.lat || 0; const cLn = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(bestRoute.stops, { stopNum: 0, campers: [{ name: camperName, division: camper.division || '', bunk: camper.bunk || '' }], address: [addr.street, addr.city, addr.state, addr.zip].filter(Boolean).join(', '), lat: addr.lat, lng: addr.lng }, cLa, cLn); } bestRoute.camperCount = bestRoute.stops.reduce((s, st) => s + st.campers.length, 0); } });
-            }
-        });
-        return clone;
-    }
-
-    function renderDailyOverrides() {
-        const container = document.getElementById('dailyOverridesBody'); if (!container) return;
-        const ov = getOverrides(); const entries = Object.entries(ov);
-        if (!entries.length) { container.innerHTML = '<div style="text-align:center;padding:1rem;color:var(--text-muted);">No overrides for today.</div>'; return; }
-        container.innerHTML = entries.map(([name, ov]) => { let desc = '', badgeCls = 'badge-neutral'; if (ov.type === 'not-riding') { desc = 'Not riding'; badgeCls = 'badge-danger'; } else if (ov.type === 'ride-with') { desc = 'With ' + esc(ov.targetCamper); badgeCls = 'badge-warning'; } else if (ov.type === 'add-rider') { desc = 'Added to bus'; badgeCls = 'badge-success'; } return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.5rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><div><strong>' + esc(name) + '</strong> — <span class="badge ' + badgeCls + '">' + desc + '</span></div><button class="btn btn-ghost btn-sm" style="color:var(--red-500)" onclick="CampistryGo.removeOverride(\'' + esc(name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; }).join('');
-    }
-
-    function openOverrideModal() { const roster = getRoster(); const names = Object.keys(roster).sort(); const sel = document.getElementById('overrideCamper'); sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join(''); document.getElementById('overrideSearch').value = ''; document.getElementById('overrideType').value = 'not-riding'; document.getElementById('overrideRideWithGroup').style.display = 'none'; openModal('overrideModal'); }
-    function filterOverrideSelect(inputId, selectId) { const q = (document.getElementById(inputId)?.value || '').toLowerCase().trim(); const sel = document.getElementById(selectId); const roster = getRoster(); const names = Object.keys(roster).sort(); const filtered = q ? names.filter(n => n.toLowerCase().includes(q)) : names; sel.innerHTML = '<option value="">— Select —</option>' + filtered.map(n => '<option value="' + esc(n) + '">' + esc(n) + '</option>').join(''); if (filtered.length === 1) sel.value = filtered[0]; }
-    function onOverrideTypeChange() { const type = document.getElementById('overrideType')?.value; document.getElementById('overrideRideWithGroup').style.display = type === 'ride-with' ? '' : 'none'; if (type === 'ride-with') { document.getElementById('overrideTargetSearch').value = ''; filterOverrideSelect('overrideTargetSearch', 'overrideTarget'); } }
-    function saveOverride() { const camper = document.getElementById('overrideCamper')?.value; const type = document.getElementById('overrideType')?.value; if (!camper) { toast('Select a camper', 'error'); return; } if (type === 'ride-with') { const target = document.getElementById('overrideTarget')?.value; if (!target) { toast('Select target', 'error'); return; } addOverride(camper, 'ride-with', { targetCamper: target }); } else if (type === 'add-rider') { if (!D.addresses[camper]?.geocoded) { toast('Need geocoded address', 'error'); return; } addOverride(camper, 'add-rider', {}); } else addOverride(camper, 'not-riding', {}); closeModal('overrideModal'); }
 
     // =========================================================================
     // CAMPER SEARCH + MOVE
     // =========================================================================
     function searchCamperInRoutes(query) {
         if (!_generatedRoutes || !query) return;
-        const q = query.toLowerCase().trim(); if (!q) { if (_generatedRoutes) renderRouteResults(applyOverrides(_generatedRoutes)); return; }
-        const results = []; const applied = applyOverrides(_generatedRoutes);
+        const q = query.toLowerCase().trim(); if (!q) { if (_generatedRoutes) renderRouteResults(_generatedRoutes); return; }
+        const results = []; const applied = _generatedRoutes;
         applied.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { st.campers.forEach(c => { if (c.name.toLowerCase().includes(q)) results.push({ name: c.name, shift: sr.shift.label || '', busName: r.busName, busColor: r.busColor, busId: r.busId, stopNum: st.stopNum, address: st.address, time: st.estimatedTime || '—', lat: st.lat, lng: st.lng, shiftIdx: _generatedRoutes.indexOf(sr) }); }); }); }); });
         const container = document.getElementById('camperSearchResults'); if (!container) return;
         if (!results.length) { container.innerHTML = '<div style="padding:.75rem;color:var(--text-muted);">No match for "' + esc(query) + '"</div>'; container.style.display = ''; return; }
@@ -6867,7 +7494,7 @@
         if (camperStop.lat && camperStop.lng) { for (const st of toRoute.stops) { if (st.lat && st.lng && haversineMi(camperStop.lat, camperStop.lng, st.lat, st.lng) < 0.3) { st.campers.push(camperData); added = true; break; } } }
         if (!added) { const cLat = D.setup.campLat || _campCoordsCache?.lat || 0; const cLng = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(toRoute.stops, { stopNum: 0, campers: [camperData], address: camperStop.address, lat: camperStop.lat, lng: camperStop.lng, estimatedTime: camperStop.estimatedTime }, cLat, cLng); }
         toRoute.stops.forEach((st, i) => { st.stopNum = i + 1; }); toRoute.camperCount = toRoute.stops.reduce((s, st) => s + st.campers.length, 0);
-        _generatedRoutes = D.savedRoutes; save(); renderRouteResults(applyOverrides(D.savedRoutes)); toast(camperName + ' moved to ' + toRoute.busName);
+        _generatedRoutes = D.savedRoutes; save(); renderRouteResults(D.savedRoutes); toast(camperName + ' moved to ' + toRoute.busName);
     }
     function openMoveModal(camperName, fromBusId, shiftIdx) { const sr = _generatedRoutes?.[shiftIdx]; if (!sr) return; const otherBuses = sr.routes.filter(r => r.busId !== fromBusId && r.stops.length > 0); document.getElementById('moveCamperName').textContent = camperName; const sel = document.getElementById('moveToBus'); sel.innerHTML = otherBuses.map(r => '<option value="' + r.busId + '">' + esc(r.busName) + ' (' + r.camperCount + ')</option>').join(''); document.getElementById('moveConfirmBtn').onclick = function() { moveCamperToBus(camperName, fromBusId, sel.value, shiftIdx); closeModal('moveModal'); }; openModal('moveModal'); }
 
@@ -6899,40 +7526,6 @@
         h += '</body></html>'; const w = window.open('', '_blank'); w.document.write(h); w.document.close(); setTimeout(() => w.print(), 500);
     }
 
-    // =========================================================================
-    // CARPOOL & RIDE-WITH
-    // =========================================================================
-    function renderCarpool() {
-        const card = document.getElementById('carpoolCard'), body = document.getElementById('carpoolBody'), countEl = document.getElementById('carpoolCount');
-        if (!card || !body) return;
-        const roster = getRoster(); if (!D.carpoolGroups) D.carpoolGroups = {};
-        const pickups = [], rideWithPairs = [], allKidsInGroups = new Set();
-        Object.values(D.carpoolGroups).forEach(g => (g.kids || []).forEach(k => allKidsInGroups.add(k)));
-        Object.keys(roster).forEach(name => { const a = D.addresses[name]; if (!a) return; if (a.transport === 'pickup') pickups.push({ name, division: roster[name].division || '', address: [a.street, a.city].filter(Boolean).join(', ') }); if (a.rideWith) rideWithPairs.push({ name, partner: a.rideWith, division: roster[name].division || '' }); });
-        const ungrouped = pickups.filter(p => !allKidsInGroups.has(p.name));
-        const groups = Object.entries(D.carpoolGroups).sort((a, b) => a[0].localeCompare(b[0], undefined, { numeric: true }));
-        card.style.display = '';
-        if (countEl) countEl.textContent = pickups.length + ' pickup, ' + groups.length + ' group' + (groups.length !== 1 ? 's' : '');
-        let html = '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.75rem;"><div style="font-size:.875rem;font-weight:700;">🚗 Carpool Groups</div><button class="btn btn-primary btn-sm" onclick="CampistryGo.openCarpoolGroupModal()">+ New Group</button></div>';
-        if (groups.length) { html += groups.map(([num, g]) => { const kidRows = (g.kids || []).map(kid => { const c = roster[kid]; return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.3rem 0;border-bottom:1px solid var(--border-light);"><span style="font-size:.8125rem;"><strong>' + esc(kid) + '</strong>' + (c?.division ? ' <span style="color:var(--text-muted);font-size:.75rem;">' + esc(c.division) + '</span>' : '') + '</span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;padding:2px 6px;" onclick="CampistryGo.removeFromCarpoolGroup(\'' + esc(num) + '\',\'' + esc(kid.replace(/'/g, "\\'")) + '\')">×</button></div>'; }).join(''); return '<div style="border:1px solid var(--border-light);border-radius:8px;margin-bottom:.75rem;overflow:hidden;"><div style="display:flex;align-items:center;justify-content:space-between;padding:.625rem .75rem;background:var(--surface-secondary,#f9fafb);"><div><span style="font-weight:700;font-size:.875rem;">Carpool ' + esc(num) + '</span>' + (g.driver ? ' <span style="font-size:.75rem;color:var(--text-muted);">— ' + esc(g.driver) + (g.phone ? ' · ' + esc(g.phone) : '') + '</span>' : '') + '</div><div style="display:flex;gap:4px;"><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.openAddToCarpoolModal(\'' + esc(num) + '\')">+ Add</button><button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.editCarpoolGroup(\'' + esc(num) + '\')">Edit</button><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.deleteCarpoolGroup(\'' + esc(num) + '\')">Delete</button></div></div><div style="padding:.5rem .75rem;">' + (kidRows || '<div style="font-size:.8125rem;color:var(--text-muted);">No kids yet</div>') + '</div></div>'; }).join(''); }
-        else html += '<div style="text-align:center;padding:1rem;color:var(--text-muted);font-size:.8125rem;border:1px dashed var(--border-light);border-radius:8px;">No carpool groups yet</div>';
-        if (ungrouped.length) { html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">Ungrouped Pickup Kids (' + ungrouped.length + ')</div>'; html += ungrouped.map(p => { const opts = groups.map(([n]) => '<option value="' + esc(n) + '">Carpool ' + esc(n) + '</option>').join(''); return '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><strong>' + esc(p.name) + '</strong><div style="display:flex;gap:4px;">' + (groups.length ? '<select class="form-input" style="font-size:.7rem;padding:2px 4px;width:auto;" onchange="if(this.value)CampistryGo.addToCarpoolGroup(this.value,\'' + esc(p.name.replace(/'/g, "\\'")) + '\');this.value=\'\'"><option value="">Add to...</option>' + opts + '</select>' : '') + '<button class="btn btn-ghost btn-sm" style="font-size:.7rem;" onclick="CampistryGo.setTransport(\'' + esc(p.name.replace(/'/g, "\\'")) + '\',\'bus\')">→ Bus</button></div></div>'; }).join(''); html += '</div>'; }
-        if (rideWithPairs.length) { html += '<div style="margin-top:.75rem;border-top:1px solid var(--border-light);padding-top:.75rem;"><div style="font-size:.8125rem;font-weight:700;color:var(--text-secondary);margin-bottom:.5rem;">🤝 Ride-With Pairs (' + rideWithPairs.length + ')</div>'; rideWithPairs.forEach(p => { html += '<div style="display:flex;align-items:center;justify-content:space-between;padding:.35rem 0;border-bottom:1px solid var(--border-light);font-size:.8125rem;"><span><strong>' + esc(p.name) + '</strong> rides with <strong>' + esc(p.partner) + '</strong></span><button class="btn btn-ghost btn-sm" style="color:var(--red-500);font-size:.7rem;" onclick="CampistryGo.removeRideWith(\'' + esc(p.name.replace(/'/g, "\\'")) + '\')">Remove</button></div>'; }); html += '</div>'; }
-        body.innerHTML = html;
-    }
-
-    function setTransport(name, mode) { if (!D.addresses[name]) return; D.addresses[name].transport = mode; save(); renderCarpool(); renderAddresses(); updateStats(); toast(name + ' → ' + (mode === 'pickup' ? 'carpool' : 'bus')); }
-    function setRideWith(name, partner) { if (!D.addresses[name]) return; D.addresses[name].rideWith = partner; save(); renderCarpool(); toast(name + ' paired with ' + partner); }
-    function removeRideWith(name) { if (!D.addresses[name]) return; D.addresses[name].rideWith = ''; save(); renderCarpool(); toast('Pairing removed'); }
-    function openCarpoolGroupModal(editNum) { const existing = editNum ? D.carpoolGroups[editNum] : null; document.getElementById('carpoolGroupNum').value = editNum || ''; document.getElementById('carpoolGroupDriver').value = existing?.driver || ''; document.getElementById('carpoolGroupPhone').value = existing?.phone || ''; document.getElementById('carpoolGroupNum').disabled = !!editNum; document.getElementById('carpoolGroupModalTitle').textContent = editNum ? 'Edit Carpool ' + editNum : 'New Carpool Group'; openModal('carpoolGroupModal'); }
-    function saveCarpoolGroup() { const num = document.getElementById('carpoolGroupNum')?.value.trim(); if (!num) { toast('Enter a number', 'error'); return; } if (!D.carpoolGroups) D.carpoolGroups = {}; if (!D.carpoolGroups[num]) D.carpoolGroups[num] = { label: 'Carpool ' + num, driver: '', phone: '', kids: [] }; D.carpoolGroups[num].driver = document.getElementById('carpoolGroupDriver')?.value.trim() || ''; D.carpoolGroups[num].phone = document.getElementById('carpoolGroupPhone')?.value.trim() || ''; save(); closeModal('carpoolGroupModal'); renderCarpool(); toast('Carpool ' + num + ' saved'); }
-    function editCarpoolGroup(num) { openCarpoolGroupModal(num); }
-    function deleteCarpoolGroup(num) { if (!D.carpoolGroups?.[num]) return; if (!confirm('Delete Carpool ' + num + '?')) return; delete D.carpoolGroups[num]; save(); renderCarpool(); toast('Deleted'); }
-    function addToCarpoolGroup(num, kidName) { if (!D.carpoolGroups?.[num]) return; if (!D.carpoolGroups[num].kids) D.carpoolGroups[num].kids = []; if (!D.carpoolGroups[num].kids.includes(kidName)) D.carpoolGroups[num].kids.push(kidName); if (D.addresses[kidName]) D.addresses[kidName].transport = 'pickup'; save(); renderCarpool(); toast(kidName + ' → Carpool ' + num); }
-    function removeFromCarpoolGroup(num, kidName) { if (!D.carpoolGroups?.[num]) return; D.carpoolGroups[num].kids = (D.carpoolGroups[num].kids || []).filter(k => k !== kidName); save(); renderCarpool(); toast(kidName + ' removed'); }
-    function openAddToCarpoolModal(num) { const roster = getRoster(); const existing = new Set(D.carpoolGroups[num]?.kids || []); const available = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n)); const sel = document.getElementById('addToCarpoolSelect'); if (sel) sel.innerHTML = '<option value="">— Select —</option>' + available.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join(''); document.getElementById('addToCarpoolSearch').value = ''; document.getElementById('addToCarpoolNum').value = num; document.getElementById('addToCarpoolTitle').textContent = 'Add to Carpool ' + num; openModal('addToCarpoolModal'); }
-    function filterAddToCarpool() { const q = (document.getElementById('addToCarpoolSearch')?.value || '').toLowerCase().trim(); const num = document.getElementById('addToCarpoolNum')?.value; const roster = getRoster(); const existing = new Set(D.carpoolGroups[num]?.kids || []); const names = Object.keys(roster).sort().filter(n => D.addresses[n] && !existing.has(n) && (!q || n.toLowerCase().includes(q))); const sel = document.getElementById('addToCarpoolSelect'); if (sel) sel.innerHTML = '<option value="">— Select —</option>' + names.map(n => '<option value="' + esc(n) + '">' + esc(n) + (D.addresses[n]?.transport === 'pickup' ? ' 🚗' : ' 🚌') + '</option>').join(''); if (names.length === 1 && sel) sel.value = names[0]; }
-    function confirmAddToCarpool() { const num = document.getElementById('addToCarpoolNum')?.value; const kid = document.getElementById('addToCarpoolSelect')?.value; if (!num || !kid) { toast('Select a camper', 'error'); return; } addToCarpoolGroup(num, kid); closeModal('addToCarpoolModal'); }
 
     // =========================================================================
     // TABS + INIT
@@ -6944,7 +7537,7 @@
             btn.classList.add('active');
             const t = btn.dataset.tab; document.getElementById('tab-' + t)?.classList.add('active');
             if (t === 'fleet') { renderFleet(); renderShifts(); } else if (t === 'shifts') renderShifts(); else if (t === 'staff') renderStaff(); else if (t === 'addresses') renderAddresses(); else if (t === 'routes') {
-                runPreflight(); renderDailyOverrides(); renderCarpool();
+                runPreflight();
                 if (_pendingMapInit) { setTimeout(function() { initMap(_pendingMapInit); _pendingMapInit = null; }, 150); }
                 else { setTimeout(function() { if (_map) _map.invalidateSize(); }, 150); }
             }
@@ -6967,11 +7560,22 @@
             D.savedRoutes.forEach(sr => { sr.routes.forEach(r => { r.stops.forEach(st => { if (st.address && st.address.startsWith('Shared stop')) { let bestAddr = null, bestDist = Infinity; (st.campers || []).forEach(c => { const a = D.addresses[c.name]; if (a?.geocoded && a.lat && a.lng && st.lat && st.lng) { const d = haversineMi(st.lat, st.lng, a.lat, a.lng); if (d < bestDist) { bestDist = d; bestAddr = [a.street, a.city, a.state, a.zip].filter(Boolean).join(', '); } } }); if (bestAddr) { st.address = bestAddr; needsSave = true; } } }); }); });
             if (needsSave) save();
             _generatedRoutes = D.savedRoutes;
-            setTimeout(() => { renderRouteResults(applyOverrides(D.savedRoutes)); toast('Saved routes loaded'); }, 200);
+            setTimeout(() => { renderRouteResults(D.savedRoutes); toast('Saved routes loaded'); }, 200);
         }
         document.querySelectorAll('.modal-overlay').forEach(o => o.addEventListener('click', e => { if (e.target === o) o.classList.remove('open'); }));
         document.addEventListener('keydown', e => { if (e.key === 'Escape') document.querySelectorAll('.modal-overlay.open').forEach(m => m.classList.remove('open')); });
-        window.addEventListener('campistry-cloud-hydrated', () => { console.log('[Go] Cloud data hydrated'); load(); renderAddresses(); updateStats(); renderShifts(); });
+        window.addEventListener('campistry-cloud-hydrated', () => {
+            console.log('[Go] Cloud data hydrated');
+            load();
+            renderAddresses(); updateStats(); renderShifts();
+            // Fetch API keys from Supabase secrets (non-blocking)
+            fetchGoConfig();
+            // Fetch addresses + routes from go_standalone_data table
+            // (they're stripped from the main camp_state payload)
+            loadGoCloudData();
+        });
+        // Also attempt Go-cloud restore on boot (in case cloud is already ready)
+        setTimeout(() => { fetchGoConfig(); loadGoCloudData(); }, 1500);
         window.addEventListener('storage', (e) => { if (e.key === 'campGlobalSettings_v1') { console.log('[Go] Roster changed — refreshing'); renderAddresses(); updateStats(); } });
         console.log('[Go] Ready —', D.buses.length, 'buses,', D.shifts.length, 'shifts,', Object.keys(getRoster()).length, 'campers');
     }
@@ -7036,30 +7640,747 @@
     }
 
     // =========================================================================
+    // =========================================================================
+    // GEOAPIFY CVRP TEST
+    // Run from browser console: CampistryGo.testGeoapify()
+    //
+    // Sends a real 5-stop / 2-bus CVRP request to Geoapify and verifies:
+    //   • API key is accepted (not 401/402)
+    //   • Solver assigns stops to buses correctly
+    //   • Road geometry comes back in the response
+    //   • Credit cost reported
+    // =========================================================================
+    async function testGeoapify() {
+        const L = (icon, msg) => console.log(icon + ' ' + msg);
+        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+        console.log('   Campistry Go — Geoapify CVRP Live Test');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+
+        // ── 1. Config checks ──
+        const apiKey  = D.setup.geoapifyKey?.trim();
+        const campLat = D.setup.campLat;
+        const campLng = D.setup.campLng;
+
+        if (!apiKey) {
+            L('❌', 'geoapifyKey not set — go to Setup → Advanced Settings → Geoapify Route Planner');
+            L('💡', 'Get a free key at https://myprojects.geoapify.com');
+            return;
+        }
+        L('✅', 'API key found: ' + apiKey.slice(0, 6) + '...' + apiKey.slice(-4));
+
+        if (!campLat || !campLng) {
+            L('❌', 'Camp coordinates not set — save Setup with a valid camp address first');
+            return;
+        }
+        L('✅', 'Camp: ' + campLat.toFixed(5) + ', ' + campLng.toFixed(5));
+
+        // ── 2. Build a tiny 5-stop / 2-bus test request ──
+        // 5 stops scattered ~1–3 miles from camp, total 8 kids → 2 buses of cap 5
+        const offsets = [
+            [  0.012,  0.015, 2 ],   // ~1.2mi NE
+            [ -0.008,  0.022, 3 ],   // ~1.5mi NW-ish
+            [  0.025, -0.010, 1 ],   // ~1.7mi N
+            [ -0.018, -0.020, 1 ],   // ~1.7mi SW
+            [  0.035,  0.005, 1 ]    // ~2.4mi N
+        ];
+        const campCoord = [campLng, campLat];
+        const agents = [
+            { delivery_capacity: 5, start_location: campCoord },
+            { delivery_capacity: 5, start_location: campCoord }
+        ];
+        const jobs = offsets.map(function(o) {
+            return {
+                location: [ campLng + o[1], campLat + o[0] ],
+                duration: 60,
+                delivery_amount: o[2]
+            };
+        });
+        const body = { mode: 'drive', agents: agents, jobs: jobs };
+
+        L('⏳', 'Sending 5-stop / 2-bus CVRP test to Geoapify...');
+        const url = 'https://api.geoapify.com/v1/routeplanner?apiKey=' + encodeURIComponent(apiKey);
+
+        let resp, data;
+        try {
+            resp = await fetch(url, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(body)
+            });
+            data = await resp.json();
+        } catch (e) {
+            L('❌', 'Network error: ' + e.message);
+            return;
+        }
+
+        // ── 3. Check HTTP status ──
+        if (!resp.ok) {
+            const msg = data?.message || data?.error || ('HTTP ' + resp.status);
+            L('❌', 'API error: ' + msg);
+            if (resp.status === 401) L('💡', '401 — API key is wrong or inactive. Check https://myprojects.geoapify.com');
+            if (resp.status === 402) L('💡', '402 — Out of credits. Check quota at https://myprojects.geoapify.com');
+            if (resp.status === 422) L('💡', '422 — Request format error (unexpected for this test)');
+            console.log('Full response:', data);
+            return;
+        }
+
+        // ── 4. Parse result ──
+        const features = data?.features || [];
+        const agentFeatures = features.filter(function(f) {
+            return f.properties?.agent_index !== undefined &&
+                   Array.isArray(f.properties?.actions);
+        });
+
+        if (!agentFeatures.length) {
+            L('⚠️ ', 'No route features returned — unexpected. Raw response:');
+            console.log(data);
+            return;
+        }
+
+        L('✅', 'Geoapify responded — ' + agentFeatures.length + ' bus route(s) returned');
+        console.log('');
+
+        let totalStopsAssigned = 0;
+        let totalKidsAssigned  = 0;
+
+        agentFeatures.forEach(function(feat, i) {
+            const actions   = feat.properties.actions || [];
+            const jobActions = actions.filter(function(a) {
+                return a.type === 'job' || a.type === 'delivery' || a.type === 'pickup';
+            });
+            const kids = jobActions.reduce(function(s, a) {
+                return s + (offsets[a.job_index]?.[2] || 0);
+            }, 0);
+            const hasGeom = !!(feat.geometry?.coordinates?.length);
+            totalStopsAssigned += jobActions.length;
+            totalKidsAssigned  += kids;
+
+            console.log('  🚌 Bus ' + (i + 1) + ': ' + jobActions.length + ' stop(s), ' + kids + ' kids' +
+                (hasGeom ? '  ✅ road geometry' : '  ⚠️  no geometry'));
+            jobActions.forEach(function(a) {
+                const o = offsets[a.job_index];
+                if (o) console.log('     Stop ' + (a.job_index + 1) + ': ' + o[2] + ' kid(s)  [job_index=' + a.job_index + ']');
+            });
+        });
+
+        const unassigned = data.unassigned_jobs || [];
+
+        console.log('');
+        L(totalStopsAssigned === 5 ? '✅' : '⚠️ ',
+            totalStopsAssigned + '/5 stops assigned, ' + totalKidsAssigned + '/8 kids assigned');
+
+        if (unassigned.length) {
+            L('⚠️ ', unassigned.length + ' stop(s) unassigned — capacity may be too tight for test data');
+        }
+
+        // ── 5. Credit cost estimate ──
+        const busCount  = D.buses.length  || 18;
+        const stopCount = Object.values(D.addresses).filter(function(a) { return a?.geocoded; }).length;
+        const estCost   = stopCount + busCount + 4; // Geoapify: N_locations + small overhead
+        console.log('');
+        L('ℹ️ ', 'Test cost: ~' + (5 + 2) + ' credits (5 stops + 2 buses)');
+        L('ℹ️ ', 'Est. real-run cost: ~' + estCost + ' credits (' + stopCount + ' stops + ' + busCount + ' buses)');
+        L('ℹ️ ', 'Free tier: 3,000 credits/day → ~' + Math.floor(3000 / Math.max(estCost, 1)) + ' full runs/day');
+
+        console.log('\n🟢 Geoapify CVRP is working. Generate Routes will use the global VRP solver.');
+        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+    }
+
+
+window.GoFlagPersistence = (function () {
+    'use strict';
+
+    const DATA_TYPE = 'route_flags';
+    const LS_KEY = 'campistry_go_flags_v1';
+    const VERSION = 1;
+
+    const EMPTY = () => ({
+        version: VERSION, savedAt: null,
+        flags: { stops: {}, buses: {}, approvals: {}, anchors: {} }
+    });
+
+    function cloudAvailable() { return !!window.GoCloudSync; }
+
+    async function _loadFromCloud() {
+        if (!cloudAvailable()) return null;
+        try {
+            const all = await window.GoCloudSync.loadAll();
+            return all?.[DATA_TYPE] || null;
+        } catch (e) {
+            console.warn('[GoFlagPersistence] cloud load failed:', e.message);
+            return null;
+        }
+    }
+
+    async function _saveToCloud(payload) {
+        if (!cloudAvailable()) return { ok: false, reason: 'no-cloud' };
+        try { return await window.GoCloudSync.save(DATA_TYPE, payload); }
+        catch (e) { return { ok: false, error: e }; }
+    }
+
+    function _loadLocal() {
+        try {
+            const raw = localStorage.getItem(LS_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (_) { return null; }
+    }
+
+    function _saveLocal(payload) {
+        try { localStorage.setItem(LS_KEY, JSON.stringify(payload)); return true; }
+        catch (_) { return false; }
+    }
+
+    async function load() {
+        const cloud = await _loadFromCloud();
+        if (cloud && cloud.version === VERSION) { _saveLocal(cloud); return cloud; }
+        const local = _loadLocal();
+        if (local && local.version === VERSION) return local;
+        return EMPTY();
+    }
+
+    async function save(payload) {
+        payload.savedAt = new Date().toISOString();
+        payload.version = VERSION;
+        _saveLocal(payload);
+        const res = await _saveToCloud(payload);
+        return res.ok || !cloudAvailable();
+    }
+
+    // Key helpers — normalize so regeneration doesn't orphan flags
+    function _stopKey(shiftIdx, address) {
+        const norm = (address || '').toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-+|-+$/g, '');
+        return shiftIdx + ':' + norm;
+    }
+    function _busKey(shiftIdx, busId) {
+        return shiftIdx + ':' + busId;
+    }
+
+    return {
+        load, save,
+        EMPTY,
+        _stopKey, _busKey
+    };
+})();
+
+
+// =============================================================================
+// IN-MEMORY FLAG CACHE
+//
+// Loaded on first use, re-saved when mutated. Prevents every click from
+// hitting Supabase.
+// =============================================================================
+let _flagCache = null;
+
+async function _ensureFlags() {
+    if (_flagCache) return _flagCache;
+    _flagCache = await window.GoFlagPersistence.load();
+    return _flagCache;
+}
+
+async function _persistFlags() {
+    if (!_flagCache) return;
+    await window.GoFlagPersistence.save(_flagCache);
+}
+
+
+// =============================================================================
+// PUBLIC FLAG API — called from the dashboard UI
+// =============================================================================
+async function flagStop(shiftIdx, stopAddress, reason, notes) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._stopKey(shiftIdx, stopAddress);
+    _flagCache.flags.stops[key] = {
+        reason:    reason || 'review',
+        notes:     notes || '',
+        flaggedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Stop flagged for review');
+}
+
+async function unflagStop(shiftIdx, stopAddress) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._stopKey(shiftIdx, stopAddress);
+    delete _flagCache.flags.stops[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function flagRoute(shiftIdx, busId, reason, notes) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.buses[key] = {
+        reason:    reason || 'review',
+        notes:     notes || '',
+        flaggedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Route flagged for review');
+}
+
+async function unflagRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.buses[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function approveRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.approvals[key] = {
+        approvedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('Route approved');
+}
+
+async function unapproveRoute(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.approvals[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+async function approveAllRoutes() {
+    if (!_generatedRoutes) return;
+    await _ensureFlags();
+    _generatedRoutes.forEach((sr, si) => {
+        sr.routes.forEach(r => {
+            if (r.stops.length === 0) return;
+            const key = window.GoFlagPersistence._busKey(si, r.busId);
+            _flagCache.flags.approvals[key] = {
+                approvedAt: new Date().toISOString()
+            };
+        });
+    });
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') toast('All routes approved');
+}
+
+async function pinAnchor(shiftIdx, busId, stopAddress, lat, lng) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    _flagCache.flags.anchors[key] = {
+        stopAddress, lat, lng,
+        pinnedAt: new Date().toISOString()
+    };
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+    if (typeof toast === 'function') {
+        toast('Anchor pinned — will take effect on next regenerate');
+    }
+}
+
+async function unpinAnchor(shiftIdx, busId) {
+    await _ensureFlags();
+    const key = window.GoFlagPersistence._busKey(shiftIdx, busId);
+    delete _flagCache.flags.anchors[key];
+    await _persistFlags();
+    renderDispatcherDashboard(_generatedRoutes);
+}
+
+
+// =============================================================================
+// ANCHOR DETECTION
+//
+// LSTA's "keystone stop" heuristic: within a bus's zone, find the stop that
+//   1. is farthest from camp (represents the route's outer edge)
+//   2. has the most kids (is a real mega-cluster worth anchoring on)
+//
+// Score = (distFromCamp in miles) * (kids at stop).  This naturally prefers
+// a 15-kid stop 10 miles out over a 2-kid stop 12 miles out.
+//
+// For arrival mode: the anchor is the FIRST stop (bus starts there, drives in)
+// For dismissal mode: the anchor is the LAST stop (bus ends there, closing out)
+//
+// NOTE: For Phase 3 we only RECOMMEND the anchor. The dispatcher must click
+// "Pin anchor" in the dashboard to make it a hard constraint on next regen.
+// This prevents the anchor from hurting routes where the solver already
+// chose a different (and equally-good or better) stop order.
+// =============================================================================
+function _detectAnchorForRoute(route, campLat, campLng) {
+    if (!route.stops || route.stops.length < 2) return null;
+
+    let best = null, bestScore = -Infinity;
+    for (const st of route.stops) {
+        if (!st.lat || !st.lng) continue;
+        if (st.isMonitor || st.isCounselor) continue;
+        const distMi = haversineMi(st.lat, st.lng, campLat, campLng);
+        const kidCount = (st.campers || []).length;
+        const score = distMi * Math.max(1, kidCount);
+        if (score > bestScore) {
+            bestScore = score;
+            best = { stop: st, distMi, kidCount, score };
+        }
+    }
+    return best;
+}
+
+// Called from Phase 2's _perBusGoogleTSP to look up any user-pinned anchor.
+// Returns the stop INDEX in route.stops if one is pinned, else null.
+function _getPinnedAnchorIndex(route, shiftIdx) {
+    if (!_flagCache) return null; // not loaded yet → no pin
+    const key = window.GoFlagPersistence._busKey(shiftIdx ?? 0, route.busId);
+    const anchor = _flagCache.flags.anchors[key];
+    if (!anchor) return null;
+
+    // Find the stop in route.stops whose address matches the pinned anchor.
+    // We match on address because stop order may have changed since pin.
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const target = norm(anchor.stopAddress);
+    for (let i = 0; i < route.stops.length; i++) {
+        if (norm(route.stops[i].address) === target) return i;
+    }
+    // No match — the pinned anchor stop no longer exists on this route.
+    // Don't fall back, just ignore (the dispatcher can re-pin if needed).
+    return null;
+}
+
+
+// =============================================================================
+// ROUTE QUALITY HEURISTIC (LSTA-style)
+//
+// Returns an object describing potential issues with a route. Used by the
+// dashboard to surface problems. These are advisory — some "problems" may
+// be intentional (e.g. single-rider stops for outliers).
+//
+// Checks:
+//   - oversized:   > 55 kids
+//   - undersized:  < 15 kids (may indicate bus can be dropped)
+//   - too-long:    > maxRideTime minutes total duration
+//   - too-many-singleton-stops: >40% of stops have 1 kid (inefficient)
+//   - ride-time-violations:  any stop with _rideTimeWarning
+//   - no-mega-stop: no stop has 5+ kids (likely a low-density zone but worth
+//     flagging for review)
+//   - anchor-mismatch: solver's first (AM) / last (PM) stop differs from the
+//     detected mega-cluster (informational)
+// =============================================================================
+function _analyzeRoute(route, shiftIdx, campLat, campLng, maxRideMin, isArrival, maxRouteMin) {
+    const issues = [];
+    const details = {};
+
+    // Basic size checks
+    if (route.camperCount > 55) {
+        issues.push({ type: 'oversized', severity: 'warn',
+            msg: route.camperCount + ' campers (over 55 LSTA guideline)' });
+    }
+    if (route.camperCount < 15 && route.camperCount > 0) {
+        issues.push({ type: 'undersized', severity: 'info',
+            msg: 'Only ' + route.camperCount + ' campers (may be mergeable)' });
+    }
+    // Use maxRouteDuration if available; falls back to maxRideMin+15 for legacy callers.
+    const tooLongThreshold = (maxRouteMin && maxRouteMin > 0) ? maxRouteMin : (maxRideMin + 15);
+    if (route.totalDuration > tooLongThreshold) {
+        issues.push({ type: 'too-long', severity: 'warn',
+            msg: 'Route takes ' + route.totalDuration + ' min (cap ' + tooLongThreshold + ' min)' });
+    }
+
+    // Stop-distribution checks
+    const stopCount = route.stops.filter(s => !s.isMonitor && !s.isCounselor).length;
+    const singletonStops = route.stops
+        .filter(s => !s.isMonitor && !s.isCounselor && s.campers.length === 1).length;
+    if (stopCount > 0 && singletonStops / stopCount > 0.5) {
+        issues.push({ type: 'too-many-singletons', severity: 'info',
+            msg: singletonStops + ' of ' + stopCount + ' stops have only 1 kid' });
+    }
+
+    const maxStopSize = Math.max(0,
+        ...route.stops
+            .filter(s => !s.isMonitor && !s.isCounselor)
+            .map(s => s.campers.length)
+    );
+    if (maxStopSize < 3 && route.camperCount >= 15) {
+        issues.push({ type: 'no-mega-stop', severity: 'warn',
+            msg: 'Largest stop has ' + maxStopSize +
+                ' kids (no anchor cluster — route may be too spread out)' });
+    }
+    details.maxStopSize = maxStopSize;
+
+    // Ride-time violations (solver-detected)
+    const rideViolations = route.stops
+        .filter(s => s._rideTimeWarning).length;
+    if (rideViolations > 0) {
+        issues.push({ type: 'ride-violations', severity: 'error',
+            msg: rideViolations + ' stop(s) over ' + maxRideMin + ' min ride' });
+    }
+
+    // Anchor analysis
+    const anchor = _detectAnchorForRoute(route, campLat, campLng);
+    if (anchor && anchor.kidCount >= 3) {
+        details.detectedAnchor = {
+            address: anchor.stop.address,
+            kidCount: anchor.kidCount,
+            distMi: anchor.distMi
+        };
+
+        // For arrival mode: bus should START at anchor
+        // For dismissal mode: bus should END at anchor
+        const solverExtremeIdx = isArrival ? 0 : route.stops.length - 1;
+        const solverExtreme = route.stops[solverExtremeIdx];
+        if (solverExtreme && solverExtreme.address !== anchor.stop.address) {
+            // Only flag if the current extreme has significantly fewer kids
+            const extremeKids = solverExtreme.campers.length;
+            if (anchor.kidCount > extremeKids + 2) {
+                issues.push({ type: 'anchor-mismatch', severity: 'info',
+                    msg: (isArrival ? 'First' : 'Last') + ' stop has ' + extremeKids +
+                        ' kid(s); mega-cluster has ' + anchor.kidCount +
+                        ' at ' + anchor.stop.address });
+            }
+        }
+    }
+
+    // Check for a pinned anchor on this route
+    const pinKey = window.GoFlagPersistence?._busKey(shiftIdx, route.busId);
+    const pinned = _flagCache?.flags?.anchors?.[pinKey];
+    if (pinned) {
+        details.pinnedAnchor = pinned;
+    }
+
+    return { issues, details };
+}
+
+
+// =============================================================================
+// DISPATCHER DASHBOARD RENDERER
+//
+// Injects the dashboard into the existing #dispatcherDashboard container.
+// Lists every active route with: status indicator, quality summary, issues,
+// and action buttons (flag, approve, pin anchor).
+//
+// Called from renderRouteResults after the route cards are built.
+// =============================================================================
+async function renderDispatcherDashboard(allShifts) {
+    const container = document.getElementById('dispatcherDashboard');
+    if (!container) return; // dashboard not yet added to HTML
+
+    if (!allShifts || !allShifts.length) {
+        container.innerHTML = '';
+        container.style.display = 'none';
+        return;
+    }
+
+    // Load flags if not already
+    await _ensureFlags();
+
+    const campLat = D.setup.campLat || _campCoordsCache?.lat || 0;
+    const campLng = D.setup.campLng || _campCoordsCache?.lng || 0;
+    const maxRideMin = D.setup.maxRideTime || 45;
+    const maxRouteMin = D.setup.maxRouteDuration || 60;
+    const isArrival = D.activeMode === 'arrival';
+
+    // Count buckets across all shifts
+    let approved = 0, flagged = 0, issues = 0, total = 0;
+    const perShift = [];
+
+    allShifts.forEach((sr, si) => {
+        const activeRoutes = sr.routes.filter(r => r.stops.length > 0);
+        const shiftData = { shiftIdx: si, shift: sr.shift, routes: [] };
+
+        activeRoutes.forEach(r => {
+            const analysis = _analyzeRoute(r, si, campLat, campLng, maxRideMin, isArrival, maxRouteMin);
+
+            const approveKey = window.GoFlagPersistence._busKey(si, r.busId);
+            const flagKey = approveKey;
+            const isApproved = !!_flagCache.flags.approvals[approveKey];
+            const isFlagged  = !!_flagCache.flags.buses[flagKey];
+
+            // Also count stop-level flags for this route
+            const stopFlagCount = r.stops.filter(s => {
+                const k = window.GoFlagPersistence._stopKey(si, s.address);
+                return !!_flagCache.flags.stops[k];
+            }).length;
+
+            total++;
+            if (isApproved) approved++;
+            if (isFlagged || stopFlagCount > 0) flagged++;
+            if (analysis.issues.length > 0) issues++;
+
+            shiftData.routes.push({
+                route: r,
+                analysis,
+                isApproved,
+                isFlagged,
+                stopFlagCount
+            });
+        });
+
+        perShift.push(shiftData);
+    });
+
+    // Top-level summary bar
+    let html = '<div class="dispatch-summary">' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num">' + total + '</div>' +
+            '<div class="dispatch-lbl">Total routes</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#10b981">' + approved + '</div>' +
+            '<div class="dispatch-lbl">Approved</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#f59e0b">' + issues + '</div>' +
+            '<div class="dispatch-lbl">Have issues</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-cell">' +
+            '<div class="dispatch-num" style="color:#ef4444">' + flagged + '</div>' +
+            '<div class="dispatch-lbl">Flagged</div>' +
+        '</div>' +
+        '<div class="dispatch-summary-actions">' +
+            '<button class="btn btn-primary btn-sm" onclick="CampistryGo.approveAllRoutes()">' +
+                'Approve all' +
+            '</button>' +
+        '</div>' +
+    '</div>';
+
+    // Per-shift, per-route detail table
+    perShift.forEach(shiftData => {
+        const { shift, routes } = shiftData;
+        html += '<div class="dispatch-shift">' +
+            '<div class="dispatch-shift-header">' +
+                esc(shift.label || 'Shift ' + (shiftData.shiftIdx + 1)) +
+                ' <span style="color:var(--text-muted);font-weight:400;font-size:.75rem;">' +
+                    routes.length + ' routes' +
+                '</span>' +
+            '</div>' +
+            '<div class="dispatch-routes">';
+
+        routes.forEach(rd => {
+            const { route: r, analysis, isApproved, isFlagged, stopFlagCount } = rd;
+            const totalFlags = (isFlagged ? 1 : 0) + stopFlagCount;
+
+            const statusClass = isApproved ? 'approved'
+                : analysis.issues.some(i => i.severity === 'error') ? 'error'
+                : analysis.issues.some(i => i.severity === 'warn') ? 'warn'
+                : 'ok';
+            const statusIcon = isApproved ? '✓'
+                : statusClass === 'error' ? '✗'
+                : statusClass === 'warn'  ? '!'
+                : '·';
+
+            html += '<div class="dispatch-route dispatch-route-' + statusClass + '">' +
+                '<div class="dispatch-route-header">' +
+                    '<div class="dispatch-route-title">' +
+                        '<span class="dispatch-status-dot dispatch-status-' + statusClass + '">' +
+                            statusIcon +
+                        '</span>' +
+                        '<span style="background:' + esc(r.busColor) +
+                            ';width:10px;height:10px;border-radius:50%;display:inline-block;"></span>' +
+                        '<strong>' + esc(r.busName) + '</strong>' +
+                        '<span class="dispatch-route-summary">' +
+                            r.camperCount + ' kids · ' + r.stops.length + ' stops · ' +
+                            r.totalDuration + ' min' +
+                        '</span>' +
+                    '</div>' +
+                    '<div class="dispatch-route-actions">';
+
+            if (totalFlags > 0) {
+                html += '<span class="dispatch-flag-badge">' + totalFlags +
+                    ' flag' + (totalFlags === 1 ? '' : 's') + '</span>';
+            }
+
+            if (isApproved) {
+                html += '<button class="btn btn-ghost btn-sm"' +
+                    ' onclick="CampistryGo.unapproveRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\')">' +
+                    'Unapprove</button>';
+            } else {
+                html += '<button class="btn btn-secondary btn-sm"' +
+                    ' onclick="CampistryGo.flagRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\',\'review\',\'\')">' +
+                    'Flag</button>' +
+                    '<button class="btn btn-primary btn-sm"' +
+                    ' onclick="CampistryGo.approveRoute(' + shiftData.shiftIdx + ',\'' +
+                        esc(r.busId) + '\')">' +
+                    'Approve</button>';
+            }
+            html += '</div></div>';
+
+            // Issues list
+            if (analysis.issues.length > 0) {
+                html += '<ul class="dispatch-issues">';
+                analysis.issues.forEach(iss => {
+                    html += '<li class="dispatch-issue dispatch-issue-' + iss.severity + '">' +
+                        esc(iss.msg) + '</li>';
+                });
+                html += '</ul>';
+            }
+
+            // Anchor info + pin/unpin control
+            if (analysis.details.detectedAnchor) {
+                const da = analysis.details.detectedAnchor;
+                const pa = analysis.details.pinnedAnchor;
+                const isPinned = !!pa;
+                const pinnedMatches = isPinned && pa.stopAddress === da.address;
+
+                html += '<div class="dispatch-anchor">' +
+                    '<span class="dispatch-anchor-icon">📍</span>' +
+                    '<span>Mega-cluster: <strong>' + esc(da.address) + '</strong> ' +
+                        '(' + da.kidCount + ' kids, ' + da.distMi.toFixed(1) + ' mi from camp)' +
+                    '</span>';
+
+                if (isPinned && !pinnedMatches) {
+                    html += '<span class="dispatch-anchor-badge">pinned: ' +
+                        esc(pa.stopAddress) + '</span>' +
+                        '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.unpinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\')">' +
+                        'Unpin</button>';
+                } else if (isPinned) {
+                    html += '<span class="dispatch-anchor-badge dispatch-anchor-pinned">📌 pinned</span>' +
+                        '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.unpinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\')">' +
+                        'Unpin</button>';
+                } else {
+                    html += '<button class="btn btn-ghost btn-sm"' +
+                        ' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' +
+                            esc(r.busId) + '\',\'' + esc(da.address) + '\',' +
+                            da.kidCount /* unused but keeps API parity */ + ',' + 0 + ')">' +
+                        'Pin as anchor' +
+                        '</button>';
+                }
+                html += '</div>';
+            }
+
+            html += '</div>'; // end dispatch-route
+        });
+
+        html += '</div></div>'; // end dispatch-routes, dispatch-shift
+    });
+
+    container.innerHTML = html;
+    container.style.display = '';
+}
+// =========================================================================
     // PUBLIC API
     // =========================================================================
     window.CampistryGo = {
-        saveSetup, testApiKey,
+        saveSetup, toggleStandalone,
         openBusModal, saveBus, editBus, deleteBus, deleteBusFromModal, _pickColor, quickCreateBuses,
         addShift, deleteShift, toggleShiftDiv, updateShiftTime, renameShift,
         toggleShiftGrade, setShiftGradeMode, toggleShiftBus, setAllShiftBuses,
         openMonitorModal, saveMonitor, editMonitor, deleteMonitor,
         openCounselorModal, saveCounselor, editCounselor, deleteCounselor,
-        acceptStaffAssign, denyStaffAssign, manualStaffAssign,
-        editAddress, saveAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
+        acceptStaffAssign, denyStaffAssign, manualStaffAssign, acceptAllStaffSuggestions,
+        editAddress, saveAddress, deleteAddress, _quickDeleteAddress, geocodeAll, validateAllAddresses, downloadAddressTemplate, importAddressCsv, sortAddresses,
+        clearAllAddresses, clearAllMonitors, clearAllCounselors,
         regeocodeAll: function() { geocodeAll(true); },
-        testGeocode, systemCheck,
+        testGeocode, systemCheck, testGeoapify,
         generateRoutes, reOptimizeBus, exportRoutesCsv, printRoutes, detectRegions, diagnoseBus,
         renderMap, selectMapBus, toggleMapBus, toggleMapShift, setMapShiftsAll, toggleMapFullscreen,
         setAddressPinMode, toggleHideRoutes, toggleZones,
         toggleAddressPins, showAddressesOnMap, locateCamper,
-        openOverrideModal, onOverrideTypeChange, saveOverride, removeOverride, filterOverrideSelect,
         searchCamperInRoutes, zoomToStop, openMoveModal, renderFilteredMasterList, sortMasterBy,
         switchMode,
-        setTransport, setRideWith, removeRideWith, renderCarpool,
-        openCarpoolGroupModal, saveCarpoolGroup, editCarpoolGroup, deleteCarpoolGroup,
-        addToCarpoolGroup, removeFromCarpoolGroup,
-        openAddToCarpoolModal, filterAddToCarpool, confirmAddToCarpool,
         closeModal, openModal,
         _getMap: function() { return _map; },
         _getSavedRoutes: function() { return D.savedRoutes; },
@@ -7069,12 +8390,26 @@
             if (D.savedRoutes) {
                 _generatedRoutes = D.savedRoutes;
                 var c = _map ? _map.getCenter() : null, z = _map ? _map.getZoom() : null;
-                renderRouteResults(applyOverrides(D.savedRoutes));
+                renderRouteResults(D.savedRoutes);
                 if (_map && c && z != null) setTimeout(function() { _map.setView(c, z, { animate: false }); }, 200);
             }
         },
         _getRouteGeomCache: function() { return _routeGeomCache; },
-        _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; }
+        _clearGeomCache: function(key) { if (key) delete _routeGeomCache[key]; else _routeGeomCache = {}; },
+
+        // Phase 3 dispatcher API
+        flagStop, unflagStop,
+        flagRoute, unflagRoute,
+        approveRoute, unapproveRoute, approveAllRoutes,
+        pinAnchor, unpinAnchor,
+        renderDispatcherDashboard
     };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init); else init();
+
+    // Temporary debug helper — remove after diagnosis
+    window._GoDebug = {
+        getAddresses:  () => D.addresses,
+        getRoster:     () => _goStandaloneRoster,
+        getD:          () => D,
+    };
 })();

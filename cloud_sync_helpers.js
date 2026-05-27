@@ -70,25 +70,33 @@
             },
             
             // ★ Access restrictions - ensure complete structure  
-             limitUsage: {
-                enabled: f.limitUsage?.enabled === true,
-                divisions: typeof f.limitUsage?.divisions === 'object' ? f.limitUsage.divisions : {},
-                priorityList: Array.isArray(f.limitUsage?.priorityList) ? f.limitUsage.priorityList : [],
-                usePriority: f.limitUsage?.usePriority === true
+             accessRestrictions: {
+                enabled: f.accessRestrictions?.enabled === true,
+                divisions: typeof f.accessRestrictions?.divisions === 'object' ? f.accessRestrictions.divisions : {},
+                priorityList: Array.isArray(f.accessRestrictions?.priorityList) ? f.accessRestrictions.priorityList : [],
+                usePriority: f.accessRestrictions?.usePriority === true
             },
             
-            // ★ Time rules - ensure array with parsed times
+            // ★ Time rules - ensure array with parsed times.
+            // Preserve `divisions` so per-grade scoping survives cloud round-trips
+            // (e.g. "Available 11-12 for grade 1, 12-1 for grade 2").
             timeRules: Array.isArray(f.timeRules) ? f.timeRules.map(r => ({
                 type: r.type || 'Available',
                 start: r.start || '',
                 end: r.end || '',
                 startMin: r.startMin ?? parseTimeToMinutes(r.start),
-                endMin: r.endMin ?? parseTimeToMinutes(r.end)
+                endMin: r.endMin ?? parseTimeToMinutes(r.end),
+                divisions: Array.isArray(r.divisions) ? [...r.divisions] : []
             })) : [],
             
             // ★ Indoor/Outdoor for rainy day
             rainyDayAvailable: f.rainyDayAvailable === true,
             
+            // Preserve per-grade sharing overrides
+            ...(f.gradeShareRules ? { gradeShareRules: f.gradeShareRules } : {}),
+            // Preserve field quality group membership
+            ...(f.fieldGroup != null ? { fieldGroup: f.fieldGroup } : {}),
+            ...(f.qualityRank != null ? { qualityRank: f.qualityRank } : {}),
             // Preserve any additional properties
             ...(f.transition ? { transition: f.transition } : {}),
             ...(f.preferences ? { preferences: f.preferences } : {}),
@@ -202,14 +210,17 @@
     window.removeGlobalSport = function(sportName) {
         const settings = window.loadGlobalSettings?.() || {};
         if (!settings.app1) settings.app1 = {};
-        
+
         let sports = settings.allSports || settings.app1?.allSports || [];
         sports = sports.filter(s => s !== sportName);
-        
+
         settings.app1.allSports = sports;
         window.saveGlobalSettings?.("app1", settings.app1);
         window.saveGlobalSettings?.("allSports", sports);
         console.log("☁️ Removed sport:", sportName);
+        if (typeof window.cleanupDeletedSport === 'function') {
+            window.cleanupDeletedSport(sportName);
+        }
     };
 
     // =========================================================================
@@ -240,156 +251,32 @@
         return settings.pinnedTileDefaults || {};
     };
 
-    // =========================================================================
-    // HELPER: SYNC SKELETONS
-    // =========================================================================
-
-    window.saveGlobalSkeletons = function(skeletons) {
-        const settings = window.loadGlobalSettings?.() || {};
-        if (!settings.app1) settings.app1 = {};
-        settings.app1.savedSkeletons = skeletons;
-        
-        window.saveGlobalSettings?.("app1", settings.app1);
-        window.saveGlobalSettings?.("savedSkeletons", skeletons);
-        console.log("☁️ Skeletons queued for sync");
-    };
-
-    window.getGlobalSkeletons = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.savedSkeletons || settings.app1?.savedSkeletons || {};
-    };
-
-    // =========================================================================
-    // HELPER: SYNC LEAGUES
-    // =========================================================================
-
-    window.saveGlobalLeagues = function(leagues) {
-        window.saveGlobalSettings?.("leaguesByName", leagues);
-        console.log("☁️ Leagues queued for sync");
-    };
-
-    window.getGlobalLeagues = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.leaguesByName || {};
-    };
-
-    // =========================================================================
-    // HELPER: SYNC RAINY DAY SPECIALS
-    // =========================================================================
-
-    window.saveRainyDaySpecials = function(specials) {
-        window.saveGlobalSettings?.("rainyDaySpecials", specials);
-        console.log("☁️ Rainy day specials queued for sync");
-    };
-
-    window.getRainyDaySpecials = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.rainyDaySpecials || [];
-    };
-
-    // =========================================================================
-    // HELPER: SYNC SMART TILE HISTORY
-    // =========================================================================
-
-    window.saveSmartTileHistory = function(history) {
-        window.saveGlobalSettings?.("smartTileHistory", history);
-        console.log("☁️ Smart tile history queued for sync");
-    };
-
-    window.getSmartTileHistory = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.smartTileHistory || { byBunk: {} };
-    };
-
-    // =========================================================================
-    // HELPER: SYNC LEAGUE HISTORY
-    // =========================================================================
-
-    window.saveLeagueHistory = function(history) {
-        window.saveGlobalSettings?.("leagueHistory", history);
-        console.log("☁️ League history queued for sync");
-    };
-
-    window.getLeagueHistory = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.leagueHistory || {};
-    };
-
-    // =========================================================================
-    // HELPER: SYNC SPECIALTY LEAGUE HISTORY
-    // =========================================================================
-
-    window.saveSpecialtyLeagueHistory = function(history) {
-        window.saveGlobalSettings?.("specialtyLeagueHistory", history);
-        console.log("☁️ Specialty league history queued for sync");
-    };
-
-    window.getSpecialtyLeagueHistory = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        return settings.specialtyLeagueHistory || {};
-    };
-
-    // =========================================================================
-    // HELPER: BULK SYNC ALL DATA
-    // =========================================================================
-
-    /**
-     * Sync all local data to cloud immediately.
-     * Call this after import operations.
-     */
-    window.syncAllDataToCloud = async function() {
-        console.log("☁️ Syncing all data to cloud...");
-        
-        const settings = window.loadGlobalSettings?.() || {};
-        
-        // Ensure divisions and bunks are at root level
-        if (settings.app1?.divisions && !settings.divisions) {
-            settings.divisions = settings.app1.divisions;
-        }
-        if (settings.app1?.bunks && !settings.bunks) {
-            settings.bunks = settings.app1.bunks;
-        }
-        
-        // Update via setCloudState if available
-        if (typeof window.setCloudState === 'function') {
-            await window.setCloudState(settings, true);
-        } else if (typeof window.forceSyncToCloud === 'function') {
-            await window.forceSyncToCloud();
-        }
-        
-        console.log("☁️ All data synced to cloud");
-    };
 
     // =========================================================================
     // AUTO-HOOK: WATCH FOR DATA CHANGES
     // =========================================================================
-
-    // Debounced auto-sync when many changes happen quickly
-    let _autoSyncTimeout = null;
-    
-    function scheduleAutoSync() {
-        if (_autoSyncTimeout) {
-            clearTimeout(_autoSyncTimeout);
-        }
-        _autoSyncTimeout = setTimeout(() => {
-            if (typeof window.forceSyncToCloud === 'function') {
-                window.forceSyncToCloud();
-            }
-        }, 1000);
-    }
 
     // Hook into common save patterns
     const originalSaveGlobalSettings = window.saveGlobalSettings;
     if (originalSaveGlobalSettings && !originalSaveGlobalSettings._cloudHelpersHooked) {
         window.saveGlobalSettings = function(key, data) {
             const result = originalSaveGlobalSettings(key, data);
-            
+
             // Log what's being saved
             console.log(`☁️ [${key}] queued for cloud sync`);
-            
+
             return result;
         };
         window.saveGlobalSettings._cloudHelpersHooked = true;
+        // Propagate the authoritative-handler flag from the inner handler.
+        // Callers (e.g. campistry_me.save()) branch on this flag to choose the
+        // fine-grained saveGlobalSettings path over a forceSyncToCloud fallback.
+        // Without it, Me falls through to forceSyncToCloud, which reads stale
+        // _localCache and pushes stale state to cloud with a fresh timestamp —
+        // causing local data (e.g. new campers) to get clobbered on next hydrate.
+        if (originalSaveGlobalSettings._isAuthoritativeHandler) {
+            window.saveGlobalSettings._isAuthoritativeHandler = true;
+        }
     }
 
     // =========================================================================
@@ -398,63 +285,4 @@
     window.normalizeFieldForSave = normalizeField;
 
     console.log('☁️ Cloud Sync Helpers v1.1 ready');
-// =========================================================================
-    // HELPER: SYNC PRINT TEMPLATES
-    // =========================================================================
-
-    /**
-     * Save print templates to both local and cloud
-     */
-    window.saveGlobalPrintTemplates = function(templates) {
-        if (!Array.isArray(templates)) {
-            console.warn("☁️ saveGlobalPrintTemplates: Invalid input, expected array");
-            return;
-        }
-        
-        // Validate templates before saving (strip oversized logos to keep payload manageable)
-        const validatedTemplates = templates.map(tpl => {
-            const copy = { ...tpl };
-            // If logo is too large (>500KB base64), warn but still save
-            if (copy.campLogo && copy.campLogo.length > 500000) {
-                console.warn("☁️ Print template logo is large:", (copy.campLogo.length / 1024).toFixed(0) + "KB");
-            }
-            return copy;
-        });
-        
-        const settings = window.loadGlobalSettings?.() || {};
-        settings.printTemplates = validatedTemplates;
-        
-        // Save via saveGlobalSettings (handles batching + cloud sync)
-        window.saveGlobalSettings?.("printTemplates", validatedTemplates);
-        
-        // Also persist to localStorage for offline access
-        try {
-            localStorage.setItem('campistry_print_templates', JSON.stringify(validatedTemplates));
-        } catch (e) {
-            console.warn("☁️ localStorage write failed for print templates:", e);
-        }
-        
-        console.log("☁️ Print templates queued for sync:", validatedTemplates.length);
-    };
-
-    /**
-     * Get print templates
-     */
-    window.getGlobalPrintTemplates = function() {
-        const settings = window.loadGlobalSettings?.() || {};
-        const cloudTemplates = settings.printTemplates || [];
-        
-        // If cloud has templates, use those (they're authoritative)
-        if (cloudTemplates.length > 0) return cloudTemplates;
-        
-        // Fallback to localStorage
-        try {
-            const raw = localStorage.getItem('campistry_print_templates');
-            if (raw) return JSON.parse(raw);
-        } catch (e) {
-            console.warn("☁️ Failed to read local print templates:", e);
-        }
-        
-        return [];
-    };
 })();

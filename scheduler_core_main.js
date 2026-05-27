@@ -229,7 +229,8 @@
     function getLocationForActivity(activityName) {
         if (!activityName) return null;
         const globalSettings = window.loadGlobalSettings?.() || {};
-        const specials = globalSettings.app1?.specialActivities || [];
+        // Prefer live in-memory cache from special_activities.js over stale storage snapshot
+        const specials = window.getGlobalSpecialActivities?.() || globalSettings.app1?.specialActivities || [];
 
         const special = specials.find(s =>
             s.name.toLowerCase() === activityName.toLowerCase()
@@ -240,15 +241,15 @@
 
     function getLocationForPinnedEvent(skeletonEvent) {
         // 1. Direct location on skeleton item
-        if (skeletonEvent.location) {
+        if (skeletonEvent.location && typeof skeletonEvent.location === 'string') {
             return skeletonEvent.location;
         }
         // 2. Special activity with assigned location
         const specialLoc = getLocationForActivity(skeletonEvent.event);
-        if (specialLoc) return specialLoc;
+        if (specialLoc && typeof specialLoc === 'string') return specialLoc;
         // 3. ★ v17.11: Pinned tile default location (Snacks→Lunchroom, Lunch→Lunchroom, etc.)
         const pinnedDefault = window.getPinnedTileDefaultLocation?.(skeletonEvent.event);
-        if (pinnedDefault) return pinnedDefault;
+        if (pinnedDefault && typeof pinnedDefault === 'string') return pinnedDefault;
         return null;
     }
 
@@ -486,7 +487,7 @@
                     continuation: i > 0,
                     _fixed: pick._fixed || false,
                     _h2h: pick._h2h || false,
-                    _activity: pick._activity || fName,
+                    _activity: pick._activity || pick.activityName || pick.sport || fName,
                     _allMatchups: pick._allMatchups || null,
                     _gameLabel: pick._gameLabel || null,
                     _zone: zone,
@@ -1154,34 +1155,61 @@
     window.runSkeletonOptimizer = async function(manualSkeleton, externalOverrides, allowedDivisions = null, existingScheduleSnapshot = null, existingUnifiedTimes = null) {
         console.log("\n" + "=".repeat(70));
        console.log("★★★ OPTIMIZER STARTED (v17.12 - SMART TILE CAMP-WIDE BUDGET) ★★★")
+
+        // ★★★ STARTER PLAN: Check schedule day limit BEFORE generating ★★★
+        try {
+            var _client = window.CampistryDB?.getClient?.() || window.supabase;
+            var _campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('campistry_camp_id');
+            var _dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+            if (_client && _campId) {
+                var _limitRes = await _client.rpc('check_schedule_limit', { p_camp_id: _campId, p_date_key: _dateKey });
+                if (!_limitRes.error && _limitRes.data && _limitRes.data.allowed === false) {
+                    console.warn('[OPTIMIZER] Blocked by starter plan limit:', _limitRes.data);
+                    alert('Schedule day limit reached (' + _limitRes.data.used + '/' + _limitRes.data.max + ' days used). Upgrade for unlimited scheduling.');
+                    window.dispatchEvent(new CustomEvent('campistry-plan-limit', {
+                        detail: { type: 'schedule', used: _limitRes.data.used, max: _limitRes.data.max }
+                    }));
+                    return false;
+                }
+            }
+        } catch (_e) {
+            console.warn('[OPTIMIZER] Schedule limit check failed, proceeding:', _e);
+        }
+
         // ★★★ SCHEDULER RESTRICTION ★★★
         if (window.AccessControl?.filterDivisionsForGeneration) {
-            allowedDivisions = window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
+            allowedDivisions = await window.AccessControl.filterDivisionsForGeneration(allowedDivisions);
             if (allowedDivisions.length === 0) {
                 alert("No divisions assigned. Contact camp owner.");
                 return false;
             }
-            console.log(`[RBAC] ★ SCHEDULER RESTRICTION APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
+            console.log(`[RBAC] ★ DIVISION FILTER APPLIED: Generating for [${allowedDivisions.join(', ')}] only`);
         }
 // ★★★ v17.12: Set flag to prevent remote merges during generation ★★★
         window._generationInProgress = true;
 
        // ★★★ STEP 0: FULL DAILY SCHEDULE WIPE (RBAC-AWARE) ★★★
         // Before ANY generation, wipe today's schedule for the divisions being generated.
-        // Schedulers only wipe THEIR bunks. Owners/admins wipe everything.
+        // ★★★ v3.13: Partial wipe when generating a SUBSET of divisions (any role) ★★★
         // This prevents stale data (old leagues, ghost assignments) from bleeding in.
-        {
+        {// ★ AUTO BUILD: Skip wipe — AutoBuildPrep already did a full wipe
+            if (window._skipGenerationWipe) {
+                console.log('[STEP 0] ⏭️ Skipping wipe — AutoBuildPrep already wiped');
+            } else {
             const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            const role = window.AccessControl?.getCurrentRole?.() || 
+            const role = window.AccessControl?.getCurrentRole?.() ||
                         window.CampistryDB?.getRole?.() || 'owner';
-            const isScheduler = role === 'scheduler';
-            
-            console.log(`[STEP 0] ★ DAILY SCHEDULE WIPE for ${dateKey} (role: ${role})`);
+            const allDivisionKeys = Object.keys(window.divisions || {});
+            const isPartialGeneration = allowedDivisions &&
+                allowedDivisions.length > 0 &&
+                allowedDivisions.length < allDivisionKeys.length;
 
-            if (isScheduler) {
-                // ═══ SCHEDULER: Only wipe MY divisions' bunks ═══
-                const myDivisions = allowedDivisions || 
-                                    window.AccessControl?.getEditableDivisions?.() || [];
+            console.log(`[STEP 0] ★ DAILY SCHEDULE WIPE for ${dateKey} (role: ${role}, partial: ${isPartialGeneration})`);
+
+            if (isPartialGeneration) {
+                // ═══ PARTIAL: Only wipe selected divisions' bunks ═══
+                const myDivisions = allowedDivisions ||
+                                    window.AccessControl?.getGeneratableDivisions?.() || [];
                 const divisions = window.divisions || {};
                 const myBunks = new Set();
                 
@@ -1189,7 +1217,7 @@
                     (divisions[divName]?.bunks || []).forEach(b => myBunks.add(b));
                 });
                 
-                console.log(`[STEP 0] Scheduler mode: wiping ${myBunks.size} bunks from [${myDivisions.join(', ')}]`);
+                console.log(`[STEP 0] Partial mode (${role}): wiping ${myBunks.size} bunks from [${myDivisions.join(', ')}]`);
                 
                 // 0a. Clear only MY bunks from window globals
                 myBunks.forEach(bunk => {
@@ -1241,8 +1269,8 @@
                 }
                 
             } else {
-                // ═══ OWNER/ADMIN: Wipe everything ═══
-                console.log('[STEP 0] Owner/Admin mode: full wipe');
+                // ═══ FULL GENERATION: Wipe everything ═══
+                console.log('[STEP 0] Full generation mode: wiping all divisions');
                 
                 // 0a. Clear all window globals
                 window.scheduleAssignments = {};
@@ -1291,6 +1319,121 @@
             window._preGenClearActive = true;
 
             console.log('[STEP 0] ★ WIPE COMPLETE — generating from clean slate');
+                }
+        }
+
+        // ★★★ 0f. HYDRATE ROTATION HISTORY FROM CLOUD ★★★
+        // The rotation engine reads past schedules from campDailyData_v1 in localStorage.
+        // If the user opened a fresh browser or cleared cache, past dates are missing.
+        // Load the last 14 days from the cloud so rotation scoring has history.
+        try {
+            // Pre-trim localStorage to prevent quota issues
+            try {
+                const rawDaily = localStorage.getItem('campDailyData_v1');
+                if (rawDaily && rawDaily.length > 500000) {
+                    const trimData = JSON.parse(rawDaily);
+                    const trimKeys = Object.keys(trimData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+                    if (trimKeys.length > 14) {
+                        while (trimKeys.length > 14) delete trimData[trimKeys.shift()];
+                        localStorage.setItem('campDailyData_v1', JSON.stringify(trimData));
+                        window.invalidateDailyDataCache?.();
+                        console.log(`[STEP 0f] Pre-trimmed localStorage to ${Object.keys(trimData).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).length} dates`);
+                    }
+                }
+            } catch (trimErr) { /* ignore trim failures */ }
+
+            if (window.ScheduleDB?.loadDateRange && navigator.onLine) {
+                const today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                const d = new Date(today + 'T12:00:00');
+                d.setDate(d.getDate() - 14);
+                const startDate = d.toISOString().split('T')[0];
+                console.log(`[STEP 0f] Hydrating rotation history: ${startDate} → ${today}`);
+                const records = await window.ScheduleDB.loadDateRange(startDate, today);
+                if (records && records.length > 0) {
+                    const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
+                    const LOCAL_ONLY = ['bunkActivityOverrides','overrides','autoSkeleton','_autoGenerated','_autoBuildTimelines','_autoGenMeta','manualSkeleton','skeleton','dailyDisabledSportsByField','dailyFieldAvailability','disabledSpecialtyLeagues','leagueRoundState','leagueDayCounters'];
+                    let hydrated = 0;
+                    const byDate = {};
+                    for (const rec of records) {
+                        const dk = rec.date_key;
+                        if (!dk || dk === today) continue;
+                        if (!byDate[dk]) byDate[dk] = [];
+                        byDate[dk].push(rec);
+                    }
+                    for (const [dk, recs] of Object.entries(byDate)) {
+                        const existing = allDaily[dk] || {};
+                        if (existing.scheduleAssignments && Object.keys(existing.scheduleAssignments).length > 0) continue;
+                        const merged = {};
+                        for (const rec of recs) {
+                            const sd = rec.schedule_data || {};
+                            if (sd.scheduleAssignments) Object.assign(merged, sd.scheduleAssignments);
+                        }
+                        if (Object.keys(merged).length > 0) {
+                            const entry = { ...existing, scheduleAssignments: merged };
+                            LOCAL_ONLY.forEach(f => { if (existing[f] !== undefined) entry[f] = existing[f]; });
+                            allDaily[dk] = entry;
+                            hydrated++;
+                        }
+                    }
+                    if (hydrated > 0) {
+                        // Trim to last 14 days to reduce localStorage size
+                        const allDateKeys = Object.keys(allDaily).filter(k => /^\d{4}-\d{2}-\d{2}$/.test(k)).sort();
+                        while (allDateKeys.length > 14) {
+                            delete allDaily[allDateKeys.shift()];
+                        }
+                        // ★ Slim past-date entries: rotation history only reads
+                        // _activity / sport / field per slot, so we strip
+                        // everything else (zones, time ranges, league pairings,
+                        // hybrid metadata, divisionTimes, etc) before persisting.
+                        // This shrinks 14 days of allDaily by ~80–90%.
+                        const _slimPastDate = (d) => {
+                            if (!d || typeof d !== 'object') return d;
+                            const slimSched = {};
+                            const sa = d.scheduleAssignments || {};
+                            for (const bunk of Object.keys(sa)) {
+                                const slots = sa[bunk];
+                                if (!Array.isArray(slots)) continue;
+                                slimSched[bunk] = slots.map(e => {
+                                    if (!e) return null;
+                                    const out = {};
+                                    if (e._activity) out._activity = e._activity;
+                                    else if (e.sport) out.sport = e.sport;
+                                    else if (e.field) out.field = e.field;
+                                    if (e.continuation) out.continuation = true;
+                                    if (e._isTransition) out._isTransition = true;
+                                    return out;
+                                });
+                            }
+                            return { scheduleAssignments: slimSched };
+                        };
+                        for (const dk of Object.keys(allDaily)) {
+                            if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
+                            if (dk === today) continue; // never slim today
+                            allDaily[dk] = _slimPastDate(allDaily[dk]);
+                        }
+                        // ★ Seed secondary-save hashes so the next saveGlobalSettings
+                        // call doesn't fan out cloud saves for these unchanged dates.
+                        try { window._seedSecondarySaveHashes?.(allDaily); } catch (_) {}
+                        try {
+                            localStorage.setItem('campDailyData_v1', JSON.stringify(allDaily));
+                            window.invalidateDailyDataCache?.();
+                            console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) from cloud (${records.length} records, slimmed)`);
+                        } catch (quotaErr) {
+                            console.warn('[STEP 0f] localStorage quota exceeded, using in-memory fallback');
+                            if (window.setDailyDataMemoryOverride) {
+                                window.setDailyDataMemoryOverride(allDaily);
+                                console.log(`[STEP 0f] ✅ Hydrated ${hydrated} past date(s) into memory fallback`);
+                            }
+                        }
+                    } else {
+                        console.log(`[STEP 0f] All past dates already in localStorage`);
+                    }
+                } else {
+                    console.log(`[STEP 0f] No cloud records for past dates`);
+                }
+            }
+        } catch (e) {
+            console.warn('[STEP 0f] History hydration failed:', e);
         }
 
         // ★★★ 1. AUTO-DETECT ALLOWED DIVISIONS ★★★
@@ -1316,8 +1459,7 @@
                 }
             }
         }
-// ★★★ v17.12: Clear generation flag ★★★
-        window._generationInProgress = false;
+// ★★★ v17.12: generation flag stays true — cleared at end of runSkeletonOptimizer ★★★
         // ★★★ 2. FORCE CLOUD LOAD + AUTO-SNAPSHOT FOR PRESERVATION ★★★
         if (allowedDivisions && (!existingScheduleSnapshot || Object.keys(existingScheduleSnapshot).length === 0)) {
             console.log("[OPTIMIZER] Partial generation detected without snapshot. Loading latest from cloud first...");
@@ -1446,9 +1588,62 @@
                         window.activityProperties[fieldName] = {};
                     }
                     window.activityProperties[fieldName].timeRules = rules;
-                    console.log(`   -> Applied ${rules.length} rule(s) to ${fieldName}`);
+                    rules.forEach(r => console.log(`   -> ${fieldName}: ${r.type} ${r.start}-${r.end} (${r.startMin ?? '?'}-${r.endMin ?? '?'} min)`));
                 }
             });
+        } else {
+            console.log("[OPTIMIZER] No Daily Field Availability Rules to merge.");
+        }
+
+        // ★★★ ROTATION HISTORY: Rebuild local + load cloud (mirrors auto mode) ★★★
+        if (window.RotationEngine && window.RotationEngine.rebuildAllHistory) {
+            window.RotationEngine.rebuildAllHistory();
+            console.log('[MANUAL] ★ RotationEngine.rebuildAllHistory() complete');
+        }
+
+        if (window.RotationCloud?.load) {
+            try {
+                const rotData = await window.RotationCloud.load(true); // force refresh
+                if (rotData?.counts && Object.keys(rotData.counts).length > 0) {
+                    // 1. Merge cloud counts into config.historicalCounts.
+                    //    Subtract today's row so a regenerate isn't biased against
+                    //    the activities the previous draft happened to use.
+                    //    (Today's contribution is re-added after generation
+                    //    completes via the post-gen rebuild.)
+                    if (!config.historicalCounts) config.historicalCounts = {};
+                    const _today = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    const _todayCloud = (rotData.countsByDate && rotData.countsByDate[_today]) || {};
+                    for (const [bunk, activities] of Object.entries(rotData.counts)) {
+                        if (!config.historicalCounts[bunk]) config.historicalCounts[bunk] = {};
+                        const _todayBunk = _todayCloud[bunk] || {};
+                        for (const [act, count] of Object.entries(activities)) {
+                            const _historical = count - (_todayBunk[act] || 0);
+                            if (_historical > 0) config.historicalCounts[bunk][act] = _historical;
+                            else delete config.historicalCounts[bunk][act];
+                        }
+                    }
+
+                    // 2. Also persist to globalSettings so it survives across sessions
+                    const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+                    if (gs) {
+                        gs.historicalCounts = config.historicalCounts;
+                        if (typeof window.saveGlobalSettings === 'function') {
+                            window.saveGlobalSettings('historicalCounts', gs.historicalCounts);
+                        }
+                    }
+
+                    // 3. Merge cloud lastDone + counts into RotationEngine's
+                    //    history cache so recency scoring works even when
+                    //    localStorage allDailyData is incomplete
+                    if (window.RotationEngine?.mergeCloudData) {
+                        window.RotationEngine.mergeCloudData(rotData);
+                    }
+
+                    console.log('[MANUAL] ☁️ Loaded ' + Object.keys(rotData.counts).length + ' bunk rotation records from cloud');
+                }
+            } catch (e) {
+                console.warn('[MANUAL] RotationCloud load failed: ' + e.message);
+            }
         }
 
         let {
@@ -1471,17 +1666,11 @@
         } = config;
 
         // =========================================================================
-        // NUMERIC BUNK SORTING
+        // BUNK ORDER: respect user-defined order from campStructure.
+        // The previous numeric sort overrode drag-reorder choices made in
+        // Campistry Me — divisions[divName].bunks already arrives in the
+        // correct user-chosen order from app1.js, so leave it alone.
         // =========================================================================
-        Object.keys(divisions).forEach(divName => {
-            if (divisions[divName].bunks) {
-                divisions[divName].bunks.sort((a, b) => {
-                    const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-                    const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-                    return numA - numB || a.localeCompare(b);
-                });
-            }
-        });
 
         window.SchedulerCoreUtils._bunkMetaData = bunkMetaData;
         window.SchedulerCoreUtils._sportMetaData = config.sportMetaData || {};
@@ -1557,6 +1746,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (s.rainyDayAvailable === false || s.availableOnRainyDay === false) return false;
                 }
 
+                // ★ v7.0: Filter out daily-disabled specials
+                if (disabledSpecials && disabledSpecials.length > 0) {
+                    if (disabledSpecials.includes(s.name)) return false;
+                }
+
                 return true;
             });
 
@@ -1578,11 +1772,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
         console.log('[STEP 1] Building division-specific time slots...');
         
-        if (window.DivisionTimesSystem) {
-            window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
-            console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
-        
+       if (window.DivisionTimesSystem) {
+            if (window._autoDivisionTimesBuilt) {
+                console.log('[STEP 1] Skipping rebuild — auto pipeline already built divisionTimes');
+                window._autoDivisionTimesBuilt = false;
+            } else {
+                window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
+                console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+            }
         } else {
+           
             console.warn('[STEP 1] DivisionTimesSystem not loaded, using legacy grid');
             const timePoints = new Set([540, 960]);
             manualSkeleton.forEach(item => {
@@ -1613,10 +1812,17 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             
             // ★★★ KEY FIX: Skip initialization for divisions NOT being generated ★★★
             const isBeingGenerated = !allowedDivisionsSet || allowedDivisionsSet.has(String(divName));
-            
+            // ★ Day 22.5: per-bunk gen scope. When window.__allowedBunkSet is set,
+            //   only the explicitly-selected bunks are regenerated; others preserve.
+            const _allowedBunkSet = window.__allowedBunkSet || null;
+
             (divisions[divName].bunks || []).forEach(bunk => {
-                if (isBeingGenerated) {
-                    // This division IS being generated — create fresh empty array
+                const bunkInScope = !_allowedBunkSet || _allowedBunkSet.has(String(bunk));
+                if (isBeingGenerated && bunkInScope) {
+                    // Always create fresh empty arrays. For mid-day rain,
+                    // Step 1.1 re-places morning entries by TIME after
+                    // divisionTimes is rebuilt (index-based copy is wrong
+                    // because slot indices change with the rainy skeleton).
                     window.scheduleAssignments[bunk] = new Array(slotCount).fill(null);
                 } else {
                     // This division is NOT being generated — PRESERVE existing data
@@ -1641,6 +1847,67 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         if (window.DivisionTimesSystem?.buildUnifiedTimesFromDivisionTimes) {
             window.unifiedTimes = window.DivisionTimesSystem.buildUnifiedTimesFromDivisionTimes(window.divisionTimes);
             console.log(`[STEP 1] Rebuilt unifiedTimes: ${window.unifiedTimes.length} slots for legacy compatibility`);
+        }
+
+        // =========================================================================
+        // ★★★ STEP 1.1: RE-PLACE MORNING ENTRIES (MID-DAY RAIN) ★★★
+        // =========================================================================
+        // After Step 1 rebuilds divisionTimes from the rainy skeleton, slot indices
+        // have changed. Re-map morning entries from the pre-rebuild snapshot into
+        // the NEW slot structure using time-based matching.
+        if (window._skipGenerationWipe && window._midDayPreRebuild) {
+            const _mdr = window._midDayPreRebuild;
+            const _oldAssign = _mdr.assignments || {};
+            const _oldDivTimes = _mdr.divisionTimes || {};
+            const _oldUnifiedTimes = _mdr.times || [];
+            const _transMin = _mdr.transitionMinutes || 810;
+            let _placed = 0;
+
+            Object.keys(_oldAssign).forEach(bunk => {
+                const oldSlots = _oldAssign[bunk];
+                if (!Array.isArray(oldSlots)) return;
+
+                const divName = Object.keys(divisions).find(d =>
+                    divisions[d].bunks?.includes(bunk)
+                );
+                const newDivSlots = window.divisionTimes?.[divName] || [];
+                if (!newDivSlots.length) return;
+                if (!window.scheduleAssignments[bunk]) return;
+
+                // Use per-division old times (correct indices), fall back to unified
+                const oldDivSlots = _oldDivTimes[divName] || _oldDivTimes[String(divName)] || _oldUnifiedTimes;
+
+                oldSlots.forEach((entry, oldIdx) => {
+                    if (!entry) return;
+                    if (entry.continuation) return;
+                    const oldSlot = oldDivSlots[oldIdx] || _oldUnifiedTimes[oldIdx];
+                    if (!oldSlot) return;
+
+                    const oStart = oldSlot.startMin !== undefined ? oldSlot.startMin
+                        : oldSlot.start ? new Date(oldSlot.start).getHours() * 60 + new Date(oldSlot.start).getMinutes() : null;
+                    const oEnd = oldSlot.endMin !== undefined ? oldSlot.endMin
+                        : oldSlot.end ? new Date(oldSlot.end).getHours() * 60 + new Date(oldSlot.end).getMinutes() : null;
+                    if (oEnd === null || oEnd > _transMin) return;
+
+                    let bestIdx = -1, bestDiff = Infinity;
+                    for (let i = 0; i < newDivSlots.length; i++) {
+                        const ns = newDivSlots[i];
+                        const diff = Math.abs((ns.startMin || 0) - oStart) + Math.abs((ns.endMin || 0) - oEnd);
+                        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+                    }
+                    if (bestIdx >= 0 && bestDiff <= 15) {
+                        window.scheduleAssignments[bunk][bestIdx] = {
+                            ...entry,
+                            _fixed: true,
+                            _pinned: true,
+                            _preservedMorning: true
+                        };
+                        _placed++;
+                    }
+                });
+            });
+            console.log(`[STEP 1.1] Re-placed ${_placed} morning entries into new rainy slot structure`);
+            delete window._midDayPreRebuild;
         }
 
         // =========================================================================
@@ -1870,8 +2137,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
             const overrideType = override.type;
-            const startMin = Utils.parseTimeToMinutes(override.startTime);
-            const endMin = Utils.parseTimeToMinutes(override.endTime);
+            const startMin = override.startMin ?? Utils.parseTimeToMinutes(override.startTime);
+            const endMin = override.endMin ?? Utils.parseTimeToMinutes(override.endTime);
             const bunk = override.bunk;
             const divName = Object.keys(divisions).find(d => divisions[d].bunks?.includes(bunk));
             const slots = Utils.findSlotsForRange(startMin, endMin, divName);
@@ -1882,7 +2149,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
 
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
-                return; 
+                return;
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
@@ -1902,6 +2169,38 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
                 console.log(`   → Trip pinned for ${bunk}, no field usage registered`);
 
+            } else if (overrideType === 'pinned') {
+                // Resolve location: prefer override's stored location, then pinned defaults, then special lookup
+                const locName = override.location
+                    || window.getPinnedTileDefaultLocation?.(activityName)
+                    || getLocationForActivity(activityName);
+
+                if (locName) {
+                    if (window.GlobalFieldLocks?.isFieldLocked(locName, slots, divName)) {
+                        console.warn(`   → Pinned ${activityName} location "${locName}" is LOCKED for ${divName}, cannot assign to ${bunk}`);
+                        return;
+                    }
+                    if (!canScheduleAtLocation(activityName, locName, slots)) {
+                        console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} at capacity`);
+                        return;
+                    }
+                }
+
+                fillBlock({
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
+                }, {
+                    field: locName || activityName,
+                    sport: null,
+                    _fixed: true,
+                    _activity: activityName,
+                    _bunkOverride: true
+                }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+
+                if (locName) {
+                    registerActivityAtLocation(activityName, locName, slots, divName);
+                }
+                console.log(`   → Pinned ${activityName} assigned to ${bunk}` + (locName ? ` @ ${locName}` : ''));
+
             } else if (overrideType === 'sport') {
                 let fieldName = activityName;
                 const fieldsBySportData = fieldsBySport || {};
@@ -1914,7 +2213,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             continue;
                         }
 
-                        // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
                         const maxCapacity = getFieldCapacityLocal(candidateField, activityProperties);
 
                         let canUse = true;
@@ -1934,11 +2232,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
 
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: fieldName,
                     sport: activityName,
@@ -1948,19 +2242,53 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
                 console.log(`   → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
 
+            } else if (overrideType === 'field') {
+                // User pinned a specific field — use the field name directly
+                const fieldName = activityName;
+                if (window.GlobalFieldLocks?.isFieldLocked(fieldName, slots, divName)) {
+                    console.warn(`   → Field ${fieldName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
+                    return;
+                }
+
+                const maxCapacity = getFieldCapacityLocal(fieldName, activityProperties);
+                let hasRoom = true;
+                for (const slotIdx of slots) {
+                    const usage = fieldUsageBySlot[slotIdx]?.[fieldName];
+                    if (usage && usage.count >= maxCapacity) {
+                        hasRoom = false;
+                        break;
+                    }
+                }
+                if (!hasRoom) {
+                    console.warn(`   → Field ${fieldName} at capacity, cannot assign to ${bunk}`);
+                    return;
+                }
+
+                fillBlock({
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
+                }, {
+                    field: fieldName,
+                    sport: null,
+                    _fixed: true,
+                    _activity: fieldName,
+                    _bunkOverride: true
+                }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                console.log(`   → Field ${fieldName} assigned to ${bunk}`);
+
             } else if (overrideType === 'special') {
+                // Use stored location from override, fall back to global lookup
+                const locName = override.location || getLocationForActivity(activityName);
+
                 if (window.GlobalFieldLocks?.isFieldLocked(activityName, slots, divName)) {
                     console.warn(`   → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);
                     return;
                 }
 
-                const locName = getLocationForActivity(activityName);
                 if (locName && !canScheduleAtLocation(activityName, locName, slots)) {
                     console.warn(`[BunkOverride] ${activityName} blocked for ${bunk} - location ${locName} in use`);
                     return;
                 }
 
-                // ★★★ FIX v17.10: Use centralized capacity calculation ★★★
                 const maxCapacity = getFieldCapacityLocal(activityName, activityProperties);
 
                 let hasRoom = true;
@@ -1978,11 +2306,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
 
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: activityName,
                     sport: null,
@@ -1991,9 +2315,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
 
-               registerActivityAtLocation(activityName, locName, slots, divName);
+                registerActivityAtLocation(activityName, locName, slots, divName);
 
-                // ★ v17.11: Lock field if special has a location assigned
                 if (locName && window.GlobalFieldLocks) {
                     window.GlobalFieldLocks.lockField(locName, slots, {
                         lockedBy: 'special_activity_location',
@@ -2006,13 +2329,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 console.log(`   → Special ${activityName} assigned to ${bunk}`);
 
             } else {
-                console.warn(`   → Unknown override type "${overrideType}", treating as pinned`);
+                console.warn(`   → Unknown override type "${overrideType}", treating as generic pin`);
                 fillBlock({
-                    divName,
-                    bunk,
-                    startTime: startMin,
-                    endTime: endMin,
-                    slots
+                    divName, bunk, startTime: startMin, endTime: endMin, slots
                 }, {
                     field: activityName,
                     sport: null,
@@ -2029,27 +2348,68 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // STEP 2.5: Process Elective Tiles
         // =========================================================================
 
-        console.log("\n[STEP 2.5] Processing elective tiles...");
-        const electiveTiles = manualSkeleton.filter(item => item.type === 'elective');
+        // ★ Cleanup: drop orphan _swimChange tiles whose adjacent Swim has been
+        //   removed (e.g. user merged Swim + Elective into a hybrid, or moved the swim).
+        //   A _swimChange tile is orphan if no swim/swim_elective in the same division
+        //   touches it (pre = ends at swim's start, post = starts at swim's end).
+        const _origLen = manualSkeleton.length;
+        manualSkeleton = manualSkeleton.filter(item => {
+            if (!item || !item._swimChange) return true;
+            const itemStart = Utils.parseTimeToMinutes(item.startTime);
+            const itemEnd = Utils.parseTimeToMinutes(item.endTime);
+            if (itemStart === null || itemEnd === null) return true;
+            const hasMate = manualSkeleton.some(other => {
+                if (!other || other === item) return false;
+                if (other.division !== item.division) return false;
+                const otherIsSwim = (other.type === 'pinned' && /^swim$/i.test(other.event || '')) ||
+                                    other.type === 'swim_elective';
+                if (!otherIsSwim) return false;
+                const otherStart = Utils.parseTimeToMinutes(other.startTime);
+                const otherEnd = Utils.parseTimeToMinutes(other.endTime);
+                if (otherStart === null || otherEnd === null) return false;
+                if (item._swimChange === 'pre' && Math.abs(itemEnd - otherStart) <= 30) return true;
+                if (item._swimChange === 'post' && Math.abs(itemStart - otherEnd) <= 30) return true;
+                return false;
+            });
+            if (!hasMate) {
+                console.log(`[CLEANUP] Removing orphan _swimChange tile: ${item.event} ${item.startTime}-${item.endTime} (${item.division})`);
+                return false;
+            }
+            return true;
+        });
+        if (manualSkeleton.length !== _origLen) {
+            console.log(`[CLEANUP] Removed ${_origLen - manualSkeleton.length} orphan Change tile(s)`);
+        }
+
+        console.log("\n[STEP 2.5] Processing elective tiles (incl. swim+elective hybrids)...");
+        // ★ Hybrid 'swim_elective' tiles are processed alongside electives:
+        //   they reserve the pool AND the elective activities.
+        const electiveTiles = manualSkeleton.filter(item =>
+            item.type === 'elective' || item.type === 'swim_elective'
+        );
 
         electiveTiles.forEach(elective => {
             const electiveDivision = elective.division;
-            
+
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(electiveDivision))) {
                 return;
             }
-            
-            const activities = elective.electiveActivities || [];
+
+            // For hybrid tiles, fold the swim location into the activity list so
+            // it gets locked too (acts like swim).
+            const baseActivities = elective.electiveActivities || [];
+            const hybridSwimLoc = (elective.type === 'swim_elective' && elective.swimLocation) ? [elective.swimLocation] : [];
+            const activities = Array.from(new Set([...baseActivities, ...hybridSwimLoc]));
             const startMin = Utils.parseTimeToMinutes(elective.startTime);
             const endMin = Utils.parseTimeToMinutes(elective.endTime);
             const slots = Utils.findSlotsForRange(startMin, endMin, electiveDivision);
 
             if (activities.length === 0 || slots.length === 0) {
-                console.warn(`[Elective] Skipping elective for ${electiveDivision} - no activities or slots`);
+                console.warn(`[Elective] Skipping ${elective.type} for ${electiveDivision} - no activities or slots`);
                 return;
             }
 
-            console.log(`[Elective] ${electiveDivision}: Reserving ${activities.join(', ')} @ ${elective.startTime}-${elective.endTime}`);
+            console.log(`[${elective.type === 'swim_elective' ? 'Swim+Elective' : 'Elective'}] ${electiveDivision}: Reserving ${activities.join(', ')} @ ${elective.startTime}-${elective.endTime}`);
 
             activities.forEach(activityName => {
                 let resolvedName = activityName;
@@ -2124,20 +2484,40 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             const eMin = Utils.parseTimeToMinutes(item.endTime);
 
             // ★★★ v17.5 FIX: Process PINNED events FIRST (before overlap check) ★★★
-            const isPinnedType = item.type === 'pinned' || 
+            // ★ Hybrid swim_elective is treated like a pinned fill (every bunk gets
+            //   the same "Swim + Elective" entry so per-bunk views show the option).
+            const isHybridSE = item.type === 'swim_elective';
+            const isPinnedType = isHybridSE ||
+                                 item.type === 'pinned' ||
                                  item.pinned === true ||
                                  ['lunch', 'snacks', 'dismissal', 'regroup', 'swim'].some(
                                      pt => (item.type || '').toLowerCase() === pt ||
                                            (item.event || '').toLowerCase().includes(pt)
                                  );
-            
+
             if (isPinnedType && item.type !== 'split' && item.type !== 'smart') {
                 // ★★★ v17.9 FIX: Use exact slot matching for pinned events too ★★★
                 const exactSlot = findExactSlotForTimeRange(divName, sMin, eMin);
                 const slots = exactSlot !== -1 ? [exactSlot] : Utils.findSlotsForRange(sMin, eMin, divName);
                 if (slots.length > 0) {
                     const eventName = item.event || item.type || 'Pinned Event';
-                    
+
+                    // ★ Hybrid extras stamped onto each bunk's entry so renderers can
+                    //   show the combined "Pool + Activities" label and Change subdivision.
+                    //   _splitPreChange/_splitPostChange use the same metadata as split-swim
+                    //   so the existing print-center / unified renderers already know how
+                    //   to draw Change → Hybrid → Change strips.
+                    const hybridExtras = isHybridSE ? {
+                        _swimElective: true,
+                        _swimLocation: item.swimLocation,
+                        _electiveActivities: item.electiveActivities || [],
+                        _reservedFields: item.reservedFields || [],
+                        _preChangeMin: item._preChangeMin,
+                        _postChangeMin: item._postChangeMin,
+                        _splitPreChange: parseInt(item._preChangeMin) || 0,
+                        _splitPostChange: parseInt(item._postChangeMin) || 0
+                    } : null;
+
                     bunkList.forEach(bunk => {
                         const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                         if (existing && existing._bunkOverride) return;
@@ -2155,7 +2535,28 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                             _pinned: true,
                             _activity: eventName
                         }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
-                        
+
+                        // Stamp hybrid metadata onto every slot of this bunk that
+                        // got a 'Swim + Elective' fill. fillBlock can write to a
+                        // different slot index than slots[0] (it derives mainSlots
+                        // from findSlotsForRange + transition rules), so scan the
+                        // bunk's full slot array and stamp anywhere matching the
+                        // event name and time range.
+                        if (hybridExtras) {
+                            const ba = window.scheduleAssignments?.[bunk];
+                            if (Array.isArray(ba)) {
+                                for (let _si = 0; _si < ba.length; _si++) {
+                                    const a = ba[_si];
+                                    if (!a) continue;
+                                    const matchesEvent = (a.field === eventName) || (a._activity === eventName);
+                                    const matchesTime = (a._startMin === sMin) || (a._startMin == null);
+                                    if (matchesEvent && matchesTime) {
+                                        Object.assign(a, hybridExtras);
+                                    }
+                                }
+                            }
+                        }
+
                         pinnedEventCount++;
                     });
                     
@@ -2163,7 +2564,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
                     // ★ v17.11: Lock physical location if pinned event uses one
                     const pinnedLocName = getLocationForPinnedEvent(item);
-                    if (pinnedLocName && window.GlobalFieldLocks) {
+                    if (pinnedLocName && typeof pinnedLocName === 'string' && window.GlobalFieldLocks) {
                         window.GlobalFieldLocks.lockField(pinnedLocName, slots, {
                             lockedBy: 'pinned_event_location',
                             division: divName,
@@ -2197,21 +2598,19 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 console.log(`[SPLIT] Processing split tile for ${divName}: ${item.event}`);
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
-                
+
                 const sortedBunks = [...bunkList].sort((a, b) => {
                     const numA = parseInt(a.match(/\d+/)?.[0] || 0);
                     const numB = parseInt(b.match(/\d+/)?.[0] || 0);
                     return numA - numB || a.localeCompare(b);
                 });
-                
-                const midMin = Math.floor(sMin + (eMin - sMin) / 2);
-                
+
                 const half = Math.ceil(sortedBunks.length / 2);
                 const groupA = sortedBunks.slice(0, half);
                 const groupB = sortedBunks.slice(half);
 
                 let act1Name, act2Name;
-                
+
                 if (item.subEvents && item.subEvents.length >= 2) {
                     const sub0 = item.subEvents[0];
                     const sub1 = item.subEvents[1];
@@ -2230,18 +2629,41 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     act2Name = resolveSwimPoolName(act2Name, activityProperties);
                 }
 
+                // ★ Swim-in-split: detect if swim is one of the activities
+                const splitSwimIs1 = isSwimOrPool(act1Name);
+                const splitSwimIs2 = isSwimOrPool(act2Name);
+                const splitHasSwim = splitSwimIs1 || splitSwimIs2;
+                const splitPreChange = splitHasSwim ? (parseInt(item._preChangeMin) || 0) : 0;
+                const splitPostChange = splitHasSwim ? (parseInt(item._postChangeMin) || 0) : 0;
+                const splitChangeMin = splitPreChange + splitPostChange; // total change per half
+
+                // Split block in half. Within each group's swim half, change is carved:
+                // Swim half = [PreChange][Swim][PostChange] — sports half stays as one continuous tile.
+                // Group A (swim first): PreChange→Swim→PostChange | Sports
+                // Group B (swim second): Sports | PreChange→Swim→PostChange
+                const midMin = Math.floor(sMin + (eMin - sMin) / 2);
+
+                // Determine which activity is swim and which is the other
+                const swimActName = splitSwimIs1 ? act1Name : act2Name;
+                const otherActName = splitSwimIs1 ? act2Name : act1Name;
+                // swimFirstGroup: the group that does swim in the first half (Group A does act1 first)
+                const swimFirstGroup = splitSwimIs1 ? groupA : groupB;
+                const swimSecondGroup = splitSwimIs1 ? groupB : groupA;
+
                 console.log(`[SPLIT] Main 1 (act1Name): "${act1Name}"`);
                 console.log(`[SPLIT] Main 2 (act2Name): "${act2Name}"`);
-                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (midpoint: ${midMin})`);
+                console.log(`[SPLIT] Time block: ${sMin} to ${eMin} (mid: ${midMin})${splitChangeMin ? ' change: ' + splitPreChange + 'pre/' + splitPostChange + 'post' : ''}`);
                 console.log(`[SPLIT] Group 1 (${groupA.length} bunks): ${groupA.join(', ')}`);
                 console.log(`[SPLIT] Group 2 (${groupB.length} bunks): ${groupB.join(', ')}`);
                 console.log(`[SPLIT] ---------------------------------------------------`);
-                console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}):`);
-                console.log(`[SPLIT]    Group 1 → ${act1Name} (main 1)`);
-                console.log(`[SPLIT]    Group 2 → ${act2Name} (main 2)`);
-                console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}):`);
-                console.log(`[SPLIT]    Group 1 → ${act2Name} (main 2) ← SWITCHED`);
-                console.log(`[SPLIT]    Group 2 → ${act1Name} (main 1) ← SWITCHED`);
+                if (splitChangeMin > 0) {
+                    const swimTime = Math.floor((eMin - sMin) / 2) - splitPreChange - splitPostChange;
+                    console.log(`[SPLIT] Swim-first group: Change(${splitPreChange}m) → Swim(${swimTime}m) → Change(${splitPostChange}m) | ${otherActName}`);
+                    console.log(`[SPLIT] Swim-second group: ${otherActName} | Change(${splitPreChange}m) → Swim(${swimTime}m) → Change(${splitPostChange}m)`);
+                } else {
+                    console.log(`[SPLIT] FIRST HALF (${sMin}-${midMin}): Group1→${act1Name}, Group2→${act2Name}`);
+                    console.log(`[SPLIT] SECOND HALF (${midMin}-${eMin}): Group1→${act2Name}, Group2→${act1Name}`);
+                }
                 console.log(`[SPLIT] ---------------------------------------------------`);
 
                 const routeSplitActivity = (bunks, actName, start, end, groupLabel, actLabel) => {
@@ -2249,12 +2671,12 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const exactSlot = findExactSlotForTimeRange(divName, start, end);
                     const fallbackSlots = Utils.findSlotsForRange(start, end, divName);
                     const targetSlots = exactSlot !== -1 ? [exactSlot] : fallbackSlots;
-                    
+
                     if (targetSlots.length === 0) {
                         console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end} in ${divName}`);
                         return;
                     }
-                    
+
                     console.log(`[SPLIT] Using slot ${targetSlots[0]} for time range ${start}-${end}`);
                     const normName = normalizeGA(actName) || actName;
                     const isGen = isGeneratedType(normName);
@@ -2283,7 +2705,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 endTime: end,
                                 slots: targetSlots,
                                 fromSplitTile: true,
-                                _fromSplitTile: true,  // ★★★ ADD: Redundant flag for fillBlock compatibility ★★★
+                                _fromSplitTile: true,
                                 _splitTimeStart: start,
                                 _splitTimeEnd: end,
                                 _splitHalf: start < midMin ? 1 : 2
@@ -2297,7 +2719,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 startTime: start,
                                 endTime: end,
                                 slots: targetSlots,
-                                fromSplitTile: true  // ★★★ ADD: Mark block as split tile ★★★
+                                fromSplitTile: true
                             }, {
                                 field: actName,
                                 sport: null,
@@ -2312,17 +2734,50 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                 };
 
-                console.log(`[SPLIT] \n>>> EXECUTING FIRST HALF (${sMin}-${midMin}) <<<`);
-                console.log(`[SPLIT] Routing Group 1 to "${act1Name}" (main 1) for time ${sMin}-${midMin}`);
+                // ───────────────────────────────────────────────────────────
+                // STANDARD SPLIT GENERATION (always used, even with change)
+                // groupA gets act1 in first half, act2 in second half
+                // groupB gets act2 in first half, act1 in second half
+                // ───────────────────────────────────────────────────────────
+                console.log(`[SPLIT] \n>>> FIRST HALF (${sMin}-${midMin}) <<<`);
                 routeSplitActivity(groupA, act1Name, sMin, midMin, "Group 1", "main 1");
-                console.log(`[SPLIT] Routing Group 2 to "${act2Name}" (main 2) for time ${sMin}-${midMin}`);
                 routeSplitActivity(groupB, act2Name, sMin, midMin, "Group 2", "main 2");
-                
-                console.log(`[SPLIT] \n>>> EXECUTING SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
-                console.log(`[SPLIT] Routing Group 1 to "${act2Name}" (main 2 (switched)) for time ${midMin}-${eMin}`);
+
+                console.log(`[SPLIT] \n>>> SECOND HALF (${midMin}-${eMin}) - SWITCH <<<`);
                 routeSplitActivity(groupA, act2Name, midMin, eMin, "Group 1", "main 2");
-                console.log(`[SPLIT] Routing Group 2 to "${act1Name}" (main 1 (switched)) for time ${midMin}-${eMin}`);
                 routeSplitActivity(groupB, act1Name, midMin, eMin, "Group 2", "main 1");
+
+                // ───────────────────────────────────────────────────────────
+                // SWIM-CHANGE METADATA: ADDED AFTER GENERATION (additive only)
+                // Stamp _splitPreChange/_splitPostChange on the swim half of each
+                // bunk so the renderer can show Change → Swim → Change. Sports
+                // halves are left untouched. This does NOT change generation.
+                // ───────────────────────────────────────────────────────────
+                if (splitChangeMin > 0 && splitHasSwim) {
+                    const swimNorm = (swimActName || '').toLowerCase().trim();
+                    const stampSwim = (bunk) => {
+                        const slots = window.divisionTimes?.[divName] || [];
+                        for (let si = 0; si < slots.length; si++) {
+                            const slot = slots[si];
+                            if (!slot || slot.startMin == null || slot.endMin == null) continue;
+                            // Only consider slots inside this split tile's time block
+                            if (slot.startMin < sMin || slot.endMin > eMin) continue;
+                            const a = window.scheduleAssignments?.[bunk]?.[si];
+                            if (!a) continue;
+                            const aNameRaw = (a._activity || a.field || '');
+                            const aNorm = (typeof aNameRaw === 'string' ? aNameRaw : '').toLowerCase().trim();
+                            // Match if assignment is the swim activity (or any swim/pool alias)
+                            const isThisSwim = aNorm === swimNorm || isSwimOrPool(aNameRaw);
+                            if (isThisSwim) {
+                                a._splitPreChange = splitPreChange;
+                                a._splitPostChange = splitPostChange;
+                            }
+                        }
+                    };
+                    groupA.forEach(stampSwim);
+                    groupB.forEach(stampSwim);
+                    console.log(`[SPLIT] Stamped swim-change metadata: ${splitPreChange}m pre / ${splitPostChange}m post on swim assignments`);
+                }
 
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
                 console.log(`[SPLIT] ✅ Completed split tile for ${divName}`);
@@ -2512,6 +2967,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             disabledSpecialtyLeagues,
             masterLeagues,
             disabledLeagues,
+            disabledFields,
             rotationHistory,
             yesterdayHistory,
             divisions,
@@ -2570,9 +3026,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         
         let activeSpecialtyLeagues = [];
         if (Array.isArray(masterSpecialtyLeagues)) {
-            activeSpecialtyLeagues = masterSpecialtyLeagues.filter(l => !disabledSpecialtyLeagues?.includes(l.id));
+            activeSpecialtyLeagues = masterSpecialtyLeagues.filter(l => !disabledSpecialtyLeagues?.includes(l.name) && !disabledSpecialtyLeagues?.includes(l.id));
         } else if (masterSpecialtyLeagues && typeof masterSpecialtyLeagues === 'object') {
-            activeSpecialtyLeagues = Object.values(masterSpecialtyLeagues).filter(l => l && !disabledSpecialtyLeagues?.includes(l.id));
+            activeSpecialtyLeagues = Object.values(masterSpecialtyLeagues).filter(l => l && !disabledSpecialtyLeagues?.includes(l.name) && !disabledSpecialtyLeagues?.includes(l.id));
         }
         
         console.log(`[STEP 5.5] Active leagues: ${activeLeagues.length}, Specialty: ${activeSpecialtyLeagues.length}`);
@@ -2842,6 +3298,59 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.5: Last-ditch Free-slot fill (silent batched version)
+        // The solver's deepFreeResolution + sameDayDuplicateSweep can leave some
+        // blocks as Free even when activities are still available. Use
+        // AutoFillSlot.autoFillSlotSilent — same picking logic as the per-cell
+        // '⚡ Auto Fill' button (rainy-day-aware, rotation-aware, max-usage
+        // aware), but writes to memory only. The optimizer saves once at the
+        // end, so we avoid 75 sequential per-cell saves.
+        // =========================================================================
+        try {
+            if (window.AutoFillSlot && typeof window.AutoFillSlot.autoFillSlotSilent === 'function') {
+                const _allowedBunks = (function() {
+                    if (!allowedDivisions || allowedDivisions.length === 0) return null;
+                    const s = new Set();
+                    allowedDivisions.forEach(d => {
+                        (divisions[d]?.bunks || divisions[String(d)]?.bunks || []).forEach(b => s.add(b));
+                    });
+                    return s;
+                })();
+                const _freeFills = [];
+                Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
+                    if (_allowedBunks && !_allowedBunks.has(bunk)) return;
+                    const arr = window.scheduleAssignments[bunk] || [];
+                    for (let si = 0; si < arr.length; si++) {
+                        const e = arr[si];
+                        if (!e) { _freeFills.push({ bunk, si }); continue; }
+                        if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;
+                        const actLower = String(e._activity || e.field || e.sport || '').toLowerCase().trim();
+                        if (actLower === 'free' || actLower === 'free play' || actLower === 'free (timeout)' || actLower === '') {
+                            _freeFills.push({ bunk, si });
+                        }
+                    }
+                });
+                if (_freeFills.length) {
+                    console.log(`[STEP 7.5] Silent fallback: ${_freeFills.length} leftover Free slots`);
+                    let _ffOk = 0, _ffSkip = 0;
+                    for (const ff of _freeFills) {
+                        try {
+                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si);
+                            if (ok) _ffOk++; else _ffSkip++;
+                        } catch (e) {
+                            _ffSkip++;
+                        }
+                    }
+                    console.log(`[STEP 7.5] Silent fallback: filled ${_ffOk} / ${_freeFills.length} (skipped ${_ffSkip})`);
+                }
+            } else {
+                console.log('[STEP 7.5] AutoFillSlot.autoFillSlotSilent not available — skipping fallback fill');
+            }
+        } catch (_e) {
+            console.warn('[STEP 7.5] Free-slot fallback failed:', _e);
+        }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 
@@ -2855,40 +3364,40 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                 (window.scheduleAssignments[bunk] || []).forEach(entry => {
-                    if (entry?._activity && !entry.continuation && !entry._isTransition) {
-                        const actName = entry._activity;
+                    if (!entry || entry.continuation || entry._isTransition) return;
+                    const actName = entry._activity || entry.sport || '';
+                    if (!actName) return;
 
-                        // Skip "Free" and transition types
-                        const actLower = actName.toLowerCase();
-                        if (actLower === 'free' || actLower.includes('transition')) {
-                            return;
-                        }
+                    const actLower = actName.toLowerCase();
+                    if (actLower === 'free' || actLower.includes('transition')) return;
 
-                        // Update rotation history (timestamps)
-                        newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
-                        newHistory.bunks[bunk][actName] = timestamp;
-                    }
+                    newHistory.bunks[bunk] = newHistory.bunks[bunk] || {};
+                    newHistory.bunks[bunk][actName] = timestamp;
                 });
             });
 
             window.saveRotationHistory?.(newHistory);
 
             // ★★★ REBUILD HISTORICAL COUNTS FROM ALL SCHEDULES ★★★
-            // This ensures counts are accurate even after regeneration (no double-counting)
+            // saveSchedule (below) writes localStorage synchronously, so a rebuild
+            // immediately after that picks up today's new contribution correctly.
+            // We deliberately use rebuildHistoricalCounts (full re-scan) instead of
+            // reIncrement: a delayed reIncrement reads the post-save allDaily and
+            // treats the new schedule as the "old" snapshot, which silently shifts
+            // counts by (newToday − oldToday) every time a date is regenerated.
             const schedDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-            if (window.SchedulerCoreUtils?.reIncrementHistoricalCounts) {
-                setTimeout(() => {
-                    window.SchedulerCoreUtils.reIncrementHistoricalCounts(
-                        schedDateKey,
-                        window.scheduleAssignments || {},
-                        true
-                    );
-                }, 200);
-            } else if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-                setTimeout(() => {
-                    window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
-                }, 200);
-            }
+            const _runCountsRebuild = () => {
+                try {
+                    if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                        window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                    }
+                    if (window.RotationCloud?.save) {
+                        window.RotationCloud.save(schedDateKey, window.scheduleAssignments || {});
+                    }
+                } catch (e) { console.warn('[Optimizer] post-gen counts rebuild failed:', e); }
+            };
+            // Defer just past saveSchedule (called below) so allDaily has today.
+            setTimeout(_runCountsRebuild, 0);
 
             console.log('📊 Rotation history updated, historical counts rebuild scheduled');
 
@@ -2903,6 +3412,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log("\n" + "=".repeat(70));
         console.log("★★★ OPTIMIZER FINISHED SUCCESSFULLY ★★★");
         console.log("=".repeat(70));
+
+        // ★★★ Clear generation-in-progress flag now that we're truly done ★★★
+        window._generationInProgress = false;
 
         if (window.GlobalFieldLocks) {
             window.GlobalFieldLocks.debugPrintLocks();

@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la *.js)",
+      "Bash(grep -l \"schedule.*display\\\\|renderSchedule\\\\|scheduleUI\\\\|bunkList\\\\|division.*list\" *.js)",
+      "Bash(grep -n \"auto_schedule_grid\\\\|schedule.*calendar\" *.js)",
+      "Bash(grep -n \"class=\\\\\".*da-\\\\|#daily-adjustments\\\\|showTab.*daily-adjustments\" *.js)",
+      "Bash(node -c scheduler_core_auto.js)",
+      "Bash(node -c auto_schedule_grid.js)",
+      "Bash(node -c rotation_events.js)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(git config:*)"
+    ]
+  }
+}

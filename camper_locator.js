@@ -398,7 +398,21 @@
 
         if (!camperName) {
             resultContainer.style.display = 'block';
-            resultContainer.innerHTML = `<h3 style="color:red; margin:0;">🚫 Camper "${nameQuery}" not found.</h3><p>Make sure the camper has been added in <strong>Campistry Me</strong>.</p>`;
+            // Build the message via DOM nodes so a search like
+            // <img src=x onerror=alert(1)> renders as text, not HTML. The
+            // earlier template-literal interpolation was a self-XSS vector
+            // and would have been a reflected XSS the moment the search
+            // ever supported a shareable ?q= URL.
+            resultContainer.replaceChildren();
+            const h3 = document.createElement('h3');
+            h3.style.cssText = 'color:red; margin:0;';
+            h3.textContent = `🚫 Camper "${nameQuery}" not found.`;
+            const p = document.createElement('p');
+            p.append('Make sure the camper has been added in ');
+            const strong = document.createElement('strong');
+            strong.textContent = 'Campistry Me';
+            p.append(strong, '.');
+            resultContainer.append(h3, p);
             return;
         }
 
