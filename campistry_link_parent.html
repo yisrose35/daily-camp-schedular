@@ -499,11 +499,10 @@ function init(){
     children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});
     switchCanteen(children[0].id);
 
-    // Canteen tx — initials avatar instead of emoji
     var txSvg='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>';
     var txSvgUp='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/></svg>';
     var tl=document.getElementById('txList');tl.innerHTML='';
-    canteenTx.forEach(function(t){tl.innerHTML+='<div style="display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--border-subtle);"><div style="display:flex;align-items:center;gap:10px;"><div style="width:32px;height:32px;border-radius:var(--radius-sm);background:'+(t.amt<0?'var(--red-50)':'var(--green-50)')+';display:flex;align-items:center;justify-content:center;color:'+(t.amt<0?'var(--red-500)':'var(--green-600)')+';">'+(t.amt<0?txSvg:txSvgUp)+'</div><div><div style="font-size:.84rem;font-weight:600;">'+t.name+'</div><div style="font-size:.7rem;color:var(--text-muted);">'+t.date+'</div></div></div><div style="font-size:.86rem;font-weight:700;color:'+(t.amt<0?'var(--red-500)':'var(--green-600)')+';">'+(t.amt<0?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
+    canteenTx.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvg:txSvgUp)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 
     // Schedule tabs
     var st=document.getElementById('schedTabs');st.innerHTML='';
@@ -588,7 +587,7 @@ function renderPickupHistory() {
     if (!pickupRequests.length) { el.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div><h3>No requests today</h3></div>'; return; }
     el.innerHTML = '';
     pickupRequests.forEach(function(r){
-        el.innerHTML += '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-light);"><div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--slate-50);display:flex;align-items:center;justify-content:center;font-size:1rem;">'+r.icon+'</div><div style="flex:1;"><div style="font-size:.84rem;font-weight:600;">'+r.label+'</div><div style="font-size:.71rem;color:var(--text-muted);">Submitted at '+r.time+'</div></div><span class="badge badge-ok">'+r.status+'</span></div>';
+        el.innerHTML += '<div class="lk-hist-item"><div class="lk-hist-icon">'+r.icon+'</div><div class="lk-hist-info"><div class="lk-hist-label">'+r.label+'</div><div class="lk-hist-time">Submitted at '+r.time+'</div></div><span class="badge badge-ok">'+r.status+'</span></div>';
     });
 }
 
