@@ -74,9 +74,12 @@
 
 <!-- HOME -->
 <div class="lk-page active" id="page-home">
-    <div class="lk-home-greeting">
-        <p class="lk-home-camp" id="homeCampName">Camp Sunshine</p>
-        <h1 id="greeting">Good morning, Sarah</h1>
+    <div class="lk-hero">
+        <div class="lk-hero-left">
+            <p class="lk-hero-greeting" id="greeting">Good morning</p>
+            <h1 class="lk-hero-title">Welcome back, <span id="heroParentName">Sarah</span></h1>
+            <p class="lk-hero-sub" id="homeCampName">Camp Sunshine</p>
+        </div>
     </div>
     <div class="lk-home-grid">
         <button class="lk-home-tile" onclick="nav('messages')">
@@ -437,7 +440,7 @@ function selAmt(v,b){document.querySelectorAll('.canteen-quick-btn').forEach(fun
 
 // RENDER
 function init(){
-    var h=new Date().getHours();document.getElementById('greeting').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening')+', '+parent.name.split(' ')[0];
+    var h=new Date().getHours();document.getElementById('greeting').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening');document.getElementById('heroParentName').textContent=parent.name.split(' ')[0];
     document.getElementById('parentAvatar').textContent=parent.name.split(' ').map(function(n){return n[0]}).join('');
     var unread=messages.filter(function(m){return!m.read}).length;
     document.getElementById('unreadBadge').textContent=unread;document.getElementById('navMsgCount').textContent=unread;
