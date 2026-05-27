@@ -463,6 +463,39 @@
       }
     } catch (_eCd) { /* never let rule-checking break the solver */ }
 
+    // === 8. Sport player cap (rules.js → sportMetaData.maxPlayers) ===
+    // When bunks SHARE a field for a sport, their summed roster (bunk sizes)
+    // must not exceed that sport's maxPlayers — mirrors the v1 solver check
+    // (auto_solver_engine.js L358-373). v1 enforces only maxPlayers (minPlayers
+    // is a soft size-matching hint, not a hard floor), so v2 matches. No-op when
+    // no sport has a maxPlayers configured, or bunk sizes are unset (sizes → 0).
+    try {
+      const _spMeta = ctx.sportMetaData || {};
+      const _bs = ctx._bunkSize || {};
+      const _anyMax = Object.keys(_spMeta).some(k => (parseInt(_spMeta[k] && _spMeta[k].maxPlayers) || 0) > 0);
+      if (_anyMax) {
+        for (const fieldName in byField) {
+          const claims = byField[fieldName];
+          for (let i = 0; i < claims.length; i++) {
+            const c = claims[i];
+            const cap = parseInt(_spMeta[c.activity] && _spMeta[c.activity].maxPlayers) || 0;
+            if (cap <= 0) continue;
+            let total = parseInt(_bs[String(c.bunk)]) || 0;
+            for (let j = 0; j < claims.length; j++) {
+              if (j === i) continue;
+              const o = claims[j];
+              if (o.start >= c.end || o.end <= c.start) continue; // no time overlap
+              total += parseInt(_bs[String(o.bunk)]) || 0;
+            }
+            if (total > cap) {
+              out.push({ bunk: c.bunk, idx: c.idx,
+                         reason: 'sport-maxPlayers:' + c.activity + ' roster=' + total + ' max=' + cap + ' on ' + fieldName });
+            }
+          }
+        }
+      }
+    } catch (_eSp) { /* never let rule-checking break the solver */ }
+
     return out;
   }
 
@@ -2514,6 +2547,18 @@
     const _specialByName = {};
     specials.forEach(s => { if (s && s.name) _specialByName[s.name] = s; });
 
+    // Sport player caps (rules.js → app1.sportMetaData) + a precomputed bunk-size
+    // map, so detectHardViolations can enforce maxPlayers without re-reading
+    // globals on every SA evaluation.
+    const sportMetaData = g.app1?.sportMetaData || window.sportMetaData || {};
+    const _bunkSize = {};
+    Object.keys(divisions).forEach(grade => {
+      const dd = divisions[grade] || {};
+      const sizes = dd.bunkSizes || {};
+      const dflt = parseInt(dd.defaultBunkSize) || parseInt(dd.bunkSize) || 0;
+      (dd.bunks || []).forEach(b => { _bunkSize[String(b)] = parseInt(sizes[b]) || dflt || 0; });
+    });
+
     return {
       config,
       divisions,
@@ -2522,6 +2567,8 @@
       specials,
       _fieldByName,
       _specialByName,
+      sportMetaData,
+      _bunkSize,
       allowedDivisions: options?.allowedDivisions || null,
       repetitionIgnoreSet: ignore
     };
