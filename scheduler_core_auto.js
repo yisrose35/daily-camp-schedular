@@ -2812,10 +2812,21 @@
                                     var _slConc = _slideConc(D.startMin, D.endMin);
                                     var _slBunks = _slConc.reduce(function (t, x) { return t + x.bunks; }, 0);
                                     if (_slBunks + bunks > _conc) { _why.slide++; return null; }
+                                    // ★ Slide-group awareness (synth custom events with a sharing rule):
+                                    //   group-mates should CO-LOCATE on one slide period so they bundle in a
+                                    //   single slot — lifting coverage within the cap — while grades from a
+                                    //   DIFFERENT group must never share the slide period. (For events with
+                                    //   no slide-group rule, keep the original mild spread-out penalty.)
+                                    var _slideScore = _slBunks * 5;
+                                    if (evt._isSynthCustom && evt._allowedPairs && _slConc.length > 0) {
+                                        var _slG = _slConc.map(function (x) { return x.grade; });
+                                        if (!isCrossDivAllowed(g, _slG, evt._allowedPairs)) { _why.slide = (_why.slide || 0) + 1; return null; }
+                                        _slideScore = -_slBunks * 20; // compatible group-mates already here → prefer co-locating
+                                    }
                                     // Prefer swim-first ('after' = Change→Swim→WS→Change): the swim
                                     //   activity carries its own pre-change, which reliably wraps the front
                                     //   of the bundle. WS-first is used only where swim-first isn't feasible.
-                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 50 : 0) + (D.startMin / 100) + _slBunks * 5 };
+                                    return { S: S, D: D, dir: dir, score: (dir === 'before' ? 50 : 0) + (D.startMin / 100) + _slideScore };
                                 };
                                 var cands = [];
                                 if (_pos === 'before' || _pos === 'either') cands.push(_tryD(periods[i - 1], 'before'));
