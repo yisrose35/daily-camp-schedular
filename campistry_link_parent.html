@@ -74,26 +74,42 @@
 
 <!-- HOME -->
 <div class="lk-page active" id="page-home">
-    <div class="lk-page-header"><h1 id="greeting">Good morning, Sarah</h1><p>Here's what's happening at camp today</p></div>
-    <div class="lk-stats">
-        <div class="lk-stat"><div class="lk-stat-icon rose"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><div><div class="lk-stat-val" id="sKids">2</div><div class="lk-stat-lbl">Enrolled Children</div></div></div>
-        <div class="lk-stat"><div class="lk-stat-icon green"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="lk-stat-val" id="sPaid">$4,200</div><div class="lk-stat-lbl">Total Paid</div></div></div>
-        <div class="lk-stat"><div class="lk-stat-icon amber"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg></div><div><div class="lk-stat-val" id="sBal">$47.50</div><div class="lk-stat-lbl">Canteen Balance</div></div></div>
-        <div class="lk-stat"><div class="lk-stat-icon blue"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><div><div class="lk-stat-val" id="sMsg">3</div><div class="lk-stat-lbl">Unread Messages</div></div></div>
+    <div class="lk-home-greeting"><h1 id="greeting">Good morning, Sarah</h1><p id="homeCampName">Camp Sunshine</p></div>
+    <div class="lk-home-grid">
+        <button class="lk-home-tile" onclick="nav('messages')" style="--tile-color:#3B82F6;--tile-tint:#EFF6FF;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+            <div class="lk-home-tile-label">Messages</div>
+            <div class="lk-home-tile-sub" id="homeMsgSub">3 unread</div>
+            <span class="lk-home-tile-badge" id="homeMsgBadge">3</span>
+        </button>
+        <button class="lk-home-tile" onclick="nav('canteen')" style="--tile-color:#F59E0B;--tile-tint:#FFFBEB;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg></div>
+            <div class="lk-home-tile-label">Canteen</div>
+            <div class="lk-home-tile-sub" id="homeCanteenSub">$47.50</div>
+        </button>
+        <button class="lk-home-tile" onclick="nav('photos')" style="--tile-color:#8B5CF6;--tile-tint:#FAF5FF;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+            <div class="lk-home-tile-label">Photos</div>
+            <div class="lk-home-tile-sub">12 new</div>
+        </button>
+        <button class="lk-home-tile" onclick="nav('forms')" style="--tile-color:#E11D48;--tile-tint:#FFF1F2;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+            <div class="lk-home-tile-label">Forms</div>
+            <div class="lk-home-tile-sub">2 pending</div>
+            <span class="lk-home-tile-badge">2</span>
+        </button>
+        <button class="lk-home-tile" onclick="nav('pickup')" style="--tile-color:#10B981;--tile-tint:#ECFDF5;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></div>
+            <div class="lk-home-tile-label">Pickup</div>
+            <div class="lk-home-tile-sub">Notify camp</div>
+        </button>
+        <button class="lk-home-tile" onclick="nav('children')" style="--tile-color:#2A7A35;--tile-tint:#F0FDF4;">
+            <div class="lk-home-tile-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></div>
+            <div class="lk-home-tile-label">My Children</div>
+            <div class="lk-home-tile-sub" id="homeKidsSub">2 enrolled</div>
+        </button>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Quick Actions</h2></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary btn-sm" onclick="nav('canteen')">Add Canteen Funds</button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('payments')">Make a Payment</button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('forms')">View Forms</button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('emergency')">Update Emergency Info</button>
-        </div>
-    </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Recent Messages</h2><button class="btn btn-ghost btn-sm" onclick="nav('messages')">View All</button></div><div id="homeMessages"></div></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Action Required</h2><span class="badge badge-warn">2 items</span></div>
-        <div class="doc-item" style="cursor:pointer;" onclick="nav('forms')"><div class="doc-icon" style="background:var(--link-tint);color:var(--link-color);">📋</div><div class="doc-info"><h4>Medical Update Form — Eli</h4><p>Due June 15, 2026</p></div><span class="badge badge-warn">Pending</span></div>
-        <div class="doc-item" style="cursor:pointer;" onclick="nav('payments')"><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);">💳</div><div class="doc-info"><h4>Second Tuition Installment</h4><p>$1,400 due July 1, 2026</p></div><span class="badge badge-warn">Due Soon</span></div>
-    </div>
+    <div id="homeMessages" style="display:none;"></div>
 </div>
 
 <!-- MY CHILDREN -->
@@ -397,9 +413,14 @@ function init(){
     var h=new Date().getHours();document.getElementById('greeting').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening')+', '+parent.name.split(' ')[0];
     document.getElementById('parentAvatar').textContent=parent.name.split(' ').map(function(n){return n[0]}).join('');
     var unread=messages.filter(function(m){return!m.read}).length;
-    document.getElementById('unreadBadge').textContent=unread;document.getElementById('navMsgCount').textContent=unread;document.getElementById('sMsg').textContent=unread;
-    document.getElementById('sKids').textContent=children.length;
-    document.getElementById('sBal').textContent='$'+(children.reduce(function(s,c){return s+c.canteenBalance},0)).toFixed(2);
+    document.getElementById('unreadBadge').textContent=unread;document.getElementById('navMsgCount').textContent=unread;
+    var bal=(children.reduce(function(s,c){return s+c.canteenBalance},0)).toFixed(2);
+
+    // Home tile subtitles
+    var msgSub=document.getElementById('homeMsgSub');if(msgSub)msgSub.textContent=unread?unread+' unread':'All caught up';
+    var msgBadge=document.getElementById('homeMsgBadge');if(msgBadge){msgBadge.textContent=unread;msgBadge.style.display=unread?'flex':'none';}
+    var canteenSub=document.getElementById('homeCanteenSub');if(canteenSub)canteenSub.textContent='$'+bal;
+    var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length+' enrolled';
 
     // Home messages
     var hm=document.getElementById('homeMessages');hm.innerHTML='';
