@@ -866,6 +866,15 @@ function moveDivision(name,dir){
     _saveDivisionOrder(keys);
     render(curPage);
 }
+function setAgeDirection(v){
+    try{
+        var gs=window.loadGlobalSettings?window.loadGlobalSettings():{};
+        if(!gs.app1)gs.app1={};
+        gs.app1.divisionAgeDirection=(v==='oldToYoung')?'oldToYoung':'youngToOld';
+        if(window.saveGlobalSettings)window.saveGlobalSettings('app1',gs.app1);
+    }catch(e){console.warn('[CampistryMe] setAgeDirection failed',e)}
+    render(curPage);
+}
 function _commitStructureReorder(){
     // Read DOM and rebuild structure objects in the new order.
     var listEl=document.getElementById('meDivList');
@@ -890,10 +899,19 @@ function _commitStructureReorder(){
 
 function renderStructure(){
     var c=document.getElementById('page-structure'),divs=_sortedDivisions();
+    var ageDir=(window.loadGlobalSettings&&(window.loadGlobalSettings().app1||{}).divisionAgeDirection)||'youngToOld';
     var h='<div class="sec-hd"><div><h2 class="sec-title">Camp Structure</h2></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addDiv()">+ Add Division</button></div></div>';
     if(!divs.length){h+='<div class="me-empty"><h3>No divisions yet</h3><p>Create your camp structure.</p></div>'}
     else{
         h+='<div id="meDivList"><div style="font-size:.72rem;color:var(--s400);margin-bottom:8px">Drag the ⋮⋮ handles or any chip to reorder divisions, grades, and bunks in place.</div>';
+        h+='<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;padding:8px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:.74rem;color:#475569">'
+            +'<span style="font-weight:600">Grade age order:</span>'
+            +'<select onchange="CampistryMe.setAgeDirection(this.value)" style="padding:4px 8px;border:1px solid #cbd5e1;border-radius:6px;font-size:.74rem;background:#fff;color:#0f172a">'
+            +'<option value="youngToOld"'+(ageDir==='youngToOld'?' selected':'')+'>Top = youngest → bottom = oldest</option>'
+            +'<option value="oldToYoung"'+(ageDir==='oldToYoung'?' selected':'')+'>Top = oldest → bottom = youngest</option>'
+            +'</select>'
+            +'<span style="color:#94a3b8">Sets which grades are “senior” so the auto scheduler can give them higher-ranked fields (Field Quality Groups).</span>'
+            +'</div>';
         divs.forEach(function([dn,dd],ix){
             var grades=_sortedGrades(dd);
             var bCt=grades.reduce(function(s,e){return s+(e[1].bunks||[]).length},0);
@@ -4110,7 +4128,7 @@ window.CampistryMe={
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
     addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
-    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,
+    addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,setAgeDirection:setAgeDirection,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,

@@ -2360,9 +2360,21 @@
           return ok && n < (capMap[field] || 2);
         }
 
+        // Seniority (camp-structure age order) — process senior grades first so
+        // they claim better-ranked fields before juniors.
+        const _senMap = {};
+        try {
+          const _a1 = (window.loadGlobalSettings ? (window.loadGlobalSettings().app1 || {}) : {});
+          const _ord = (Array.isArray(_a1.manualColumnOrder) && _a1.manualColumnOrder.length) ? _a1.manualColumnOrder.slice() : Object.keys(ctx.divisions || {});
+          const _dir = _a1.divisionAgeDirection || 'youngToOld';
+          const _N = _ord.length;
+          _ord.forEach(function (nm, i) { _senMap[nm] = (_dir === 'oldToYoung') ? (_N - 1 - i) : i; });
+        } catch (_eS) {}
+        const _sen = function (gr) { const v = _senMap[gr]; return (v == null) ? -1 : v; };
         let baseline = detectHardViolations(sched, ctx).length;
         let moved = 0;
-        for (const bunk of Object.keys(sched)) {
+        const _bunkOrder = Object.keys(sched).sort(function (a, b) { return _sen(bunkGrade[String(b)]) - _sen(bunkGrade[String(a)]); });
+        for (const bunk of _bunkOrder) {
           const slots = sched[bunk]; if (!Array.isArray(slots)) continue;
           const bs = String(bunk), grade = bunkGrade[bs];
           for (const s of slots) {

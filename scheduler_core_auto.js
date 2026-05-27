@@ -21293,8 +21293,20 @@
                     return ok && n < (capMap[field] || 2);
                 }
 
+                // Seniority from camp-structure age order (manualColumnOrder + direction):
+                //   higher score = older = more senior → processed FIRST so senior grades
+                //   claim better-ranked fields before juniors.
+                const _senMap = {};
+                try {
+                    const _a1 = (window.loadGlobalSettings ? (window.loadGlobalSettings().app1 || {}) : {});
+                    const _ord = (Array.isArray(_a1.manualColumnOrder) && _a1.manualColumnOrder.length) ? _a1.manualColumnOrder.slice() : Object.keys(divisions || {});
+                    const _dir = _a1.divisionAgeDirection || 'youngToOld';
+                    const _N = _ord.length;
+                    _ord.forEach(function (nm, i) { _senMap[nm] = (_dir === 'oldToYoung') ? (_N - 1 - i) : i; });
+                } catch (_eS) {}
+                const _sen = function (gr) { const v = _senMap[gr]; return (v == null) ? -1 : v; };
                 let moved = 0;
-                Object.keys(sa).forEach(function (b) {
+                Object.keys(sa).sort(function (a, b) { return _sen(bunkGrade[String(b)]) - _sen(bunkGrade[String(a)]); }).forEach(function (b) {
                     const bs = String(b), grade = bunkGrade[bs];
                     (sa[b] || []).forEach(function (s) {
                         if (!s || s.continuation || !s.field || s.field === 'Free') return;
