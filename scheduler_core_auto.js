@@ -3983,26 +3983,40 @@
                 //   demand for each tag independently. Each row is "exactly N".
                 //   Falls through to single-need emission if grid is empty.
                 if (t === 'special' && layer.subQuantities && typeof layer.subQuantities === 'object') {
+                    const _subOps = (layer.subOps && typeof layer.subOps === 'object') ? layer.subOps : {};
+                    const _subOpOf = (name) => {
+                        const k = Object.keys(_subOps).find(x => x.toLowerCase() === String(name).toLowerCase());
+                        const o = k ? _subOps[k] : '=';
+                        return (o === '>=' || o === '<=' || o === '=') ? o : '=';
+                    };
                     const entries = Object.keys(layer.subQuantities)
                         .map(k => [k, parseInt(layer.subQuantities[k], 10) || 0])
                         .filter(([, v]) => v > 0);
                     if (entries.length > 0) {
-                        // Distribute alreadyPlaced proportionally across entries
-                        // is overkill — placedTypes is shared across the whole
-                        // 'special' type, so just pass per-row floor=cap=qty
-                        // and let _canPickSpecialBySubcategory enforce per-tag.
+                        // Emit one need per subcategory with floor (count) + ceiling (cap)
+                        // derived from the per-subcategory operator:
+                        //   '>=' → at least qty  (count=qty, cap=Infinity)
+                        //   '<=' → at most qty   (count=0,  cap=qty)
+                        //   '='  → exactly qty   (count=qty, cap=qty)
+                        // _canPickSpecialBySubcategory enforces the per-tag ceiling;
+                        // specialSubcategoryCap sums these caps per subcategory.
                         entries.forEach(([subName, subQty]) => {
+                            const _op = _subOpOf(subName);
+                            let _count, _cap;
+                            if (_op === '>=') { _count = subQty; _cap = Infinity; }
+                            else if (_op === '<=') { _count = 0; _cap = subQty; }
+                            else { _count = subQty; _cap = subQty; }
                             const layerForSub = Object.assign({}, layer, {
                                 subcategory: subName,
                                 qty: subQty,
-                                op: '='
+                                op: _op
                             });
                             remainingNeeds.push({
                                 layer: layerForSub,
                                 type: 'special',
-                                count: subQty,
-                                cap: subQty,
-                                op: '='
+                                count: _count,
+                                cap: _cap,
+                                op: _op
                             });
                         });
                         return;

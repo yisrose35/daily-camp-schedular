@@ -2512,12 +2512,28 @@ function showDAWPopover(bandEl, layer, grade, opts) {
           }
           return 0;
         };
+        // Seed each row's operator from layer.subOps (default '=' = exactly).
+        const _subOpsSeed = (layer.subOps && typeof layer.subOps === 'object') ? layer.subOps : {};
+        const getSeededOp = (name) => {
+          const key = Object.keys(_subOpsSeed).find(k => k.toLowerCase() === name.toLowerCase());
+          const op = key ? _subOpsSeed[key] : '=';
+          return (op === '>=' || op === '<=' || op === '=') ? op : '=';
+        };
         const rows = subs.map(name => {
           const v = getSeeded(name);
+          const op = getSeededOp(name);
+          const sn = name.replace(/"/g, '&quot;');
           return `
           <div class="ms-daw-subq-row" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 0;">
             <span style="font-size:12px;color:#cbd5e1;">${name}</span>
-            <input type="number" class="ms-daw-subq-input" data-subname="${name.replace(/"/g, '&quot;')}" value="${v}" min="0" max="10" style="width:60px;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <div style="display:flex;">
+                <button class="ms-daw-pop-op ms-daw-subq-op ${op === '>=' ? 'active' : ''}" data-subname="${sn}" data-op=">=">≥</button>
+                <button class="ms-daw-pop-op ms-daw-subq-op ${op === '=' ? 'active' : ''}" data-subname="${sn}" data-op="=">=</button>
+                <button class="ms-daw-pop-op ms-daw-subq-op ${op === '<=' ? 'active' : ''}" data-subname="${sn}" data-op="<=">≤</button>
+              </div>
+              <input type="number" class="ms-daw-subq-input" data-subname="${sn}" value="${v}" min="0" max="10" style="width:60px;">
+            </div>
           </div>`;
         }).join('');
         const total = subs.reduce((s, name) => s + getSeeded(name), 0);
@@ -2531,7 +2547,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
             <span id="daw-pop-subq-total" style="font-weight:600;color:#e2e8f0;">${total}</span>
           </div>
         </div>
-        <div class="ms-daw-pop-hint">0 = skip that subcategory. List comes from Facilities → Special Activities → Subcategory.</div>
+        <div class="ms-daw-pop-hint">Per subcategory: ≥ at least · = exactly · ≤ at most. 0 = skip that subcategory. List comes from Facilities → Special Activities → Subcategory.</div>
       </div>`;
       })()}
       ${(layer.type === 'league' || layer.type === 'specialty_league') ? (() => {
@@ -2724,10 +2740,14 @@ function showDAWPopover(bandEl, layer, grade, opts) {
   document.body.appendChild(popover);
   requestAnimationFrame(() => popover.classList.add('ms-daw-pop-visible'));
   
-  // Operator buttons
+  // Operator buttons — scope active-toggle to the button's OWN group (its flex
+  //   wrapper), so the main qty op, the weekly op, and each per-subcategory row's
+  //   op are independent (previously a single global clear made them clobber each
+  //   other / made all subcategory rows share one operator).
   popover.querySelectorAll('.ms-daw-pop-op').forEach(btn => {
     btn.onclick = () => {
-      popover.querySelectorAll('.ms-daw-pop-op').forEach(b => b.classList.remove('active'));
+      const grp = btn.parentElement || popover;
+      grp.querySelectorAll('.ms-daw-pop-op').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
     };
   });
@@ -2810,17 +2830,28 @@ function showDAWPopover(bandEl, layer, grade, opts) {
     //   that hasn't been migrated still sees the right total.
     const _subqInputs = popover.querySelectorAll('.ms-daw-subq-input');
     if (layer.type === 'special' && _subqInputs.length > 0) {
+      // Map each subcategory → its active operator (≥/=/≤) from its row's buttons.
+      const _activeOpBySub = {};
+      popover.querySelectorAll('.ms-daw-subq-op.active').forEach(b => {
+        if (b.dataset && b.dataset.subname) _activeOpBySub[b.dataset.subname] = b.dataset.op || '=';
+      });
       const subQ = {};
+      const subOps = {};
       let total = 0;
       _subqInputs.forEach(inp => {
         const name = inp.dataset.subname || '';
         const v = Math.max(0, parseInt(inp.value, 10) || 0);
         if (!name) return;
-        if (v > 0) { subQ[name] = v; total += v; }
+        if (v > 0) {
+          subQ[name] = v; total += v;
+          const op = _activeOpBySub[name];
+          subOps[name] = (op === '>=' || op === '<=' || op === '=') ? op : '=';
+        }
       });
       layer.subQuantities = subQ;
+      layer.subOps = subOps;           // per-subcategory operator (≥/=/≤)
       layer.qty = Math.max(1, total); // keep ≥1 so legacy paths don't no-op
-      layer.op = '=';                  // exact-N semantics per subcategory
+      layer.op = '=';                  // layer-level op unused when subQuantities present
       delete layer.subcategory;        // superseded by subQuantities
     } else {
       const qtyEl = popover.querySelector('#daw-pop-qty');
