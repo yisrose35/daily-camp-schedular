@@ -665,7 +665,9 @@ window.removeSpecialSubcategory = removeSubcategory;
 
 function summarySubcategory(item) {
     const v = (typeof item.subcategory === 'string') ? item.subcategory.trim() : '';
-    return v ? v : 'Regular';
+    // Untagged + legacy "Regular" both display as the implicit "Uncategorized" bucket.
+    if (!v || v.toLowerCase() === 'regular') return 'Uncategorized';
+    return v;
 }
 
 function renderSubcategory(item) {
@@ -674,7 +676,7 @@ function renderSubcategory(item) {
 
     const desc = document.createElement('div');
     desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
-    desc.textContent = 'Group this special into a bucket (e.g. "Food", "Theme"). Layers can then demand a specific count per bucket. Leave blank = "Regular".';
+    desc.textContent = 'Group this special into a bucket (e.g. "Food", "Theme"). Layers can then demand a specific count per bucket. Leave blank = "Uncategorized".';
     wrap.appendChild(desc);
 
     const row = document.createElement('div');
@@ -691,7 +693,7 @@ function renderSubcategory(item) {
 
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Regular';
+    input.placeholder = 'Uncategorized';
     input.value = (typeof item.subcategory === 'string') ? item.subcategory : '';
     input.setAttribute('list', dlId);
     input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; min-width:200px;';

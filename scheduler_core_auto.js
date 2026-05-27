@@ -4140,7 +4140,10 @@
             //   special — without forcing the user to tag every existing one.
             const _canonSub = (s) => {
                 const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
-                return v || 'regular';
+                // Untagged specials + the legacy "Regular" label both map to the
+                //   "uncategorized" bucket (renamed from "Regular"). Aliased so old
+                //   {Regular:N} configs keep matching untagged specials.
+                return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v;
             };
             const specialSubcategoryCap = {};
             let _hasSubcategoryTags = false;
@@ -4441,7 +4444,10 @@
             //   different scope and not visible to runGlobalPlanner.
             const _gpCanonSub = (s) => {
                 const v = (typeof s === 'string') ? s.trim().toLowerCase() : '';
-                return v || 'regular';
+                // Untagged specials + the legacy "Regular" label both map to the
+                //   "uncategorized" bucket (renamed from "Regular"). Aliased so old
+                //   {Regular:N} configs keep matching untagged specials.
+                return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v;
             };
             function _canPickSpecialBySubcategory(special, sl, result) {
                 if (!sl?.specials?.subcategoryEnforced) return true;
@@ -18705,7 +18711,7 @@
             //   can push a bunk to 2+ of one subcategory (observed F1_R2 / F0_R3). Build
             //   a name→canonical-subcategory map + a per-bunk counter so we can skip a
             //   recapture whose subcategory is already satisfied for that bunk.
-            const _p49CanonSub = (s) => { const v = (typeof s === 'string') ? s.trim().toLowerCase() : ''; return v || 'regular'; };
+            const _p49CanonSub = (s) => { const v = (typeof s === 'string') ? s.trim().toLowerCase() : ''; return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v; };
             const _p49SpecSub = {};
             try {
                 const _p49Specs = (globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || [];
@@ -18744,7 +18750,7 @@
                     const _scEntry = (window._subcatCapsByBunk || {})[def.bunk];
                     if (_scEntry && _scEntry.enforced) {
                         const _caps49 = _scEntry.caps || {};
-                        const _sk49 = _p49SpecSub[String(def.name).toLowerCase()] || 'regular';
+                        const _sk49 = _p49SpecSub[String(def.name).toLowerCase()] || 'uncategorized';
                         const _cap49 = _caps49[_sk49];
                         if (_cap49 == null) {
                             log('[Phase4.9] skip ' + def.name + ' for ' + def.bunk + ' — subcategory "' + _sk49 + '" not demanded by any layer');

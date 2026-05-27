@@ -2482,11 +2482,12 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         }
         const _regSubs = (typeof window.getSpecialSubcategories === 'function')
           ? window.getSpecialSubcategories() : [];
-        // ★ "Regular" is always present, even if the user never explicitly added
-        //   it to the registry. Untagged specials map here (see _canonSub in
-        //   scheduler_core_auto.js), so the grid always exposes a row for them.
-        const _hasRegular = _regSubs.some(s => s.toLowerCase() === 'regular');
-        const subs = _hasRegular ? _regSubs : ['Regular', ..._regSubs];
+        // Canonicalize: blank + the legacy "Regular" label both collapse to the
+        //   implicit "uncategorized" bucket that untagged specials map to.
+        const _canonSubName = (s) => { const v = (typeof s === 'string' ? s : '').trim().toLowerCase(); return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v; };
+        // ★ "Uncategorized" is always present (untagged specials map here); strip any
+        //   "Regular"/"Uncategorized" the registry/tags carry so it appears once.
+        const subs = ['Uncategorized', ..._regSubs.filter(s => _canonSubName(s) !== 'uncategorized')];
         if (subs.length === 0) {
           return `
       <div class="ms-daw-pop-field">
@@ -2502,12 +2503,13 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         const existing = (layer.subQuantities && typeof layer.subQuantities === 'object') ? layer.subQuantities : null;
         const legacySub = (typeof layer.subcategory === 'string') ? layer.subcategory.trim() : '';
         const getSeeded = (name) => {
+          const cn = _canonSubName(name);
           if (existing) {
-            // Case-insensitive lookup so renames in registry don't lose data.
-            const key = Object.keys(existing).find(k => k.toLowerCase() === name.toLowerCase());
+            // Canonical lookup so a legacy {Regular:N} key seeds the Uncategorized row.
+            const key = Object.keys(existing).find(k => _canonSubName(k) === cn);
             return key ? (parseInt(existing[key], 10) || 0) : 0;
           }
-          if (legacySub && legacySub.toLowerCase() === name.toLowerCase()) {
+          if (legacySub && _canonSubName(legacySub) === cn) {
             return parseInt(layer.qty, 10) || 1;
           }
           return 0;
@@ -2515,7 +2517,8 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         // Seed each row's operator from layer.subOps (default '=' = exactly).
         const _subOpsSeed = (layer.subOps && typeof layer.subOps === 'object') ? layer.subOps : {};
         const getSeededOp = (name) => {
-          const key = Object.keys(_subOpsSeed).find(k => k.toLowerCase() === name.toLowerCase());
+          const cn = _canonSubName(name);
+          const key = Object.keys(_subOpsSeed).find(k => _canonSubName(k) === cn);
           const op = key ? _subOpsSeed[key] : '=';
           return (op === '>=' || op === '<=' || op === '=') ? op : '=';
         };
