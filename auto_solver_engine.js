@@ -160,7 +160,9 @@
                     isIndoor: !!f.isIndoor,
                     accessRestrictions,
                     timeRules,
-                    disabledSports: fieldDisabledSports
+                    disabledSports: fieldDisabledSports,
+                    qualityRank: parseInt(f.qualityRank) || null,
+                    fieldGroup: f.fieldGroup || null
                 });
             });
         });
@@ -184,6 +186,9 @@
                     timeRules: field.timeRules,
                     disabledSports: field.disabledSports,
                     maxPlayers,
+                    minPlayers: parseInt(meta.minPlayers) || null,
+                    qualityRank: (field.qualityRank != null ? field.qualityRank : null),
+                    fieldGroup: field.fieldGroup || null,
                     _activity: sport  // for scheduleAssignments compatibility
                 });
             });
@@ -890,6 +895,31 @@
                             }
                         }
                     }
+                }
+
+                // ★ rules.js FIELD QUALITY GROUPS: prefer better-ranked fields.
+                //   Lower qualityRank = better. rank-1 adds 0 (neutral vs ungrouped
+                //   fields); worse ranks get a modest penalty so a higher-ranked field
+                //   in the same group wins when it's free. Fixes ranks being ignored:
+                //   qualityRank was previously never attached to candidates, so the
+                //   tie-break below always saw 999. No-op for ungrouped fields.
+                if (cand.qualityRank != null && cand.qualityRank > 1) {
+                    score += (cand.qualityRank - 1) * 80;
+                }
+                // ★ rules.js SPORT MIN-PLAYERS: softly discourage placing a bunk that's
+                //   smaller than the sport's minimum on that sport (nudge toward pairing
+                //   or a sport it can fill). Only active when bunk sizes are configured
+                //   (size 0 → skip), so it never fires for camps without sizes.
+                if (cand.minPlayers != null && cand.minPlayers > 0) {
+                    var _bs = 0, _dv = window.divisions || {};
+                    for (var _g in _dv) {
+                        var _dd = _dv[_g];
+                        if (_dd && Array.isArray(_dd.bunks) && _dd.bunks.map(String).indexOf(String(bunk)) >= 0) {
+                            _bs = parseInt((_dd.bunkSizes || {})[bunk]) || parseInt(_dd.defaultBunkSize) || parseInt(_dd.bunkSize) || 0;
+                            break;
+                        }
+                    }
+                    if (_bs > 0 && _bs < cand.minPlayers) score += (cand.minPlayers - _bs) * 40;
                 }
 
                 scored.push({ cand, score });
