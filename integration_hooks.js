@@ -1767,7 +1767,37 @@
                 if (trustLocal && (localState.app1 || cloudState.app1)) {
                     mergedState.app1 = { ...(cloudState.app1 || {}), ...(localState.app1 || {}) };
                 }
-                
+
+                // ★ Preserve special-activity SUBCATEGORY tags across the cross-device
+                //   merge. app1 syncs as ONE blob (last-write-wins), so a device that
+                //   never tagged specials can clobber a device that did — specialActivities
+                //   has no field-level merge. Rule: for each special on the winning side
+                //   that ended up BLANK, restore its subcategory from either side if a
+                //   tagged copy exists (prefer-tagged, same as loadData). Only fills BLANK
+                //   rows, so an intentional tag CHANGE (non-blank) on the newer device is
+                //   still respected. (Edge case: an intentional un-tag on another device
+                //   may be resurrected from a tagged local copy — acceptable vs. silent
+                //   tag-wipe, which was the reported bug.)
+                try {
+                    if (mergedState.app1 && Array.isArray(mergedState.app1.specialActivities)) {
+                        const _lSpecs = (localState.app1 && Array.isArray(localState.app1.specialActivities)) ? localState.app1.specialActivities : [];
+                        const _cSpecs = (cloudState.app1 && Array.isArray(cloudState.app1.specialActivities)) ? cloudState.app1.specialActivities : [];
+                        const _subByName = {};
+                        [..._cSpecs, ..._lSpecs].forEach(function (s) {
+                            if (!s || !s.name) return;
+                            const sub = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
+                            if (sub && !_subByName[s.name]) _subByName[s.name] = s.subcategory;
+                        });
+                        let _restored = 0;
+                        mergedState.app1.specialActivities.forEach(function (s) {
+                            if (!s || !s.name) return;
+                            const cur = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
+                            if (!cur && _subByName[s.name]) { s.subcategory = _subByName[s.name]; _restored++; }
+                        });
+                        if (_restored > 0) log('Preserved ' + _restored + ' special subcategory tag(s) across cross-device cloud merge');
+                    }
+                } catch (_eMergeSubcat) { logError('subcategory-preserve merge error:', _eMergeSubcat); }
+
                 setLocalSettings(mergedState);
 
                 // Suppress realtime echo — setLocalSettings wrote to localStorage/IDB
