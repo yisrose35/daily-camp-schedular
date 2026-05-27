@@ -50,6 +50,9 @@
         <button class="lk-nav-item" data-page="forms" onclick="nav('forms')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg> Forms & Docs</button>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> Photos</button>
         <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Camp Day</div>
+        <button class="lk-nav-item" data-page="pickup" onclick="nav('pickup')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg> Pickup & Arrival</button>
+        <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Safety</div>
         <button class="lk-nav-item" data-page="emergency" onclick="nav('emergency')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> Emergency Info</button>
         <div class="lk-nav-divider"></div>
@@ -129,8 +132,20 @@
         </div>
         <div style="display:flex;gap:8px;justify-content:center;"><button class="btn btn-primary" onclick="toast('Funds added!')">Add Funds</button><button class="btn btn-secondary" onclick="toast('Auto-reload enabled!')">Auto-Reload</button></div>
     </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Daily Spending Limit</h2></div>
-        <div style="display:flex;align-items:center;gap:14px;"><input type="range" min="0" max="20" value="5" style="flex:1;accent-color:var(--link-color);" oninput="document.getElementById('limVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="limVal">$5.00</span></div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Spending Controls</h2></div>
+        <div class="lk-field"><label>Daily Spending Limit</label>
+            <div style="display:flex;align-items:center;gap:14px;"><input type="range" min="0" max="20" value="5" style="flex:1;accent-color:var(--link-color);" oninput="document.getElementById('limVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="limVal">$5.00</span></div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Max your child can spend per day</div>
+        </div>
+        <div class="lk-field" style="margin-top:14px;"><label>Credit Limit</label>
+            <div style="display:flex;align-items:center;gap:14px;"><input type="range" min="0" max="20" value="0" style="flex:1;accent-color:var(--amber-600);" oninput="document.getElementById('creditVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="creditVal">$0.00</span></div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">How much your child can spend beyond a $0 balance (camp covers it, you owe it back)</div>
+        </div>
+        <div class="lk-field" style="margin-top:14px;"><label>Balance Floor</label>
+            <div style="display:flex;align-items:center;gap:14px;"><input type="range" min="0" max="20" value="0" style="flex:1;accent-color:var(--blue-500);" oninput="document.getElementById('floorVal').textContent='$'+this.value+'.00'"><span style="font-weight:700;min-width:55px;" id="floorVal">$0.00</span></div>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-top:4px;">Stop spending when balance drops below this amount</div>
+        </div>
+        <button class="btn btn-primary btn-sm" style="margin-top:6px;" onclick="toast('Spending controls saved!')">Save Controls</button>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Recent Transactions</h2></div><div id="txList"></div></div>
 </div>
@@ -178,6 +193,91 @@
     </div>
 </div>
 
+<!-- PICKUP & ARRIVAL -->
+<div class="lk-page" id="page-pickup">
+    <div class="lk-page-header"><h1>Pickup & Arrival</h1><p>Notify camp of any changes to your child's day</p></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px;">
+        <button class="pickup-type-btn active" data-type="early" onclick="selPickup('early',this)">
+            <div class="pickup-type-icon" style="background:var(--amber-50);color:var(--amber-600);">🚗</div>
+            <div class="pickup-type-label">Early Pickup</div>
+        </button>
+        <button class="pickup-type-btn" data-type="change" onclick="selPickup('change',this)">
+            <div class="pickup-type-icon" style="background:var(--blue-50);color:var(--blue-500);">🔄</div>
+            <div class="pickup-type-label">Pickup Change</div>
+        </button>
+        <button class="pickup-type-btn" data-type="friend" onclick="selPickup('friend',this)">
+            <div class="pickup-type-icon" style="background:var(--purple-50);color:var(--purple-500);">👫</div>
+            <div class="pickup-type-label">Going With Friend</div>
+        </button>
+        <button class="pickup-type-btn" data-type="late" onclick="selPickup('late',this)">
+            <div class="pickup-type-icon" style="background:var(--link-tint);color:var(--link-color);">⏰</div>
+            <div class="pickup-type-label">Late Arrival</div>
+        </button>
+    </div>
+
+    <!-- EARLY PICKUP FORM -->
+    <div class="pickup-form active" id="pickup-early">
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Early Pickup</h2></div>
+            <div class="lk-tabs" id="pickupChildTabs"></div>
+            <div class="lk-field"><label>Pickup Time</label><input type="time" class="lk-input" value="14:00"></div>
+            <div class="lk-field"><label>Who is picking up?</label><input type="text" class="lk-input" placeholder="Full name of person picking up"></div>
+            <div class="lk-field"><label>Relationship to child</label>
+                <select class="lk-select"><option>Parent</option><option>Grandparent</option><option>Sibling (18+)</option><option>Aunt / Uncle</option><option>Family Friend</option><option>Other</option></select>
+            </div>
+            <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info for the camp office..."></textarea></div>
+            <button class="btn btn-primary" onclick="submitPickup('early')">Send to Camp Office</button>
+        </div>
+    </div>
+
+    <!-- PICKUP CHANGE FORM -->
+    <div class="pickup-form" id="pickup-change">
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Pickup Change</h2></div>
+            <div class="lk-tabs" id="pickupChangeTabs"></div>
+            <div class="lk-field"><label>New pickup person</label><input type="text" class="lk-input" placeholder="Full name"></div>
+            <div class="lk-field"><label>Relationship to child</label>
+                <select class="lk-select"><option>Parent</option><option>Grandparent</option><option>Sibling (18+)</option><option>Aunt / Uncle</option><option>Family Friend</option><option>Other</option></select>
+            </div>
+            <div class="lk-field"><label>Their phone number</label><input type="tel" class="lk-input" placeholder="(555) 000-0000"></div>
+            <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info..."></textarea></div>
+            <button class="btn btn-primary" onclick="submitPickup('change')">Send to Camp Office</button>
+        </div>
+    </div>
+
+    <!-- GOING WITH FRIEND FORM -->
+    <div class="pickup-form" id="pickup-friend">
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Going Home With Friend</h2></div>
+            <div class="lk-tabs" id="pickupFriendTabs"></div>
+            <div class="lk-field"><label>Friend's name</label><input type="text" class="lk-input" placeholder="Friend's full name"></div>
+            <div class="lk-field"><label>Friend's parent name</label><input type="text" class="lk-input" placeholder="Parent driving"></div>
+            <div class="lk-field"><label>Friend's parent phone</label><input type="tel" class="lk-input" placeholder="(555) 000-0000"></div>
+            <div style="background:var(--amber-50);border:1px solid var(--amber-500);border-radius:var(--radius-md);padding:12px;margin-bottom:14px;font-size:.8rem;color:var(--amber-600);">
+                <strong>Note:</strong> By submitting, you confirm you have verbal approval from the other parent. Camp will verify before releasing.
+            </div>
+            <button class="btn btn-primary" onclick="submitPickup('friend')">Send to Camp Office</button>
+        </div>
+    </div>
+
+    <!-- LATE ARRIVAL FORM -->
+    <div class="pickup-form" id="pickup-late">
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Late Arrival</h2></div>
+            <div class="lk-tabs" id="pickupLateTabs"></div>
+            <div class="lk-field"><label>Expected arrival time</label><input type="time" class="lk-input" value="09:30"></div>
+            <div class="lk-field"><label>Reason (optional)</label>
+                <select class="lk-select"><option value="">Select reason...</option><option>Doctor appointment</option><option>Traffic / Transportation</option><option>Family matter</option><option>Other</option></select>
+            </div>
+            <div class="lk-field"><label>Notes (optional)</label><textarea class="lk-textarea" placeholder="Any additional info for the office..."></textarea></div>
+            <button class="btn btn-primary" onclick="submitPickup('late')">Send to Camp Office</button>
+        </div>
+    </div>
+
+    <!-- SUBMITTED REQUESTS -->
+    <div class="lk-card" style="margin-top:6px;"><div class="lk-card-head"><h2>Today's Submitted Requests</h2></div><div id="pickupHistory"><div class="lk-empty"><div class="lk-empty-icon">📋</div><h3>No requests today</h3></div></div></div>
+</div>
+
 <!-- EMERGENCY -->
 <div class="lk-page" id="page-emergency">
     <div class="lk-page-header"><h1>Emergency Information</h1><p>Keep your emergency contacts and medical info current</p></div>
@@ -204,6 +304,37 @@
     </div>
 </div>
 
+</div>
+
+<!-- PHOTO CONSENT OVERLAY -->
+<div class="lk-overlay" id="photoConsentOverlay">
+    <div class="lk-modal">
+        <div class="lk-modal-head"><h3>📸 Photo Feature — Consent Required</h3></div>
+        <div class="lk-modal-body">
+            <p style="font-size:.88rem;line-height:1.7;color:var(--text-secondary);margin-bottom:16px;">
+                Campistry Link uses <strong>facial recognition</strong> to automatically find and deliver photos of your child from camp. Before we can enable this feature, we need your consent.
+            </p>
+            <div style="background:var(--slate-50);border-radius:var(--radius-md);padding:14px;margin-bottom:16px;font-size:.8rem;color:var(--text-secondary);line-height:1.6;">
+                <strong>What we do:</strong><br>
+                • You upload a reference photo of your child<br>
+                • Our AI scans daily camp photos to find matching faces<br>
+                • Only photos featuring your child are shown to you<br>
+                • Your child's facial data is never shared or sold<br>
+                • You can opt out at any time from Settings
+            </div>
+            <div style="background:var(--amber-50);border:1px solid var(--amber-500);border-radius:var(--radius-md);padding:12px;margin-bottom:16px;font-size:.78rem;color:var(--amber-600);">
+                This feature involves processing biometric data of a minor. Your explicit consent is required by law in several US states.
+            </div>
+            <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;margin-bottom:8px;">
+                <input type="checkbox" id="consentCheck" style="margin-top:3px;accent-color:var(--link-color);width:16px;height:16px;">
+                <span style="font-size:.82rem;color:var(--text-secondary);">I consent to facial recognition processing for my child(ren) and understand I can withdraw this consent at any time.</span>
+            </label>
+        </div>
+        <div class="lk-modal-foot">
+            <button class="btn btn-secondary" onclick="declinePhotoConsent()">No Thanks</button>
+            <button class="btn btn-primary" id="consentAcceptBtn" onclick="acceptPhotoConsent()" disabled>Enable Photo Feature</button>
+        </div>
+    </div>
 </div>
 
 <div id="toastBox"></div>
@@ -351,7 +482,75 @@ function openMsg(id){
 }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
 
+// PICKUP & ARRIVAL
+var pickupRequests = [];
+function selPickup(type, btn) {
+    document.querySelectorAll('.pickup-type-btn').forEach(function(b){b.classList.remove('active')});
+    btn.classList.add('active');
+    document.querySelectorAll('.pickup-form').forEach(function(f){f.classList.remove('active')});
+    document.getElementById('pickup-'+type).classList.add('active');
+}
+function submitPickup(type) {
+    var labels = {early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
+    var icons = {early:'🚗',change:'🔄',friend:'👫',late:'⏰'};
+    var now = new Date();
+    pickupRequests.unshift({type:type,label:labels[type],icon:icons[type],time:now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes(),status:'Sent'});
+    renderPickupHistory();
+    toast(labels[type]+' request sent to camp office!');
+}
+function renderPickupHistory() {
+    var el = document.getElementById('pickupHistory');
+    if (!pickupRequests.length) { el.innerHTML='<div class="lk-empty"><div class="lk-empty-icon">📋</div><h3>No requests today</h3></div>'; return; }
+    el.innerHTML = '';
+    pickupRequests.forEach(function(r){
+        el.innerHTML += '<div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid var(--border-light);"><div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--slate-50);display:flex;align-items:center;justify-content:center;font-size:1rem;">'+r.icon+'</div><div style="flex:1;"><div style="font-size:.84rem;font-weight:600;">'+r.label+'</div><div style="font-size:.71rem;color:var(--text-muted);">Submitted at '+r.time+'</div></div><span class="badge badge-ok">'+r.status+'</span></div>';
+    });
+}
+
+// PHOTO CONSENT
+var photoConsented = localStorage.getItem('lk_photo_consent');
+function checkPhotoConsent() {
+    if (!photoConsented) {
+        document.getElementById('photoConsentOverlay').classList.add('open');
+    }
+}
+function acceptPhotoConsent() {
+    if (!document.getElementById('consentCheck').checked) return;
+    localStorage.setItem('lk_photo_consent','yes');
+    photoConsented = 'yes';
+    document.getElementById('photoConsentOverlay').classList.remove('open');
+    toast('Photo feature enabled!');
+}
+function declinePhotoConsent() {
+    localStorage.setItem('lk_photo_consent','no');
+    photoConsented = 'no';
+    document.getElementById('photoConsentOverlay').classList.remove('open');
+    nav('home');
+}
+document.getElementById('consentCheck').addEventListener('change', function(){
+    document.getElementById('consentAcceptBtn').disabled = !this.checked;
+});
+
+// Hook photo consent into nav
+var _origNav = nav;
+nav = function(p) {
+    if (p === 'photos' && !photoConsented) { checkPhotoConsent(); return; }
+    _origNav(p);
+};
+
+// Init pickup child tabs
+function initPickupTabs() {
+    ['pickupChildTabs','pickupChangeTabs','pickupFriendTabs','pickupLateTabs'].forEach(function(id){
+        var el = document.getElementById(id); if(!el) return;
+        el.innerHTML = '';
+        children.forEach(function(c,i){
+            el.innerHTML += '<button class="lk-tab '+(i===0?'active':'')+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.emoji+' '+c.name.split(' ')[0]+'</button>';
+        });
+    });
+}
+
 init();
+initPickupTabs();
 </script>
 </body>
 </html>

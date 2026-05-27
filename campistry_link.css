@@ -190,6 +190,28 @@ body{font-family:var(--font-body);background:var(--bg-primary);color:var(--text-
 .lk-bnav-item.active,.lk-bnav-item:hover{color:var(--link-color)}
 .lk-bnav-item svg{width:20px;height:20px}
 
+/* PICKUP TYPE BUTTONS */
+.pickup-type-btn{display:flex;flex-direction:column;align-items:center;gap:8px;padding:16px 12px;border:2px solid var(--border-light);border-radius:var(--radius-lg);background:#fff;cursor:pointer;transition:all .15s;font-family:var(--font-body);width:100%}
+.pickup-type-btn:hover{border-color:var(--link-border);background:var(--link-tint)}
+.pickup-type-btn.active{border-color:var(--link-color);background:var(--link-tint)}
+.pickup-type-icon{width:44px;height:44px;border-radius:var(--radius-md);display:flex;align-items:center;justify-content:center;font-size:1.3rem}
+.pickup-type-label{font-size:.76rem;font-weight:700;color:var(--text-secondary);text-align:center}
+.pickup-type-btn.active .pickup-type-label{color:var(--link-color)}
+.pickup-form{display:none}.pickup-form.active{display:block}
+
+/* CANTEEN QUICK BTNS */
+.canteen-quick-btn{padding:7px 16px;border-radius:var(--radius-full);border:2px solid var(--border-light);background:#fff;font-size:.82rem;font-weight:700;cursor:pointer;transition:all .15s;font-family:var(--font-body)}
+.canteen-quick-btn:hover{border-color:var(--link-border);background:var(--link-tint)}
+.canteen-quick-btn.sel{border-color:var(--link-color);background:var(--link-tint);color:var(--link-color)}
+
+/* SCHEDULE */
+.sched-item{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid var(--slate-100)}
+.sched-item:last-child{border-bottom:none}
+.sched-time{font-size:.78rem;font-weight:700;color:var(--text-muted);min-width:44px}
+.sched-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.sched-name{font-size:.86rem;font-weight:600}
+.sched-loc{font-size:.72rem;color:var(--text-muted)}
+
 /* RESPONSIVE */
 @media(max-width:768px){.lk-sidebar{display:none}.lk-main{margin-left:0;padding:16px 14px 100px}.lk-bnav{display:block}.lk-stats{grid-template-columns:1fr 1fr;gap:8px}.lk-page-header h1{font-size:1.2rem}.lk-camp-name{display:none}.channel-btns{flex-direction:column}}
 @media(max-width:480px){.lk-stats{grid-template-columns:1fr}}
