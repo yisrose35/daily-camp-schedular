@@ -21300,6 +21300,86 @@
             }));
         })();
 
+        // ─── Custom-Layer Coverage Report ─────────────────────────────────────
+        // Which bunks did NOT receive a custom-layer activity they were
+        // configured for (e.g. a "connect-to-swim" Water Slide that couldn't find
+        // an open adjacent slot within the sharing capacity), and WHY.
+        // NOTE: a missed custom activity is NOT a Free/hole — the slot usually got
+        // filled with a sport instead — so this is a SEPARATE category from the
+        // Impossibility Report above. Surfaced to a dismissable UI panel via the
+        // `campistry-coverage-gaps` event (see coverage_warning.js).
+        (function() {
+            try {
+                const _sa = window.scheduleAssignments || {};
+                const _hints = window._coverageReasonHints || {}; // optional per-bunk hints (future)
+                const _norm = function (s) { return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim(); };
+
+                // Group custom layers by activity → the set of bunks that SHOULD get it.
+                const _byAct = {}; // actName → { activity, adjacentTo, targets:[{bunk,grade}] }
+                (layers || []).forEach(function (l) {
+                    if (!l || (l.type || '').toLowerCase() !== 'custom') return;
+                    const _g = l.grade || l.division;
+                    if (!_g) return;
+                    if (allowedSet && !allowedSet.has(String(_g))) return; // respect partial-regen scope
+                    const _act = l.customActivity || l.name || 'Custom';
+                    const _allB = getBunksForGrade(_g, divisions).map(String);
+                    const _custList = (Array.isArray(l.customBunks) && l.customBunks.length > 0)
+                        ? l.customBunks.map(String) : null;
+                    const _targets = _custList ? _allB.filter(b => _custList.indexOf(b) >= 0) : _allB;
+                    if (!_byAct[_act]) _byAct[_act] = { activity: _act, adjacentTo: l.adjacentTo || null, targets: [] };
+                    if (l.adjacentTo) _byAct[_act].adjacentTo = l.adjacentTo;
+                    _targets.forEach(function (b) {
+                        if (!_byAct[_act].targets.some(t => t.bunk === b)) _byAct[_act].targets.push({ bunk: b, grade: _g });
+                    });
+                });
+
+                const _gaps = []; // [{bunk, grade, activity, reason}]
+                Object.keys(_byAct).forEach(function (actName) {
+                    const rec = _byAct[actName];
+                    const _actN = _norm(rec.activity);
+                    rec.targets.forEach(function (t) {
+                        const _slots = _sa[t.bunk];
+                        const _got = Array.isArray(_slots) && _slots.some(function (s) {
+                            if (!s) return false;
+                            return [s._customActivity, s._activity, s.event, s.sport, s.name]
+                                .some(function (v) { const n = _norm(v); return n && n === _actN; });
+                        });
+                        if (_got) return;
+                        // ── derive a human-readable reason ──
+                        let _reason = _hints[_norm(t.bunk + '|' + rec.activity)] || '';
+                        if (!_reason) {
+                            if (rec.adjacentTo) {
+                                const _adj = _norm(rec.adjacentTo) || 'swim';
+                                const _hasAdj = Array.isArray(_slots) && _slots.some(function (s) {
+                                    if (!s) return false;
+                                    return [s._activity, s.event, s.sport, s.type]
+                                        .some(function (v) { const n = _norm(v); return n && n.indexOf(_adj) >= 0; });
+                                });
+                                _reason = _hasAdj
+                                    ? ('The only ' + _adj + '-adjacent slot was already full (sharing capacity reached) or taken by another grade. Raise the sharing capacity, widen the sharing group, or add another ' + _adj + '-adjacent period.')
+                                    : ('No ' + _adj + ' was scheduled for this bunk today, so "' + rec.activity + '" had nothing to attach to.');
+                            } else {
+                                _reason = 'No open slot or field was available for "' + rec.activity + '" in this bunk’s day.';
+                            }
+                        }
+                        _gaps.push({ bunk: t.bunk, grade: t.grade, activity: rec.activity, reason: _reason });
+                    });
+                });
+
+                window._coverageGaps = _gaps;
+                if (_gaps.length > 0) {
+                    log('\n⚠️  CUSTOM-LAYER COVERAGE — ' + _gaps.length + ' bunk/activity assignment(s) not placed (see warning panel).');
+                } else if (Object.keys(_byAct).length > 0) {
+                    log('\n✅ All configured custom-layer activities were placed.');
+                }
+                window.dispatchEvent(new CustomEvent('campistry-coverage-gaps', {
+                    detail: { count: _gaps.length, items: _gaps }
+                }));
+            } catch (_eCov) {
+                try { warn('[CoverageReport] ' + (_eCov && _eCov.message)); } catch (_e2) {}
+            }
+        })();
+
 
         // =====================================================================
         // POST-GEN DIAGNOSTICS (callable, not inline)
