@@ -21237,6 +21237,89 @@
             }
         } catch (e) { /* non-fatal */ }
 
+        // ── Field Quality Groups re-optimization (rules.js) ──
+        // The per-candidate scoring only weakly reaches field choice (and only on
+        // leftover slots the AutoSolverEngine fills), so this FINAL pass over the
+        // assembled schedule guarantees ranks are honored across every placement
+        // path: pull each grouped-field sport block to a strictly better-ranked
+        // field in its group when that field is free (or same-grade shareable
+        // within capacity) and the move passes access/time validation. No-op when
+        // no field groups are configured.
+        try {
+            (function _fieldQualityReopt() {
+                const _gs = getGlobalSettings();
+                const _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
+                _flds.forEach(function (f) {
+                    if (!f || !f.name) return;
+                    (f.activities || []).forEach(function (sp) { (hostsBySport[sp] = hostsBySport[sp] || []).push(f.name); });
+                    capMap[f.name] = parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+                        || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+                    if (f.fieldGroup && f.qualityRank) {
+                        fgMap[f.name] = { group: f.fieldGroup, rank: parseInt(f.qualityRank) || 999 };
+                        (fgGroups[f.fieldGroup] = fgGroups[f.fieldGroup] || []).push({ name: f.name, rank: parseInt(f.qualityRank) || 999 });
+                    }
+                });
+                if (Object.keys(fgGroups).length === 0) return; // no groups → nothing to do
+                Object.keys(fgGroups).forEach(function (gn) { fgGroups[gn].sort(function (a, b) { return a.rank - b.rank; }); });
+
+                const sa = window.scheduleAssignments || {};
+                const bunkGrade = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { bunkGrade[String(b)] = g; }); });
+
+                // Occupancy index: fieldName → [{s,e,bunk}]
+                const occ = {};
+                Object.keys(sa).forEach(function (b) {
+                    (sa[b] || []).forEach(function (s) {
+                        if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                        if (st == null || en == null) return;
+                        (occ[s.field] = occ[s.field] || []).push({ s: st, e: en, bunk: String(b) });
+                    });
+                });
+                function canUse(field, s, e, exclBunk, myGrade) {
+                    const list = occ[field] || []; let n = 0, allSame = true;
+                    for (let i = 0; i < list.length; i++) {
+                        const iv = list[i];
+                        if (iv.bunk === exclBunk) continue;
+                        if (iv.s >= e || iv.e <= s) continue;
+                        n++; if (bunkGrade[iv.bunk] !== myGrade) allSame = false;
+                    }
+                    if (n === 0) return true;                                   // empty → safe
+                    return n < (capMap[field] || 2) && allSame;                 // same-grade share within cap
+                }
+
+                let moved = 0;
+                Object.keys(sa).forEach(function (b) {
+                    const bs = String(b), grade = bunkGrade[bs];
+                    (sa[b] || []).forEach(function (s) {
+                        if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        const cur = fgMap[s.field]; if (!cur) return;
+                        const sport = s._activity; if (!sport) return;
+                        const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                        if (st == null || en == null) return;
+                        const members = fgGroups[cur.group];
+                        for (let i = 0; i < members.length; i++) {
+                            const m = members[i];
+                            if (m.rank >= cur.rank) break;                                       // only strictly better-ranked
+                            if (m.name === s.field) continue;
+                            if ((hostsBySport[sport] || []).indexOf(m.name) < 0) continue;        // field must host the sport
+                            if (!canUse(m.name, st, en, bs, grade)) continue;                     // capacity/sharing OK
+                            if (_validateWritePlacement(m.name, sport, grade, bs, st, en)) continue; // access/time problem → skip
+                            const from = s.field;
+                            s.field = m.name; s._fqMoved = true;
+                            const fl = occ[from];
+                            if (fl) { for (let k = 0; k < fl.length; k++) { if (fl[k].bunk === bs && fl[k].s === st && fl[k].e === en) { fl.splice(k, 1); break; } } }
+                            (occ[m.name] = occ[m.name] || []).push({ s: st, e: en, bunk: bs });
+                            moved++;
+                            break;
+                        }
+                    });
+                });
+                if (moved > 0) log('  🏟️ Field-quality re-opt: moved ' + moved + ' placement(s) to a better-ranked field.');
+            })();
+        } catch (_eFQ) { try { warn('[FieldQualityReopt] ' + (_eFQ && _eFQ.message)); } catch (_e2) {} }
+
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
         // ─── Impossibility Report ─────────────────────────────────────────────
