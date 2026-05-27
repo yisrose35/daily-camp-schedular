@@ -2798,7 +2798,18 @@
                                     //   that stranded Soloists (swim@735 vs prior period ending 730 → a
                                     //   5-min gap, so the slide could never attach). Require exact adjacency
                                     //   so the planner only seats slots Phase 2.4 can actually bundle.
-                                    var _adjOk = (dir === 'before') ? (D.endMin === S.startMin) : (D.startMin === sEnd);
+                                    // Exact flush adjacency for real events (kept — fixes the
+                                    //   Soloists stranding bug). For synth custom events, allow a
+                                    //   small passing-time gap (≤10m) so the planner can seat the
+                                    //   near-adjacent period pairs that the bell grid actually has
+                                    //   (most pairs carry a 5-min passing gap) — Phase 2.4 bundles
+                                    //   ≤20m gaps anyway, so this just lets the planner PIN more
+                                    //   grades' swims (esp. a sharing group that otherwise gets no
+                                    //   flush slot). Optimistic: if Phase 2.4 can't bundle it, that
+                                    //   bunk simply defers — no worse than today.
+                                    var _adjTol = evt._isSynthCustom ? 10 : 0;
+                                    var _adjGap = (dir === 'before') ? (S.startMin - D.endMin) : (D.startMin - sEnd);
+                                    var _adjOk = (_adjGap >= 0 && _adjGap <= _adjTol);
                                     if (!_adjOk) { _why.gap = (_why.gap || 0) + 1; return null; }
                                     // NOTE: a 'before' bundle whose WS sits in the day's first period has
                                     //   no room for a LEADING change — but a day-start bundle (WS→Swim→Change)
