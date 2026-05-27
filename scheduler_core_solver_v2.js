@@ -2402,6 +2402,37 @@
             }
           }
         }
+        // PHASE B — seniority re-pair: within each (group, exact time window), give
+        // the most senior grade the best-ranked field. Reassign fields among the
+        // co-located group placements (each hosts the activity), then validate via
+        // detectHardViolations and revert if it adds any hard violation.
+        const _slotMap = {};
+        for (const _bk of Object.keys(sched)) {
+          const _sl = sched[_bk]; if (!Array.isArray(_sl)) continue;
+          for (const _s of _sl) {
+            if (!_s || _s.continuation || !_s.field || _s.field === 'Free') continue;
+            const _fg = fgMap[_s.field]; if (!_fg) continue;
+            const _st = _s._startMin, _en = _s._endMin; if (_st == null || _en == null) continue;
+            (_slotMap[_fg.group + '|' + _st + '|' + _en] = _slotMap[_fg.group + '|' + _st + '|' + _en] || []).push({ s: _s, field: _s.field, grade: bunkGrade[String(_bk)] });
+          }
+        }
+        Object.keys(_slotMap).forEach(function (key) {
+          const list = _slotMap[key];
+          if (list.length < 2) return;
+          const bySen = list.slice().sort(function (a, b) { return _sen(b.grade) - _sen(a.grade); }); // most senior first
+          const fieldsByRank = list.map(function (p) { return p.field; }).sort(function (a, b) { return fgMap[a].rank - fgMap[b].rank; }); // best rank first
+          let anyChange = false, hostOk = true;
+          for (let i = 0; i < bySen.length; i++) {
+            if ((hostsBySport[bySen[i].s._activity] || []).indexOf(fieldsByRank[i]) < 0) hostOk = false;
+            if (bySen[i].s.field !== fieldsByRank[i]) anyChange = true;
+          }
+          if (!anyChange || !hostOk) return;
+          const orig = bySen.map(function (p) { return p.s.field; });
+          for (let i = 0; i < bySen.length; i++) bySen[i].s.field = fieldsByRank[i];
+          const v = detectHardViolations(sched, ctx).length;
+          if (v <= baseline) { baseline = v; for (let i = 0; i < bySen.length; i++) bySen[i].s._fqMoved = true; moved++; }
+          else { for (let i = 0; i < bySen.length; i++) bySen[i].s.field = orig[i]; }
+        });
         try { console.log('[FQ-REOPT-v2] groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_e) {}
       })();
     } catch (_eFQ2) {}

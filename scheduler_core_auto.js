@@ -21332,6 +21332,36 @@
                         }
                     });
                 });
+                // PHASE B — seniority re-pair: within each (group, exact time window),
+                // reassign fields among the co-located group placements so the most
+                // senior grade gets the best rank. Pre-validate each reassignment with
+                // _validateWritePlacement (access/time) + field-hosts-activity; apply
+                // only if every reassignment is legal (capacity preserved — bijection).
+                const _slotMap = {};
+                Object.keys(sa).forEach(function (bb) {
+                    (sa[bb] || []).forEach(function (s) {
+                        if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        const fg = fgMap[s.field]; if (!fg) return;
+                        const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                        if (st == null || en == null) return;
+                        (_slotMap[fg.group + '|' + st + '|' + en] = _slotMap[fg.group + '|' + st + '|' + en] || []).push({ s: s, field: s.field, grade: bunkGrade[String(bb)], bunk: String(bb), st: st, en: en });
+                    });
+                });
+                Object.keys(_slotMap).forEach(function (key) {
+                    const list = _slotMap[key];
+                    if (list.length < 2) return;
+                    const bySen = list.slice().sort(function (a, b) { return _sen(b.grade) - _sen(a.grade); });
+                    const fieldsByRank = list.map(function (p) { return p.field; }).sort(function (a, b) { return fgMap[a].rank - fgMap[b].rank; });
+                    let anyChange = false, ok = true;
+                    for (let i = 0; i < bySen.length; i++) {
+                        const tgt = fieldsByRank[i], p = bySen[i];
+                        if ((hostsBySport[p.s._activity] || []).indexOf(tgt) < 0) ok = false;
+                        if (p.s.field !== tgt) { anyChange = true; if (_validateWritePlacement(tgt, p.s._activity, p.grade, p.bunk, p.st, p.en)) ok = false; }
+                    }
+                    if (!anyChange || !ok) return;
+                    for (let j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
+                    moved++;
+                });
                 try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_eL) {}
                 if (moved > 0) log('  🏟️ Field-quality re-opt: moved ' + moved + ' placement(s) to a better-ranked field.');
             })();
