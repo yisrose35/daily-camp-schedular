@@ -21424,6 +21424,10 @@
                     const bs = String(b), grade = bunkGrade[bs];
                     (sa[b] || []).forEach(function (s) {
                         if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        // Forced-pair lock: never move a paired half (Phase A would
+                        // otherwise drag one half of a pair to a better-ranked field
+                        // in the group and split the co-location).
+                        if (s._pairLock) return;
                         const cur = fgMap[s.field]; if (!cur) return;
                         const sport = s._activity; if (!sport) return;
                         const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
@@ -21455,6 +21459,10 @@
                 Object.keys(sa).forEach(function (bb) {
                     (sa[bb] || []).forEach(function (s) {
                         if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        // Forced-pair lock: exclude pair halves from the seniority
+                        // re-pair — pairs live on a specific shared field by design
+                        // and must not be redistributed across the group's ranks.
+                        if (s._pairLock) return;
                         const fg = fgMap[s.field]; if (!fg) return;
                         const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
                         if (st == null || en == null) return;

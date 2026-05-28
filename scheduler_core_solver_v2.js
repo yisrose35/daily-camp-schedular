@@ -2379,6 +2379,10 @@
           const bs = String(bunk), grade = bunkGrade[bs];
           for (const s of slots) {
             if (!s || s.continuation || !s.field || s.field === 'Free') continue;
+            // Forced-pair lock: never move a paired half to a different field — the
+            // pair lives on a specific shared field by design; FQ Phase A would
+            // otherwise drag one half to a better-ranked field and split the pair.
+            if (s._pairLock) continue;
             const cur = fgMap[s.field]; if (!cur) continue;
             const sport = s._activity; if (!sport) continue;
             const st = s._startMin, en = s._endMin; if (st == null || en == null) continue;
@@ -2411,6 +2415,10 @@
           const _sl = sched[_bk]; if (!Array.isArray(_sl)) continue;
           for (const _s of _sl) {
             if (!_s || _s.continuation || !_s.field || _s.field === 'Free') continue;
+            // Forced-pair lock: exclude from Phase B re-pair — leaving them in
+            // would let the seniority sort distribute pair halves across the
+            // group's rank order (Field 1/2/3/...), breaking the co-location.
+            if (_s._pairLock) continue;
             const _fg = fgMap[_s.field]; if (!_fg) continue;
             const _st = _s._startMin, _en = _s._endMin; if (_st == null || _en == null) continue;
             (_slotMap[_fg.group + '|' + _st + '|' + _en] = _slotMap[_fg.group + '|' + _st + '|' + _en] || []).push({ s: _s, field: _s.field, grade: bunkGrade[String(_bk)] });
