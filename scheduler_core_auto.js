@@ -17371,6 +17371,37 @@
             const _specials = _gs.app1?.specialActivities || [];
             const fld = _fields.find(f => f && f.name === fieldName);
             const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
+            // ★ DA Resources: field disabled for today → no placement allowed
+            //   (FQ-REOPT, active-pairing, time-reloc, drop-refill, and the write
+            //   step all flow through this validator — adding the check here
+            //   gates every path consistently).
+            if (window.currentDisabledFields && window.currentDisabledFields.includes(fieldName)) {
+                return 'DA Resources: field disabled today';
+            }
+            // ★ DA Resources: per-field daily sport disable (e.g. Baseball turned
+            //   off on Baseball Field 1 but allowed on 2/3/4). Reads the same
+            //   sources as the generator's STEP 1 dailyDisabledSportsByField.
+            if (activityName) {
+                let _dailySports = null;
+                try {
+                    const _dd = window.loadCurrentDailyData?.()?.dailyDisabledSportsByField;
+                    if (_dd && _dd[fieldName]) _dailySports = _dd[fieldName];
+                    else {
+                        const _dk = window.currentScheduleDate || '';
+                        if (_dk) {
+                            const _stored = localStorage.getItem('campResourceOverrides_' + _dk);
+                            if (_stored) {
+                                const _parsed = JSON.parse(_stored);
+                                const _ls = _parsed?.dailyDisabledSportsByField?.[fieldName];
+                                if (Array.isArray(_ls)) _dailySports = _ls;
+                            }
+                        }
+                    }
+                } catch (_e) {}
+                if (Array.isArray(_dailySports) && _dailySports.some(s => String(s).toLowerCase().trim() === String(activityName).toLowerCase().trim())) {
+                    return 'DA Resources: sport disabled on this field today';
+                }
+            }
             if (fld?.accessRestrictions?.enabled
                 && fld.accessRestrictions.divisions
                 && Object.keys(fld.accessRestrictions.divisions).length > 0) {
