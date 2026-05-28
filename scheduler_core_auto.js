@@ -21983,6 +21983,22 @@
                             var tn = ts._activity || ts.sport;
                             if (tn) playedToday.add(String(tn).toLowerCase());
                         }
+                        // ★ Respect Daily Adjustments → Resources overrides: skip fields
+                        //   that have been disabled for today via the UI. Without this,
+                        //   drop-refill would silently re-introduce a sport on a field
+                        //   the user explicitly turned off.
+                        var _disabledForDay = new Set((window.currentDisabledFields || []).map(String));
+                        var _dailyDisabledSportsByField = {};
+                        try {
+                            var _dk = window.currentScheduleDate || '';
+                            if (_dk) {
+                                var _s = localStorage.getItem('campResourceOverrides_' + _dk);
+                                if (_s) {
+                                    var _p = JSON.parse(_s);
+                                    _dailyDisabledSportsByField = (_p && _p.dailyDisabledSportsByField) || {};
+                                }
+                            }
+                        } catch (_eL) {}
                         var replacements = [];
                         for (var pi = 0; pi < pool.length; pi++) {
                             var act = pool[pi];
@@ -21995,7 +22011,11 @@
                             for (var fi = 0; fi < _flds.length; fi++) {
                                 var f = _flds[fi];
                                 if (!f || !f.name) continue;
+                                if (_disabledForDay.has(f.name)) continue; // DA Resources: field disabled today
                                 if (!_fieldHosts(f.name, act)) continue;
+                                // DA Resources: per-field sport disable for today
+                                var _disSports = _dailyDisabledSportsByField[f.name];
+                                if (Array.isArray(_disSports) && _disSports.some(function (ds) { return String(ds).toLowerCase().trim() === String(act).toLowerCase().trim(); })) continue;
                                 replacements.push({ act: act, field: f.name });
                             }
                         }
