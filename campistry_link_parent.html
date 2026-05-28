@@ -268,14 +268,72 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
     <div><h1>Forms &amp; Documents</h1><p>Complete forms and access camp documents</p></div>
 </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Action Required</h2><span class="badge badge-warn">2 pending</span></div>
-        <div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div><div class="doc-info"><h4>Medical Update Form</h4><p>Eli Miller · Due June 15</p></div><button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button></div>
-        <div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div><div class="doc-info"><h4>Photo Release Consent</h4><p>Mia Miller · Due June 20</p></div><button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button></div>
+
+    <!-- Digital forms: fill out in the app -->
+    <div class="lk-card"><div class="lk-card-head"><h2>Complete Online</h2><span class="badge badge-warn">2 pending</span></div>
+        <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px;">These forms can be filled out directly in the app.</p>
+        <div class="doc-item">
+            <div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
+            <div class="doc-info"><h4>Medical Update Form</h4><p>Eli Miller · Due June 15</p></div>
+            <button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button>
+        </div>
+        <div class="doc-item">
+            <div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
+            <div class="doc-info"><h4>Photo Release Consent</h4><p>Mia Miller · Due June 20</p></div>
+            <button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button>
+        </div>
     </div>
+
+    <!-- Print & Return forms -->
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Print &amp; Return</h2><span class="badge badge-warn">2 pending</span></div>
+        <div style="background:var(--amber-50);border:1px solid var(--amber-200);border-radius:var(--radius-md);padding:10px 14px;margin-bottom:14px;font-size:.78rem;color:var(--amber-700);display:flex;gap:8px;align-items:flex-start;">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span>Download the blank form, print it, fill it by hand, then send it back as a photo or PDF using the Upload button.</span>
+        </div>
+        <div id="printReturnList">
+            <div class="doc-item" id="pr-waiver-eli">
+                <div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div>
+                <div class="doc-info">
+                    <h4>General Liability Waiver</h4>
+                    <p>Eli Miller · Due June 15 · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn btn-secondary btn-sm" onclick="downloadBlankForm('waiver-eli')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>
+                    <label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload
+                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn('waiver-eli','Eli Miller','General Liability Waiver',this)">
+                    </label>
+                </div>
+            </div>
+            <div class="doc-item" id="pr-waiver-mia">
+                <div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div>
+                <div class="doc-info">
+                    <h4>General Liability Waiver</h4>
+                    <p>Mia Miller · Due June 15 · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn btn-secondary btn-sm" onclick="downloadBlankForm('waiver-mia')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>
+                    <label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload
+                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn('waiver-mia','Mia Miller','General Liability Waiver',this)">
+                    </label>
+                </div>
+            </div>
+            <div class="doc-item" id="pr-trip-eli" style="opacity:.6;">
+                <div class="doc-icon" style="background:var(--green-50);color:var(--green-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
+                <div class="doc-info">
+                    <h4>Trip Permission Slip</h4>
+                    <p>Eli Miller · <span class="badge badge-ok" style="font-size:.62rem;">Submitted Jun 2</span></p>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="toast('Re-uploading...')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Camp Documents: download only -->
     <div class="lk-card"><div class="lk-card-head"><h2>Camp Documents</h2></div>
-        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div><div class="doc-info"><h4>Parent Handbook 2026</h4><p>Camp rules and guidelines</p></div><button class="btn btn-secondary btn-sm">Download</button></div>
-        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div><div class="doc-info"><h4>Summer Calendar</h4><p>Key dates and events</p></div><button class="btn btn-secondary btn-sm">Download</button></div>
-        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div><div class="doc-info"><h4>Bus Routes & Times</h4><p>Pickup and dropoff schedule</p></div><button class="btn btn-secondary btn-sm">Download</button></div>
+        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div><div class="doc-info"><h4>Parent Handbook 2026</h4><p>Camp rules and guidelines</p></div><button class="btn btn-secondary btn-sm" onclick="toast('Downloading...')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button></div>
+        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg></div><div class="doc-info"><h4>Summer Calendar</h4><p>Key dates and events</p></div><button class="btn btn-secondary btn-sm" onclick="toast('Downloading...')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button></div>
+        <div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 5v3h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg></div><div class="doc-info"><h4>Bus Routes &amp; Times</h4><p>Pickup and dropoff schedule</p></div><button class="btn btn-secondary btn-sm" onclick="toast('Downloading...')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button></div>
     </div>
 </div>
 
@@ -689,6 +747,29 @@ function switchCanteen(id,btn){
     var txs=canteenTxByChild[id]||[];
     if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3></div>';return;}
     txs.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
+}
+
+function downloadBlankForm(id){
+    toast('Downloading blank form — print, fill by hand, then upload it back.');
+}
+function handleFormReturn(formId,camperName,formName,input){
+    if(!input.files||!input.files[0])return;
+    var file=input.files[0];
+    var row=document.getElementById('pr-'+formId);
+    if(row){
+        var info=row.querySelector('.doc-info');
+        if(info){
+            var p=info.querySelector('p');
+            var now=new Date();
+            var ds=(now.getMonth()+1)+'/'+now.getDate();
+            if(p)p.innerHTML=camperName+' &nbsp;&middot;&nbsp; <span class="badge badge-info" style="font-size:.62rem;">Submitted '+ds+'</span>';
+        }
+        row.style.opacity='0.6';
+        var actions=row.querySelector('div[style*="display:flex"]');
+        if(actions){actions.innerHTML='<button class="btn btn-ghost btn-sm" onclick="toast(\'Re-uploading...\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>';}
+    }
+    toast(camperName+' — '+formName+' submitted! Camp will review it shortly.');
+    input.value='';
 }
 
 function switchHealth(id,btn){

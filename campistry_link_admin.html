@@ -134,6 +134,10 @@
         </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
+        <button class="lk-nav-item" data-page="documents" onclick="nav('documents')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+            Documents
+        </button>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Photos
@@ -394,6 +398,112 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════ -->
+<!--  DOCUMENTS                                          -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-documents">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div>
+            <h1>Documents</h1>
+            <p>Submitted forms from families — auto-filed into folders by grade, division, or type</p>
+        </div>
+    </div>
+
+    <!-- Folder list view -->
+    <div id="docFolderListView">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div class="lk-tabs" style="margin:0;border:none;">
+                <button class="lk-tab active" onclick="filterDocSubmissions('all',this)">All Submissions</button>
+                <button class="lk-tab" onclick="filterDocSubmissions('unfiled',this)">Unfiled</button>
+                <button class="lk-tab" onclick="filterDocSubmissions('folders',this)">Folders</button>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="showCreateFolder()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Folder
+            </button>
+        </div>
+
+        <!-- Create folder inline form (hidden by default) -->
+        <div id="createFolderForm" style="display:none;">
+            <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:0;">
+                <div class="lk-card-head"><h2>Create Folder</h2><button class="btn btn-ghost btn-sm" onclick="hideCreateFolder()">Cancel</button></div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                    <div class="lk-field" style="grid-column:1/-1;"><label>Folder Name</label><input type="text" class="lk-input" id="folderName" placeholder='e.g. "Grade 1 Waivers", "Seniors Trip Slips"'></div>
+                    <div class="lk-field"><label>Document Type <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                        <select class="lk-select" id="folderDocType">
+                            <option value="">Any document type</option>
+                            <option value="waiver">Waiver</option>
+                            <option value="medical">Medical Form</option>
+                            <option value="permission">Permission Slip</option>
+                            <option value="consent">Consent Form</option>
+                            <option value="other">Other</option>
+                        </select>
+                    </div>
+                    <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                        <select class="lk-select" id="folderGrade">
+                            <option value="">Any grade</option>
+                            <option>1st Grade</option>
+                            <option>2nd Grade</option>
+                            <option>3rd Grade</option>
+                            <option>4th Grade</option>
+                            <option>5th Grade</option>
+                            <option>6th Grade</option>
+                            <option>7th Grade</option>
+                            <option>8th Grade</option>
+                        </select>
+                    </div>
+                    <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                        <select class="lk-select" id="folderDivision">
+                            <option value="">Any division</option>
+                            <option>Juniors</option>
+                            <option>Seniors</option>
+                            <option>CITs</option>
+                        </select>
+                    </div>
+                    <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                        <input type="text" class="lk-input" id="folderBunk" placeholder='e.g. "Bunk 4" or leave blank'>
+                    </div>
+                </div>
+                <p style="font-size:.76rem;color:var(--slate-400);margin:8px 0 12px;">All rules are optional — the more you fill in, the more specific the auto-filing. Leave all blank to manually file.</p>
+                <button class="btn btn-primary btn-sm" onclick="createFolder()">Create Folder</button>
+            </div>
+        </div>
+
+        <!-- Folders grid -->
+        <div id="foldersGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px;"></div>
+
+        <!-- All submissions list -->
+        <div class="lk-card" id="docSubmissionsCard">
+            <div class="lk-card-head">
+                <h2 id="docSubmissionsTitle">All Submissions</h2>
+                <input type="text" class="lk-input" placeholder="Search..." id="docSearch" oninput="renderDocSubmissions(currentDocFilter,this.value)" style="max-width:180px;font-size:.8rem;padding:5px 10px;height:auto;">
+            </div>
+            <div id="docSubmissionsList"></div>
+        </div>
+    </div>
+
+    <!-- Folder detail view -->
+    <div id="docFolderDetailView" style="display:none;">
+        <button class="btn btn-ghost btn-sm" onclick="closeFolderDetail()" style="margin-bottom:12px;">&larr; All Folders</button>
+        <div class="lk-card">
+            <div class="lk-card-head">
+                <div>
+                    <h2 id="folderDetailName">Folder</h2>
+                    <div id="folderDetailRules" style="font-size:.74rem;color:var(--slate-400);margin-top:2px;"></div>
+                </div>
+                <div style="display:flex;gap:6px;">
+                    <button class="btn btn-secondary btn-sm" onclick="printFolderDocs()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print All</button>
+                    <button class="btn btn-ghost btn-sm" onclick="deleteFolderPrompt()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></button>
+                </div>
+            </div>
+            <div id="folderDetailList"></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
 <!--  PHOTOS                                             -->
 <!-- ═══════════════════════════════════════════════════ -->
 <div class="lk-page" id="page-photos">
@@ -578,6 +688,7 @@ function nav(p) {
     if (p === 'campers') renderCampers('');
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
     if (p === 'messages') renderAdminMsgs('all');
+    if (p === 'documents') { renderFoldersGrid(); renderDocSubmissions('all',''); }
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
@@ -840,6 +951,208 @@ function closeAdminMsgDetail() {
     document.getElementById('adminMsgListView').style.display = '';
     document.getElementById('adminMsgDetailView').style.display = 'none';
     renderAdminMsgs('all');
+}
+
+// ─── DOCUMENTS & FOLDER MANAGER ─────────────────────────────────────────────
+var docFolders = [
+    { id:1, name:'Grade 1 Waivers',       rules:{ docType:'waiver',     grade:'1st Grade', division:'',      bunk:'' }, docs:[] },
+    { id:2, name:'Juniors Permission Slips', rules:{ docType:'permission', grade:'',          division:'Juniors', bunk:'' }, docs:[] },
+    { id:3, name:'Seniors Medical',        rules:{ docType:'medical',    grade:'',          division:'Seniors', bunk:'' }, docs:[] }
+];
+var docSubmissions = [
+    { id:1, camper:'Mia Miller',  grade:'1st Grade', division:'Juniors', bunk:'Bunk 4', docType:'waiver',     name:'General Liability Waiver', filename:'waiver_mia_miller.pdf',  date:'Jun 3',  folderId:1 },
+    { id:2, camper:'Eli Miller',  grade:'3rd Grade', division:'Juniors', bunk:'Bunk 4', docType:'permission', name:'Trip Permission Slip',      filename:'trip_eli_miller.jpg',    date:'Jun 2',  folderId:2 },
+    { id:3, camper:'Noah Stern',  grade:'5th Grade', division:'Seniors', bunk:'Bunk 7', docType:'medical',    name:'Medical Update Form',       filename:'medical_noah_stern.pdf', date:'Jun 1',  folderId:3 },
+    { id:4, camper:'Sophie Cohen',grade:'6th Grade', division:'Seniors', bunk:'Bunk 9', docType:'waiver',     name:'General Liability Waiver',  filename:'waiver_sophie_cohen.pdf',date:'Jun 4',  folderId:null },
+    { id:5, camper:'Jake Levy',   grade:'3rd Grade', division:'Juniors', bunk:'Bunk 4', docType:'consent',    name:'Photo Release Consent',     filename:'consent_jake_levy.pdf',  date:'Jun 5',  folderId:null }
+];
+// Auto-file new submissions into matching folders on load
+docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
+
+var currentDocFilter = 'all';
+var currentFolderId = null;
+
+function autoFileSubmission(sub) {
+    docFolders.forEach(function(f) {
+        var r = f.rules;
+        var match = true;
+        if (r.docType   && r.docType   !== sub.docType)   match = false;
+        if (r.grade     && r.grade     !== sub.grade)     match = false;
+        if (r.division  && r.division  !== sub.division)  match = false;
+        if (r.bunk      && r.bunk      !== sub.bunk)      match = false;
+        if (match && !f.docs.find(function(d){ return d.id === sub.id; })) {
+            f.docs.push(sub);
+            sub.folderId = f.id;
+        }
+    });
+}
+
+function renderFoldersGrid() {
+    var g = document.getElementById('foldersGrid'); if (!g) return;
+    if (!docFolders.length) { g.innerHTML = ''; return; }
+    g.innerHTML = docFolders.map(function(f) {
+        var ruleChips = [];
+        if (f.rules.docType)   ruleChips.push(f.rules.docType);
+        if (f.rules.grade)     ruleChips.push(f.rules.grade);
+        if (f.rules.division)  ruleChips.push(f.rules.division);
+        if (f.rules.bunk)      ruleChips.push(f.rules.bunk);
+        var chips = ruleChips.map(function(r){ return '<span class="badge badge-neutral" style="font-size:.62rem;">'+esc(r)+'</span>'; }).join(' ');
+        return '<div class="lk-card" style="cursor:pointer;padding:14px;" onclick="openFolderDetail('+f.id+')">' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' +
+                '<div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' +
+                '</div>' +
+                '<div style="flex:1;min-width:0;">' +
+                    '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);">'+esc(f.name)+'</div>' +
+                    '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">'+f.docs.length+' document'+(f.docs.length!==1?'s':'')+'</div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:4px;">'+(chips||'<span style="font-size:.72rem;color:var(--slate-400);">No auto-file rules</span>')+'</div>' +
+        '</div>';
+    }).join('');
+}
+
+function openFolderDetail(fid) {
+    var f = docFolders.find(function(x){ return x.id === fid; }); if (!f) return;
+    currentFolderId = fid;
+    document.getElementById('docFolderListView').style.display = 'none';
+    document.getElementById('docFolderDetailView').style.display = '';
+    document.getElementById('folderDetailName').textContent = f.name;
+    var ruleStr = [];
+    if (f.rules.docType)   ruleStr.push('Type: '+f.rules.docType);
+    if (f.rules.grade)     ruleStr.push('Grade: '+f.rules.grade);
+    if (f.rules.division)  ruleStr.push('Division: '+f.rules.division);
+    if (f.rules.bunk)      ruleStr.push('Bunk: '+f.rules.bunk);
+    document.getElementById('folderDetailRules').textContent = ruleStr.length ? 'Auto-filing: ' + ruleStr.join(' · ') : 'No auto-file rules — manual filing only';
+    renderFolderDocs(f);
+}
+
+function renderFolderDocs(f) {
+    var box = document.getElementById('folderDetailList');
+    if (!f.docs.length) {
+        box.innerHTML = '<div class="lk-empty" style="padding:28px;"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div><h3>No documents yet</h3><p>Submissions matching this folder\'s rules will appear here automatically.</p></div>';
+        return;
+    }
+    box.innerHTML = f.docs.map(function(d){ return docRow(d, true); }).join('');
+}
+
+function closeFolderDetail() {
+    document.getElementById('docFolderDetailView').style.display = 'none';
+    document.getElementById('docFolderListView').style.display = '';
+    currentFolderId = null;
+    renderFoldersGrid();
+}
+
+function filterDocSubmissions(f, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){ t.classList.remove('active'); }); btn.classList.add('active'); }
+    currentDocFilter = f;
+    if (f === 'folders') {
+        document.getElementById('docSubmissionsCard').style.display = 'none';
+    } else {
+        document.getElementById('docSubmissionsCard').style.display = '';
+        var title = f === 'unfiled' ? 'Unfiled Submissions' : 'All Submissions';
+        document.getElementById('docSubmissionsTitle').textContent = title;
+        renderDocSubmissions(f, document.getElementById('docSearch').value);
+    }
+}
+
+function renderDocSubmissions(f, q) {
+    q = (q || '').toLowerCase();
+    var list = docSubmissions.filter(function(d) {
+        if (f === 'unfiled' && d.folderId) return false;
+        if (q && (d.camper+d.name+d.docType+d.grade+d.division).toLowerCase().indexOf(q) < 0) return false;
+        return true;
+    });
+    var box = document.getElementById('docSubmissionsList');
+    if (!list.length) {
+        box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem);">' + (f==='unfiled'?'All submissions are filed!':'No submissions yet') + '</div>';
+        return;
+    }
+    box.innerHTML = list.map(function(d){ return docRow(d, false); }).join('');
+}
+
+function docRow(d, inFolder) {
+    var ext = (d.filename||'').split('.').pop().toUpperCase();
+    var extColor = ext==='PDF' ? 'var(--red-500)' : 'var(--blue-500)';
+    var folderInfo = !inFolder && d.folderId ? '<span class="badge badge-ok" style="font-size:.62rem;">Filed: '+esc((docFolders.find(function(f){return f.id===d.folderId;})||{name:'—'}).name)+'</span>' : '';
+    var unfiledBadge = !inFolder && !d.folderId ? '<span class="badge badge-warn" style="font-size:.62rem;">Unfiled</span>' : '';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:var(--slate-100);display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:800;color:'+extColor+';flex-shrink:0;">'+ext+'</div>' +
+        '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(d.name)+'</div>' +
+            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">'+esc(d.camper)+' &nbsp;&middot;&nbsp; '+esc(d.grade||d.division)+' &nbsp;&middot;&nbsp; Submitted '+esc(d.date)+' &nbsp;'+folderInfo+unfiledBadge+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:5px;flex-shrink:0;">' +
+            '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading '+esc(d.filename)+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>' +
+            (!inFolder ? '<button class="btn btn-ghost btn-sm" onclick="moveToFolder('+d.id+')" title="File into folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>' : '') +
+        '</div>' +
+    '</div>';
+}
+
+function moveToFolder(docId) {
+    var d = docSubmissions.find(function(x){ return x.id===docId; }); if (!d) return;
+    if (!docFolders.length) { toast('Create a folder first'); return; }
+    var sel = prompt('File into folder:\n' + docFolders.map(function(f,i){ return (i+1)+'. '+f.name; }).join('\n') + '\nEnter number:');
+    var idx = parseInt(sel,10) - 1;
+    if (isNaN(idx) || !docFolders[idx]) return;
+    var f = docFolders[idx];
+    d.folderId = f.id;
+    if (!f.docs.find(function(x){ return x.id===d.id; })) f.docs.push(d);
+    renderDocSubmissions(currentDocFilter, document.getElementById('docSearch').value);
+    renderFoldersGrid();
+    toast(esc(d.camper)+'\'s '+esc(d.name)+' filed into "'+esc(f.name)+'"');
+}
+
+function showCreateFolder() { document.getElementById('createFolderForm').style.display = ''; document.getElementById('folderName').focus(); }
+function hideCreateFolder() { document.getElementById('createFolderForm').style.display = 'none'; }
+
+function createFolder() {
+    var name = document.getElementById('folderName').value.trim();
+    if (!name) { toast('Enter a folder name'); return; }
+    var rules = {
+        docType:  document.getElementById('folderDocType').value,
+        grade:    document.getElementById('folderGrade').value,
+        division: document.getElementById('folderDivision').value,
+        bunk:     document.getElementById('folderBunk').value.trim()
+    };
+    var fid = Date.now();
+    var folder = { id:fid, name:name, rules:rules, docs:[] };
+    docFolders.push(folder);
+    // auto-file existing unmatched submissions
+    var newlyFiled = 0;
+    docSubmissions.forEach(function(sub) {
+        if (sub.folderId) return;
+        var r = rules, match = true;
+        if (r.docType  && r.docType  !== sub.docType)   match = false;
+        if (r.grade    && r.grade    !== sub.grade)      match = false;
+        if (r.division && r.division !== sub.division)   match = false;
+        if (r.bunk     && r.bunk     !== sub.bunk)       match = false;
+        if (match) { folder.docs.push(sub); sub.folderId = fid; newlyFiled++; }
+    });
+    hideCreateFolder();
+    document.getElementById('folderName').value = '';
+    document.getElementById('folderDocType').value = '';
+    document.getElementById('folderGrade').value = '';
+    document.getElementById('folderDivision').value = '';
+    document.getElementById('folderBunk').value = '';
+    renderFoldersGrid();
+    renderDocSubmissions(currentDocFilter, '');
+    toast('Folder "'+name+'" created' + (newlyFiled ? ' — '+newlyFiled+' existing submission'+(newlyFiled>1?'s':'')+' auto-filed' : ''));
+}
+
+function printFolderDocs() {
+    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
+    if (!f.docs.length) { toast('No documents in this folder'); return; }
+    toast('Printing '+f.docs.length+' document'+(f.docs.length>1?'s':'')+' from "'+f.name+'"...');
+}
+
+function deleteFolderPrompt() {
+    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
+    if (!confirm('Delete folder "'+f.name+'"? Documents will be unfiled (not deleted).')) return;
+    f.docs.forEach(function(d){ if(d.folderId===currentFolderId) d.folderId=null; });
+    docFolders = docFolders.filter(function(x){ return x.id!==currentFolderId; });
+    closeFolderDetail();
+    toast('Folder deleted');
 }
 
 // ─── CANTEEN FILTER ──────────────────────────────────────────────────────────
