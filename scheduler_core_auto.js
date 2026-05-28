@@ -4096,6 +4096,33 @@
                 }
                 const playerReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(name);
                 const needsPairing = playerReqs?.minPlayers && bunkSize < playerReqs.minPlayers;
+                // ★ Preventive infeasibility filter (forced-pairing follow-on):
+                //   When this bunk's size is below the sport's minPlayers AND there's
+                //   no same-grade partner whose size could bring the combined total
+                //   into [minPlayers, maxPlayers], the bunk can NEVER field a viable
+                //   team for this sport. Exclude it from the priority list so the
+                //   planner/Phase 3 won't even consider it. Example: Minors is a
+                //   single-bunk division (size 6) and Baseball needs minPlayers 18 —
+                //   no partner can ever exist, so Baseball is dropped from Minors 1's
+                //   sport menu entirely. The downstream active pairing passes (which
+                //   only fire on under-min placements that DO have a feasible partner)
+                //   are not affected.
+                if (needsPairing) {
+                    var _peerBunks = getBunksForGrade(grade, divisions) || [];
+                    var _bmd = (window.getBunkMetaData && window.getBunkMetaData()) || {};
+                    var _canEverPair = false;
+                    for (var _pbi = 0; _pbi < _peerBunks.length; _pbi++) {
+                        var _pb = _peerBunks[_pbi];
+                        if (String(_pb) === String(bunk)) continue;
+                        var _pbSize = (_bmd[_pb] && typeof _bmd[_pb].size === 'number') ? _bmd[_pb].size : 0;
+                        if (!_pbSize) continue;
+                        var _comb = bunkSize + _pbSize;
+                        if (_comb >= playerReqs.minPlayers && (!playerReqs.maxPlayers || _comb <= playerReqs.maxPlayers)) {
+                            _canEverPair = true; break;
+                        }
+                    }
+                    if (!_canEverPair) return; // skip this sport — pairing is impossible for this bunk
+                }
                 sportPriorityList.push({
                     name, type: 'sport', rotationScore: score,
                     dMin: sportConstraints.dMin, dMax: sportConstraints.dMax, dIdeal: sportConstraints.dIdeal,
@@ -21667,6 +21694,198 @@
                 if (formedPairs > 0) log('  🤝 Active pairing: formed ' + formedPairs + ' new pair(s) via partner swap/fill.');
             })();
         } catch (_eAP) { try { warn('[ActivePairing] ' + (_eAP && _eAP.message)); } catch (_e2) {} }
+
+        // ── TIME-RELOCATION active pairing pass ──
+        // The same-time swap above only catches partners B free or with a sport at
+        // A's exact time T1. This pass catches the remaining case: B already plays
+        // the same sport S at a DIFFERENT time T2 (so S is already in B's day, just
+        // mistimed for pairing). We do a two-slot swap on B: B's T1 activity X
+        // moves to T2 (on B's original T1 field), and B's T2 sport S moves to T1
+        // (on A's field F1) — putting B alongside A and freeing T2 for X.
+        // Validates: all 4 placements (B@T1 new, B@T2 new) pass _validateWritePlacement,
+        // field capacities aren't exceeded, cooldown OK, combined size in [min,max].
+        try {
+            (function _activeTimeRelocPass() {
+                var sa = window.scheduleAssignments || {};
+                var bmd = (window.getBunkMetaData && window.getBunkMetaData()) || {};
+                var bunkGradeP = {};
+                allGrades.forEach(function (g) {
+                    getBunksForGrade(g, divisions).forEach(function (b) { bunkGradeP[String(b)] = g; });
+                });
+                function _sz(b) {
+                    if (bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+                    return 0;
+                }
+                var getReqs = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getSportPlayerRequirements;
+                if (!getReqs) return;
+                var _gs = getGlobalSettings();
+                var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                var fieldByName = {};
+                _flds.forEach(function (f) { if (f && f.name) fieldByName[f.name] = f; });
+                function _fieldHosts(fname, sport) {
+                    var f = fieldByName[fname];
+                    if (!f) return false;
+                    return (f.activities || []).some(function (a) { return String(a).toLowerCase().trim() === String(sport).toLowerCase().trim(); });
+                }
+                function _fieldCap(fname) {
+                    var f = fieldByName[fname];
+                    if (!f) return 1;
+                    return parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+                        || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+                }
+                function _fieldSharable(fname) {
+                    var f = fieldByName[fname];
+                    if (!f) return false;
+                    var t = (f.sharableWith && f.sharableWith.type) || 'not_sharable';
+                    return t !== 'not_sharable' && _fieldCap(fname) >= 2;
+                }
+                function _fieldOccupants(fname, st, en, excludeBunk) {
+                    var occ = [];
+                    Object.keys(sa).forEach(function (b) {
+                        if (String(b) === String(excludeBunk)) return;
+                        (sa[b] || []).forEach(function (ss) {
+                            if (!ss || ss.continuation || ss.field !== fname) return;
+                            var sst = ss._startMin != null ? ss._startMin : ss.startMin;
+                            var sse = ss._endMin != null ? ss._endMin : ss.endMin;
+                            if (sst < en && sse > st) occ.push({ bunk: String(b), slot: ss });
+                        });
+                    });
+                    return occ;
+                }
+                var skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
+                function _isProtected(s) {
+                    if (!s) return true;
+                    if (s._pinned || s._autoSpecial || s._isRotationEvent || s._isPrep || s._league || s._pairLock) return true;
+                    var act = String(s._activity || s.sport || '').toLowerCase();
+                    if (skipActs.indexOf(act) >= 0 && act !== 'free' && act !== 'general activity slot' && act !== '') return true;
+                    return false;
+                }
+                var formedReloc = 0, scannedSolo = 0;
+                Object.keys(sa).forEach(function (aBunk) {
+                    var aSlots = sa[aBunk] || [];
+                    for (var aIdx = 0; aIdx < aSlots.length; aIdx++) {
+                        var aSlot = aSlots[aIdx];
+                        if (!aSlot || aSlot.continuation || aSlot._pairLock) continue;
+                        if (aSlot._pinned || aSlot._autoSpecial || aSlot._isRotationEvent || aSlot._isPrep || aSlot._league) continue;
+                        var sport = aSlot._activity || aSlot.sport;
+                        if (!sport) continue;
+                        if (skipActs.indexOf(String(sport).toLowerCase()) >= 0) continue;
+                        var reqs = getReqs(sport);
+                        if (!reqs || !reqs.minPlayers) continue;
+                        var aSize = _sz(aBunk);
+                        if (!aSize || aSize >= reqs.minPlayers) continue;
+                        var t1s = aSlot._startMin != null ? aSlot._startMin : aSlot.startMin;
+                        var t1e = aSlot._endMin != null ? aSlot._endMin : aSlot.endMin;
+                        if (t1s == null || t1e == null) continue;
+                        var aField = aSlot.field;
+                        if (!aField || aField === 'Free') continue;
+                        if (!_fieldSharable(aField)) continue;
+                        if (!_fieldHosts(aField, sport)) continue;
+                        var occT1 = _fieldOccupants(aField, t1s, t1e, aBunk);
+                        if (occT1.length + 1 >= _fieldCap(aField)) continue;
+                        if (occT1.some(function (o) { return (o.slot._activity || o.slot.sport) !== sport; })) continue;
+                        var myGrade = bunkGradeP[String(aBunk)];
+                        if (!myGrade) continue;
+                        scannedSolo++;
+                        var partners = getBunksForGrade(myGrade, divisions).map(String).filter(function (b) { return b !== String(aBunk); });
+                        var candidate = null;
+                        for (var pi = 0; pi < partners.length; pi++) {
+                            var bBunk = partners[pi];
+                            var bSize = _sz(bBunk);
+                            if (!bSize) continue;
+                            var combined = aSize + bSize;
+                            if (combined < reqs.minPlayers) continue;
+                            if (reqs.maxPlayers && combined > reqs.maxPlayers) continue;
+                            var bSlots = sa[bBunk] || [];
+                            // Find B's slot at T1
+                            var bT1Idx = -1, bT1Slot = null;
+                            // Find B's slot playing sport S at T2 ≠ T1
+                            var bT2Idx = -1, bT2Slot = null, t2s = null, t2e = null;
+                            for (var bi = 0; bi < bSlots.length; bi++) {
+                                var bs = bSlots[bi];
+                                if (!bs || bs.continuation) continue;
+                                var bst = bs._startMin != null ? bs._startMin : bs.startMin;
+                                var bse = bs._endMin != null ? bs._endMin : bs.endMin;
+                                if (bst === t1s && bse === t1e) { bT1Idx = bi; bT1Slot = bs; }
+                                else if ((bs._activity === sport || bs.sport === sport) && bst != null) {
+                                    if (bT2Idx < 0) { bT2Idx = bi; bT2Slot = bs; t2s = bst; t2e = bse; }
+                                }
+                            }
+                            if (bT1Idx < 0 || bT2Idx < 0) continue;
+                            if (_isProtected(bT1Slot) || _isProtected(bT2Slot)) continue;
+                            var t1Dur = t1e - t1s;
+                            var t2Dur = (t2e || 0) - (t2s || 0);
+                            if (t1Dur !== t2Dur) continue; // require same duration (we're swapping slot contents 1:1)
+                            // X = B's T1 activity, fieldX = B's T1 field
+                            var X = bT1Slot._activity || bT1Slot.sport;
+                            var fieldX = bT1Slot.field;
+                            if (!X || !fieldX || fieldX === 'Free') continue;
+                            if (skipActs.indexOf(String(X).toLowerCase()) >= 0) continue;
+                            // Pre-validate the new placements:
+                            //   (1) B at T1 plays S on aField — must pass access/time + capacity already checked
+                            //   (2) B at T2 plays X on fieldX — must pass access/time + have spare capacity
+                            var why1 = _validateWritePlacement(aField, sport, myGrade, bBunk, t1s, t1e);
+                            if (why1) continue;
+                            var why2 = _validateWritePlacement(fieldX, X, myGrade, bBunk, t2s, t2e);
+                            if (why2) continue;
+                            // Capacity for fieldX at T2: include all OTHER bunks (excluding B's T2 entry which we're replacing)
+                            var occFieldXT2 = _fieldOccupants(fieldX, t2s, t2e, bBunk);
+                            if (occFieldXT2.length + 1 > _fieldCap(fieldX)) continue;
+                            if (occFieldXT2.some(function (o) { return (o.slot._activity || o.slot.sport) !== X; })) continue;
+                            // Cooldown via SchedulingRules
+                            if (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function') {
+                                var bTemplate = [];
+                                for (var ti = 0; ti < bSlots.length; ti++) {
+                                    if (ti === bT1Idx || ti === bT2Idx) continue;
+                                    var ts = bSlots[ti];
+                                    if (!ts || ts.continuation) continue;
+                                    var tst = ts._startMin != null ? ts._startMin : ts.startMin;
+                                    var tse = ts._endMin != null ? ts._endMin : ts.endMin;
+                                    if (tst == null) continue;
+                                    bTemplate.push({ type: 'sport', event: ts._activity, field: ts.field, startMin: tst, endMin: tse });
+                                }
+                                // Add the two new placements so cooldown checks them against each other too
+                                try {
+                                    if (!window.SchedulingRules.isCandidateAllowed({ type: 'sport', event: sport, field: aField, startMin: t1s, endMin: t1e }, bTemplate, { mode: 'auto' })) continue;
+                                    var bTemplateWithT1 = bTemplate.concat([{ type: 'sport', event: sport, field: aField, startMin: t1s, endMin: t1e }]);
+                                    if (!window.SchedulingRules.isCandidateAllowed({ type: 'sport', event: X, field: fieldX, startMin: t2s, endMin: t2e }, bTemplateWithT1, { mode: 'auto' })) continue;
+                                } catch (_eC) {}
+                            }
+                            candidate = { bunk: bBunk, t1Idx: bT1Idx, t1Slot: bT1Slot, t2Idx: bT2Idx, t2Slot: bT2Slot, X: X, fieldX: fieldX, t2s: t2s, t2e: t2e, combined: combined };
+                            break;
+                        }
+                        if (!candidate) continue;
+                        // Apply the swap: B[T1] becomes {S, aField} + pairLock; B[T2] becomes {X, fieldX}
+                        sa[candidate.bunk][candidate.t1Idx] = {
+                            field: aField, sport: sport, _activity: sport,
+                            _fixed: true, _bunkOverride: true, _activityLocked: false,
+                            _autoMode: true, _capacityChecked: true,
+                            _startMin: t1s, _endMin: t1e,
+                            _pinned: true, _pairLock: true,
+                            _pairCombinedSize: candidate.combined, _pairedWith: String(aBunk),
+                            _source: 'pairing-time-reloc',
+                            continuation: false
+                        };
+                        sa[candidate.bunk][candidate.t2Idx] = {
+                            field: candidate.fieldX, sport: candidate.X, _activity: candidate.X,
+                            _fixed: true, _bunkOverride: true, _activityLocked: false,
+                            _autoMode: true, _capacityChecked: true,
+                            _startMin: candidate.t2s, _endMin: candidate.t2e,
+                            _source: 'pairing-time-reloc-displaced',
+                            continuation: false
+                        };
+                        // Tag A
+                        aSlot._pinned = true;
+                        aSlot._pairLock = true;
+                        aSlot._pairCombinedSize = candidate.combined;
+                        aSlot._pairedWith = String(candidate.bunk);
+                        formedReloc++;
+                    }
+                });
+                try { console.log('[TIME-RELOC] scannedSolo=' + scannedSolo + ', formedReloc=' + formedReloc); } catch (_eL) {}
+                if (formedReloc > 0) log('  🔁 Time-relocation pairing: formed ' + formedReloc + ' new pair(s) by relocating partner.');
+            })();
+        } catch (_eTR) { try { warn('[TimeRelocPairing] ' + (_eTR && _eTR.message)); } catch (_e2) {} }
 
         // ── Forced bunk-pairing tag pass (sport minPlayers) ──
         // Detects same-grade/same-sport/same-time/same-field block PAIRS in
