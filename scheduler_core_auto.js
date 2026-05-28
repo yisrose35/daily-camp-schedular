@@ -20023,9 +20023,9 @@
         // fewer fall back to Free.
         // STEP 4.96 was a slot-alignment pass that proved unsafe (dropped queue
         // entries for bunks whose sa had more anchor-named items than pbs had
-        // anchor slots). Removed in favor of the final null-backfill at the
-        // end of runAutoSchedulerV2 in scheduler_core_solver_v2.js, which is
-        // strictly additive — it never overwrites or drops existing entries.
+        // anchor slots). Removed in favor of the null-bucket finalizer below,
+        // which is strictly additive — it never overwrites or drops existing
+        // entries.
 
         log('[STEP 4.97] Null-bucket finalizer starting...');
         (function nullBucketFinalizer() {
