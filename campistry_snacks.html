@@ -29,6 +29,13 @@
         width: 220px; height: auto;
         animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
     }
+    /* Applied by JS at t=1540ms (after bite SVG fully grows). Clips the logo
+       to the remaining-after-bite shape so the scalloped edge is the literal
+       boundary of the logo image — always clearly visible against the white
+       background. Path mirrors the bite SVG boundary in logo px coordinates. */
+    #snacks-splash-logo.snacks-bitten {
+        clip-path: path("M0,0 L130,0 C100,4 100,28 140,30 C108,34 108,56 144,58 C130,62 130,69 200,69 L0,69 Z");
+    }
     /* White SVG bite at the top-right corner. Scales from the corner outward.
        120×68px covers the right 120px of the 220px logo (logo x=100→220).
        SVG (0,0)=logo(100,0); SVG(120,0)=logo(220,0)=bite corner.
@@ -94,7 +101,13 @@
     </div>
     <script>
     (function() {
-        var ov = document.getElementById('snacks-splash');
+        var ov   = document.getElementById('snacks-splash');
+        var logo = document.getElementById('snacks-splash-logo');
+        /* Snap the logo clip-path once the bite SVG has fully grown (1320+220ms).
+           The scalloped edge becomes the literal edge of the logo image. */
+        setTimeout(function() {
+            if (logo) logo.classList.add('snacks-bitten');
+        }, 1540);
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
