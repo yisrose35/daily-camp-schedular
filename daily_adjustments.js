@@ -7227,35 +7227,37 @@ function loadCurrentOverrides() {
   const dailyData = window.loadCurrentDailyData?.() || {};
   let dailyOverrides = dailyData.overrides || {};
 
-  // ★ v7.0: Fallback to dedicated localStorage key (survives cloud overwrites)
-  if (!dailyOverrides.disabledFields?.length && !dailyOverrides.disabledSpecials?.length && !dailyOverrides.leagues?.length) {
-    try {
-      const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed?.overrides) {
-          dailyOverrides = parsed.overrides;
-          // Also restore other override data
-          if (parsed.dailyDisabledSportsByField) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
-          if (parsed.dailyFieldAvailability) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
-          if (parsed.disabledSpecialtyLeagues) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
-          // Sync back to dailyData for cloud
-          window.saveCurrentDailyData?.("overrides", dailyOverrides);
-          console.log('[ResourceOverrides] Restored from localStorage for ' + dateKey);
-        }
+  // ★ Multi-day audit fix: localStorage is the PRIMARY source for date-keyed
+  //   overrides during a session. dailyData.overrides is cloud-loaded async
+  //   by integration_hooks AFTER campistry-date-changed fires, so reading it
+  //   first during a date switch returns stale data from the previous date.
+  //   localStorage is keyed by date in the read, so it always returns the
+  //   right snapshot. We still write back to dailyData for cloud persistence.
+  try {
+    const stored = localStorage.getItem('campResourceOverrides_' + dateKey);
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.overrides) dailyOverrides = parsed.overrides;
+        if (parsed.dailyDisabledSportsByField !== undefined) dailyData.dailyDisabledSportsByField = parsed.dailyDisabledSportsByField;
+        if (parsed.dailyFieldAvailability !== undefined) dailyData.dailyFieldAvailability = parsed.dailyFieldAvailability;
+        if (parsed.disabledSpecialtyLeagues !== undefined) dailyData.disabledSpecialtyLeagues = parsed.disabledSpecialtyLeagues;
+        // Sync to dailyData (cloud) so other consumers also see the right state.
+        try { window.saveCurrentDailyData?.("overrides", dailyOverrides); } catch (_e) {}
       }
-    } catch(e) {}
-  } else {
-    // Sync to dedicated key for fast reload
-    try {
-      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
-        overrides: dailyOverrides,
-        dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
-        dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
-        disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
-      }));
-    } catch(e) {}
-  }
+    } else {
+      // No localStorage entry — fall back to whatever dailyData has (cloud), and
+      // mirror it back to localStorage for next reload.
+      try {
+        localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+          overrides: dailyOverrides,
+          dailyDisabledSportsByField: dailyData.dailyDisabledSportsByField || {},
+          dailyFieldAvailability: dailyData.dailyFieldAvailability || {},
+          disabledSpecialtyLeagues: dailyData.disabledSpecialtyLeagues || []
+        }));
+      } catch (_e2) {}
+    }
+  } catch (e) {}
 
   currentOverrides.dailyFieldAvailability = dailyData.dailyFieldAvailability || {};
   // ★ Day 22.5: seed the dedicated iron-gate key from whatever rules we have so they
