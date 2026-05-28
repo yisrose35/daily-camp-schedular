@@ -7342,10 +7342,16 @@ try {
         }
         try {
           if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
-          var resPanel = document.getElementById('da-resources-container');
-          if (resPanel && resPanel.offsetParent !== null && typeof renderResourceOverridesUI === 'function') {
-            renderResourceOverridesUI();
-            if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
+          // Re-render unconditionally (don't gate on visibility). The Resources
+          // panel container may be in the DOM but offsetParent=null because a
+          // parent tab is hidden; gating on visibility means the DOM stays
+          // stale and the user sees the previous date's state next time they
+          // open the panel.
+          if (typeof renderResourceOverridesUI === 'function') {
+            try { renderResourceOverridesUI(); } catch (_eR1) {}
+          }
+          if (typeof renderOverrideDetailPane === 'function') {
+            try { renderOverrideDetailPane(); } catch (_eR2) {}
           }
         } catch (_e1) { try { console.warn('[ResourceOverrides] reload-on-date-change failed:', _e1 && _e1.message); } catch (_e2) {} }
         // Belt-and-braces: re-load + re-render once more 1.5s later in case
