@@ -18,13 +18,23 @@
         transition: opacity 0.4s ease;
     }
     #snacks-splash.hide { opacity: 0; pointer-events: none; }
-    #snacks-splash-logo {
-        width: 220px; height: auto;
+    /* Wrapper exactly matches the rendered logo size (304×95 → 220×68px).
+       Crumbs are absolutely positioned within it. */
+    #snacks-splash-wrap {
+        position: relative;
+        width: 220px; height: 68px;
         flex-shrink: 0;
-        /* two animations: fall (transform) then chomp (clip-path) — separate properties, no conflict */
-        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards,
-                   snacks-chomp 0.38s ease-out 1.4s forwards;
     }
+    #snacks-splash-logo {
+        position: absolute; top: 0; left: 0;
+        width: 220px; height: auto;
+        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards,
+                   snacks-chomp 0.32s cubic-bezier(0.22,0.61,0.36,1) 1.35s forwards;
+    }
+    /* Bite: 7-point polygon. From-state collapses all 5 arc points to
+       the top-right corner. To-state spreads them into a sweeping arc
+       from 50% across the top down to the bottom-right corner, removing
+       the "acks" from Snacks. */
     @keyframes snacks-fall {
         0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
         65%  { transform: translateY(16px) rotate(4deg); opacity: 1; }
@@ -32,25 +42,55 @@
         90%  { transform: translateY(4px) rotate(1deg); }
         100% { transform: translateY(0) rotate(0deg); opacity: 1; }
     }
-    /* Clip-path bite: both keyframes have 6 matching points.
-       Start collapses the 3 bite-arc points to the top-right corner,
-       end spreads them into a quarter-circle arc — the bite. */
     @keyframes snacks-chomp {
-        from { clip-path: polygon(0% 0%, 100% 0%, 100% 0%, 100% 0%, 100% 100%, 0% 100%); }
-        to   { clip-path: polygon(0% 0%, 60% 0%, 78% 14%, 100% 40%, 100% 100%, 0% 100%); }
+        from { clip-path: polygon(0% 0%, 100% 0%, 100% 0%, 100% 0%, 100% 0%, 100% 100%, 0% 100%); }
+        to   { clip-path: polygon(0% 0%,  50% 0%,  65% 26%,  80% 56%,  92% 82%, 100% 100%, 0% 100%); }
     }
+    /* Crumbs: chocolate-brown particles that scatter from the bite entry point
+       (~110–160px, 0–30px within the wrap) after the chomp fires. */
+    .snacks-crumb {
+        position: absolute;
+        border-radius: 2px;
+        opacity: 0;
+    }
+    .sc1 { width:6px; height:5px; top:3px;  left:116px; background:#7B3A0F; animation: sc1 0.85s ease-in 1.38s forwards; }
+    .sc2 { width:4px; height:4px; top:14px; left:132px; background:#A05020; animation: sc2 0.70s ease-in 1.38s forwards; }
+    .sc3 { width:5px; height:3px; top:23px; left:122px; background:#6B3110; animation: sc3 0.90s ease-in 1.40s forwards; }
+    .sc4 { width:3px; height:3px; top:7px;  left:150px; background:#934018; animation: sc4 0.65s ease-in 1.36s forwards; }
+    .sc5 { width:7px; height:5px; top:31px; left:138px; background:#7B3A0F; animation: sc5 1.00s ease-in 1.42s forwards; }
+    .sc6 { width:4px; height:4px; top:18px; left:110px; background:#A05020; animation: sc6 0.78s ease-in 1.38s forwards; }
+    .sc7 { width:5px; height:3px; top:9px;  left:162px; background:#6B3110; animation: sc7 0.60s ease-in 1.35s forwards; }
+    .sc8 { width:3px; height:3px; top:26px; left:145px; background:#934018; animation: sc8 0.82s ease-in 1.41s forwards; }
+    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(32px,48px) rotate(130deg)} }
+    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(20px,54px) rotate(-80deg)} }
+    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(38px,42px) rotate(210deg)} }
+    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(26px,36px) rotate(-160deg)} }
+    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(14px,68px) rotate(95deg)} }
+    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(42px,52px) rotate(-55deg)} }
+    @keyframes sc7 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(28px,30px) rotate(175deg)} }
+    @keyframes sc8 { 0%{opacity:1;transform:translate(0,0) rotate(0)}   100%{opacity:0;transform:translate(18px,62px) rotate(-110deg)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
-    <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+    <div id="snacks-splash-wrap">
+        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+        <div class="snacks-crumb sc1"></div>
+        <div class="snacks-crumb sc2"></div>
+        <div class="snacks-crumb sc3"></div>
+        <div class="snacks-crumb sc4"></div>
+        <div class="snacks-crumb sc5"></div>
+        <div class="snacks-crumb sc6"></div>
+        <div class="snacks-crumb sc7"></div>
+        <div class="snacks-crumb sc8"></div>
+    </div>
     <script>
     (function() {
         var ov = document.getElementById('snacks-splash');
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2700);
+        }, 2800);
     })();
     </script>
 </div>

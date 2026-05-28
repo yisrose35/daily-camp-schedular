@@ -21,26 +21,25 @@
         #health-splash-logo {
             width: 220px; height: auto;
             flex-shrink: 0;
-            animation: health-beat 2.6s ease forwards;
+            animation: health-beat 3.4s ease forwards;
         }
         @keyframes health-beat {
-            /* fade in */
-            0%   { transform: scale(0.88); opacity: 0; }
-            6%   { transform: scale(0.88); opacity: 1; }
-            /* lub — quick first beat */
-            12%  { transform: scale(1.24); }
-            18%  { transform: scale(0.95); }
-            /* DUB — second beat, slightly bigger, immediately after */
-            24%  { transform: scale(1.38); }
-            32%  { transform: scale(0.96); }
-            /* diastole — long rest */
-            38%  { transform: scale(1.0); }
-            /* repeat */
-            56%  { transform: scale(1.0); }
-            62%  { transform: scale(1.24); }
-            68%  { transform: scale(0.95); }
-            74%  { transform: scale(1.38); }
-            82%  { transform: scale(0.96); }
+            0%   { transform: scale(0.95); opacity: 0; }
+            5%   { transform: scale(0.95); opacity: 1; }
+            /* lub — gentle first beat */
+            11%  { transform: scale(1.12); }
+            17%  { transform: scale(0.98); }
+            /* DUB — second beat, slightly bigger, right after */
+            23%  { transform: scale(1.20); }
+            30%  { transform: scale(0.99); }
+            /* long diastole */
+            36%  { transform: scale(1.0); }
+            /* second cycle */
+            57%  { transform: scale(1.0); }
+            63%  { transform: scale(1.12); }
+            69%  { transform: scale(0.98); }
+            75%  { transform: scale(1.20); }
+            82%  { transform: scale(0.99); }
             88%  { transform: scale(1.0); }
             100% { transform: scale(1.0); opacity: 1; }
         }
