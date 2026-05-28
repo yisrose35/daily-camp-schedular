@@ -10,87 +10,768 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_link.css">
-    <!-- Suite shared styles for header/sidebar pattern -->
-    <link rel="stylesheet" href="design-system.css">
-    <link rel="stylesheet" href="styles.css">
-    <link rel="stylesheet" href="mobile-responsive.css">
     <style>
-        /* Link-specific overrides for suite header */
-        .app-header { background: #fff; border-bottom: 1px solid var(--slate-200, #E2E8F0); }
-        .hamburger-btn:hover { border-color: #2A7A35; background: #F0FDF4; }
-        .sidebar-item.active { background: rgba(42,122,53,0.1); border-color: rgba(42,122,53,0.2); color: #2A7A35; }
-        .sidebar-item.active .sidebar-dot { background: #2A7A35; }
-        .sidebar-item:hover { background: rgba(42,122,53,0.05); color: #F0FDF4; }
-        /* Override lk-main to not use fixed left margin when sidebar is off-canvas */
-        .lk-main { margin-left: 0; }
-        .app-logo-link-img { height: 43px; max-height: 45px; width: auto; position: relative; top: 2px; }
-        .sync-badge { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 999px; font-size: 0.72rem; font-weight: 600; color: var(--slate-500, #64748B); background: var(--slate-100, #F1F5F9); }
-        .sync-dot { width: 7px; height: 7px; border-radius: 50%; background: #22C55E; }
+        .lk-sync-badge { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:600; color:var(--green-600); background:var(--green-50); }
+        .lk-sync-badge::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-500); flex-shrink:0; }
+        .lk-main { margin-left: 240px; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
+
+        /* Page hero — matches parent portal pattern */
+        .lk-page-hero { display:flex; align-items:center; gap:16px; margin-bottom:22px; padding-bottom:16px; border-bottom:1px solid var(--slate-100); }
+        .lk-page-hero-icon { width:44px; height:44px; border-radius:var(--radius-md); background:var(--link-tint); color:var(--link-color); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lk-page-hero-icon svg { width:22px; height:22px; }
+        .lk-page-hero h1 { font-family:var(--font-display); font-size:1.45rem; font-weight:700; margin-bottom:2px; color:var(--slate-900); }
+        .lk-page-hero p { font-size:.84rem; color:var(--slate-400); }
+
+        /* Pickup queue rows */
+        .lk-pickup-row { display:flex; align-items:center; gap:12px; padding:13px 0; border-bottom:1px solid var(--slate-100); }
+        .lk-pickup-row:last-child { border-bottom:none; }
+        .lk-pickup-icon-circle { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lk-pickup-icon-circle.amber { background:var(--amber-50); color:var(--amber-600); }
+        .lk-pickup-icon-circle.blue { background:var(--blue-50); color:var(--blue-500); }
+        .lk-pickup-icon-circle.purple { background:var(--purple-50); color:var(--purple-500); }
+        .lk-pickup-icon-circle.green { background:var(--green-50); color:var(--green-600); }
+        .lk-pickup-row-info { flex:1; min-width:0; }
+        .lk-pickup-row-name { font-size:.86rem; font-weight:600; color:var(--slate-900); }
+        .lk-pickup-row-sub { font-size:.75rem; color:var(--text-muted); margin-top:1px; }
+        .lk-pickup-row-meta { font-size:.73rem; color:var(--slate-500); margin-top:2px; }
+        .lk-pickup-row-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+
+        /* Health visit dots */
+        .lk-health-visit { display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--slate-100); }
+        .lk-health-visit:last-child { border-bottom:none; }
+        .lk-health-visit-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; margin-top:4px; }
+        .lk-health-visit-dot.routine { background:var(--green-500); }
+        .lk-health-visit-dot.attention { background:var(--amber-500); }
+        .lk-health-visit-dot.sent-home { background:var(--red-500); }
+        .lk-health-visit-body { flex:1; min-width:0; }
+        .lk-health-visit-title { font-size:.86rem; font-weight:600; color:var(--slate-900); margin-bottom:2px; }
+        .lk-health-visit-note { font-size:.8rem; color:var(--slate-500); line-height:1.5; margin-bottom:4px; }
+        .lk-health-visit-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:.72rem; color:var(--text-muted); }
+        .lk-health-visit-meta span { display:inline-flex; align-items:center; gap:4px; }
+
+        /* Health docs */
+        .lk-health-doc { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--slate-100); }
+        .lk-health-doc:last-child { border-bottom:none; }
+        .lk-health-doc-icon { width:36px; height:36px; border-radius:var(--radius-sm); background:var(--slate-100); display:flex; align-items:center; justify-content:center; color:var(--slate-500); flex-shrink:0; }
+        .lk-health-doc-info { flex:1; min-width:0; }
+        .lk-health-doc-name { font-size:.84rem; font-weight:600; color:var(--slate-900); }
+        .lk-health-doc-meta { font-size:.73rem; color:var(--text-muted); margin-top:1px; }
+
+        /* Admin messages */
+        .msg-item { display:flex; align-items:flex-start; gap:10px; padding:13px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
+        .msg-item:hover { background:var(--slate-50); }
+        .msg-item.unread { background:rgba(42,122,53,.02); }
+        .msg-dot { width:8px; height:8px; border-radius:50%; background:var(--link-color); margin-top:5px; flex-shrink:0; opacity:0; }
+        .msg-item.unread .msg-dot { opacity:1; }
+        .msg-body { flex:1; min-width:0; }
+        .msg-subj { font-size:.85rem; font-weight:600; color:var(--slate-900); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .msg-item.unread .msg-subj { font-weight:700; }
+        .msg-from { font-size:.74rem; color:var(--text-muted); margin-top:2px; }
+        .msg-preview { font-size:.78rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .msg-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
+
+        /* Canteen table row highlight */
+        .canteen-low { background:var(--amber-50) !important; }
+        .canteen-empty { background:var(--red-50) !important; }
+
+        /* Empty state */
+        .lk-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:36px 20px; color:var(--text-muted); text-align:center; }
+        .lk-empty h3 { font-size:.95rem; font-weight:600; margin-bottom:4px; color:var(--slate-400); }
+        .lk-empty p { font-size:.8rem; }
+        .lk-empty-icon { margin-bottom:12px; opacity:.35; }
+
+        /* Photo upload zone */
+        .lk-upload-zone { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; border:2px dashed var(--border-light); border-radius:var(--radius-md); padding:28px; text-align:center; cursor:pointer; transition:border-color .2s; }
+        .lk-upload-zone:hover { border-color:var(--link-color); background:var(--link-tint); }
+        .lk-upload-zone-icon { color:var(--slate-400); }
+        .lk-upload-zone h4 { font-size:.86rem; font-weight:600; color:var(--slate-600); }
+        .lk-upload-zone p { font-size:.76rem; color:var(--text-muted); }
+        .lk-upload-zone input[type=file] { display:none; }
+
+        /* Photo stats grid */
+        .lk-photo-stat-icon { font-size:0; display:inline-flex; align-items:center; justify-content:center; }
+
+        /* Channel buttons */
+        .channel-btns { display:flex; gap:6px; flex-wrap:wrap; }
+        .channel-btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; font-size:.78rem; font-weight:600; border:1.5px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; color:var(--slate-600); cursor:pointer; font-family:var(--font-body); transition:all .2s; }
+        .channel-btn.selected { border-color:var(--link-color); background:var(--link-tint); color:var(--link-color); }
+
+        /* Progress bar */
+        .progress { width:100%; height:8px; background:var(--slate-100); border-radius:var(--radius-full); overflow:hidden; }
+        .progress-fill { height:100%; background:var(--link-color); border-radius:var(--radius-full); transition:width .3s ease; }
+
+        /* Mobile */
+        @media(max-width:768px) {
+            .lk-sidebar { transform:translateX(-100%); transition:transform .25s ease; }
+            body.sidebar-open .lk-sidebar { transform:translateX(0); }
+            .lk-main { margin-left:0; padding:16px 16px 80px; }
+            .lk-sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:49; }
+            body.sidebar-open .lk-sidebar-backdrop { display:block; }
+        }
+
+        /* Hamburger */
+        .lk-hamburger { display:none; width:36px; height:36px; border:1px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0; }
+        .lk-hamburger span { display:block; width:16px; height:2px; background:var(--slate-600); border-radius:1px; }
+        @media(max-width:768px) { .lk-hamburger { display:flex; } }
+
+        @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        #toastBox { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }
     </style>
 </head>
 <body>
 
-<!-- HEADER (matches Me / Flow / Health pattern) -->
-<header class="app-header">
-    <div class="header-left">
-        <a href="dashboard.html" class="header-back">&larr; Dashboard</a>
-        <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu"><span></span><span></span><span></span></button>
-        <div class="app-title"><img src="Link_clean.png" alt="Campistry Link" class="app-logo-full app-logo-link-img"></div>
-        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me"><img src="Me_clean.png" alt="Me" class="app-logo-full app-logo-me-img"></a>
-        <a href="flow.html" class="header-app-switch" title="Campistry Flow"><img src="Flow_clean.png" alt="Flow" class="app-logo-full app-logo-flow-img"></a>
-        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go"><img src="Go_clean.png" alt="Go" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;"></a>
-        <a href="campistry_health.html" class="header-app-switch" title="Campistry Health"><img src="Health_clean.png" alt="Health" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;"></a>
-        <a href="campistry_live.html" class="header-app-switch" title="Campistry Live"><img src="Live_clean.png" alt="Live" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;"></a>
-        <a href="campistry_snacks.html" class="header-app-switch" title="Campistry Snacks"><img src="Snacks_clean.png" alt="Snacks" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;"></a>
+<!-- HEADER -->
+<header class="lk-header">
+    <div class="lk-header-left">
+        <button class="lk-hamburger" id="hamburgerBtn" aria-label="Menu"><span></span><span></span><span></span></button>
+        <a href="dashboard.html" class="lk-logo">
+            <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
+        </a>
+        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
     </div>
-    <div class="header-right">
-        <div class="sync-badge"><span class="sync-dot"></span> <span id="campNameDisplay">Synced</span></div>
+    <div class="lk-header-right">
+        <span class="lk-sync-badge" id="syncBadge">Live</span>
+        <div class="lk-avatar" id="adminAvatar">CA</div>
     </div>
 </header>
 
-<!-- SIDEBAR (off-canvas hamburger — matches suite pattern) -->
-<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
-<aside id="sidebar" class="sidebar">
-    <nav class="sidebar-nav">
-        <div class="sidebar-label">Overview</div>
-        <button class="sidebar-item active" data-page="dashboard" onclick="nav('dashboard')"><span class="sidebar-dot"></span> Dashboard</button>
-        <div class="sidebar-label" style="margin-top:10px;">Communication</div>
-        <button class="sidebar-item" data-page="compose" onclick="nav('compose')"><span class="sidebar-dot"></span> Compose Message</button>
-        <button class="sidebar-item" data-page="sent" onclick="nav('sent')"><span class="sidebar-dot"></span> Sent &amp; Broadcasts</button>
-        <div class="sidebar-label" style="margin-top:10px;">Families</div>
-        <button class="sidebar-item" data-page="directory" onclick="nav('directory')"><span class="sidebar-dot"></span> Parent Directory</button>
-        <button class="sidebar-item" data-page="campers" onclick="nav('campers')"><span class="sidebar-dot"></span> Camper Lookup</button>
-        <div class="sidebar-label" style="margin-top:10px;">Content</div>
-        <button class="sidebar-item" data-page="photos" onclick="nav('photos')"><span class="sidebar-dot"></span> Photos</button>
-    </nav>
-</aside>
+<!-- SIDEBAR BACKDROP (mobile) -->
+<div class="lk-sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<!-- SIDEBAR -->
+<nav class="lk-sidebar" id="sidebar">
+    <div class="lk-sidebar-nav">
+        <div class="lk-nav-label">Overview</div>
+        <button class="lk-nav-item active" data-page="dashboard" onclick="nav('dashboard')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Dashboard
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Camp Day</div>
+        <button class="lk-nav-item" data-page="pickup" onclick="nav('pickup')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
+            Pickup &amp; Arrival
+        </button>
+        <button class="lk-nav-item" data-page="messages" onclick="nav('messages')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Messages
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Families</div>
+        <button class="lk-nav-item" data-page="directory" onclick="nav('directory')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Parent Directory
+        </button>
+        <button class="lk-nav-item" data-page="campers" onclick="nav('campers')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Camper Lookup
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Financial</div>
+        <button class="lk-nav-item" data-page="canteen" onclick="nav('canteen')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
+            Canteen
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Health</div>
+        <button class="lk-nav-item" data-page="health" onclick="nav('health')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+            Nurse Portal
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Content</div>
+        <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Photos
+        </button>
+        <button class="lk-nav-item" data-page="compose" onclick="nav('compose')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Compose
+        </button>
+    </div>
+</nav>
+
+<!-- BOTTOM NAV (mobile) -->
+<div class="lk-bnav"><div class="lk-bnav-inner">
+    <button class="lk-bnav-item active" data-page="dashboard" onclick="nav('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Home
+    </button>
+    <button class="lk-bnav-item" data-page="pickup" onclick="nav('pickup')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
+        Pickup
+    </button>
+    <button class="lk-bnav-item" data-page="messages" onclick="nav('messages')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Messages
+    </button>
+    <button class="lk-bnav-item" data-page="health" onclick="nav('health')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Health
+    </button>
+    <button class="lk-bnav-item" data-page="compose" onclick="nav('compose')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+        More
+    </button>
+</div></div>
+
+<!-- MAIN -->
 <div class="lk-main">
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  DASHBOARD                                          -->
+<!-- ═══════════════════════════════════════════════════ -->
 <div class="lk-page active" id="page-dashboard">
-    <div class="lk-page-header"><h1>Link Command Center</h1><p>Parent communication hub — data synced live from Campistry Me</p></div>
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </div>
+        <div>
+            <h1>Link Command Center</h1>
+            <p>Parent communication hub — data synced live from Campistry Me</p>
+        </div>
+    </div>
     <div class="lk-stats" id="dashStats"></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Quick Actions</h2></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-primary btn-sm" onclick="nav('compose')">+ Compose Message</button><button class="btn btn-secondary btn-sm" onclick="nav('directory')">Parent Directory</button><button class="btn btn-secondary btn-sm" onclick="nav('campers')">Camper Lookup</button><a href="campistry_me.html" class="btn btn-secondary btn-sm">Open Me</a></div></div>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Quick Actions</h2></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-primary btn-sm" onclick="nav('compose')">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Compose Message
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="nav('pickup')">Pickup Queue</button>
+            <button class="btn btn-secondary btn-sm" onclick="nav('directory')">Parent Directory</button>
+            <button class="btn btn-secondary btn-sm" onclick="nav('campers')">Camper Lookup</button>
+            <a href="campistry_me.html" class="btn btn-secondary btn-sm">Open Me</a>
+        </div>
+    </div>
     <div class="lk-card" id="dashDataCheck"></div>
 </div>
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PICKUP & ARRIVAL QUEUE                            -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-pickup">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
+        </div>
+        <div>
+            <h1>Pickup &amp; Arrival</h1>
+            <p>Incoming requests from parents — confirm via Campistry Live</p>
+        </div>
+    </div>
+
+    <!-- Pickup stats -->
+    <div class="lk-stats" id="pickupStats"></div>
+
+    <!-- Request queue card -->
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Today's Requests</h2>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span class="badge badge-neutral" id="pickupCountBadge">3 requests</span>
+                <span style="font-size:.72rem;color:var(--text-muted);">Syncs with Campistry Live</span>
+            </div>
+        </div>
+        <div id="pickupQueueList"></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  MESSAGES                                          -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-messages">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div>
+            <h1>Messages</h1>
+            <p>Inbox from parents</p>
+        </div>
+    </div>
+
+    <div id="adminMsgListView">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+            <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;">
+                <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('pickup',this)">Pickup Requests</button>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="nav('compose')" style="flex-shrink:0;">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Compose Announcement
+            </button>
+        </div>
+        <div class="lk-card" style="padding:0;overflow:hidden;">
+            <div id="adminMsgList"></div>
+        </div>
+    </div>
+
+    <div id="adminMsgDetailView" style="display:none;">
+        <button class="btn btn-ghost btn-sm" onclick="closeAdminMsgDetail()" style="margin-bottom:10px;">&larr; Back</button>
+        <div class="lk-card"><div id="adminMsgDetail"></div></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PARENT DIRECTORY                                   -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-directory">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div>
+            <h1>Parent Directory</h1>
+            <p>Live from Campistry Me</p>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;">
+        <input type="text" class="lk-input" placeholder="Search parents or families..." id="dirSearch" oninput="renderDir(this.value)" style="max-width:400px;">
+    </div>
+    <div class="lk-card" style="padding:0;overflow:hidden;">
+        <table class="lk-table">
+            <thead><tr><th>Parent</th><th>Children</th><th>Division / Bunk</th><th>Email</th><th>Phone</th><th></th></tr></thead>
+            <tbody id="dirTable"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  CAMPER LOOKUP                                      -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-campers">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <div>
+            <h1>Camper Lookup</h1>
+            <p>Live from Campistry Me</p>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;">
+        <input type="text" class="lk-input" placeholder="Search camper..." id="camperSearch" oninput="renderCampers(this.value)" style="max-width:400px;">
+    </div>
+    <div class="lk-card" style="padding:0;overflow:hidden;">
+        <table class="lk-table">
+            <thead><tr><th>Camper</th><th>Division</th><th>Grade</th><th>Bunk</th><th>Parent</th><th>Phone</th><th>Bus</th></tr></thead>
+            <tbody id="camperTable"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  CANTEEN                                            -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-canteen">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
+        </div>
+        <div>
+            <h1>Canteen</h1>
+            <p>Manage all camper accounts — powered by Campistry Snacks</p>
+        </div>
+    </div>
+
+    <!-- Canteen overview stats -->
+    <div class="lk-stats">
+        <div class="lk-stat">
+            <div class="lk-stat-icon green">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
+            </div>
+            <div><div class="lk-stat-val">$123.50</div><div class="lk-stat-lbl">Total Balance</div></div>
+        </div>
+        <div class="lk-stat">
+            <div class="lk-stat-icon blue">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            </div>
+            <div><div class="lk-stat-val">6</div><div class="lk-stat-lbl">Active Campers</div></div>
+        </div>
+        <div class="lk-stat">
+            <div class="lk-stat-icon amber">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            </div>
+            <div><div class="lk-stat-val">2</div><div class="lk-stat-lbl">Pending Deposits</div></div>
+        </div>
+        <div class="lk-stat">
+            <div class="lk-stat-icon" style="background:var(--red-50);color:var(--red-600);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+            </div>
+            <div><div class="lk-stat-val">2</div><div class="lk-stat-lbl">Low Balance Alerts</div></div>
+        </div>
+    </div>
+
+    <!-- Canteen accounts table -->
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>All Accounts</h2>
+            <input type="text" class="lk-input" placeholder="Search camper..." oninput="filterCanteen(this.value)" style="width:200px;">
+        </div>
+        <div style="overflow-x:auto;">
+            <table class="lk-table" id="canteenTable">
+                <thead>
+                    <tr>
+                        <th>Camper</th>
+                        <th>Division</th>
+                        <th>Balance</th>
+                        <th>Daily Limit</th>
+                        <th>Last Purchase</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody id="canteenTableBody">
+                    <tr>
+                        <td class="bold">Eli Miller</td>
+                        <td>Juniors</td>
+                        <td><span class="badge badge-ok">$32.50</span></td>
+                        <td>$5/day</td>
+                        <td>Today 2:30 PM</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Eli Miller!')">Add Funds</button></td>
+                    </tr>
+                    <tr>
+                        <td class="bold">Mia Miller</td>
+                        <td>Juniors</td>
+                        <td><span class="badge badge-ok">$15.00</span></td>
+                        <td>$3/day</td>
+                        <td>Today 1:15 PM</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Mia Miller!')">Add Funds</button></td>
+                    </tr>
+                    <tr class="canteen-low">
+                        <td class="bold">Sophie Cohen</td>
+                        <td>Seniors</td>
+                        <td><span class="badge badge-warn">$8.25</span></td>
+                        <td>$5/day</td>
+                        <td>Yesterday</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Sophie Cohen!')">Add Funds</button></td>
+                    </tr>
+                    <tr class="canteen-empty">
+                        <td class="bold">Noah Stern</td>
+                        <td>Seniors</td>
+                        <td><span class="badge badge-err">$0.00</span></td>
+                        <td>$5/day</td>
+                        <td>2d ago</td>
+                        <td><button class="btn btn-primary btn-sm" onclick="toast('Funds added for Noah Stern!')">Add Funds</button></td>
+                    </tr>
+                    <tr>
+                        <td class="bold">Jake Levy</td>
+                        <td>Juniors</td>
+                        <td><span class="badge badge-ok">$45.00</span></td>
+                        <td>$10/day</td>
+                        <td>Today 3:00 PM</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Jake Levy!')">Add Funds</button></td>
+                    </tr>
+                    <tr>
+                        <td class="bold">Aviva Gold</td>
+                        <td>Seniors</td>
+                        <td><span class="badge badge-ok">$22.75</span></td>
+                        <td>$5/day</td>
+                        <td>Today 11:00 AM</td>
+                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Aviva Gold!')">Add Funds</button></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  NURSE PORTAL                                       -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-health">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        </div>
+        <div>
+            <h1>Nurse Portal</h1>
+            <p>Health records — powered by Campistry Health</p>
+        </div>
+    </div>
+
+    <div class="lk-tabs">
+        <button class="lk-tab active" id="healthTabVisitLog" onclick="switchHealthTab('visitlog',this)">Visit Log</button>
+        <button class="lk-tab" id="healthTabDocs" onclick="switchHealthTab('docs',this)">Health Documents</button>
+    </div>
+
+    <!-- Visit Log tab -->
+    <div id="healthPanelVisitlog">
+        <!-- Add visit note form -->
+        <div class="lk-card" style="border-left:4px solid var(--link-color);">
+            <div class="lk-card-head"><h2>Add Visit Note</h2></div>
+            <div class="lk-field">
+                <label>Camper</label>
+                <select class="lk-select" id="visitCamperSelect">
+                    <option value="">Select camper...</option>
+                    <option>Eli Miller</option>
+                    <option>Mia Miller</option>
+                    <option>Sophie Cohen</option>
+                    <option>Noah Stern</option>
+                    <option>Jake Levy</option>
+                    <option>Aviva Gold</option>
+                </select>
+            </div>
+            <div class="lk-field">
+                <label>Severity</label>
+                <select class="lk-select" id="visitSeverity">
+                    <option value="routine">Routine</option>
+                    <option value="attention">Attention</option>
+                    <option value="sent-home">Sent Home</option>
+                </select>
+            </div>
+            <div class="lk-field">
+                <label>Visit Note</label>
+                <textarea class="lk-textarea" id="visitNote" placeholder="Describe the visit, treatment provided, and outcome..." style="min-height:90px;"></textarea>
+            </div>
+            <button class="btn btn-primary btn-sm" onclick="saveVisitNote()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                Save Visit Note
+            </button>
+        </div>
+
+        <!-- Visit log list -->
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Visit Log</h2><span class="badge badge-neutral" id="visitLogCount">4 entries</span></div>
+            <div id="visitLogList">
+                <div class="lk-health-visit">
+                    <div class="lk-health-visit-dot attention"></div>
+                    <div class="lk-health-visit-body">
+                        <div class="lk-health-visit-title">Mild sunburn on shoulders</div>
+                        <div class="lk-health-visit-note">Applied aloe vera and a cool compress. Child was comfortable and returned to activity. SPF 50+ recommended going forward.</div>
+                        <div class="lk-health-visit-meta">
+                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 2:15 PM</span>
+                            <span>Nurse Rachel</span>
+                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Eli Miller</span>
+                            <span class="badge badge-warn" style="font-size:.6rem;padding:2px 7px;">Attention</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="lk-health-visit">
+                    <div class="lk-health-visit-dot routine"></div>
+                    <div class="lk-health-visit-body">
+                        <div class="lk-health-visit-title">Morning medication administered</div>
+                        <div class="lk-health-visit-note">Morning medications given as per parent instructions. Child cooperative and in good spirits.</div>
+                        <div class="lk-health-visit-meta">
+                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 8:45 AM</span>
+                            <span>Nurse Rachel</span>
+                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Eli Miller</span>
+                            <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="lk-health-visit">
+                    <div class="lk-health-visit-dot attention"></div>
+                    <div class="lk-health-visit-body">
+                        <div class="lk-health-visit-title">Bee sting on left arm</div>
+                        <div class="lk-health-visit-note">Bee sting treated with antihistamine cream. No signs of allergic reaction. Parents notified via app.</div>
+                        <div class="lk-health-visit-meta">
+                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Yesterday, 3:30 PM</span>
+                            <span>Nurse Rachel</span>
+                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Sophie Cohen</span>
+                            <span class="badge badge-warn" style="font-size:.6rem;padding:2px 7px;">Attention</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="lk-health-visit">
+                    <div class="lk-health-visit-dot routine"></div>
+                    <div class="lk-health-visit-body">
+                        <div class="lk-health-visit-title">Scraped knee</div>
+                        <div class="lk-health-visit-note">Small scrape on right knee from field activity. Cleaned and bandaged. No further intervention needed.</div>
+                        <div class="lk-health-visit-meta">
+                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Yesterday, 4:20 PM</span>
+                            <span>Nurse Rachel</span>
+                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Noah Stern</span>
+                            <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Health Documents tab -->
+    <div id="healthPanelDocs" style="display:none;">
+        <div class="lk-card">
+            <div class="lk-card-head">
+                <h2>Health Documents</h2>
+                <input type="text" class="lk-input" placeholder="Search documents..." style="width:220px;" oninput="filterHealthDocs(this.value)">
+            </div>
+            <p style="font-size:.8rem;color:var(--slate-400);margin-bottom:14px;">Documents uploaded by parents — allergy plans, insurance cards, and other health records.</p>
+            <div id="healthDocList">
+                <div class="lk-health-doc">
+                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+                    <div class="lk-health-doc-info">
+                        <div class="lk-health-doc-name">Allergy Action Plan — Tree Nuts</div>
+                        <div class="lk-health-doc-meta">Eli Miller · #0001 — Uploaded Jun 1</div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm">View</button>
+                </div>
+                <div class="lk-health-doc">
+                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
+                    <div class="lk-health-doc-info">
+                        <div class="lk-health-doc-name">Insurance Card — Blue Cross</div>
+                        <div class="lk-health-doc-meta">Eli Miller · #0001 — Uploaded May 28</div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm">View</button>
+                </div>
+                <div class="lk-health-doc">
+                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+                    <div class="lk-health-doc-info">
+                        <div class="lk-health-doc-name">Allergy Action Plan — None</div>
+                        <div class="lk-health-doc-meta">Mia Miller · #0002 — Uploaded Jun 1</div>
+                    </div>
+                    <button class="btn btn-secondary btn-sm">View</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PHOTOS                                             -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-photos">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <div>
+            <h1>Photos</h1>
+            <p>Auto-tag with face recognition, send to parents</p>
+        </div>
+    </div>
+    <div class="lk-stats" id="photoStats"></div>
+    <div class="lk-card" style="border-left:4px solid var(--link-color);">
+        <div class="lk-card-head"><h2>Step 1: Build Face Index</h2><span class="badge" id="indexBadge">Not built</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Reads headshots from Me — used to tag campers automatically.</p>
+        <button class="btn btn-primary btn-sm" onclick="buildIndex()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Build Index
+        </button>
+        <div id="indexProg" style="display:none;margin-top:10px;"></div>
+    </div>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 2: Upload Photos</h2></div>
+        <label class="lk-upload-zone" for="photoInput" onclick="">
+            <div class="lk-upload-zone-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/><path d="M12 2v6m-3-3l3-3 3 3" style="stroke-dasharray:2 2;"/></svg>
+            </div>
+            <h4>Click to upload photos</h4>
+            <p>JPG or PNG, multiple files supported</p>
+            <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotos(this.files)">
+        </label>
+        <div id="uploadProg" style="display:none;margin-top:10px;"></div>
+    </div>
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Step 3: Review &amp; Send</h2>
+            <button class="btn btn-ghost btn-sm" onclick="refreshPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                Refresh
+            </button>
+        </div>
+        <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;"></div>
+        <div id="photoEmpty" class="lk-empty" style="display:none;">
+            <div class="lk-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </div>
+            <h3>No photos yet</h3>
+            <p>Upload photos in Step 2 to get started</p>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="sendPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send Roundup
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="previewPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                Preview
+            </button>
+        </div>
+        <div id="photoPreview" style="display:none;margin-top:10px;"></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  COMPOSE                                            -->
+<!-- ═══════════════════════════════════════════════════ -->
 <div class="lk-page" id="page-compose">
-    <div class="lk-page-header"><h1>Compose</h1><p>Send personalized messages — data from Me</p></div>
-    <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;"><div class="lk-card-head"><h2>⚡ Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div><p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click → each parent gets info for <strong>their child only</strong>.</p><div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;"><button class="btn btn-primary btn-sm" onclick="smartSend('bus')">🚌 Bus Stops</button><button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">🏕 Bunk Assignments</button><button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">📅 Schedule</button><button class="btn btn-primary btn-sm" onclick="smartSend('canteen')">💰 Low Balance</button></div><div style="display:flex;gap:8px;flex-wrap:wrap;"><button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">👁 Preview Bus</button><button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">👁 Preview Bunk</button><button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">📥 Export CSV</button></div><div id="smartPreviewBox" style="display:none;margin-top:12px;"></div></div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Manual Message</h2></div><div class="lk-field"><label>Recipient</label><input type="text" class="lk-input" placeholder="Search parent, camper, family..." id="recipSearch" oninput="searchRecip(this.value)"><div id="recipResults" style="border:1px solid var(--border-light);border-radius:var(--radius-md);margin-top:4px;max-height:150px;overflow-y:auto;display:none;"></div><div id="recipChips" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;"></div></div><div class="lk-field"><label>Delivery</label><div class="channel-btns"><button class="channel-btn selected" data-ch="app" onclick="toggleCh(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> In-App</button><button class="channel-btn" data-ch="email" onclick="toggleCh(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg> Email</button><button class="channel-btn" data-ch="sms" onclick="toggleCh(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg> SMS</button></div></div><div class="lk-field"><label>Subject</label><input type="text" class="lk-input" id="compSubj" placeholder="Subject..."></div><div class="lk-field"><label>Message</label><textarea class="lk-textarea" id="compBody" placeholder="Type message..." style="min-height:120px;"></textarea></div><div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);"><button class="btn btn-primary" onclick="sendManual()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg> Send</button></div></div>
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </div>
+        <div>
+            <h1>Compose</h1>
+            <p>Send personalized messages — data from Me</p>
+        </div>
+    </div>
+
+    <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
+        <div class="lk-card-head"><h2>Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click — each parent gets info for <strong>their child only</strong>.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+            <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">Bus Stops</button>
+            <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">Bunk Assignments</button>
+            <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">Schedule</button>
+            <button class="btn btn-primary btn-sm" onclick="smartSend('canteen')">Low Balance</button>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
+            <button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">Preview Bunk</button>
+            <button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">Export CSV</button>
+        </div>
+        <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
+    </div>
+
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Manual Message</h2></div>
+        <div class="lk-field">
+            <label>Recipient</label>
+            <input type="text" class="lk-input" placeholder="Search parent, camper, family..." id="recipSearch" oninput="searchRecip(this.value)">
+            <div id="recipResults" style="border:1px solid var(--border-light);border-radius:var(--radius-md);margin-top:4px;max-height:150px;overflow-y:auto;display:none;"></div>
+            <div id="recipChips" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;"></div>
+        </div>
+        <div class="lk-field">
+            <label>Delivery</label>
+            <div class="channel-btns">
+                <button class="channel-btn selected" data-ch="app" onclick="toggleCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    In-App
+                </button>
+                <button class="channel-btn" data-ch="email" onclick="toggleCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    Email
+                </button>
+                <button class="channel-btn" data-ch="sms" onclick="toggleCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    SMS
+                </button>
+            </div>
+        </div>
+        <div class="lk-field">
+            <label>Subject</label>
+            <input type="text" class="lk-input" id="compSubj" placeholder="Subject...">
+        </div>
+        <div class="lk-field">
+            <label>Message</label>
+            <textarea class="lk-textarea" id="compBody" placeholder="Type message..." style="min-height:120px;"></textarea>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
+            <button class="btn btn-primary" onclick="sendManual()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send
+            </button>
+        </div>
+    </div>
 </div>
 
-<div class="lk-page" id="page-sent"><div class="lk-page-header"><h1>Sent &amp; Broadcasts</h1><p>Message history</p></div><div class="lk-card" style="padding:0;overflow:hidden;"><div id="sentList"></div></div></div>
-
-<div class="lk-page" id="page-directory"><div class="lk-page-header"><h1>Parent Directory</h1><p>Live from Campistry Me</p></div><div style="margin-bottom:12px;"><input type="text" class="lk-input" placeholder="Search..." id="dirSearch" oninput="renderDir(this.value)" style="max-width:400px;"></div><div class="lk-card" style="padding:0;overflow:hidden;"><table class="lk-table"><thead><tr><th>Parent</th><th>Children</th><th>Division / Bunk</th><th>Email</th><th>Phone</th><th></th></tr></thead><tbody id="dirTable"></tbody></table></div></div>
-
-<div class="lk-page" id="page-campers"><div class="lk-page-header"><h1>Camper Lookup</h1><p>Live from Campistry Me</p></div><div style="margin-bottom:12px;"><input type="text" class="lk-input" placeholder="Search camper..." id="camperSearch" oninput="renderCampers(this.value)" style="max-width:400px;"></div><div class="lk-card" style="padding:0;overflow:hidden;"><table class="lk-table"><thead><tr><th>Camper</th><th>Division</th><th>Grade</th><th>Bunk</th><th>Parent</th><th>Phone</th><th>Bus</th></tr></thead><tbody id="camperTable"></tbody></table></div></div>
-
-<div class="lk-page" id="page-photos"><div class="lk-page-header"><h1>Photos</h1><p>Auto-tag with face recognition, send to parents</p></div><div class="lk-stats" id="photoStats"></div><div class="lk-card" style="border-left:4px solid var(--link-color);"><div class="lk-card-head"><h2>Step 1: Build Face Index</h2><span class="badge" id="indexBadge">Not built</span></div><p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Reads headshots from Me.</p><button class="btn btn-primary btn-sm" onclick="buildIndex()">🔍 Build Index</button><div id="indexProg" style="display:none;margin-top:10px;"></div></div><div class="lk-card"><div class="lk-card-head"><h2>Step 2: Upload Photos</h2></div><div style="border:2px dashed var(--border-light);border-radius:var(--radius-md);padding:28px;text-align:center;cursor:pointer;" onclick="document.getElementById('photoInput').click()"><div style="font-size:1.8rem;margin-bottom:6px;">📸</div><div style="font-size:.86rem;font-weight:600;">Click to upload</div><input type="file" id="photoInput" accept="image/*" multiple style="display:none;" onchange="handlePhotos(this.files)"></div><div id="uploadProg" style="display:none;margin-top:10px;"></div></div><div class="lk-card"><div class="lk-card-head"><h2>Step 3: Review &amp; Send</h2><button class="btn btn-ghost btn-sm" onclick="refreshPhotos()">↻</button></div><div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;"></div><div id="photoEmpty" class="lk-empty" style="display:none;"><div class="lk-empty-icon">📷</div><h3>No photos yet</h3></div><div style="margin-top:14px;display:flex;gap:8px;"><button class="btn btn-primary btn-sm" onclick="sendPhotos()">📨 Send Roundup</button><button class="btn btn-secondary btn-sm" onclick="previewPhotos()">👁 Preview</button></div><div id="photoPreview" style="display:none;margin-top:10px;"></div></div></div>
-
-</div>
+</div><!-- /.lk-main -->
 <div id="toastBox"></div>
 
-<!-- Cloud sync (same as Me/Flow — hydrates campGlobalSettings_v1 from Supabase) -->
+<!-- Scripts -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
 <script src="config.js"></script>
@@ -104,98 +785,537 @@ if (window.location.protocol === 'file:') {
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="integration_hooks.js"></script>
-
-<!-- Data Bridge + Photo Engine -->
 <script src="campistry_link_data.js"></script>
 <script src="campistry_link_photos.js"></script>
 <script>
 'use strict';
-var esc=function(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]})};
-var CL=function(){return window.CampistryLink||null};
-var CP=function(){return window.CampistryPhotos||null};
-var channels=['app'];
 
-function nav(p){document.querySelectorAll('.lk-page').forEach(function(e){e.classList.remove('active')});document.querySelectorAll('.sidebar-item').forEach(function(e){e.classList.remove('active')});var el=document.getElementById('page-'+p);if(el)el.classList.add('active');var si=document.querySelector('.sidebar-item[data-page="'+p+'"]');if(si)si.classList.add('active');window.scrollTo(0,0);
-    // Close sidebar on nav
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+var esc = function(s) {
+    if (s == null) return '';
+    var m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    return String(s).replace(/[&<>"']/g, function(c) { return m[c]; });
+};
+var CL = function() { return window.CampistryLink || null; };
+var CP = function() { return window.CampistryPhotos || null; };
+var channels = ['app'];
+
+// ─── NAV ─────────────────────────────────────────────────────────────────────
+function nav(p) {
+    document.querySelectorAll('.lk-page').forEach(function(e) { e.classList.remove('active'); });
+    document.querySelectorAll('.lk-nav-item,.lk-bnav-item').forEach(function(e) { e.classList.remove('active'); });
+    var el = document.getElementById('page-' + p);
+    if (el) el.classList.add('active');
+    document.querySelectorAll('[data-page="' + p + '"]').forEach(function(e) { e.classList.add('active'); });
+    // close sidebar on mobile
     document.body.classList.remove('sidebar-open');
-    if(p==='dashboard')renderDash();if(p==='directory')renderDir('');if(p==='campers')renderCampers('');if(p==='sent')renderSent();if(p==='photos'){refreshPhotos();updatePhotoStats();}}
-function toast(m){var t=document.createElement('div');t.textContent=m;t.style.cssText='background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';document.getElementById('toastBox').appendChild(t);setTimeout(function(){t.style.opacity='0';t.style.transition='opacity .3s'},2500);setTimeout(function(){t.remove()},2800);}
-
-// ── HAMBURGER SIDEBAR TOGGLE (matches Me/Flow/Health) ──
-(function(){
-    var btn=document.getElementById('hamburgerBtn');
-    var backdrop=document.getElementById('sidebarBackdrop');
-    if(btn){btn.addEventListener('click',function(){document.body.classList.toggle('sidebar-open');});}
-    if(backdrop){backdrop.addEventListener('click',function(){document.body.classList.remove('sidebar-open');});}
-})();
-function stat(color,icon,val,label){return'<div class="lk-stat"><div class="lk-stat-icon '+color+'" style="font-size:1.1rem;">'+icon+'</div><div><div class="lk-stat-val">'+val+'</div><div class="lk-stat-lbl">'+esc(label)+'</div></div></div>';}
-
-function renderDash(){
-    var cl=CL();if(!cl)return;var dir=cl.data.getParentDirectory();var roster=cl.data.getRoster();var struct=cl.data.getStructure();var goRoutes=cl.data.getBusRoutes();var msgs=cl.msg.getBroadcasts();
-    var goSetup;try{goSetup=JSON.parse(localStorage.getItem('campistry_go_data')||'{}').setup||{}}catch(e){goSetup={}}
-    var cn=goSetup.campName||'';if(!cn)try{cn=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}').campName||''}catch(e){}
-    document.getElementById('campNameDisplay').textContent=cn;
-    var rc=Object.keys(roster).length,dc=Object.keys(struct).length,fc=dir.length;
-    document.getElementById('dashStats').innerHTML=stat('rose','👨‍👩‍👧‍👦',fc,'Parents')+stat('blue','🏕',rc,'Campers')+stat('green','📂',dc,'Divisions')+stat('amber','📨',msgs.length,'Broadcasts')+(goRoutes?stat('purple','🚌','✓','Bus Routes'):'');
-    var issues=[];
-    if(!rc)issues.push('No campers — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">add in Me</a>');
-    if(!fc)issues.push('No families — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">create in Me</a>');
-    if(!dc)issues.push('No divisions — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">set up in Me</a>');
-    var box=document.getElementById('dashDataCheck');
-    if(issues.length){box.innerHTML='<div class="lk-card-head"><h2>⚠ Setup Needed</h2></div>'+issues.map(function(i){return'<p style="font-size:.85rem;color:var(--text-secondary);padding:4px 0;">'+i+'</p>'}).join('');box.style.display='';}
-    else{box.innerHTML='<div class="lk-card-head"><h2>✅ Connected to Me</h2></div><p style="font-size:.85rem;color:var(--text-muted);">'+rc+' campers, '+fc+' families, '+dc+' divisions synced live.</p>';}
+    window.scrollTo(0, 0);
+    if (p === 'dashboard') renderDash();
+    if (p === 'directory') renderDir('');
+    if (p === 'campers') renderCampers('');
+    if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
+    if (p === 'pickup') renderPickupQueue();
+    if (p === 'messages') renderAdminMsgs('all');
 }
 
-function renderDir(q){var cl=CL();if(!cl)return;q=(q||'').toLowerCase();var dir=cl.data.getParentDirectory();var tb=document.getElementById('dirTable');if(!dir.length){tb.innerHTML='<tr><td colspan="6" style="text-align:center;padding:28px;color:var(--text-muted);">No parents. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add families in Me</a></td></tr>';return;}var h='';dir.forEach(function(p){var s=(p.parentName+' '+p.familyName+' '+p.children.map(function(c){return c.name}).join(' ')).toLowerCase();if(q&&s.indexOf(q)<0)return;h+='<tr><td class="bold">'+esc(p.parentName||'—')+'</td><td>'+p.children.map(function(c){return esc(c.name)}).join(', ')+'</td><td style="font-size:.78rem;">'+p.children.map(function(c){return esc((c.division||'—')+' / '+(c.bunk||'—'))}).join('; ')+'</td><td style="font-size:.78rem;">'+esc(p.parentEmail||'—')+'</td><td style="font-size:.78rem;">'+esc(p.parentPhone||'—')+'</td><td><button class="btn btn-ghost btn-sm" onclick="msgParent(\''+esc(p.parentName)+'\')">Msg</button></td></tr>';});tb.innerHTML=h||'<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';}
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+function toast(m) {
+    var t = document.createElement('div');
+    t.textContent = m;
+    t.style.cssText = 'background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';
+    document.getElementById('toastBox').appendChild(t);
+    setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 2500);
+    setTimeout(function() { t.remove(); }, 2800);
+}
 
-function renderCampers(q){var cl=CL();if(!cl)return;q=(q||'').toLowerCase();var map=cl.data.getCamperParentMap();var tb=document.getElementById('camperTable');var entries=Object.entries(map);if(!entries.length){tb.innerHTML='<tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">No campers. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add in Me</a></td></tr>';return;}var h='';entries.forEach(function(e){var name=e[0],c=e[1];if(q&&name.toLowerCase().indexOf(q)<0)return;var busInfo=cl.data.getCamperBusStop(name);var busCell=busInfo?'<span class="badge badge-ok">'+esc(busInfo.busName)+' #'+busInfo.stopNum+'</span>':'<span class="badge badge-neutral">—</span>';h+='<tr><td class="bold">'+esc(name)+'</td><td>'+esc(c.division||'—')+'</td><td>'+esc(c.grade||'—')+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+esc(c.parentName||c.parent1Name||'—')+'</td><td style="font-size:.78rem;">'+esc(c.parentPhone||c.parent1Phone||'—')+'</td><td>'+busCell+'</td></tr>';});tb.innerHTML=h||'<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';}
+// ─── HAMBURGER SIDEBAR TOGGLE ─────────────────────────────────────────────────
+(function() {
+    var btn = document.getElementById('hamburgerBtn');
+    var backdrop = document.getElementById('sidebarBackdrop');
+    if (btn) btn.addEventListener('click', function() { document.body.classList.toggle('sidebar-open'); });
+    if (backdrop) backdrop.addEventListener('click', function() { document.body.classList.remove('sidebar-open'); });
+})();
 
-function searchRecip(q){var box=document.getElementById('recipResults');if(!q||q.length<2||!CL()){box.style.display='none';return;}q=q.toLowerCase();var dir=CL().data.getParentDirectory();var hits=dir.filter(function(p){return(p.parentName+' '+p.familyName+' '+p.children.map(function(c){return c.name}).join(' ')).toLowerCase().indexOf(q)>=0});if(!hits.length){box.innerHTML='<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>';box.style.display='block';return;}box.innerHTML=hits.slice(0,8).map(function(p){return'<div style="padding:8px 12px;cursor:pointer;font-size:.82rem;border-bottom:1px solid var(--border-light);" onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" onclick="pickRecip(\''+esc(p.parentName)+'\')"><strong>'+esc(p.parentName)+'</strong> <span style="color:var(--text-muted);">— '+p.children.map(function(c){return esc(c.name)}).join(', ')+'</span></div>';}).join('');box.style.display='block';}
-function pickRecip(name){document.getElementById('recipResults').style.display='none';document.getElementById('recipSearch').value='';var box=document.getElementById('recipChips');if(box.querySelector('[data-name="'+name+'"]'))return;var chip=document.createElement('span');chip.dataset.name=name;chip.style.cssText='display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--link-tint);color:var(--link-color);border-radius:var(--radius-full);font-size:.78rem;font-weight:600;';chip.innerHTML=esc(name)+' <span onclick="this.parentElement.remove()" style="cursor:pointer;">&times;</span>';box.appendChild(chip);}
-function msgParent(name){nav('compose');pickRecip(name);}
-function toggleCh(btn){btn.classList.toggle('selected');channels=[];document.querySelectorAll('.channel-btn.selected').forEach(function(b){channels.push(b.dataset.ch)});if(!channels.length){btn.classList.add('selected');channels.push(btn.dataset.ch);}}
-function sendManual(){var cl=CL();if(!cl){toast('Data bridge not loaded');return;}var subj=document.getElementById('compSubj').value.trim();var body=document.getElementById('compBody').value.trim();if(!subj){toast('Enter a subject');return;}if(!body){toast('Enter a message');return;}var chips=document.querySelectorAll('#recipChips span[data-name]');if(!chips.length){toast('Select a recipient');return;}chips.forEach(function(c){cl.msg.send({to:c.dataset.name,toType:'individual',subject:subj,body:body,channels:channels});});toast('✅ Sent to '+chips.length+' recipient(s)');document.getElementById('compSubj').value='';document.getElementById('compBody').value='';document.getElementById('recipChips').innerHTML='';}
+// ─── STAT HELPER ─────────────────────────────────────────────────────────────
+function stat(color, svgStr, val, label) {
+    return '<div class="lk-stat"><div class="lk-stat-icon ' + color + '">' + svgStr + '</div><div><div class="lk-stat-val">' + val + '</div><div class="lk-stat-lbl">' + esc(label) + '</div></div></div>';
+}
 
-function smartSend(type){var cl=CL();if(!cl){toast('Data bridge not loaded');return;}var r;if(type==='bus')r=cl.notify.sendBusStopNotifications(channels);else if(type==='bunk')r=cl.notify.sendBunkAssignments(channels);else if(type==='schedule')r=cl.notify.sendDailySchedules(channels);else if(type==='canteen')r=cl.notify.sendCanteenAlerts(channels);if(r&&r.success)toast('✅ '+r.sent+' notifications sent!');else toast('⚠ '+(r?r.error||'No data available':'Failed'));updateSmartBadge();}
-function smartPreview(type){var cl=CL();if(!cl)return;var notifs;if(type==='bus')notifs=cl.notify.generateBusStopNotifications();else if(type==='bunk')notifs=cl.notify.generateBunkAssignmentNotifications();else if(type==='schedule')notifs=cl.notify.generateScheduleNotifications();else if(type==='canteen')notifs=cl.notify.generateCanteenAlerts();var box=document.getElementById('smartPreviewBox');if(!notifs||!notifs.length){box.innerHTML='<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. Make sure data exists in Me'+(type==='bus'?' and routes in Go':'')+'.</div>';box.style.display='block';return;}var h='<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:260px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">'+notifs.length+' notifications</div>';notifs.slice(0,8).forEach(function(n){h+='<div style="padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;"><strong>'+esc(n.camperName)+'</strong> → '+esc(n.parentName||'?')+'<div style="color:var(--text-muted);font-size:.72rem;margin-top:2px;max-height:50px;overflow:hidden;">'+esc((n.body||'').substring(0,120))+'...</div></div>';});if(notifs.length>8)h+='<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+'+(notifs.length-8)+' more</div>';h+='</div>';box.innerHTML=h;box.style.display='block';}
-function smartExportCSV(){var cl=CL();if(!cl)return;var n=cl.notify.generateBusStopNotifications();if(!n.length)n=cl.notify.generateBunkAssignmentNotifications();if(!n.length){toast('No data');return;}cl.send.downloadCSV(n,'campistry_link_export.csv');toast('📥 CSV: '+n.length+' rows');}
-function updateSmartBadge(){var cl=CL();if(!cl)return;var c=cl.msg.getBroadcasts().length;document.getElementById('smartBadge').textContent=c?c+' sent':'Ready';document.getElementById('smartBadge').className='badge '+(c?'badge-ok':'badge-neutral');}
+var svgPeople = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+var svgLayers = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+var svgFolder = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+var svgSend  = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
 
-function renderSent(){var cl=CL();if(!cl)return;var all=cl.msg.getSent().concat(cl.msg.getBroadcasts().map(function(b){return{direction:'broadcast',subject:b.subject,date:b.date,channels:b.channels,recipientCount:b.recipientCount,to:'Broadcast'}}));all.sort(function(a,b){return new Date(b.date)-new Date(a.date)});var box=document.getElementById('sentList');if(!all.length){box.innerHTML='<div class="lk-empty" style="padding:28px;"><div class="lk-empty-icon">📭</div><h3>No messages yet</h3><p>Use Compose to send</p></div>';return;}box.innerHTML=all.map(function(m){var ch=(m.channels||['app']).map(function(c){return c==='app'?'In-App':c==='email'?'Email':'SMS'}).join(', ');var dt=m.date?new Date(m.date).toLocaleDateString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'';return'<div class="msg-item"><div class="msg-dot" style="background:transparent;"></div><div class="msg-body"><div class="msg-subj">'+esc(m.subject||'(no subject)')+'</div><div class="msg-from">To: '+esc(m.to||'Broadcast')+(m.recipientCount?' ('+m.recipientCount+')':'')+' · '+ch+'</div></div><span class="msg-time">'+dt+'</span></div>';}).join('');}
+// ─── DASHBOARD ───────────────────────────────────────────────────────────────
+function renderDash() {
+    var cl = CL(); if (!cl) return;
+    var dir    = cl.data.getParentDirectory();
+    var roster = cl.data.getRoster();
+    var struct = cl.data.getStructure();
+    var msgs   = cl.msg.getBroadcasts();
 
-async function buildIndex(){var cp=CP();if(!cp){toast('Photo engine not loaded');return;}var prog=document.getElementById('indexProg');prog.style.display='block';prog.innerHTML='<div style="font-size:.82rem;color:var(--text-muted);">Loading models (~6MB)...</div>';var r=await cp.buildFaceIndex(function(p){prog.innerHTML='<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:'+Math.round(p.current/p.total*100)+'%;"></div></div>'+p.current+'/'+p.total+': <strong>'+esc(p.name)+'</strong></div>';});if(r.error&&!r.indexed)prog.innerHTML='<div style="color:var(--red-500);font-size:.82rem;">⚠ '+esc(r.error)+'</div>';else{prog.innerHTML='<div style="color:var(--green-600);font-size:.82rem;">✅ '+r.indexed+' faces indexed</div>';document.getElementById('indexBadge').textContent=r.indexed+' faces';document.getElementById('indexBadge').className='badge badge-ok';}updatePhotoStats();}
-async function handlePhotos(files){if(!files||!files.length)return;var cp=CP();if(!cp){toast('Photo engine not loaded');return;}if(!cp.isIndexBuilt()){toast('Build face index first');return;}var prog=document.getElementById('uploadProg');prog.style.display='block';var r=await cp.batchUploadAndScan(files,function(p){prog.innerHTML='<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:'+Math.round(p.current/p.total*100)+'%;"></div></div>Scanning '+p.current+'/'+p.total+'</div>';});prog.innerHTML='<div style="color:var(--green-600);font-size:.82rem;">✅ '+r.processed+' done, '+r.tagged+' tagged</div>';document.getElementById('photoInput').value='';refreshPhotos();updatePhotoStats();}
-function refreshPhotos(){var cp=CP();if(!cp)return;var photos=cp.getPhotos(cp.getCurrentWeek());var grid=document.getElementById('photoGrid');var empty=document.getElementById('photoEmpty');if(!photos.length){grid.innerHTML='';empty.style.display='';return;}empty.style.display='none';grid.innerHTML=photos.slice(-40).reverse().map(function(p){var tags=(p.tags||[]).concat(p.manualTags||[]);var tagStr=tags.length?tags.map(function(t){return'<span class="badge badge-ok" style="font-size:.58rem;margin:1px;">'+esc(t.camperName.split(' ')[0])+' '+Math.round(t.confidence*100)+'%</span>'}).join(' '):'<span class="badge badge-warn" style="font-size:.58rem;">No match</span>';var thumb=p.dataUrl?'<img src="'+p.dataUrl+'" style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">':'<div style="height:120px;background:var(--slate-100);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">📷</div>';return'<div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);overflow:hidden;background:#fff;">'+thumb+'<div style="padding:6px;font-size:.72rem;"><div style="display:flex;flex-wrap:wrap;gap:2px;">'+tagStr+'</div></div></div>';}).join('');}
-function updatePhotoStats(){var cp=CP();if(!cp)return;var s=cp.getDistributionSummary();document.getElementById('photoStats').innerHTML=stat('blue','📸',s.totalPhotos,'This Week')+stat('green','✅',s.taggedPhotos,'Tagged')+stat('amber','👤',s.uniqueCampers,'Identified')+stat('rose','🔍',cp.getIndexSize()||Object.keys(cp.getStore().faceIndex).length,'Index');}
-function sendPhotos(){var cp=CP();if(!cp)return;var r=cp.sendPhotoRoundup(channels);if(r.success)toast('📨 Sent to '+r.sent+' parents!');else toast('⚠ '+(r.error||'No photos'));}
-function previewPhotos(){var cp=CP();if(!cp)return;var s=cp.getDistributionSummary();var box=document.getElementById('photoPreview');if(!s.totalPhotos){box.innerHTML='<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:.82rem;">No photos this week.</div>';box.style.display='block';return;}var entries=Object.entries(s.camperCounts).sort(function(a,b){return b[1].count-a[1].count});var h='<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:200px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">'+s.totalPhotos+' photos · '+s.uniqueCampers+' campers</div>';entries.forEach(function(e){h+='<div style="padding:6px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;display:flex;justify-content:space-between;"><span>'+esc(e[0])+'</span><span class="badge badge-ok">'+e[1].count+'</span></div>';});h+='</div>';box.innerHTML=h;box.style.display='block';}
+    var goSetup; try { goSetup = JSON.parse(localStorage.getItem('campistry_go_data') || '{}').setup || {}; } catch(e) { goSetup = {}; }
+    var cn = goSetup.campName || '';
+    if (!cn) try { cn = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}').campName || ''; } catch(e) {}
+    document.getElementById('campNameDisplay').textContent = cn;
 
-function boot(){
-    // Initial render with whatever localStorage has
-    renderDash();updateSmartBadge();
-    
-    // Re-render after cloud hydration completes (if integration_hooks is loaded)
-    window.addEventListener('campistry-cloud-hydrated',function(){
-        console.log('[Link] Cloud hydration complete — refreshing');
+    var rc = Object.keys(roster).length;
+    var dc = Object.keys(struct).length;
+    var fc = dir.length;
+
+    document.getElementById('dashStats').innerHTML =
+        stat('rose',  svgPeople, fc,        'Families')  +
+        stat('green', svgLayers, rc,        'Campers')   +
+        stat('amber', svgFolder, dc,        'Divisions') +
+        stat('blue',  svgSend,   msgs.length,'Broadcasts');
+
+    var issues = [];
+    if (!rc) issues.push('No campers — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">add in Me</a>');
+    if (!fc) issues.push('No families — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">create in Me</a>');
+    if (!dc) issues.push('No divisions — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">set up in Me</a>');
+    var box = document.getElementById('dashDataCheck');
+    if (issues.length) {
+        box.innerHTML = '<div class="lk-card-head"><h2>Setup Needed</h2><span class="badge badge-warn">Action required</span></div>' + issues.map(function(i) { return '<p style="font-size:.85rem;color:var(--text-secondary);padding:4px 0;">' + i + '</p>'; }).join('');
+        box.style.display = '';
+    } else {
+        box.innerHTML = '<div class="lk-card-head"><h2>Connected to Me</h2><span class="badge badge-ok">Synced</span></div><p style="font-size:.85rem;color:var(--text-muted);">' + rc + ' campers, ' + fc + ' families, ' + dc + ' divisions synced live.</p>';
+    }
+}
+
+// ─── PARENT DIRECTORY ────────────────────────────────────────────────────────
+function renderDir(q) {
+    var cl = CL(); if (!cl) return;
+    q = (q || '').toLowerCase();
+    var dir = cl.data.getParentDirectory();
+    var tb = document.getElementById('dirTable');
+    if (!dir.length) {
+        tb.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:28px;color:var(--text-muted);">No parents. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add families in Me</a></td></tr>';
+        return;
+    }
+    var h = '';
+    dir.forEach(function(p) {
+        var s = (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c) { return c.name; }).join(' ')).toLowerCase();
+        if (q && s.indexOf(q) < 0) return;
+        h += '<tr><td class="bold">' + esc(p.parentName || '—') + '</td><td>' + p.children.map(function(c) { return esc(c.name); }).join(', ') + '</td><td style="font-size:.78rem;">' + p.children.map(function(c) { return esc((c.division || '—') + ' / ' + (c.bunk || '—')); }).join('; ') + '</td><td style="font-size:.78rem;">' + esc(p.parentEmail || '—') + '</td><td style="font-size:.78rem;">' + esc(p.parentPhone || '—') + '</td><td><button class="btn btn-ghost btn-sm" onclick="msgParent(\'' + esc(p.parentName) + '\')">Msg</button></td></tr>';
+    });
+    tb.innerHTML = h || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';
+}
+
+// ─── CAMPER LOOKUP ────────────────────────────────────────────────────────────
+function renderCampers(q) {
+    var cl = CL(); if (!cl) return;
+    q = (q || '').toLowerCase();
+    var map = cl.data.getCamperParentMap();
+    var tb = document.getElementById('camperTable');
+    var entries = Object.entries(map);
+    if (!entries.length) {
+        tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">No campers. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add in Me</a></td></tr>';
+        return;
+    }
+    var h = '';
+    entries.forEach(function(e) {
+        var name = e[0], c = e[1];
+        if (q && name.toLowerCase().indexOf(q) < 0) return;
+        var busInfo = cl.data.getCamperBusStop(name);
+        var busCell = busInfo ? '<span class="badge badge-ok">' + esc(busInfo.busName) + ' #' + busInfo.stopNum + '</span>' : '<span class="badge badge-neutral">—</span>';
+        h += '<tr><td class="bold">' + esc(name) + '</td><td>' + esc(c.division || '—') + '</td><td>' + esc(c.grade || '—') + '</td><td>' + esc(c.bunk || '—') + '</td><td>' + esc(c.parentName || c.parent1Name || '—') + '</td><td style="font-size:.78rem;">' + esc(c.parentPhone || c.parent1Phone || '—') + '</td><td>' + busCell + '</td></tr>';
+    });
+    tb.innerHTML = h || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';
+}
+
+// ─── RECIPIENT SEARCH ─────────────────────────────────────────────────────────
+function searchRecip(q) {
+    var box = document.getElementById('recipResults');
+    if (!q || q.length < 2 || !CL()) { box.style.display = 'none'; return; }
+    q = q.toLowerCase();
+    var dir = CL().data.getParentDirectory();
+    var hits = dir.filter(function(p) { return (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c) { return c.name; }).join(' ')).toLowerCase().indexOf(q) >= 0; });
+    if (!hits.length) { box.innerHTML = '<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>'; box.style.display = 'block'; return; }
+    box.innerHTML = hits.slice(0, 8).map(function(p) {
+        return '<div style="padding:8px 12px;cursor:pointer;font-size:.82rem;border-bottom:1px solid var(--border-light);" onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" onclick="pickRecip(\'' + esc(p.parentName) + '\')"><strong>' + esc(p.parentName) + '</strong> <span style="color:var(--text-muted);">— ' + p.children.map(function(c) { return esc(c.name); }).join(', ') + '</span></div>';
+    }).join('');
+    box.style.display = 'block';
+}
+function pickRecip(name) {
+    document.getElementById('recipResults').style.display = 'none';
+    document.getElementById('recipSearch').value = '';
+    var box = document.getElementById('recipChips');
+    if (box.querySelector('[data-name="' + name + '"]')) return;
+    var chip = document.createElement('span');
+    chip.dataset.name = name;
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--link-tint);color:var(--link-color);border-radius:var(--radius-full);font-size:.78rem;font-weight:600;';
+    chip.innerHTML = esc(name) + ' <span onclick="this.parentElement.remove()" style="cursor:pointer;">&times;</span>';
+    box.appendChild(chip);
+}
+function msgParent(name) { nav('compose'); pickRecip(name); }
+
+// ─── CHANNELS / SEND ─────────────────────────────────────────────────────────
+function toggleCh(btn) {
+    btn.classList.toggle('selected');
+    channels = [];
+    document.querySelectorAll('.channel-btn.selected').forEach(function(b) { channels.push(b.dataset.ch); });
+    if (!channels.length) { btn.classList.add('selected'); channels.push(btn.dataset.ch); }
+}
+function sendManual() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var subj = document.getElementById('compSubj').value.trim();
+    var body = document.getElementById('compBody').value.trim();
+    if (!subj) { toast('Enter a subject'); return; }
+    if (!body)  { toast('Enter a message'); return; }
+    var chips = document.querySelectorAll('#recipChips span[data-name]');
+    if (!chips.length) { toast('Select a recipient'); return; }
+    chips.forEach(function(c) { cl.msg.send({to:c.dataset.name,toType:'individual',subject:subj,body:body,channels:channels}); });
+    toast('Sent to ' + chips.length + ' recipient(s)');
+    document.getElementById('compSubj').value = '';
+    document.getElementById('compBody').value = '';
+    document.getElementById('recipChips').innerHTML = '';
+}
+
+// ─── SMART NOTIFICATIONS ─────────────────────────────────────────────────────
+function smartSend(type) {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var r;
+    if (type === 'bus')     r = cl.notify.sendBusStopNotifications(channels);
+    else if (type === 'bunk')     r = cl.notify.sendBunkAssignments(channels);
+    else if (type === 'schedule') r = cl.notify.sendDailySchedules(channels);
+    else if (type === 'canteen')  r = cl.notify.sendCanteenAlerts(channels);
+    if (r && r.success) toast(r.sent + ' notifications sent!');
+    else toast((r ? r.error || 'No data available' : 'Failed'));
+    updateSmartBadge();
+}
+function smartPreview(type) {
+    var cl = CL(); if (!cl) return;
+    var notifs;
+    if (type === 'bus')     notifs = cl.notify.generateBusStopNotifications();
+    else if (type === 'bunk') notifs = cl.notify.generateBunkAssignmentNotifications();
+    else if (type === 'schedule') notifs = cl.notify.generateScheduleNotifications();
+    else if (type === 'canteen')  notifs = cl.notify.generateCanteenAlerts();
+    var box = document.getElementById('smartPreviewBox');
+    if (!notifs || !notifs.length) {
+        box.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. Make sure data exists in Me' + (type === 'bus' ? ' and routes in Go' : '') + '.</div>';
+        box.style.display = 'block'; return;
+    }
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:260px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">' + notifs.length + ' notifications</div>';
+    notifs.slice(0, 8).forEach(function(n) { h += '<div style="padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;"><strong>' + esc(n.camperName) + '</strong> — ' + esc(n.parentName || '?') + '<div style="color:var(--text-muted);font-size:.72rem;margin-top:2px;max-height:50px;overflow:hidden;">' + esc((n.body || '').substring(0, 120)) + '...</div></div>'; });
+    if (notifs.length > 8) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+' + (notifs.length - 8) + ' more</div>';
+    h += '</div>';
+    box.innerHTML = h; box.style.display = 'block';
+}
+function smartExportCSV() {
+    var cl = CL(); if (!cl) return;
+    var n = cl.notify.generateBusStopNotifications();
+    if (!n.length) n = cl.notify.generateBunkAssignmentNotifications();
+    if (!n.length) { toast('No data'); return; }
+    cl.send.downloadCSV(n, 'campistry_link_export.csv');
+    toast('CSV: ' + n.length + ' rows');
+}
+function updateSmartBadge() {
+    var cl = CL(); if (!cl) return;
+    var c = cl.msg.getBroadcasts().length;
+    document.getElementById('smartBadge').textContent = c ? c + ' sent' : 'Ready';
+    document.getElementById('smartBadge').className = 'badge ' + (c ? 'badge-ok' : 'badge-neutral');
+}
+
+// ─── SENT / BROADCASTS (kept for compat) ─────────────────────────────────────
+function renderSent() {}
+
+// ─── PICKUP QUEUE ─────────────────────────────────────────────────────────────
+var pickupRequests = [
+    { idx:0, child:'Eli Miller',   type:'Early Pickup',       color:'amber', time:'10:42 AM', person:'David Miller',  personLabel:'Pickup',  status:'Pending' },
+    { idx:1, child:'Sophie Cohen', type:'Going With Friend',  color:'purple', time:'11:15 AM', person:'Levi Cohen',    personLabel:'Friend',  status:'Confirmed' },
+    { idx:2, child:'Noah Stern',   type:'Late Arrival',       color:'green',  time:'8:30 AM',  person:'Expected 9:30', personLabel:'Arrival', status:'Released' }
+];
+
+function confirmRequest(idx) {
+    var r = pickupRequests.find(function(x) { return x.idx === idx; });
+    if (!r) return;
+    if (r.status === 'Pending')   { r.status = 'Confirmed'; toast(r.child + ' — request confirmed!'); }
+    else if (r.status === 'Confirmed') { r.status = 'Released'; toast(r.child + ' — released!'); }
+    renderPickupQueue();
+}
+
+function renderPickupQueue() {
+    var list = document.getElementById('pickupQueueList');
+    if (!list) return;
+    var pending   = pickupRequests.filter(function(r) { return r.status === 'Pending'; }).length;
+    var confirmed = pickupRequests.filter(function(r) { return r.status === 'Confirmed'; }).length;
+    var released  = pickupRequests.filter(function(r) { return r.status === 'Released'; }).length;
+
+    // Pickup stats
+    var ps = document.getElementById('pickupStats');
+    if (ps) {
+        ps.innerHTML =
+            stat('amber', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>', pickupRequests.length, "Today's Requests") +
+            stat('amber', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', pending, 'Pending') +
+            stat('blue',  '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>', confirmed, 'Confirmed') +
+            stat('green', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 11 12 14 22 4"/></svg>', released, 'Released');
+    }
+    var countBadge = document.getElementById('pickupCountBadge');
+    if (countBadge) countBadge.textContent = pickupRequests.length + ' requests';
+
+    var statusBadge = { Pending:'badge-warn', Confirmed:'badge-info', Released:'badge-ok' };
+    var typeIcon = {
+        'Early Pickup':      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>',
+        'Going With Friend': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
+        'Late Arrival':      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
+        'Pickup Change':     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>'
+    };
+
+    var h = '';
+    pickupRequests.forEach(function(r) {
+        var icon = typeIcon[r.type] || '';
+        var badgeCls = statusBadge[r.status] || 'badge-neutral';
+        var canAct = r.status !== 'Released';
+        var actionLabel = r.status === 'Pending' ? 'Confirm' : 'Release';
+        h += '<div class="lk-pickup-row">' +
+            '<div class="lk-pickup-icon-circle ' + r.color + '">' + icon + '</div>' +
+            '<div class="lk-pickup-row-info">' +
+                '<div class="lk-pickup-row-name">' + esc(r.child) + ' <span style="font-weight:400;color:var(--text-muted);font-size:.8rem;">— ' + esc(r.type) + '</span></div>' +
+                '<div class="lk-pickup-row-sub">Submitted ' + esc(r.time) + '</div>' +
+                '<div class="lk-pickup-row-meta">' + esc(r.personLabel) + ': ' + esc(r.person) + '</div>' +
+            '</div>' +
+            '<div class="lk-pickup-row-actions">' +
+                '<span class="badge ' + badgeCls + '">' + esc(r.status) + '</span>' +
+                (canAct ? '<button class="btn btn-secondary btn-sm" onclick="confirmRequest(' + r.idx + ')">' + actionLabel + '</button>' : '') +
+            '</div>' +
+        '</div>';
+    });
+    list.innerHTML = h || '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></div><h3>No requests today</h3></div>';
+}
+
+// ─── ADMIN MESSAGES ───────────────────────────────────────────────────────────
+var adminMessages = [
+    { id:1, from:'Sarah Miller', role:'Parent', subject:'Question about visiting day', preview:'When is visiting day exactly? We have a conflict...', body:'<p>Hi,</p><p>When is visiting day exactly? We have a potential conflict and wanted to confirm the date. Also, can family members other than parents attend?</p><p>Thank you,<br>Sarah Miller</p>', date:'2h ago', read:false, tag:'general' },
+    { id:2, from:'David Cohen',  role:'Parent', subject:"Eli's medication reminder",    preview:"Just a reminder that Eli needs his afternoon dose...", body:'<p>Hi,</p><p>Just a reminder that Eli needs his afternoon medication (Ritalin 10mg) at 2:00 PM. The nurse should have the prescription on file. Please confirm.</p><p>Thanks,<br>David Cohen</p>', date:'5h ago', read:false, tag:'general' },
+    { id:3, from:'Rachel Stern', role:'Parent', subject:'Late pickup Thursday',        preview:'We need to pick Noah up 30 minutes late Thursday...', body:'<p>Hello,</p><p>We need to pick Noah up about 30 minutes after the normal dismissal time this Thursday (July 3). Is that okay? Who should we speak to when we arrive?</p><p>Rachel Stern</p>', date:'1d ago', read:true, tag:'pickup' }
+];
+
+function renderAdminMsgs(filter) {
+    var list = adminMessages;
+    if (filter === 'unread') list = adminMessages.filter(function(m) { return !m.read; });
+    if (filter === 'pickup') list = adminMessages.filter(function(m) { return m.tag === 'pickup'; });
+    var c = document.getElementById('adminMsgList');
+    if (!list.length) {
+        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';
+        return;
+    }
+    c.innerHTML = '';
+    list.forEach(function(m) {
+        c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(' + m.id + ')">' +
+            '<div class="msg-dot"></div>' +
+            '<div class="msg-body">' +
+                '<div class="msg-subj">' + esc(m.subject) + '</div>' +
+                '<div class="msg-preview">' + esc(m.preview) + '</div>' +
+                '<div class="msg-from">' + esc(m.from) + ' (' + esc(m.role) + ')</div>' +
+            '</div>' +
+            '<span class="msg-time">' + esc(m.date) + '</span>' +
+        '</div>';
+    });
+}
+function filterAdminMsgs(filter, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    renderAdminMsgs(filter);
+}
+function openAdminMsg(id) {
+    var m = adminMessages.find(function(x) { return x.id === id; }); if (!m) return;
+    m.read = true;
+    document.getElementById('adminMsgListView').style.display = 'none';
+    document.getElementById('adminMsgDetailView').style.display = 'block';
+    document.getElementById('adminMsgDetail').innerHTML =
+        '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
+            '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject) + '</div>' +
+            '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
+                '<span>From: <strong>' + esc(m.from) + '</strong></span>' +
+                '<span>' + esc(m.date) + '</span>' +
+                '<span class="badge badge-neutral">' + esc(m.role) + '</span>' +
+            '</div>' +
+        '</div>' +
+        '<div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">' + m.body + '</div>' +
+        '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">' +
+            '<textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea>' +
+            '<div style="margin-top:8px;text-align:right;">' +
+                '<button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent to ' + esc(m.from) + '!\')">Send Reply</button>' +
+            '</div>' +
+        '</div>';
+}
+function closeAdminMsgDetail() {
+    document.getElementById('adminMsgListView').style.display = '';
+    document.getElementById('adminMsgDetailView').style.display = 'none';
+    renderAdminMsgs('all');
+}
+
+// ─── HEALTH TAB SWITCHER ─────────────────────────────────────────────────────
+function switchHealthTab(tab, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    document.getElementById('healthPanelVisitlog').style.display = tab === 'visitlog' ? '' : 'none';
+    document.getElementById('healthPanelDocs').style.display     = tab === 'docs'     ? '' : 'none';
+}
+
+// ─── SAVE VISIT NOTE ─────────────────────────────────────────────────────────
+function saveVisitNote() {
+    var camper = document.getElementById('visitCamperSelect').value;
+    var severity = document.getElementById('visitSeverity').value;
+    var note = document.getElementById('visitNote').value.trim();
+    if (!camper) { toast('Select a camper'); return; }
+    if (!note)   { toast('Enter a visit note'); return; }
+    var now = new Date();
+    var timeStr = 'Today, ' + (now.getHours() % 12 || 12) + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + (now.getHours() < 12 ? ' AM' : ' PM');
+    var dotClass = severity === 'sent-home' ? 'sent-home' : (severity === 'attention' ? 'attention' : 'routine');
+    var badgeCls = severity === 'sent-home' ? 'badge-err' : (severity === 'attention' ? 'badge-warn' : 'badge-ok');
+    var badgeLabel = severity === 'sent-home' ? 'Sent Home' : (severity === 'attention' ? 'Attention' : 'Routine');
+    var clockSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
+    var html = '<div class="lk-health-visit">' +
+        '<div class="lk-health-visit-dot ' + dotClass + '"></div>' +
+        '<div class="lk-health-visit-body">' +
+            '<div class="lk-health-visit-title">' + esc(note.slice(0, 60)) + (note.length > 60 ? '...' : '') + '</div>' +
+            '<div class="lk-health-visit-note">' + esc(note) + '</div>' +
+            '<div class="lk-health-visit-meta">' +
+                '<span>' + clockSvg + ' ' + timeStr + '</span>' +
+                '<span>Nurse</span>' +
+                '<span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">' + esc(camper) + '</span>' +
+                '<span class="badge ' + badgeCls + '" style="font-size:.6rem;padding:2px 7px;">' + badgeLabel + '</span>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
+    document.getElementById('visitLogList').insertAdjacentHTML('afterbegin', html);
+    // update count badge
+    var entries = document.getElementById('visitLogList').querySelectorAll('.lk-health-visit').length;
+    document.getElementById('visitLogCount').textContent = entries + ' entr' + (entries === 1 ? 'y' : 'ies');
+    document.getElementById('visitNote').value = '';
+    document.getElementById('visitCamperSelect').value = '';
+    toast('Visit note saved for ' + camper + '!');
+}
+
+// ─── HEALTH DOC FILTER ───────────────────────────────────────────────────────
+function filterHealthDocs(q) {
+    q = (q || '').toLowerCase();
+    document.querySelectorAll('#healthDocList .lk-health-doc').forEach(function(row) {
+        var txt = row.textContent.toLowerCase();
+        row.style.display = (!q || txt.indexOf(q) >= 0) ? '' : 'none';
+    });
+}
+
+// ─── CANTEEN FILTER ──────────────────────────────────────────────────────────
+function filterCanteen(q) {
+    q = (q || '').toLowerCase();
+    document.querySelectorAll('#canteenTableBody tr').forEach(function(row) {
+        var txt = row.textContent.toLowerCase();
+        row.style.display = (!q || txt.indexOf(q) >= 0) ? '' : 'none';
+    });
+}
+
+// ─── PHOTOS ───────────────────────────────────────────────────────────────────
+async function buildIndex() {
+    var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
+    var prog = document.getElementById('indexProg');
+    prog.style.display = 'block';
+    prog.innerHTML = '<div style="font-size:.82rem;color:var(--text-muted);">Loading models (~6MB)...</div>';
+    var r = await cp.buildFaceIndex(function(p) {
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round(p.current / p.total * 100) + '%;"></div></div>' + p.current + '/' + p.total + ': <strong>' + esc(p.name) + '</strong></div>';
+    });
+    if (r.error && !r.indexed) prog.innerHTML = '<div style="color:var(--red-500);font-size:.82rem;">Error: ' + esc(r.error) + '</div>';
+    else {
+        prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.indexed + ' faces indexed</div>';
+        document.getElementById('indexBadge').textContent = r.indexed + ' faces';
+        document.getElementById('indexBadge').className = 'badge badge-ok';
+    }
+    updatePhotoStats();
+}
+async function handlePhotos(files) {
+    if (!files || !files.length) return;
+    var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
+    if (!cp.isIndexBuilt()) { toast('Build face index first'); return; }
+    var prog = document.getElementById('uploadProg');
+    prog.style.display = 'block';
+    var r = await cp.batchUploadAndScan(files, function(p) {
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round(p.current / p.total * 100) + '%;"></div></div>Scanning ' + p.current + '/' + p.total + '</div>';
+    });
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged</div>';
+    document.getElementById('photoInput').value = '';
+    refreshPhotos(); updatePhotoStats();
+}
+function refreshPhotos() {
+    var cp = CP(); if (!cp) return;
+    var photos = cp.getPhotos(cp.getCurrentWeek());
+    var grid = document.getElementById('photoGrid');
+    var empty = document.getElementById('photoEmpty');
+    if (!photos.length) { grid.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    grid.innerHTML = photos.slice(-40).reverse().map(function(p) {
+        var tags = (p.tags || []).concat(p.manualTags || []);
+        var tagStr = tags.length ? tags.map(function(t) { return '<span class="badge badge-ok" style="font-size:.58rem;margin:1px;">' + esc(t.camperName.split(' ')[0]) + ' ' + Math.round(t.confidence * 100) + '%</span>'; }).join(' ') : '<span class="badge badge-warn" style="font-size:.58rem;">No match</span>';
+        var camSvg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+        var thumb = p.dataUrl ? '<img src="' + p.dataUrl + '" style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">' : '<div style="height:120px;background:var(--slate-100);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">' + camSvg + '</div>';
+        return '<div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);overflow:hidden;background:#fff;">' + thumb + '<div style="padding:6px;font-size:.72rem;"><div style="display:flex;flex-wrap:wrap;gap:2px;">' + tagStr + '</div></div></div>';
+    }).join('');
+}
+function updatePhotoStats() {
+    var cp = CP(); if (!cp) return;
+    var s = cp.getDistributionSummary();
+    var camSvg   = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+    var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+    var personSvg= '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    var searchSvg= '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+    document.getElementById('photoStats').innerHTML =
+        stat('blue',  camSvg,    s.totalPhotos,         'This Week')  +
+        stat('green', checkSvg,  s.taggedPhotos,        'Tagged')     +
+        stat('amber', personSvg, s.uniqueCampers,       'Identified') +
+        stat('rose',  searchSvg, cp.getIndexSize() || Object.keys(cp.getStore().faceIndex).length, 'Index');
+}
+function sendPhotos() {
+    var cp = CP(); if (!cp) return;
+    var r = cp.sendPhotoRoundup(channels);
+    if (r.success) toast('Sent to ' + r.sent + ' parents!');
+    else toast(r.error || 'No photos');
+}
+function previewPhotos() {
+    var cp = CP(); if (!cp) return;
+    var s = cp.getDistributionSummary();
+    var box = document.getElementById('photoPreview');
+    if (!s.totalPhotos) { box.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:.82rem;">No photos this week.</div>'; box.style.display = 'block'; return; }
+    var entries = Object.entries(s.camperCounts).sort(function(a, b) { return b[1].count - a[1].count; });
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:200px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">' + s.totalPhotos + ' photos · ' + s.uniqueCampers + ' campers</div>';
+    entries.forEach(function(e) { h += '<div style="padding:6px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;display:flex;justify-content:space-between;"><span>' + esc(e[0]) + '</span><span class="badge badge-ok">' + e[1].count + '</span></div>'; });
+    h += '</div>';
+    box.innerHTML = h; box.style.display = 'block';
+}
+
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+function boot() {
+    renderDash();
+    updateSmartBadge();
+    renderPickupQueue();
+    renderAdminMsgs('all');
+
+    window.addEventListener('campistry-cloud-hydrated', function() {
+        console.log('[Link Admin] Cloud hydration complete — refreshing');
         renderDash();
     });
-    // Also re-render when __CAMPISTRY_CLOUD_READY__ fires
-    var checkCloud=setInterval(function(){
-        if(window.__CAMPISTRY_CLOUD_READY__){
+    var checkCloud = setInterval(function() {
+        if (window.__CAMPISTRY_CLOUD_READY__) {
             clearInterval(checkCloud);
-            console.log('[Link] Cloud ready — refreshing');
             renderDash();
         }
-    },500);
-    setTimeout(function(){clearInterval(checkCloud)},10000); // stop checking after 10s
-    
+    }, 500);
+    setTimeout(function() { clearInterval(checkCloud); }, 10000);
+
     // Photo index restore
-    var cp=CP();if(cp&&Object.keys(cp.getStore().faceIndex).length){cp.loadModels().then(function(){if(cp.restoreIndex()){document.getElementById('indexBadge').textContent=cp.getIndexSize()+' faces';document.getElementById('indexBadge').className='badge badge-ok';updatePhotoStats();}});}
-    
-    // Listen for Me data changes from other tabs
-    window.addEventListener('storage',function(e){if(e.key==='campGlobalSettings_v1'||e.key==='CAMPISTRY_LOCAL_CACHE'){console.log('[Link] Me data changed');renderDash();}});
+    var cp = CP();
+    if (cp && Object.keys(cp.getStore().faceIndex).length) {
+        cp.loadModels().then(function() {
+            if (cp.restoreIndex()) {
+                document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' faces';
+                document.getElementById('indexBadge').className = 'badge badge-ok';
+                updatePhotoStats();
+            }
+        });
+    }
+
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') { renderDash(); }
+    });
 }
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 </script>
 </body>
 </html>
