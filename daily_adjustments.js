@@ -6317,6 +6317,43 @@ function createChip(name, color) {
 // =================================================================
 // RESOURCE OVERRIDES UI
 // =================================================================
+
+// Module-scope so BOTH renderResourceOverridesUI (facility / league toggles) AND
+// renderOverrideDetailPane (time-rule + per-field sport-disable handlers) can
+// call it. Previously this was a closure inside renderResourceOverridesUI, so
+// calls from the detail pane silently threw ReferenceError → time rules and
+// sport disables only wrote to cloud, never to localStorage, and were lost on
+// reload.
+function saveOverridesUnified() {
+  const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+  const fullOverrides = {
+    leagues: currentOverrides.leagues || [],
+    disabledFields: currentOverrides.disabledFields || [],
+    disabledSpecials: currentOverrides.disabledSpecials || []
+  };
+  window.saveCurrentDailyData?.("overrides", fullOverrides);
+  window.saveCurrentDailyData?.("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
+  window.saveCurrentDailyData?.("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
+  window.saveCurrentDailyData?.("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
+  try {
+    localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
+      overrides: fullOverrides,
+      dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
+      dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
+      disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
+    }));
+    // Iron-gate time-rules key (read by _ironGateTimeRulesV1 in
+    // scheduler_core_auto.js as PRIMARY for time-rule clearing).
+    localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability || {}));
+  } catch (e) {}
+  try {
+    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
+      fullOverrides.disabledFields.length + ' disabled fields, ' +
+      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
+      fullOverrides.leagues.length + ' disabled leagues');
+  } catch (_e) {}
+}
+
 function renderResourceOverridesUI() {
   const container = document.getElementById('da-resources-container');
   if (!container) return;
@@ -6352,37 +6389,12 @@ function renderResourceOverridesUI() {
     </div>
   `;
   
-  const saveOverrides = () => {
-    const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-    const fullOverrides = {
-      leagues: currentOverrides.leagues || [],
-      disabledFields: currentOverrides.disabledFields || [],
-      disabledSpecials: currentOverrides.disabledSpecials || []
-    };
-    // Save to dailyData (cloud sync)
-    window.saveCurrentDailyData("overrides", fullOverrides);
-    window.saveCurrentDailyData("dailyDisabledSportsByField", currentOverrides.dailyDisabledSportsByField);
-    window.saveCurrentDailyData("dailyFieldAvailability", currentOverrides.dailyFieldAvailability);
-    window.saveCurrentDailyData("disabledSpecialtyLeagues", currentOverrides.disabledSpecialtyLeagues);
-    // ★ v7.0: Also save to dedicated localStorage key (survives cloud overwrites)
-    try {
-      localStorage.setItem('campResourceOverrides_' + dateKey, JSON.stringify({
-        overrides: fullOverrides,
-        dailyDisabledSportsByField: currentOverrides.dailyDisabledSportsByField || {},
-        dailyFieldAvailability: currentOverrides.dailyFieldAvailability || {},
-        disabledSpecialtyLeagues: currentOverrides.disabledSpecialtyLeagues || []
-      }));
-      // ★ Iron-gate time-rules key (read by _ironGateTimeRulesV1 in
-      //   scheduler_core_auto.js as PRIMARY for time-rule clearing).
-      //   Keep it in sync so the iron-gate stays effective even if
-      //   cloud sync resets activityProperties later.
-      localStorage.setItem('campTimeRulesEnforce_' + dateKey, JSON.stringify(currentOverrides.dailyFieldAvailability || {}));
-    } catch(e) {}
-    console.log('[ResourceOverrides] Saved for ' + dateKey + ': ' +
-      fullOverrides.disabledFields.length + ' disabled fields, ' +
-      fullOverrides.disabledSpecials.length + ' disabled specials, ' +
-      fullOverrides.leagues.length + ' disabled leagues');
-  };
+  // Local alias delegates to the module-scope unified saver so toggling
+  // facility/league/specialty-league checkboxes uses the SAME persistence
+  // path as the detail-pane handlers (time-rule add/remove + per-field
+  // sport disable). Eliminates the scope mismatch that left those two
+  // categories unable to call saveOverrides.
+  const saveOverrides = () => saveOverridesUnified();
   
   // Unified Facilities list (reads window.getFacilities() from facilities.js).
   // Disabling a facility cascades to any special activities hosted at it so
@@ -6609,10 +6621,11 @@ function renderOverrideDetailPane() {
           const idx = parseInt(btn.dataset.idx);
           dailyRules.splice(idx, 1);
           currentOverrides.dailyFieldAvailability[name] = dailyRules;
-          // ★ Use unified saveOverrides — writes cloud + campResourceOverrides_<date>
-          //   localStorage atomically, so reload + generator both see the change.
-          //   (Also keeps the legacy iron-gate key in sync via the same function.)
-          saveOverrides();
+          // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+          //   + campTimeRulesEnforce_<date> atomically. Previously the local
+          //   `saveOverrides` was inside renderResourceOverridesUI's closure
+          //   and silently undefined here, so removals only updated cloud.
+          saveOverridesUnified();
           renderOverrideDetailPane();
         };
       });
@@ -6632,11 +6645,9 @@ function renderOverrideDetailPane() {
       
       dailyRules.push({ type: ruleType, start, end, startMin, endMin });
       currentOverrides.dailyFieldAvailability[name] = dailyRules;
-      // ★ Use unified saveOverrides — writes cloud + campResourceOverrides_<date>
-      //   localStorage atomically. Previously the add wrote cloud + the legacy
-      //   iron-gate key separately, but never the unified localStorage entry the
-      //   generator's fallback chain reads.
-      saveOverrides();
+      // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+      //   + campTimeRulesEnforce_<date> atomically.
+      saveOverridesUnified();
       renderOverrideDetailPane();
       renderResourceOverridesUI();
     };
@@ -6660,13 +6671,10 @@ function renderOverrideDetailPane() {
             if (e.target.checked) list = list.filter(s => s !== sport);
             else if (!list.includes(sport)) list.push(sport);
             currentOverrides.dailyDisabledSportsByField[name] = list;
-            // ★ Use unified saveOverrides so the per-field sport disable persists
-            //   to BOTH cloud and localStorage (campResourceOverrides_<date>),
-            //   matching the field-toggle and league-toggle handlers. Previously
-            //   the lone saveCurrentDailyData call wrote to cloud only, so the
-            //   disable was lost on reload (and the generator's localStorage
-            //   fallback chain found nothing).
-            saveOverrides();
+            // ★ Module-scope unified saver — writes cloud + campResourceOverrides_<date>
+            //   + campTimeRulesEnforce_<date>. The local `saveOverrides` from
+            //   renderResourceOverridesUI is not in scope here (sibling function).
+            saveOverridesUnified();
           };
           checkboxesEl.appendChild(label);
         });
