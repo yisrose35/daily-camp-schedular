@@ -667,7 +667,36 @@
       }
       acts.add(s.name);
     });
-    return [...acts];
+    // ★ Forced-pairing infeasibility filter: drop sports where NO bunk in this
+    //   grade (alone OR paired with another grade bunk) can reach the sport's
+    //   [minPlayers, maxPlayers] range. Without this, v2 SA moves (replace/
+    //   inject/swap/etc.) freely insert sports like Baseball (min 18) into a
+    //   small-bunk grade where no pair can ever satisfy min — producing
+    //   permanent under-min placements that no pairing pass can fix.
+    const sm = ctx.sportMetaData || {};
+    const sizeMap = ctx._bunkSize || {};
+    const gradeBunks = (ctx.divisions && ctx.divisions[grade] && ctx.divisions[grade].bunks || []).map(String);
+    const filtered = [];
+    for (const act of acts) {
+      const meta = sm[act];
+      if (!meta || !meta.minPlayers) { filtered.push(act); continue; }
+      const min = meta.minPlayers;
+      const max = meta.maxPlayers || Infinity;
+      let pairExists = false;
+      for (let i = 0; i < gradeBunks.length && !pairExists; i++) {
+        const sz_i = sizeMap[gradeBunks[i]] || 0;
+        if (!sz_i) continue;
+        if (sz_i >= min && sz_i <= max) { pairExists = true; break; }
+        for (let j = i + 1; j < gradeBunks.length && !pairExists; j++) {
+          const sz_j = sizeMap[gradeBunks[j]] || 0;
+          if (!sz_j) continue;
+          const combined = sz_i + sz_j;
+          if (combined >= min && combined <= max) pairExists = true;
+        }
+      }
+      if (pairExists) filtered.push(act);
+    }
+    return filtered;
   }
 
   function _findFieldForActivity(activity, ctx) {
