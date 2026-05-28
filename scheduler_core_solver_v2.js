@@ -2091,6 +2091,7 @@
   // PUBLIC ENTRY
   // -------------------------------------------------------------------------
   window.runAutoSchedulerV2 = async function (layers, options) {
+    try { window.__v2FlowDiag = { v2Entered: Date.now() }; } catch (_eEntry) {}
     const cfg = getConfig();
     log('v2 entry. timeBudget=' + cfg.timeBudgetMs + 'ms');
 
