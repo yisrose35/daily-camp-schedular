@@ -2446,9 +2446,11 @@
     //   `_pairLock`. Self-healing if some new co-location formed during SA.
     try {
       (function _pairingReoptV2() {
+        try { window.__pairingV2Diag = { started: true, ts: Date.now(), ctxKeys: ctx ? Object.keys(ctx) : null }; } catch (_eD) {}
         const sched = window.scheduleAssignments || {};
         const bunkGradeP = {};
         for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGradeP[String(b)] = g; }); }
+        try { window.__pairingV2Diag.bunkGradeCount = Object.keys(bunkGradeP).length; window.__pairingV2Diag.divisionsKeys = Object.keys(ctx.divisions || {}); } catch (_eD2) {}
         const _sizeMap = (ctx._bunkSize || {});
         function _szOfV2(b) {
           if (typeof _sizeMap[b] === 'number') return _sizeMap[b];
@@ -2514,8 +2516,9 @@
           });
         });
         try { console.log('[PAIRING-REOPT-v2] pairedHalvesTagged=' + pairedTaggedV2 + ', underMinSolo=' + underMinSoloV2); } catch (_eL) {}
+        try { window.__pairingV2Diag.completed = true; window.__pairingV2Diag.pairedTagged = pairedTaggedV2; window.__pairingV2Diag.underMinSolo = underMinSoloV2; window.__pairingV2Diag.slotIdxKeyCount = Object.keys(slotIdxV2).length; } catch (_eD3) {}
       })();
-    } catch (_ePR2) {}
+    } catch (_ePR2) { try { window.__pairingV2Diag = window.__pairingV2Diag || {}; window.__pairingV2Diag.error = String(_ePR2 && _ePR2.message || _ePR2); window.__pairingV2Diag.errorStack = String(_ePR2 && _ePR2.stack || ''); } catch (_eD4) {} }
 
     // ★ Day 22.5+ FINAL NULL BACKFILL — guarantee 100% fill rate.
     //   smartRepair's Pass 3 tries to fill nulls with real activities, but
