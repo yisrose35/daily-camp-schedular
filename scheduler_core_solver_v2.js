@@ -3066,12 +3066,30 @@
               if (slots[i]) continue;
               const b = pbsArr[i];
               if (!b || b.startMin == null || b.endMin == null) continue;
-              // Try a real activity first via smartRepair candidate helper
+              // Try a real activity first via smartRepair candidate helper.
+              // ★ Forced-pairing follow-on: prefer BUNK-solo-feasible activities
+              //   (size >= minPlayers OR no minPlayers) so this final fill
+              //   doesn't undo the careful pair work by re-introducing under-min
+              //   placements. Only fall through to bunk-infeasible candidates
+              //   when no bunk-feasible activity has a valid field at this slot.
               let placed = null;
               try {
                 const pool = (typeof _candidateActivities === 'function')
                   ? _candidateActivities(grade, ctx) : [];
-                for (const act of pool.slice(0, 8)) {
+                const sm_nb = ctx.sportMetaData || {};
+                const bunkSz = (ctx._bunkSize && ctx._bunkSize[bunk]) || 0;
+                function _bunkFeasible(act) {
+                  const m = sm_nb[act];
+                  if (!m || !m.minPlayers) return true;
+                  if (!bunkSz) return true; // unknown size — defer to other logic
+                  if (bunkSz < m.minPlayers) return false;
+                  if (m.maxPlayers && bunkSz > m.maxPlayers) return false;
+                  return true;
+                }
+                // Two passes: bunk-feasible first, then anything as fallback
+                const feasible = pool.filter(_bunkFeasible);
+                const tryOrder = feasible.concat(pool.filter(a => !_bunkFeasible(a)));
+                for (const act of tryOrder.slice(0, 8)) {
                   const field = (typeof _findFieldForActivity === 'function')
                     ? _findFieldForActivity(act, ctx) : null;
                   if (!field) continue;
