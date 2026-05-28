@@ -18135,6 +18135,59 @@
             });
         });
 
+        // ── TRIP MULTI-SLOT WRITE: force ALL slots overlapping a trip to be Trip ──
+        // Trip blocks in bunkTimelines are pinned at [tStart, tEnd], often spanning
+        // multiple slots in the per-bunk grid. The generic pinned-write above only
+        // writes to ONE slot (the first matching by exact or overlap-fallback), so
+        // a 3-hour trip ends up filling a single 40-minute slot — leaving the
+        // remaining slots free for Phase 3 sport-fill to drop other activities into
+        // the trip's time window. This pass scans bunkTimelines for `_isTrip` blocks
+        // and OVERWRITES every overlapping slot with a Trip entry (first slot is
+        // the anchor, subsequent are continuation). Also preserves _isTrip so the
+        // renderer / future code can identify trip slots.
+        let tripWriteCount = 0;
+        allGrades.forEach(grade => {
+            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            if (!pbs) return;
+            getBunksForGrade(grade, divisions).forEach(bunk => {
+                const arr = pbs[String(bunk)] || [];
+                if (!arr.length) return;
+                const tripBlocks = (bunkTimelines[bunk] || []).filter(b => b && (b._isTrip || b.type === 'trip'));
+                for (const trip of tripBlocks) {
+                    const tStart = trip.startMin, tEnd = trip.endMin;
+                    if (tStart == null || tEnd == null) continue;
+                    // Find every slot whose range overlaps the trip.
+                    const overlaps = [];
+                    for (let i = 0; i < arr.length; i++) {
+                        const s = arr[i];
+                        if (!s || s.startMin == null || s.endMin == null) continue;
+                        if (s.startMin < tEnd && s.endMin > tStart) overlaps.push(i);
+                    }
+                    if (overlaps.length === 0) continue;
+                    overlaps.forEach((idx, i) => {
+                        const slot = arr[idx];
+                        const isFirst = (i === 0);
+                        window.scheduleAssignments[String(bunk)][idx] = {
+                            field: trip.event || 'Trip',
+                            sport: null,
+                            _activity: trip.event || 'Trip',
+                            _isTrip: true,
+                            _tripEvent: trip.event || 'Trip',
+                            _fixed: true,
+                            _pinned: true,
+                            _bunkOverride: true,
+                            _activityLocked: true,
+                            _autoMode: true,
+                            continuation: !isFirst, // first slot = anchor, rest = continuation
+                            _startMin: slot.startMin,
+                            _endMin: slot.endMin
+                        };
+                        tripWriteCount++;
+                    });
+                }
+            });
+        });
+
         // Write capacity-checked sport blocks
         let sportWriteCount = 0;
         allGrades.forEach(grade => {
