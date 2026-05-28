@@ -636,6 +636,35 @@
         // NOTE: Schedule day limit is checked in runSkeletonOptimizer (generation time),
         // not here — auto-saves and edits to existing dates should never be blocked.
 
+        // ★★★ DAY 16 FIX: Empty-data wipe guard ★★★
+        // Block writes with empty scheduleAssignments unless the caller
+        // explicitly opts in. The orchestrator's doCloudSaveWithVerification
+        // has the same guard but only for paths that go through it — direct
+        // ScheduleDB.saveSchedule callers (visibilitychange/beforeunload
+        // fallbacks, propagation paths, offline-queue replays, etc.) could
+        // wipe a populated cloud row by writing an empty payload. Persist
+        // the offending stack to localStorage so we can find any remaining
+        // call sites after the guard catches them.
+        if (originalBunkCount === 0 && !options.allowEmpty) {
+            const trace = {
+                ts: new Date().toISOString(),
+                dateKey,
+                originalBunkCount,
+                skipFilter: !!options.skipFilter,
+                stack: (new Error('empty-save-blocked')).stack || ''
+            };
+            try {
+                const key = '__campistry_empty_save_blocks';
+                const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                existing.push(trace);
+                // Keep the last 25 blocks so the log doesn't grow forever
+                while (existing.length > 25) existing.shift();
+                localStorage.setItem(key, JSON.stringify(existing));
+            } catch (_) {}
+            console.warn('[ScheduleDB.saveSchedule] BLOCKED empty-data write for', dateKey, '— see localStorage["__campistry_empty_save_blocks"] for stack');
+            return { success: true, target: 'empty-blocked', bunkCount: 0 };
+        }
+
         try {
             // ★★★ FIXED FILTERING - Uses AccessControl instead of PermissionsDB ★★★
             let filteredAssignments;
@@ -649,6 +678,30 @@
 
             const filteredBunkCount = Object.keys(filteredAssignments).length;
             log(`After filtering: ${filteredBunkCount} bunks (was ${originalBunkCount})`);
+
+            // ★★★ DAY 16 FIX: also block filter-induced empties ★★★
+            // A scheduler whose owned bunks don't appear in the input could
+            // produce a filtered-empty result. Block this for the same
+            // reason — it'd overwrite the (filtered) cloud row with empty.
+            if (filteredBunkCount === 0 && originalBunkCount > 0 && !options.allowEmpty) {
+                const trace = {
+                    ts: new Date().toISOString(),
+                    dateKey,
+                    originalBunkCount,
+                    filteredBunkCount,
+                    reason: 'filter-stripped-all',
+                    stack: (new Error('empty-save-blocked-by-filter')).stack || ''
+                };
+                try {
+                    const key = '__campistry_empty_save_blocks';
+                    const existing = JSON.parse(localStorage.getItem(key) || '[]');
+                    existing.push(trace);
+                    while (existing.length > 25) existing.shift();
+                    localStorage.setItem(key, JSON.stringify(existing));
+                } catch (_) {}
+                console.warn('[ScheduleDB.saveSchedule] BLOCKED filter-stripped-empty write for', dateKey, '— see localStorage["__campistry_empty_save_blocks"]');
+                return { success: true, target: 'empty-blocked-by-filter', bunkCount: 0 };
+            }
 
             // Phase 4: persist scheduleSegments alongside assignments, filtered
             // by the same bunk-ownership rules so we never leak foreign data.
@@ -1051,7 +1104,31 @@
         
         // Diagnostics
         diagnose,
-        
+
+        // ★★★ DAY 16: inspect empty-save guard hits (survives reload) ★★★
+        inspectEmptySaveBlocks: () => {
+            try {
+                const blocks = JSON.parse(localStorage.getItem('__campistry_empty_save_blocks') || '[]');
+                console.log('═══════════════════════════════════════════════════════');
+                console.log(`Empty-save blocks captured: ${blocks.length}`);
+                console.log('═══════════════════════════════════════════════════════');
+                blocks.forEach((b, i) => {
+                    console.log(`\n[${i + 1}] ${b.ts} — date=${b.dateKey} originalBunkCount=${b.originalBunkCount}${b.reason ? ' reason=' + b.reason : ''}`);
+                    console.log(b.stack);
+                });
+                if (blocks.length === 0) console.log('(none — no empty save attempts blocked)');
+                console.log('═══════════════════════════════════════════════════════');
+                return blocks;
+            } catch (e) {
+                console.error('inspectEmptySaveBlocks error:', e);
+                return [];
+            }
+        },
+        clearEmptySaveBlocks: () => {
+            try { localStorage.removeItem('__campistry_empty_save_blocks'); } catch (_) {}
+            console.log('Cleared empty-save block log.');
+        },
+
         // State
         get isInitialized() { return _isInitialized; }
     };
