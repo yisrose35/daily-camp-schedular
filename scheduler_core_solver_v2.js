@@ -2309,9 +2309,11 @@
       ctx.perBunkSlots = bestPbsSnapshot;
     }
 
+    try { window.__v2FlowDiag = (window.__v2FlowDiag || {}); window.__v2FlowDiag.beforeSmartRepair = Date.now(); } catch (_e1) {}
     // ★ SMART REPAIR — directed, deterministic fixes for residual issues.
     //   SA finds a good neighborhood; repair polishes specific violations.
-    smartRepair(window.scheduleAssignments, ctx);
+    try { smartRepair(window.scheduleAssignments, ctx); } catch (_eSR) { try { window.__v2FlowDiag.smartRepairError = String(_eSR && _eSR.message); window.__v2FlowDiag.smartRepairStack = String(_eSR && _eSR.stack); } catch (_e2) {} }
+    try { window.__v2FlowDiag.afterSmartRepair = Date.now(); } catch (_e3) {}
 
     // ★ FIELD QUALITY GROUPS re-optimization (rules.js) — runs AFTER SA + repair,
     //   because v2 rebuilds the schedule and would otherwise discard the v1 seed's
@@ -2434,8 +2436,10 @@
           else { for (let i = 0; i < bySen.length; i++) bySen[i].s.field = orig[i]; }
         });
         try { console.log('[FQ-REOPT-v2] groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_e) {}
+        try { window.__v2FlowDiag.fqReoptCompleted = Date.now(); window.__v2FlowDiag.fqGroupsCount = Object.keys(fgGroups).length; window.__v2FlowDiag.fqMoved = moved; } catch (_eD) {}
       })();
-    } catch (_eFQ2) {}
+    } catch (_eFQ2) { try { window.__v2FlowDiag.fqReoptError = String(_eFQ2 && _eFQ2.message); window.__v2FlowDiag.fqReoptStack = String(_eFQ2 && _eFQ2.stack); } catch (_eD2) {} }
+    try { window.__v2FlowDiag.beforePairingReopt = Date.now(); } catch (_e4) {}
 
     // ★ FORCED BUNK-PAIRING tag pass — re-validates and re-tags pairs after SA.
     //   v1's `_pairingReopt` already tags pairs as `_pinned` before v2 reads the
