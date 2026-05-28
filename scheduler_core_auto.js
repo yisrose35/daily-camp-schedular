@@ -8373,6 +8373,17 @@
                         else if (isDrafted && !isUsed) score += 12000;         // drafted-any-time wins vs rotation
                         else if (!isUsed) score += 500;                         // good: not used
                         // else: reuse, score stays 0
+                        // ★ Field-match bonus: the planner's draft picks a SPECIFIC field for each
+                        //   sport assignment, but Phase 3 iterates fields independently and would
+                        //   otherwise score each based on demand/pressure alone — letting the
+                        //   "correct" field get out-scored by another. Critical for forced pairing:
+                        //   when the planner co-drafts bunk A and partner B onto the same field
+                        //   to satisfy minPlayers, Phase 3 must keep them on that field or the
+                        //   pair scatters. +3000 is small enough not to override field-quality
+                        //   or capacity-pressure decisions, but big enough to break ties.
+                        if (draftMatchAtTime && draftMatchAtTime.claimedField === sport.fields[f]) {
+                            score += 3000;
+                        }
                         score -= demand * 10;                      // prefer LOW demand fields
                         // ★ Back-to-back prevention: heavy penalty for repeating an adjacent sport
                         if (adjSports && adjSports.has(sport.name.toLowerCase().trim())) {
