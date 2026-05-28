@@ -2144,9 +2144,45 @@
                     return;
                 }
 
+                // ★★★ DAY 16 FIX: Don't queue a wipe-shaped save during init.
+                // Every call to saveCurrentDailyData(key, value) — including
+                // ones for UNRELATED settings — triggers this wrapper, which
+                // queues a full scheduleAssignments save based on whatever's
+                // currently in window.scheduleAssignments. During page init,
+                // before cloud hydration completes, scheduleAssignments is
+                // empty {}, so the queued payload is empty too. The debounce
+                // delay then fires the empty save AFTER hydration brings in
+                // the real data — overwriting cloud with empty.
+                //
+                // Skip the queue when the payload would wipe: no bunks at
+                // all, or bunks present but ZERO scheduled activities (the
+                // "structural skeleton" wipe-shape we observed in cloud).
+                // unifiedTimes is NOT a safe signal because some configs
+                // (period-based scheduling) keep it empty even on healthy
+                // schedules. Legitimate post-edit/post-gen flows save via
+                // verifiedScheduleSave / doCloudSaveWithVerification anyway.
+                const sa = window.scheduleAssignments || {};
+                const bunkCount = Object.keys(sa).length;
+                if (bunkCount === 0) return;
+                let hasAnyActivity = false;
+                outer: for (const bk of Object.keys(sa)) {
+                    const arr = sa[bk];
+                    if (!Array.isArray(arr)) continue;
+                    for (const slot of arr) {
+                        if (slot && typeof slot === 'object') {
+                            const act = slot._activity || slot.activity || slot.field || slot.sport;
+                            if (act && act !== 'Free' && act !== '+ Add') {
+                                hasAnyActivity = true;
+                                break outer;
+                            }
+                        }
+                    }
+                }
+                if (!hasAnyActivity) return;
+
                 // ★★★ FIX v6.5: Include rainyDayStartTime and rainyDayMode ★★★
                 const data = {
-                    scheduleAssignments: window.scheduleAssignments || {},
+                    scheduleAssignments: sa,
                     leagueAssignments: window.leagueAssignments || {},
                     unifiedTimes: window.unifiedTimes || [],
                     divisionTimes: window.divisionTimes || {},
