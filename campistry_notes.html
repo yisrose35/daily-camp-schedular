@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en" data-product="notes">
+<head>
+    <meta charset="UTF-8">
+    <title>Campistry Notes</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="Notes_clean.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry_notes.css">
+</head>
+<body>
+
+<!-- ── SPLASH ───────────────────────────────────────────── -->
+<div id="notes-splash">
+    <div style="position:relative;display:inline-block;">
+        <img src="Notes_clean.png" alt="Notes" id="notes-splash-logo">
+        <div class="nt-splash-shimmer"></div>
+    </div>
+</div>
+
+<!-- ── HEADER ───────────────────────────────────────────── -->
+<header class="nt-header">
+    <a href="dashboard.html" class="nt-back-btn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+        Dashboard
+    </a>
+    <div class="nt-header-logo">
+        <img src="Notes_clean.png" alt="Campistry Notes">
+    </div>
+    <div class="nt-header-right">
+        <span class="nt-shortcut-hint">Shift+N quick note</span>
+        <div class="nt-avatar" id="ntAvatar">CN</div>
+    </div>
+</header>
+
+<!-- ── APP BODY ─────────────────────────────────────────── -->
+<div class="nt-body">
+
+    <!-- SIDEBAR -->
+    <aside class="nt-sidebar">
+        <button class="nt-new-btn" onclick="createAndOpen()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            <span>New Note</span>
+        </button>
+
+        <div style="height:12px;"></div>
+
+        <button class="nt-nav-item active" data-view="all" onclick="switchView('all')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+            <span>All Notes</span>
+            <span class="nt-nav-count" id="cnt-all"></span>
+        </button>
+        <button class="nt-nav-item" data-view="pinned" onclick="switchView('pinned')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <span>Pinned</span>
+            <span class="nt-nav-count" id="cnt-pinned"></span>
+        </button>
+        <button class="nt-nav-item" data-view="shared" onclick="switchView('shared')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            <span>Shared</span>
+            <span class="nt-nav-count" id="cnt-shared"></span>
+        </button>
+        <button class="nt-nav-item" data-view="reminders" onclick="switchView('reminders')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            <span>Reminders</span>
+            <span class="nt-nav-count" id="cnt-reminders"></span>
+        </button>
+
+        <div class="nt-sidebar-divider"></div>
+
+        <button class="nt-nav-item" data-view="trash" onclick="switchView('trash')">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+            <span>Trash</span>
+            <span class="nt-nav-count" id="cnt-trash"></span>
+        </button>
+
+        <!-- Tags section -->
+        <div id="sidebarTagsBox" class="nt-sidebar-tags" style="display:none; padding:8px 10px;"></div>
+    </aside>
+
+    <!-- MAIN -->
+    <div class="nt-main">
+
+        <!-- Toolbar -->
+        <div class="nt-toolbar">
+            <h2 class="nt-view-title" id="viewTitle">All Notes</h2>
+            <input type="search" class="nt-search" id="searchInput" placeholder="Search notes…" oninput="searchQuery=this.value; renderGrid()">
+            <div class="nt-view-btns">
+                <button class="nt-view-btn active" id="gridViewBtn" title="Grid" onclick="setView(true,this)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+                </button>
+                <button class="nt-view-btn" id="listViewBtn" title="List" onclick="setView(false,this)">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Grid -->
+        <div class="nt-grid-area">
+            <div class="nt-grid" id="notesGrid"></div>
+            <div class="nt-empty" id="emptyState" style="display:none;">
+                <div class="nt-empty-icon">📝</div>
+                <h3>No notes here</h3>
+                <p>Press Shift+N or click New Note to start</p>
+                <button class="nt-new-btn" onclick="createAndOpen()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    New Note
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- EDITOR PANEL -->
+    <div class="nt-editor" id="editorPanel">
+
+        <!-- Top bar -->
+        <div class="nt-editor-topbar">
+            <button class="nt-close-editor" onclick="closeEditor()" title="Close">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div class="nt-editor-action-btns">
+                <button class="nt-ea-btn" id="pinBtn" onclick="togglePin()" title="Pin note">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+                </button>
+                <button class="nt-ea-btn" id="shareBtn" onclick="toggleSharePanel()" title="Share">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                </button>
+                <button class="nt-ea-btn" id="remBtn" onclick="toggleReminderPanel()" title="Reminder">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                </button>
+                <button class="nt-ea-btn" id="trashBtn" onclick="deleteNote()" title="Delete">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <!-- Color picker -->
+        <div class="nt-color-row">
+            <span style="font-size:.7rem;color:#94A3B8;margin-right:2px;">Color</span>
+            <div class="nt-color-dot selected" data-c="yellow" onclick="setColor('yellow')" title="Yellow"></div>
+            <div class="nt-color-dot" data-c="peach"  onclick="setColor('peach')"  title="Peach"></div>
+            <div class="nt-color-dot" data-c="pink"   onclick="setColor('pink')"   title="Pink"></div>
+            <div class="nt-color-dot" data-c="blue"   onclick="setColor('blue')"   title="Blue"></div>
+            <div class="nt-color-dot" data-c="green"  onclick="setColor('green')"  title="Green"></div>
+            <div class="nt-color-dot" data-c="purple" onclick="setColor('purple')" title="Purple"></div>
+            <div class="nt-color-dot" data-c="slate"  onclick="setColor('slate')"  title="Slate"></div>
+        </div>
+
+        <!-- Editable content -->
+        <div class="nt-editor-scroll" id="editorScroll">
+            <input type="text" class="nt-editor-title" id="editorTitle" placeholder="Title…" oninput="scheduleSave()">
+            <textarea class="nt-editor-body" id="editorBody" placeholder="Start writing…" oninput="scheduleSave()"></textarea>
+        </div>
+
+        <!-- Tags row -->
+        <div class="nt-editor-tags" id="editorTagsRow"></div>
+
+        <!-- Share sub-panel -->
+        <div class="nt-sub-panel" id="sharePanel" style="display:none;margin:10px 14px 0;">
+            <div class="nt-sub-panel-header">
+                Share Note
+                <button onclick="hideSubPanel('sharePanel')" style="background:none;border:none;cursor:pointer;color:#94A3B8;font-size:1rem;line-height:1;">×</button>
+            </div>
+            <div class="nt-sub-panel-body">
+                <input type="email" class="nt-sp-input" id="shareEmailInput" placeholder="colleague@camp.com">
+                <div class="nt-sp-btn-row">
+                    <button class="nt-sp-btn" onclick="addShare()">Share</button>
+                </div>
+                <div id="sharePeopleList" style="margin-top:8px;"></div>
+            </div>
+        </div>
+
+        <!-- Reminder sub-panel -->
+        <div class="nt-sub-panel" id="reminderPanel" style="display:none;margin:10px 14px 0;">
+            <div class="nt-sub-panel-header">
+                Set Reminder
+                <button onclick="hideSubPanel('reminderPanel')" style="background:none;border:none;cursor:pointer;color:#94A3B8;font-size:1rem;line-height:1;">×</button>
+            </div>
+            <div class="nt-sub-panel-body">
+                <input type="date" class="nt-sp-input" id="remDateInput">
+                <input type="time" class="nt-sp-input" id="remTimeInput">
+                <input type="text" class="nt-sp-input" id="remMsgInput" placeholder="Reminder note (optional)">
+                <div class="nt-sp-btn-row">
+                    <button class="nt-sp-btn" onclick="saveReminder()">Set Reminder</button>
+                    <button class="nt-sp-btn secondary" onclick="clearReminder()">Clear</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Meta footer -->
+        <div class="nt-editor-meta" id="editorMeta"></div>
+    </div>
+
+</div><!-- /.nt-body -->
+
+<!-- ── QUICK NOTE OVERLAY (Shift+N) ─────────────────────── -->
+<div class="nt-quick-overlay" id="quickOverlay" style="display:none;">
+    <div class="nt-quick-card">
+        <div class="nt-quick-header">
+            <span class="nt-quick-label">Quick Note</span>
+            <span class="nt-quick-hint">Shift+N or Esc to save &amp; close</span>
+        </div>
+        <input type="text" class="nt-quick-title" id="quickTitle" placeholder="Title (optional)…">
+        <textarea class="nt-quick-body" id="quickBody" placeholder="Jot something down…" rows="6"></textarea>
+        <div class="nt-quick-footer">
+            <button class="nt-quick-open-btn" onclick="openQuickInFull()">Open in Notes →</button>
+            <button class="nt-quick-save-btn" onclick="closeQuickNote()">Save &amp; Close</button>
+        </div>
+    </div>
+</div>
+
+<div id="nt-toast-box"></div>
+
+<script src="campistry_notes.js"></script>
+<script>
+// Grid/list toggle
+function setView(grid, btn) {
+    isGridView = grid;
+    document.getElementById('gridViewBtn').classList.toggle('active', grid);
+    document.getElementById('listViewBtn').classList.toggle('active', !grid);
+    renderGrid();
+}
+
+// Create and immediately open a new note
+function createAndOpen() {
+    var note = createNote({ color: 'yellow' });
+    renderGrid();
+    openEditor(note.id);
+}
+
+// Sidebar count IDs need to match what updateCounts() targets
+// updateCounts() queries [data-view] .nt-nav-count — the spans above have id="cnt-X" too
+// But the function uses querySelector — ensure it works: already done in renderGrid/updateCounts
+</script>
+</body>
+</html>

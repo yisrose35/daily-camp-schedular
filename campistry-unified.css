@@ -160,6 +160,15 @@
     --product-700: var(--violet-700);
 }
 
+[data-product="notes"] {
+    /* Warm gold — matches Notes script logo */
+    --product-50:  #FEF9EE; --product-100: #FBF0D3;
+    --product-200: #F6E0A8; --product-400: #E5B54A;
+    --product-500: #C4891A; --product-600: #9A6710;
+    --product-700: #7A500C;
+    --notes-color: #C4891A;
+}
+
 /* ==================== BASE RESET ==================== */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 

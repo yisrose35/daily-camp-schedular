@@ -96,6 +96,10 @@
                 <img src="Link_clean.png" alt="Link" class="dash-ql-logo">
                 <span>Link</span>
             </a>
+            <a href="campistry_notes.html" class="dash-ql-tile" style="--ql-color: var(--notes-color);">
+                <img src="Notes_clean.png" alt="Notes" class="dash-ql-logo">
+                <span>Notes</span>
+            </a>
         </section>
 
         <!-- ===== QUICK STATS ROW ===== -->
@@ -302,6 +306,92 @@
             </a>
         </section>
     </main>
+
+    <!-- ═══════════════ QUICK NOTE OVERLAY (Shift+N) ═══════════════ -->
+    <style>
+    .dn-qoverlay{position:fixed;inset:0;z-index:8000;background:rgba(15,23,42,.35);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;animation:dn-fi .18s ease}
+    .dn-qoverlay.hide{animation:dn-fo .18s ease forwards}
+    @keyframes dn-fi{from{opacity:0}to{opacity:1}}
+    @keyframes dn-fo{from{opacity:1}to{opacity:0}}
+    .dn-qcard{width:min(460px,calc(100vw - 32px));background:#FEFCE8;border:2px solid #FEF08A;border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.15);display:flex;flex-direction:column;animation:dn-qi .22s cubic-bezier(.16,1,.3,1);overflow:hidden}
+    @keyframes dn-qi{from{transform:scale(.92) translateY(16px);opacity:0}to{transform:scale(1) translateY(0);opacity:1}}
+    .dn-qhdr{display:flex;align-items:center;justify-content:space-between;padding:11px 16px 6px}
+    .dn-qlbl{font-size:.73rem;font-weight:700;letter-spacing:.05em;color:#C4891A;text-transform:uppercase;font-family:'DM Sans',sans-serif}
+    .dn-qhint{font-size:.7rem;color:#94A3B8;background:rgba(255,255,255,.6);border-radius:5px;padding:2px 7px;font-family:'DM Sans',sans-serif}
+    .dn-qtitle{width:100%;border:none;outline:none;background:transparent;font-size:1.05rem;font-weight:600;color:#0F172A;padding:2px 16px 6px;font-family:'Fraunces',serif}
+    .dn-qtitle::placeholder{color:#CBD5E1}
+    .dn-qbody{width:100%;border:none;outline:none;background:transparent;font-size:.9rem;line-height:1.65;color:#334155;padding:0 16px;resize:none;min-height:120px;font-family:'DM Sans',sans-serif}
+    .dn-qbody::placeholder{color:#CBD5E1}
+    .dn-qftr{display:flex;align-items:center;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #FEF08A;background:rgba(255,255,255,.4)}
+    .dn-qopen{font-size:.78rem;color:#9A6710;font-weight:600;background:none;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;padding:4px 8px;border-radius:5px;text-decoration:none;transition:background .15s}
+    .dn-qopen:hover{background:rgba(255,255,255,.6)}
+    .dn-qsave{padding:6px 16px;background:#C4891A;color:#fff;font-size:.82rem;font-weight:600;border:none;cursor:pointer;border-radius:8px;font-family:'DM Sans',sans-serif;transition:background .15s}
+    .dn-qsave:hover{background:#9A6710}
+    #dn-toast{position:fixed;bottom:28px;left:50%;transform:translateX(-50%);z-index:9999;pointer-events:none}
+    .dn-t{background:#0F172A;color:#fff;padding:10px 20px;border-radius:10px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);animation:dn-fi .25s ease;font-family:'DM Sans',sans-serif}
+    </style>
+    <div class="dn-qoverlay" id="dnOverlay" style="display:none;">
+        <div class="dn-qcard">
+            <div class="dn-qhdr">
+                <span class="dn-qlbl">Quick Note</span>
+                <span class="dn-qhint">Shift+N or Esc to close</span>
+            </div>
+            <input type="text" class="dn-qtitle" id="dnTitle" placeholder="Title (optional)…">
+            <textarea class="dn-qbody" id="dnBody" placeholder="Jot something down…" rows="6"></textarea>
+            <div class="dn-qftr">
+                <a href="campistry_notes.html" class="dn-qopen" id="dnOpenFull">Open in Notes →</a>
+                <button class="dn-qsave" onclick="dnSaveClose()">Save &amp; Close</button>
+            </div>
+        </div>
+    </div>
+    <div id="dn-toast"></div>
+    <script>
+    (function(){
+        var open=false;
+        function dnToast(m){var d=document.createElement('div');d.className='dn-t';d.textContent=m;var b=document.getElementById('dn-toast');if(b){b.appendChild(d);setTimeout(function(){d.style.opacity='0';d.style.transition='opacity .3s';},2000);setTimeout(function(){d.remove();},2400);}}
+        function dnSave(){
+            var t=(document.getElementById('dnTitle')||{}).value||'';
+            var b=(document.getElementById('dnBody')||{}).value||'';
+            t=t.trim();b=b.trim();
+            if(!t&&!b)return;
+            try{
+                var s=JSON.parse(localStorage.getItem('campistry_notes_v1')||'{}');
+                var notes=s.notes||[];
+                var id=Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+                notes.unshift({id:id,title:t,body:b,color:'yellow',pinned:false,isShared:false,sharedWith:[],reminder:null,tags:[],trashed:false,createdAt:Date.now(),updatedAt:Date.now()});
+                s.notes=notes;
+                localStorage.setItem('campistry_notes_v1',JSON.stringify(s));
+                dnToast('Note saved');
+            }catch(e){}
+        }
+        window.dnSaveClose=function(){
+            dnSave();
+            var ov=document.getElementById('dnOverlay');
+            if(ov){ov.classList.add('hide');setTimeout(function(){ov.style.display='none';ov.classList.remove('hide');},200);}
+            open=false;
+        };
+        document.addEventListener('keydown',function(e){
+            if(e.shiftKey&&(e.key==='N'||e.key==='n')&&!e.ctrlKey&&!e.metaKey){
+                var tag=(document.activeElement||{}).tagName||'';
+                if(tag==='INPUT'||tag==='TEXTAREA')return;
+                e.preventDefault();
+                var ov=document.getElementById('dnOverlay');
+                if(!ov)return;
+                if(open){dnSaveClose();}
+                else{
+                    open=true;
+                    document.getElementById('dnTitle').value='';
+                    document.getElementById('dnBody').value='';
+                    ov.style.display='flex';
+                    ov.classList.remove('hide');
+                    setTimeout(function(){document.getElementById('dnBody').focus();},60);
+                }
+            }
+            if(e.key==='Escape'&&open){dnSaveClose();}
+        });
+        document.getElementById('dnOverlay').addEventListener('click',function(e){if(e.target===this)dnSaveClose();});
+    })();
+    </script>
 
     <!-- ========================================= -->
     <!-- SCRIPTS -->
