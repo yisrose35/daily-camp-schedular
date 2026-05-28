@@ -27,8 +27,21 @@
     #snacks-splash-logo {
         position: absolute; top: 0; left: 0;
         width: 220px; height: auto;
-        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards,
-                   snacks-chomp 0.28s cubic-bezier(0.22,0.61,0.36,1) 1.32s forwards;
+        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
+    }
+    /* White circle centred at the top-right corner of the logo.
+       Grows from scale(0) → scale(1) to reveal a clean circular bite.
+       130px diameter = 65px radius; top:-65px right:-65px places the
+       circle's centre exactly at the logo's top-right corner (220,0). */
+    #snacks-bite {
+        position: absolute;
+        width: 130px; height: 130px;
+        border-radius: 50%;
+        background: #fff;
+        top: -65px; right: -65px;
+        transform: scale(0);
+        transform-origin: center;
+        animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
     }
     @keyframes snacks-fall {
         0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
@@ -37,26 +50,20 @@
         90%  { transform: translateY(4px) rotate(1deg); }
         100% { transform: translateY(0) rotate(0deg); opacity: 1; }
     }
-    /* 7-point polygon — mathematically exact circular arc, radius 90px
-       centred at the top-right corner of the logo (220px, 0).
-       From: all 4 arc points collapsed at (100%,0%) → full rectangle.
-       To:   arc enters at (59%,0%) on the top edge, sweeps through
-             3 points on the circle, exits at (73%,100%) on the bottom —
-             a clean rounded scoop just like the cookie reference image. */
-    @keyframes snacks-chomp {
-        0%   { clip-path: polygon(0% 0%, 100% 0%, 100%  0%, 100%  0%, 100%  0%, 100% 100%, 0% 100%); }
-        100% { clip-path: polygon(0% 0%,  59% 0%,  61% 34%,  65% 66%,  71% 94%,  73% 100%, 0% 100%); }
+    @keyframes snacks-bite-grow {
+        0%   { transform: scale(0); }
+        100% { transform: scale(1); }
     }
-    /* Crumbs: in the bitten top-right zone (x≈138–195px, y≈4–45px).
-       Scatter up-right and down-right from the corner impact. */
+    /* Crumbs: inside the 65px-radius bite zone (top-right corner area).
+       All positions verified: (220−left)²+top² < 65² = 4225. */
     .snacks-crumb { position: absolute; opacity: 0; }
-    .sc1 { width:13px; height:10px; top: 4px; left:138px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
+    .sc1 { width:13px; height:10px; top: 4px; left:168px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
     .sc2 { width:10px; height: 8px; top:18px; left:162px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.88s ease-in 1.34s forwards; }
     .sc3 { width: 7px; height: 7px; top: 9px; left:180px; background:#6B3110; border-radius:50%;             animation:sc3 0.70s ease-in 1.33s forwards; }
-    .sc4 { width:12px; height: 9px; top:32px; left:152px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.12s ease-in 1.36s forwards; }
+    .sc4 { width:12px; height: 9px; top:25px; left:172px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.12s ease-in 1.36s forwards; }
     .sc5 { width: 8px; height: 6px; top: 7px; left:195px; background:#7B3A0F; border-radius:2px 3px 1px 2px; animation:sc5 0.76s ease-in 1.32s forwards; }
-    .sc6 { width:15px; height: 9px; top:44px; left:160px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.22s ease-in 1.38s forwards; }
-    .sc7 { width: 6px; height: 5px; top:22px; left:142px; background:#6B3110; border-radius:50%;             animation:sc7 0.66s ease-in 1.34s forwards; }
+    .sc6 { width:15px; height: 9px; top:38px; left:175px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.22s ease-in 1.38s forwards; }
+    .sc7 { width: 6px; height: 5px; top:16px; left:163px; background:#6B3110; border-radius:50%;             animation:sc7 0.66s ease-in 1.34s forwards; }
     .sc8 { width:11px; height: 8px; top:12px; left:172px; background:#934018; border-radius:3px 1px 2px 3px; animation:sc8 0.94s ease-in 1.35s forwards; }
     @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    35%{opacity:1;transform:translate(22px,-32px)rotate(65deg)}  100%{opacity:0;transform:translate(48px,70px)rotate(215deg)} }
     @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    40%{opacity:1;transform:translate(30px,-20px)rotate(-50deg)} 100%{opacity:0;transform:translate(56px,64px)rotate(-192deg)} }
@@ -72,6 +79,7 @@
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
         <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+        <div id="snacks-bite"></div>
         <div class="snacks-crumb sc1"></div>
         <div class="snacks-crumb sc2"></div>
         <div class="snacks-crumb sc3"></div>
