@@ -10,8 +10,58 @@
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_link.css">
+    <!-- Splash screen — inline so it appears before any external CSS -->
+    <style>
+        #link-splash {
+            position: fixed; inset: 0; z-index: 9999999;
+            background: #fff;
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.4s ease;
+        }
+        #link-splash.hide { opacity: 0; pointer-events: none; }
+        #link-splash-wrap {
+            position: relative;
+            width: 220px; height: 220px;
+        }
+        .link-splash-half {
+            position: absolute; top: 0; left: 0;
+            width: 220px; height: 220px; object-fit: contain;
+        }
+        .link-splash-left {
+            clip-path: inset(0 50% 0 0);
+            animation: link-from-left 0.8s cubic-bezier(0.22,0.61,0.36,1) 0.15s both;
+        }
+        .link-splash-right {
+            clip-path: inset(0 0 0 50%);
+            animation: link-from-right 0.8s cubic-bezier(0.22,0.61,0.36,1) 0.15s both;
+        }
+        @keyframes link-from-left {
+            from { transform: translateX(-55vw); opacity: 0.85; }
+            to   { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes link-from-right {
+            from { transform: translateX(55vw); opacity: 0.85; }
+            to   { transform: translateX(0); opacity: 1; }
+        }
+    </style>
 </head>
 <body>
+
+<div id="link-splash">
+    <div id="link-splash-wrap">
+        <img src="Link_clean.png" alt="" class="link-splash-half link-splash-left">
+        <img src="Link_clean.png" alt="" class="link-splash-half link-splash-right">
+    </div>
+    <script>
+    (function() {
+        var ov = document.getElementById('link-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2200);
+    })();
+    </script>
+</div>
 
 <!-- HEADER -->
 <header class="lk-header">

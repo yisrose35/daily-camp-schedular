@@ -14,6 +14,31 @@
     <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
     <!-- H3 hexagonal geo-indexing (sub-zone routing fallback) -->
     <script src="https://cdn.jsdelivr.net/npm/h3-js@3.7.2/dist/h3-js.umd.js"></script>
+    <!-- Splash screen — inline so it appears before any external CSS -->
+    <style>
+        #go-splash {
+            position: fixed; inset: 0; z-index: 9999999;
+            background: #fff;
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden;
+            transition: opacity 0.4s ease;
+        }
+        #go-splash.hide { opacity: 0; pointer-events: none; }
+        #go-splash-logo {
+            width: 180px; height: 180px; object-fit: contain;
+            animation: go-whip 2.6s cubic-bezier(0.22,0.61,0.36,1) forwards;
+        }
+        @keyframes go-whip {
+            0%   { transform: translateX(-120vw) rotate(-20deg); }
+            20%  { transform: translateX(14px) rotate(3deg) scaleX(0.9); }
+            27%  { transform: translateX(-6px) rotate(-1deg) scaleX(1.02); }
+            34%  { transform: translateX(0) rotate(0deg) scaleX(1); }
+            70%  { transform: translateX(0) rotate(0deg) scaleX(1); }
+            77%  { transform: translateX(6px) rotate(1deg) scaleX(1.02); }
+            84%  { transform: translateX(-14px) rotate(-3deg) scaleX(0.9); }
+            100% { transform: translateX(120vw) rotate(20deg); }
+        }
+    </style>
     <!-- FOUC Prevention -->
     <style>
         html:not(.css-ready) body { opacity: 0; }
@@ -25,6 +50,19 @@
     <noscript><style>html body { opacity: 1 !important; }</style></noscript>
 </head>
 <body>
+
+<div id="go-splash">
+    <img id="go-splash-logo" src="Go_clean.png" alt="">
+    <script>
+    (function() {
+        var ov = document.getElementById('go-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2800);
+    })();
+    </script>
+</div>
 
 <!-- ═══════════════════════════════════════════════════════
      COMING SOON OVERLAY — remove this block to re-open Go

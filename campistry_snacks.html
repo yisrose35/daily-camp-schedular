@@ -9,8 +9,63 @@
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="campistry-unified.css">
 <link rel="stylesheet" href="campistry_snacks.css">
+<!-- Splash screen — inline so it appears before any external CSS -->
+<style>
+    #snacks-splash {
+        position: fixed; inset: 0; z-index: 9999999;
+        background: #fff;
+        display: flex; align-items: center; justify-content: center;
+        transition: opacity 0.4s ease;
+    }
+    #snacks-splash.hide { opacity: 0; pointer-events: none; }
+    #snacks-splash-wrap {
+        position: relative;
+        width: 180px; height: 180px;
+    }
+    #snacks-splash-logo {
+        width: 180px; height: 180px; object-fit: contain; display: block;
+        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
+    }
+    #snacks-bite {
+        position: absolute;
+        top: -10px; right: -10px;
+        width: 68px; height: 68px;
+        background: #fff;
+        border-radius: 50%;
+        transform: scale(0);
+        animation: snacks-bite-grow 0.5s cubic-bezier(0.34,1.56,0.64,1) 1.5s forwards;
+    }
+    @keyframes snacks-fall {
+        0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
+        65%  { transform: translateY(16px) rotate(4deg); opacity: 1; }
+        80%  { transform: translateY(-8px) rotate(-2deg); }
+        90%  { transform: translateY(4px) rotate(1deg); }
+        100% { transform: translateY(0) rotate(0deg); opacity: 1; }
+    }
+    @keyframes snacks-bite-grow {
+        0%   { transform: scale(0); }
+        70%  { transform: scale(1.15); }
+        85%  { transform: scale(0.93); }
+        100% { transform: scale(1); }
+    }
+</style>
 </head>
 <body>
+<div id="snacks-splash">
+    <div id="snacks-splash-wrap">
+        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+        <div id="snacks-bite"></div>
+    </div>
+    <script>
+    (function() {
+        var ov = document.getElementById('snacks-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2600);
+    })();
+    </script>
+</div>
 <nav class="nav"><div class="nav-inner"><div class="nav-left">
 <a href="dashboard.html" class="nav-back"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M19 12H5M12 19l-7-7 7-7"/></svg> Dashboard</a>
 <div class="nav-brand"><img src="Snacks_clean.png" alt="Campistry Snacks" class="nav-logo-img"></div>

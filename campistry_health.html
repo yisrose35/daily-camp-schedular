@@ -9,11 +9,52 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
     <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
+    <!-- Splash screen — inline so it appears before any external CSS -->
+    <style>
+        #health-splash {
+            position: fixed; inset: 0; z-index: 9999999;
+            background: #fff;
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.4s ease;
+        }
+        #health-splash.hide { opacity: 0; pointer-events: none; }
+        #health-splash-logo {
+            width: 180px; height: 180px; object-fit: contain;
+            animation: health-beat 2.4s ease forwards;
+        }
+        @keyframes health-beat {
+            0%   { transform: scale(1); opacity: 0; }
+            5%   { transform: scale(1); opacity: 1; }
+            14%  { transform: scale(1.28); }
+            22%  { transform: scale(0.96); }
+            30%  { transform: scale(1.18); }
+            38%  { transform: scale(1); }
+            55%  { transform: scale(1); }
+            64%  { transform: scale(1.28); }
+            72%  { transform: scale(0.96); }
+            80%  { transform: scale(1.18); }
+            90%  { transform: scale(1); }
+            100% { transform: scale(1); opacity: 1; }
+        }
+    </style>
     <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_health.css">
     <noscript><style>html body{opacity:1!important}</style></noscript>
 </head>
 <body>
+
+<div id="health-splash">
+    <img id="health-splash-logo" src="Health_clean.png" alt="">
+    <script>
+    (function() {
+        var ov = document.getElementById('health-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2600);
+    })();
+    </script>
+</div>
 
 <!-- ═══ HEADER ═══ -->
 <header class="app-header">
