@@ -7293,31 +7293,43 @@ function loadCurrentOverrides() {
 
 // ── Resources panel: reload overrides + re-render on date change ──
 // When the user switches the calendar date picker, calendar.js dispatches
-// `campistry-date-changed`. Before this listener, the in-memory
-// `currentOverrides` stayed pinned to the OLD date — the panel still showed
-// the previous date's toggles, time rules, and per-field sport disables, even
-// though the GENERATOR was correctly reading the new date's localStorage
-// (so schedules were right but the UI was misleading and any new toggle in
-// the panel would write to the wrong date's storage).
+// `campistry-date-changed`. The CRITICAL detail: calendar.js intentionally
+// does NOT update window.currentScheduleDate (per its "date round-trip drift"
+// comment) — integration_hooks's input-change handler sets it AFTER the old
+// date is cloud-saved and the new date is cloud-loaded. So a naive 50ms
+// setTimeout reads the OLD date and writes the WRONG date's storage.
+//
+// Solution: poll until window.currentScheduleDate matches the event's
+// dateKey (or a hard cap of 2000ms elapses), then call loadCurrentOverrides
+// + re-render. If polling times out, force-set currentScheduleDate to the
+// event's dateKey so loadCurrentOverrides reads the right localStorage.
 try {
   window.addEventListener('campistry-date-changed', function (e) {
     try {
-      // Wait one tick so window.currentScheduleDate is fully updated by
-      // upstream listeners (orchestrator/integration_hooks) before we read it.
-      setTimeout(function () {
+      var newDate = e && e.detail && e.detail.dateKey;
+      if (!newDate) return;
+      var start = Date.now();
+      function _tryLoad() {
+        var matched = window.currentScheduleDate === newDate;
+        if (!matched && Date.now() - start < 2000) {
+          setTimeout(_tryLoad, 100);
+          return;
+        }
+        if (!matched) {
+          // Hard cap: force the date so the loader reads the right localStorage.
+          window.currentScheduleDate = newDate;
+        }
         try {
           if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
-          // Only re-render if the Resources panel is currently mounted.
           var resPanel = document.getElementById('da-resources-container');
           if (resPanel && resPanel.offsetParent !== null && typeof renderResourceOverridesUI === 'function') {
             renderResourceOverridesUI();
-            // If a facility/league was previously selected, the detail pane
-            // also needs to refresh so its time-rule and sport-disable lists
-            // match the new date.
             if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
           }
         } catch (_e1) { try { console.warn('[ResourceOverrides] reload-on-date-change failed:', _e1 && _e1.message); } catch (_e2) {} }
-      }, 50);
+      }
+      // Start polling after one tick to let the dispatch chain settle.
+      setTimeout(_tryLoad, 50);
     } catch (_e0) {}
   });
 } catch (_e) {}
