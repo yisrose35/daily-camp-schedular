@@ -4900,18 +4900,24 @@ if (success) {
           };
           // Save to localStorage (best-effort — may be full)
           try {
+              // ★★★ DAY 17 FIX: bump localStorage cap from 5 → 30 dates ★★★
+              // Post-gen save path was independently capping localStorage to 5
+              // dates, defeating the orchestrator's bumped-to-30 cap. With cap=5
+              // the week-based count function (getPeriodActivityCount) could
+              // not see the full 7-day window — silently broke exactFrequency,
+              // minFrequency, and rotationCohort enforcement.
               const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
               const DAILY_KEY = 'campDailyData_v1';
               const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
               allData[dateKey] = { ...freshData, savedAt: new Date().toISOString() };
               const dKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
-              if (dKeys.length > 5) { dKeys.sort(); dKeys.slice(0, dKeys.length - 5).forEach(k => delete allData[k]); }
+              if (dKeys.length > 30) { dKeys.sort(); dKeys.slice(0, dKeys.length - 30).forEach(k => delete allData[k]); }
               localStorage.setItem(DAILY_KEY, JSON.stringify(allData));
               const ORCH_KEY = 'campistry_schedule_data';
               const orchData = JSON.parse(localStorage.getItem(ORCH_KEY) || '{}');
               orchData[dateKey] = { ...freshData, _updatedAt: new Date().toISOString() };
               const oKeys = Object.keys(orchData).filter(k => DATE_RE.test(k));
-              if (oKeys.length > 5) { oKeys.sort(); oKeys.slice(0, oKeys.length - 5).forEach(k => delete orchData[k]); }
+              if (oKeys.length > 30) { oKeys.sort(); oKeys.slice(0, oKeys.length - 30).forEach(k => delete orchData[k]); }
               localStorage.setItem(ORCH_KEY, JSON.stringify(orchData));
           } catch (e) {
               if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
