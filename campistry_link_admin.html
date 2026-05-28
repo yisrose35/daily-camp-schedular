@@ -115,6 +115,12 @@
 
         @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
         #toastBox { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }
+
+        /* Back to dashboard */
+        .lk-back-btn { display:inline-flex; align-items:center; gap:4px; font-size:.77rem; font-weight:600; color:var(--slate-400); text-decoration:none; padding:5px 9px; border-radius:var(--radius-sm); transition:color .15s,background .15s; flex-shrink:0; }
+        .lk-back-btn:hover { color:var(--slate-700); background:var(--slate-100); }
+        .lk-back-btn svg { flex-shrink:0; }
+        @media(max-width:768px) { .lk-back-btn { display:none; } }
     </style>
 </head>
 <body>
@@ -139,6 +145,10 @@
 <header class="lk-header">
     <div class="lk-header-left">
         <button class="lk-hamburger" id="hamburgerBtn" aria-label="Menu"><span></span><span></span><span></span></button>
+        <a href="dashboard.html" class="lk-back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            Dashboard
+        </a>
         <a href="dashboard.html" class="lk-logo">
             <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
         </a>
@@ -184,17 +194,9 @@
         </button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
-        <button class="lk-nav-item" data-page="documents" onclick="nav('documents')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-            Documents
-        </button>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
             Photos
-        </button>
-        <button class="lk-nav-item" data-page="compose" onclick="nav('compose')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-            Compose
         </button>
     </div>
 </nav>
@@ -209,9 +211,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Messages
     </button>
-    <button class="lk-bnav-item" data-page="compose" onclick="nav('compose')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
-        More
+    <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        Photos
     </button>
 </div></div>
 
@@ -232,18 +234,6 @@
         </div>
     </div>
     <div class="lk-stats" id="dashStats"></div>
-    <div class="lk-card">
-        <div class="lk-card-head"><h2>Quick Actions</h2></div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-primary btn-sm" onclick="nav('compose')">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Compose Message
-            </button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('directory')">Parent Directory</button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('campers')">Camper Lookup</button>
-            <a href="campistry_me.html" class="btn btn-secondary btn-sm">Open Me</a>
-        </div>
-    </div>
     <div class="lk-card" id="dashDataCheck"></div>
 </div>
 
@@ -257,30 +247,184 @@
         </div>
         <div>
             <h1>Messages</h1>
-            <p>Inbox from parents</p>
+            <p>Inbox, outbox, and submitted forms</p>
         </div>
     </div>
 
-    <div id="adminMsgListView">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-            <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;">
-                <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
-                <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
-                <button class="lk-tab" onclick="filterAdminMsgs('pickup',this)">Pickup Requests</button>
+    <!-- Top-level section tabs -->
+    <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
+        <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
+        <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Outbox</button>
+        <button class="lk-tab" data-msgtab="forms" onclick="switchMsgTab('forms',this)">Forms</button>
+    </div>
+
+    <!-- ── INBOX ─────────────────────────────────────── -->
+    <div id="msgTabInbox">
+        <div id="adminMsgListView">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+                <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;">
+                    <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
+                    <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+                    <button class="lk-tab" onclick="filterAdminMsgs('pickup',this)">Pickup Requests</button>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="switchMsgTab('outbox',null)" style="flex-shrink:0;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Compose
+                </button>
             </div>
-            <button class="btn btn-primary btn-sm" onclick="nav('compose')" style="flex-shrink:0;">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                Compose Announcement
-            </button>
+            <div class="lk-card" style="padding:0;overflow:hidden;">
+                <div id="adminMsgList"></div>
+            </div>
         </div>
-        <div class="lk-card" style="padding:0;overflow:hidden;">
-            <div id="adminMsgList"></div>
+        <div id="adminMsgDetailView" style="display:none;">
+            <button class="btn btn-ghost btn-sm" onclick="closeAdminMsgDetail()" style="margin-bottom:10px;">&larr; Back</button>
+            <div class="lk-card"><div id="adminMsgDetail"></div></div>
         </div>
     </div>
 
-    <div id="adminMsgDetailView" style="display:none;">
-        <button class="btn btn-ghost btn-sm" onclick="closeAdminMsgDetail()" style="margin-bottom:10px;">&larr; Back</button>
-        <div class="lk-card"><div id="adminMsgDetail"></div></div>
+    <!-- ── OUTBOX ─────────────────────────────────────── -->
+    <div id="msgTabOutbox" style="display:none;">
+        <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
+            <div class="lk-card-head"><h2>Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div>
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click — each parent gets info for <strong>their child only</strong>.</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+                <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">Bus Stops</button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">Bunk Assignments</button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">Schedule</button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('canteen')">Low Balance</button>
+            </div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
+                <button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">Preview Bunk</button>
+                <button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">Export CSV</button>
+            </div>
+            <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
+        </div>
+        <div class="lk-card">
+            <div class="lk-card-head"><h2>Manual Message</h2></div>
+            <div class="lk-field">
+                <label>Recipient</label>
+                <input type="text" class="lk-input" placeholder="Search parent, camper, family..." id="recipSearch" oninput="searchRecip(this.value)">
+                <div id="recipResults" style="border:1px solid var(--border-light);border-radius:var(--radius-md);margin-top:4px;max-height:150px;overflow-y:auto;display:none;"></div>
+                <div id="recipChips" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;"></div>
+            </div>
+            <div class="lk-field">
+                <label>Delivery</label>
+                <div class="channel-btns">
+                    <button class="channel-btn selected" data-ch="app" onclick="toggleCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        In-App
+                    </button>
+                    <button class="channel-btn" data-ch="email" onclick="toggleCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                        Email
+                    </button>
+                    <button class="channel-btn" data-ch="sms" onclick="toggleCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                        SMS
+                    </button>
+                </div>
+            </div>
+            <div class="lk-field">
+                <label>Subject</label>
+                <input type="text" class="lk-input" id="compSubj" placeholder="Subject...">
+            </div>
+            <div class="lk-field">
+                <label>Message</label>
+                <textarea class="lk-textarea" id="compBody" placeholder="Type message..." style="min-height:120px;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
+                <button class="btn btn-primary" onclick="sendManual()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── FORMS ──────────────────────────────────────── -->
+    <div id="msgTabForms" style="display:none;">
+        <div id="docFolderListView">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <div class="lk-tabs" style="margin:0;border:none;">
+                    <button class="lk-tab active" onclick="filterDocSubmissions('all',this)">All Submissions</button>
+                    <button class="lk-tab" onclick="filterDocSubmissions('unfiled',this)">Unfiled</button>
+                    <button class="lk-tab" onclick="filterDocSubmissions('folders',this)">Folders</button>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="showCreateFolder()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    New Folder
+                </button>
+            </div>
+            <div id="createFolderForm" style="display:none;">
+                <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:0;">
+                    <div class="lk-card-head"><h2>Create Folder</h2><button class="btn btn-ghost btn-sm" onclick="hideCreateFolder()">Cancel</button></div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                        <div class="lk-field" style="grid-column:1/-1;"><label>Folder Name</label><input type="text" class="lk-input" id="folderName" placeholder='e.g. "Grade 1 Waivers", "Seniors Trip Slips"'></div>
+                        <div class="lk-field"><label>Document Type <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderDocType">
+                                <option value="">Any document type</option>
+                                <option value="waiver">Waiver</option>
+                                <option value="medical">Medical Form</option>
+                                <option value="permission">Permission Slip</option>
+                                <option value="consent">Consent Form</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderGrade">
+                                <option value="">Any grade</option>
+                                <option>1st Grade</option>
+                                <option>2nd Grade</option>
+                                <option>3rd Grade</option>
+                                <option>4th Grade</option>
+                                <option>5th Grade</option>
+                                <option>6th Grade</option>
+                                <option>7th Grade</option>
+                                <option>8th Grade</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderDivision">
+                                <option value="">Any division</option>
+                                <option>Juniors</option>
+                                <option>Seniors</option>
+                                <option>CITs</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <input type="text" class="lk-input" id="folderBunk" placeholder='e.g. "Bunk 4" or leave blank'>
+                        </div>
+                    </div>
+                    <p style="font-size:.76rem;color:var(--slate-400);margin:8px 0 12px;">All rules are optional — the more you fill in, the more specific the auto-filing. Leave all blank to manually file.</p>
+                    <button class="btn btn-primary btn-sm" onclick="createFolder()">Create Folder</button>
+                </div>
+            </div>
+            <div id="foldersGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px;"></div>
+            <div class="lk-card" id="docSubmissionsCard">
+                <div class="lk-card-head">
+                    <h2 id="docSubmissionsTitle">All Submissions</h2>
+                    <input type="text" class="lk-input" placeholder="Search..." id="docSearch" oninput="renderDocSubmissions(currentDocFilter,this.value)" style="max-width:180px;font-size:.8rem;padding:5px 10px;height:auto;">
+                </div>
+                <div id="docSubmissionsList"></div>
+            </div>
+        </div>
+        <div id="docFolderDetailView" style="display:none;">
+            <button class="btn btn-ghost btn-sm" onclick="closeFolderDetail()" style="margin-bottom:12px;">&larr; All Folders</button>
+            <div class="lk-card">
+                <div class="lk-card-head">
+                    <div>
+                        <h2 id="folderDetailName">Folder</h2>
+                        <div id="folderDetailRules" style="font-size:.74rem;color:var(--slate-400);margin-top:2px;"></div>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn btn-secondary btn-sm" onclick="printFolderDocs()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print All</button>
+                        <button class="btn btn-ghost btn-sm" onclick="deleteFolderPrompt()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></button>
+                    </div>
+                </div>
+                <div id="folderDetailList"></div>
+            </div>
+        </div>
     </div>
 </div>
 
@@ -447,111 +591,6 @@
     </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════ -->
-<!--  DOCUMENTS                                          -->
-<!-- ═══════════════════════════════════════════════════ -->
-<div class="lk-page" id="page-documents">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-        </div>
-        <div>
-            <h1>Documents</h1>
-            <p>Submitted forms from families — auto-filed into folders by grade, division, or type</p>
-        </div>
-    </div>
-
-    <!-- Folder list view -->
-    <div id="docFolderListView">
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-            <div class="lk-tabs" style="margin:0;border:none;">
-                <button class="lk-tab active" onclick="filterDocSubmissions('all',this)">All Submissions</button>
-                <button class="lk-tab" onclick="filterDocSubmissions('unfiled',this)">Unfiled</button>
-                <button class="lk-tab" onclick="filterDocSubmissions('folders',this)">Folders</button>
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="showCreateFolder()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                New Folder
-            </button>
-        </div>
-
-        <!-- Create folder inline form (hidden by default) -->
-        <div id="createFolderForm" style="display:none;">
-            <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:0;">
-                <div class="lk-card-head"><h2>Create Folder</h2><button class="btn btn-ghost btn-sm" onclick="hideCreateFolder()">Cancel</button></div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                    <div class="lk-field" style="grid-column:1/-1;"><label>Folder Name</label><input type="text" class="lk-input" id="folderName" placeholder='e.g. "Grade 1 Waivers", "Seniors Trip Slips"'></div>
-                    <div class="lk-field"><label>Document Type <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                        <select class="lk-select" id="folderDocType">
-                            <option value="">Any document type</option>
-                            <option value="waiver">Waiver</option>
-                            <option value="medical">Medical Form</option>
-                            <option value="permission">Permission Slip</option>
-                            <option value="consent">Consent Form</option>
-                            <option value="other">Other</option>
-                        </select>
-                    </div>
-                    <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                        <select class="lk-select" id="folderGrade">
-                            <option value="">Any grade</option>
-                            <option>1st Grade</option>
-                            <option>2nd Grade</option>
-                            <option>3rd Grade</option>
-                            <option>4th Grade</option>
-                            <option>5th Grade</option>
-                            <option>6th Grade</option>
-                            <option>7th Grade</option>
-                            <option>8th Grade</option>
-                        </select>
-                    </div>
-                    <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                        <select class="lk-select" id="folderDivision">
-                            <option value="">Any division</option>
-                            <option>Juniors</option>
-                            <option>Seniors</option>
-                            <option>CITs</option>
-                        </select>
-                    </div>
-                    <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                        <input type="text" class="lk-input" id="folderBunk" placeholder='e.g. "Bunk 4" or leave blank'>
-                    </div>
-                </div>
-                <p style="font-size:.76rem;color:var(--slate-400);margin:8px 0 12px;">All rules are optional — the more you fill in, the more specific the auto-filing. Leave all blank to manually file.</p>
-                <button class="btn btn-primary btn-sm" onclick="createFolder()">Create Folder</button>
-            </div>
-        </div>
-
-        <!-- Folders grid -->
-        <div id="foldersGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px;"></div>
-
-        <!-- All submissions list -->
-        <div class="lk-card" id="docSubmissionsCard">
-            <div class="lk-card-head">
-                <h2 id="docSubmissionsTitle">All Submissions</h2>
-                <input type="text" class="lk-input" placeholder="Search..." id="docSearch" oninput="renderDocSubmissions(currentDocFilter,this.value)" style="max-width:180px;font-size:.8rem;padding:5px 10px;height:auto;">
-            </div>
-            <div id="docSubmissionsList"></div>
-        </div>
-    </div>
-
-    <!-- Folder detail view -->
-    <div id="docFolderDetailView" style="display:none;">
-        <button class="btn btn-ghost btn-sm" onclick="closeFolderDetail()" style="margin-bottom:12px;">&larr; All Folders</button>
-        <div class="lk-card">
-            <div class="lk-card-head">
-                <div>
-                    <h2 id="folderDetailName">Folder</h2>
-                    <div id="folderDetailRules" style="font-size:.74rem;color:var(--slate-400);margin-top:2px;"></div>
-                </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn btn-secondary btn-sm" onclick="printFolderDocs()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print All</button>
-                    <button class="btn btn-ghost btn-sm" onclick="deleteFolderPrompt()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></button>
-                </div>
-            </div>
-            <div id="folderDetailList"></div>
-        </div>
-    </div>
-</div>
 
 <!-- ═══════════════════════════════════════════════════ -->
 <!--  PHOTOS                                             -->
@@ -618,78 +657,6 @@
     </div>
 </div>
 
-<!-- ═══════════════════════════════════════════════════ -->
-<!--  COMPOSE                                            -->
-<!-- ═══════════════════════════════════════════════════ -->
-<div class="lk-page" id="page-compose">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-        </div>
-        <div>
-            <h1>Compose</h1>
-            <p>Send personalized messages — data from Me</p>
-        </div>
-    </div>
-
-    <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
-        <div class="lk-card-head"><h2>Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div>
-        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click — each parent gets info for <strong>their child only</strong>.</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-            <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">Bus Stops</button>
-            <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">Bunk Assignments</button>
-            <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">Schedule</button>
-            <button class="btn btn-primary btn-sm" onclick="smartSend('canteen')">Low Balance</button>
-        </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;">
-            <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
-            <button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">Preview Bunk</button>
-            <button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">Export CSV</button>
-        </div>
-        <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
-    </div>
-
-    <div class="lk-card">
-        <div class="lk-card-head"><h2>Manual Message</h2></div>
-        <div class="lk-field">
-            <label>Recipient</label>
-            <input type="text" class="lk-input" placeholder="Search parent, camper, family..." id="recipSearch" oninput="searchRecip(this.value)">
-            <div id="recipResults" style="border:1px solid var(--border-light);border-radius:var(--radius-md);margin-top:4px;max-height:150px;overflow-y:auto;display:none;"></div>
-            <div id="recipChips" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;"></div>
-        </div>
-        <div class="lk-field">
-            <label>Delivery</label>
-            <div class="channel-btns">
-                <button class="channel-btn selected" data-ch="app" onclick="toggleCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                    In-App
-                </button>
-                <button class="channel-btn" data-ch="email" onclick="toggleCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                    Email
-                </button>
-                <button class="channel-btn" data-ch="sms" onclick="toggleCh(this)">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
-                    SMS
-                </button>
-            </div>
-        </div>
-        <div class="lk-field">
-            <label>Subject</label>
-            <input type="text" class="lk-input" id="compSubj" placeholder="Subject...">
-        </div>
-        <div class="lk-field">
-            <label>Message</label>
-            <textarea class="lk-textarea" id="compBody" placeholder="Type message..." style="min-height:120px;"></textarea>
-        </div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
-            <button class="btn btn-primary" onclick="sendManual()">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                Send
-            </button>
-        </div>
-    </div>
-</div>
 
 </div><!-- /.lk-main -->
 <div id="toastBox"></div>
@@ -724,21 +691,34 @@ var CP = function() { return window.CampistryPhotos || null; };
 var channels = ['app'];
 
 // ─── NAV ─────────────────────────────────────────────────────────────────────
+var currentMsgTab = 'inbox';
+
 function nav(p) {
     document.querySelectorAll('.lk-page').forEach(function(e) { e.classList.remove('active'); });
     document.querySelectorAll('.lk-nav-item,.lk-bnav-item').forEach(function(e) { e.classList.remove('active'); });
     var el = document.getElementById('page-' + p);
     if (el) el.classList.add('active');
     document.querySelectorAll('[data-page="' + p + '"]').forEach(function(e) { e.classList.add('active'); });
-    // close sidebar on mobile
     document.body.classList.remove('sidebar-open');
     window.scrollTo(0, 0);
     if (p === 'dashboard') renderDash();
     if (p === 'directory') renderDir('');
     if (p === 'campers') renderCampers('');
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
-    if (p === 'messages') renderAdminMsgs('all');
-    if (p === 'documents') { renderFoldersGrid(); renderDocSubmissions('all',''); }
+    if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
+}
+
+function switchMsgTab(tab, btn) {
+    currentMsgTab = tab;
+    document.querySelectorAll('#msgTopTabs .lk-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.msgtab === tab);
+    });
+    document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
+    document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
+    document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
+    if (tab === 'inbox')  renderAdminMsgs('all');
+    if (tab === 'outbox') updateSmartBadge();
+    if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); }
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
@@ -870,7 +850,7 @@ function pickRecip(name) {
     chip.innerHTML = esc(name) + ' <span onclick="this.parentElement.remove()" style="cursor:pointer;">&times;</span>';
     box.appendChild(chip);
 }
-function msgParent(name) { nav('compose'); pickRecip(name); }
+function msgParent(name) { nav('messages'); switchMsgTab('outbox', null); pickRecip(name); }
 
 // ─── CHANNELS / SEND ─────────────────────────────────────────────────────────
 function toggleCh(btn) {
@@ -1293,7 +1273,6 @@ function previewPhotos() {
 // ─── BOOT ─────────────────────────────────────────────────────────────────────
 function boot() {
     renderDash();
-    updateSmartBadge();
     renderAdminMsgs('all');
 
     window.addEventListener('campistry-cloud-hydrated', function() {
