@@ -2650,32 +2650,42 @@
             });
             if (!partnerCandidates.length) continue;
             partnerCandidates.sort(function (x, y) { return y.score - x.score; });
-            const pick = partnerCandidates[0];
-            // Speculative swap with revert-on-violation
-            const orig = sched[pick.bunk][pick.idx];
-            const newBSlot = {
-              field: aField, sport: sport, _activity: sport,
-              _fixed: true, _bunkOverride: true, _activityLocked: false,
-              _autoMode: true, _capacityChecked: true,
-              _startMin: st, _endMin: en,
-              _pinned: true, _pairLock: true,
-              _pairCombinedSize: pick.combined, _pairedWith: String(aBunk),
-              _source: pick.isFree ? 'pairing-active-fill-v2' : 'pairing-active-swap-v2',
-              continuation: false
-            };
-            sched[pick.bunk][pick.idx] = newBSlot;
-            const newViol = detectHardViolations(sched, ctx).length;
-            if (newViol > baseline) {
-              // Revert
-              sched[pick.bunk][pick.idx] = orig;
-              continue;
+            // Iterate candidates: speculative swap + revert on violation; if
+            // first pick fails, try the next. Previously the code only tried
+            // the top candidate, which silently lost valid alternatives when
+            // the top pick happened to add a hard violation (e.g. via field
+            // capacity ripples or cooldown side-effects elsewhere in the day).
+            let applied = false;
+            let appliedPick = null;
+            for (let _pcI = 0; _pcI < partnerCandidates.length && !applied; _pcI++) {
+              const pick = partnerCandidates[_pcI];
+              const orig = sched[pick.bunk][pick.idx];
+              const newBSlot = {
+                field: aField, sport: sport, _activity: sport,
+                _fixed: true, _bunkOverride: true, _activityLocked: false,
+                _autoMode: true, _capacityChecked: true,
+                _startMin: st, _endMin: en,
+                _pinned: true, _pairLock: true,
+                _pairCombinedSize: pick.combined, _pairedWith: String(aBunk),
+                _source: pick.isFree ? 'pairing-active-fill-v2' : 'pairing-active-swap-v2',
+                continuation: false
+              };
+              sched[pick.bunk][pick.idx] = newBSlot;
+              const newViol = detectHardViolations(sched, ctx).length;
+              if (newViol > baseline) {
+                sched[pick.bunk][pick.idx] = orig;
+                continue; // try next candidate
+              }
+              baseline = newViol;
+              applied = true;
+              appliedPick = pick;
             }
-            baseline = newViol;
+            if (!applied) continue;
             // Tag A
             aSlot._pinned = true;
             aSlot._pairLock = true;
-            aSlot._pairCombinedSize = pick.combined;
-            aSlot._pairedWith = String(pick.bunk);
+            aSlot._pairCombinedSize = appliedPick.combined;
+            aSlot._pairedWith = String(appliedPick.bunk);
             formedPairs++;
           }
         });
@@ -2836,6 +2846,116 @@
         try { console.log('[TIME-RELOC-v2] scannedSolo=' + scannedSolo + ', formedReloc=' + formedReloc); } catch (_eL) {}
       })();
     } catch (_eTR2) {}
+
+    // ★ DROP-AND-REFILL pass v2 — last-resort fix for under-min placements that
+    //   pairing couldn't help (no partner free at A's slot, no partner playing
+    //   the same sport at a different time with matching duration). Replaces
+    //   the under-min sport with a different sport the BUNK's size can play
+    //   solo. Per-candidate speculative apply + detectHardViolations revert
+    //   keeps the schedule valid. This handles the "geometric leftover" cases
+    //   where the bunk's grade COULD pair generally but the specific schedule
+    //   structure doesn't allow it (different bunks have different slot grids;
+    //   anchors/specials block A's time window for would-be partners; etc.).
+    try {
+      (function _dropAndRefillUnderMinV2() {
+        const sched = window.scheduleAssignments || {};
+        const bunkGradeP = {};
+        for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGradeP[String(b)] = g; }); }
+        const _sizeMap = (ctx._bunkSize || {});
+        function _szV2(b) {
+          if (typeof _sizeMap[b] === 'number') return _sizeMap[b];
+          try {
+            const bmd = window.getBunkMetaData && window.getBunkMetaData();
+            if (bmd && bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+          } catch (_e) {}
+          return 0;
+        }
+        const sm = ctx.sportMetaData || (typeof window.getSportMetaData === 'function' ? window.getSportMetaData() : (window.sportMetaData || {}));
+        function _reqsOf(sport) {
+          const m = sm && sm[sport];
+          if (!m) return null;
+          return { minPlayers: m.minPlayers || null, maxPlayers: m.maxPlayers || null };
+        }
+        const skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
+        function _fieldsForActivity(act) {
+          return (ctx.fields || []).filter(function (f) {
+            if (!f || !f.name) return false;
+            return (f.activities || []).some(function (a) { return String(a).toLowerCase().trim() === String(act).toLowerCase().trim(); });
+          });
+        }
+        let baseline = detectHardViolations(sched, ctx).length;
+        let scanned = 0, replaced = 0;
+        Object.keys(sched).forEach(function (aBunk) {
+          const aSlots = sched[aBunk] || [];
+          const grade = bunkGradeP[String(aBunk)];
+          if (!grade) return;
+          const aSize = _szV2(aBunk);
+          if (!aSize) return;
+          for (let aIdx = 0; aIdx < aSlots.length; aIdx++) {
+            const aSlot = aSlots[aIdx];
+            if (!aSlot || aSlot.continuation || aSlot._pairLock) continue;
+            if (aSlot._pinned || aSlot._autoSpecial || aSlot._isRotationEvent || aSlot._isPrep || aSlot._league) continue;
+            const sport = aSlot._activity || aSlot.sport;
+            if (!sport) continue;
+            if (skipActs.indexOf(String(sport).toLowerCase()) >= 0) continue;
+            const reqs = _reqsOf(sport);
+            if (!reqs || !reqs.minPlayers) continue;
+            if (aSize >= reqs.minPlayers) continue; // not under-min
+            scanned++;
+            const st = aSlot._startMin, en = aSlot._endMin;
+            if (st == null || en == null) continue;
+            // Build replacement candidate sports the BUNK can play solo
+            const pool = _candidateActivities(grade, ctx);
+            const playedToday = new Set();
+            for (const s of aSlots) {
+              if (!s) continue;
+              const sn = s._activity || s.sport;
+              if (sn) playedToday.add(String(sn).toLowerCase());
+            }
+            const replacements = [];
+            for (const act of pool) {
+              if (String(act).toLowerCase() === String(sport).toLowerCase()) continue;
+              if (skipActs.indexOf(String(act).toLowerCase()) >= 0) continue;
+              if (playedToday.has(String(act).toLowerCase())) continue;
+              const actReqs = _reqsOf(act);
+              // Bunk's size alone must meet the sport's minPlayers (or no min)
+              if (actReqs && actReqs.minPlayers && aSize < actReqs.minPlayers) continue;
+              if (actReqs && actReqs.maxPlayers && aSize > actReqs.maxPlayers) continue;
+              const fields = _fieldsForActivity(act);
+              if (!fields.length) continue;
+              for (const f of fields) {
+                replacements.push({ act, field: f.name });
+              }
+            }
+            // Try each replacement candidate
+            const orig = sched[aBunk][aIdx];
+            let success = false;
+            for (const cand of replacements) {
+              const newSlot = {
+                field: cand.field, sport: cand.act, _activity: cand.act,
+                _fixed: true, _bunkOverride: true, _activityLocked: false,
+                _autoMode: true, _autoSolved: true, _capacityChecked: true,
+                _startMin: st, _endMin: en,
+                _source: 'pairing-drop-refill-v2',
+                continuation: false
+              };
+              sched[aBunk][aIdx] = newSlot;
+              const newViol = detectHardViolations(sched, ctx).length;
+              if (newViol > baseline) {
+                sched[aBunk][aIdx] = orig;
+                continue;
+              }
+              baseline = newViol;
+              success = true;
+              replaced++;
+              break;
+            }
+            if (!success) sched[aBunk][aIdx] = orig;
+          }
+        });
+        try { console.log('[DROP-REFILL-v2] scanned=' + scanned + ', replaced=' + replaced); } catch (_eL) {}
+      })();
+    } catch (_eDR2) {}
 
     // ★ FORCED BUNK-PAIRING tag pass — re-validates and re-tags pairs after SA.
     //   v1's `_pairingReopt` already tags pairs as `_pinned` before v2 reads the
