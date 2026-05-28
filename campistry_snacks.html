@@ -23,90 +23,86 @@
         width: 220px; height: 68px;
         flex-shrink: 0;
     }
-    /* JS adds this class at t=900ms — after all letters have landed */
-    #snacks-splash-wrap.snacks-crunch {
-        animation: snacks-crunch 0.55s ease forwards;
+    #snacks-splash-logo {
+        position: absolute; top: 0; left: 0;
+        width: 220px; height: auto;
+        animation: logo-pop 0.28s ease 0.78s both;
     }
-    /* Six letter slices — PNG sprite, each div shows one letter via background-position.
-       304×95 original scaled to 220×68. Letter x-offsets: S=0, n=37, a=73, c=110, k=146, s=183 */
-    .sl {
+    @keyframes logo-pop {
+        0%   { transform: scale(1);    }
+        55%  { transform: scale(1.06); }
+        100% { transform: scale(1);    }
+    }
+    /* Wrapper panels — orange candy-wrapper gradient with diagonal stripe texture.
+       Left panel covers x=0–114, right panel covers x=106–224 (8px overlap at seam).
+       Both extend 8px above/below the logo for full coverage. */
+    .wp {
         position: absolute;
-        height: 68px;
-        background: url('Snacks_clean.png') no-repeat;
-        background-size: 220px 68px;
-        opacity: 0;
-        animation: letter-drop 0.42s cubic-bezier(0.22,1,0.36,1) forwards;
+        top: -8px; height: 84px;
+        background:
+            repeating-linear-gradient(-45deg, rgba(255,255,255,0.12) 0, rgba(255,255,255,0.12) 3px, transparent 3px, transparent 9px),
+            linear-gradient(170deg, #F5841A 0%, #CF5A0E 48%, #F5841A 100%);
+        z-index: 1;
     }
-    .sl0 { left:  0px; width:37px; background-position:   0px 0; animation-delay: 0.00s; }
-    .sl1 { left: 37px; width:36px; background-position: -37px 0; animation-delay: 0.08s; }
-    .sl2 { left: 73px; width:37px; background-position: -73px 0; animation-delay: 0.16s; }
-    .sl3 { left:110px; width:36px; background-position:-110px 0; animation-delay: 0.24s; }
-    .sl4 { left:146px; width:37px; background-position:-146px 0; animation-delay: 0.32s; }
-    .sl5 { left:183px; width:37px; background-position:-183px 0; animation-delay: 0.40s; }
-    @keyframes letter-drop {
-        0%   { opacity: 0; transform: translateY(-80px) rotate(-6deg); }
-        55%  { opacity: 1; transform: translateY(9px)   rotate(1.5deg); }
-        78%  { transform: translateY(-4px) rotate(-0.5deg); }
-        100% { opacity: 1; transform: translateY(0)     rotate(0deg); }
+    /* Zigzag inner edges simulate a torn wrapper seam */
+    .wp-left {
+        left: -4px; width: 118px;
+        clip-path: polygon(0 0, 100% 0, 90% 20%, 100% 40%, 90% 60%, 100% 80%, 90% 100%, 0 100%);
+        animation: wp-left-tear 0.48s cubic-bezier(0.55,0,1,0.45) 0.28s forwards;
     }
-    @keyframes snacks-crunch {
-        0%   { transform: translate(0,0)       rotate(0deg);    }
-        8%   { transform: translate(-4px, 1px) rotate(-2deg);   }
-        18%  { transform: translate( 4px,-1px) rotate( 2deg);   }
-        30%  { transform: translate(-3px, 1px) rotate(-1.5deg); }
-        40%  { transform: translate( 3px, 0)   rotate( 1.5deg); }
-        52%  { transform: translate(-4px,-1px) rotate(-2deg);   }
-        62%  { transform: translate( 4px, 1px) rotate( 2deg);   }
-        74%  { transform: translate(-1px, 0)   rotate(-0.5deg); }
-        86%  { transform: translate( 1px,-1px) rotate( 0.3deg); }
-        100% { transform: translate(0,0)       rotate(0deg);    }
+    .wp-right {
+        left: 106px; width: 118px;
+        clip-path: polygon(10% 0, 100% 0, 100% 100%, 10% 100%, 0 80%, 10% 60%, 0 40%, 10% 20%);
+        animation: wp-right-tear 0.48s cubic-bezier(0.55,0,1,0.45) 0.28s forwards;
     }
-    /* Crumbs fire at t=900ms, spread across the full word width */
-    .snacks-crumb { position: absolute; opacity: 0; }
-    .sc1 { width:11px; height:8px;  top:18px; left: 35px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 0.85s ease-in 0.90s forwards; }
-    .sc2 { width: 8px; height:7px;  top:48px; left: 75px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.90s ease-in 0.90s forwards; }
-    .sc3 { width: 7px; height:6px;  top:12px; left:128px; background:#6B3110; border-radius:50%;             animation:sc3 0.72s ease-in 0.92s forwards; }
-    .sc4 { width:10px; height:7px;  top:40px; left:162px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.00s ease-in 0.90s forwards; }
-    .sc5 { width: 6px; height:5px;  top:52px; left:108px; background:#7B3A0F; border-radius:50%;             animation:sc5 0.78s ease-in 0.91s forwards; }
-    .sc6 { width:13px; height:8px;  top:28px; left:188px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.10s ease-in 0.90s forwards; }
-    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-32px,55px)rotate(200deg)} }
-    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-18px,58px)rotate(-180deg)} }
-    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(22px,52px)rotate(240deg)} }
-    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(28px,62px)rotate(280deg)} }
-    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-10px,50px)rotate(-120deg)} }
-    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(16px,58px)rotate(310deg)} }
+    @keyframes wp-left-tear {
+        0%   { transform: translateX(0);      opacity: 1; }
+        55%  { opacity: 1; }
+        100% { transform: translateX(-130px); opacity: 0; }
+    }
+    @keyframes wp-right-tear {
+        0%   { transform: translateX(0);     opacity: 1; }
+        55%  { opacity: 1; }
+        100% { transform: translateX(130px); opacity: 0; }
+    }
+    /* Tiny wrapper bits fly off the tear seam (x≈110) in all directions */
+    .wt { position: absolute; opacity: 0; z-index: 2; border-radius: 2px; background: #C05010; }
+    .wt1 { width:4px; height:9px;  top: 2px; left:107px; animation: wt1 0.50s ease-in 0.30s forwards; }
+    .wt2 { width:5px; height:7px;  top:24px; left:111px; animation: wt2 0.40s ease-in 0.28s forwards; }
+    .wt3 { width:3px; height:8px;  top:48px; left:108px; animation: wt3 0.55s ease-in 0.32s forwards; }
+    .wt4 { width:5px; height:5px;  top:14px; left:112px; border-radius:50%; animation: wt4 0.42s ease-in 0.29s forwards; }
+    .wt5 { width:4px; height:6px;  top:36px; left:109px; animation: wt5 0.48s ease-in 0.31s forwards; }
+    .wt6 { width:3px; height:5px;  top:58px; left:110px; animation: wt6 0.38s ease-in 0.33s forwards; }
+    @keyframes wt1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-22px,-28px)rotate(50deg)} }
+    @keyframes wt2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(18px,22px)rotate(-65deg)} }
+    @keyframes wt3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-16px,34px)rotate(80deg)} }
+    @keyframes wt4 { 0%{opacity:1;transform:translate(0,0)}            100%{opacity:0;transform:translate(24px,-22px)} }
+    @keyframes wt5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-20px,18px)rotate(-90deg)} }
+    @keyframes wt6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(14px,30px)rotate(120deg)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
-        <!-- Six letter slices — S, n, a, c, k, s — each drops in with 80ms stagger -->
-        <div class="sl sl0"></div>
-        <div class="sl sl1"></div>
-        <div class="sl sl2"></div>
-        <div class="sl sl3"></div>
-        <div class="sl sl4"></div>
-        <div class="sl sl5"></div>
-        <!-- Crumbs scatter on the crunch at t=900ms -->
-        <div class="snacks-crumb sc1"></div>
-        <div class="snacks-crumb sc2"></div>
-        <div class="snacks-crumb sc3"></div>
-        <div class="snacks-crumb sc4"></div>
-        <div class="snacks-crumb sc5"></div>
-        <div class="snacks-crumb sc6"></div>
+        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+        <!-- Two wrapper panels tear apart left+right to reveal the logo -->
+        <div class="wp wp-left"></div>
+        <div class="wp wp-right"></div>
+        <!-- Debris from the wrapper tear seam -->
+        <div class="wt wt1"></div>
+        <div class="wt wt2"></div>
+        <div class="wt wt3"></div>
+        <div class="wt wt4"></div>
+        <div class="wt wt5"></div>
+        <div class="wt wt6"></div>
     </div>
     <script>
     (function() {
-        var ov   = document.getElementById('snacks-splash');
-        var wrap = document.getElementById('snacks-splash-wrap');
-        /* Crunch shake fires once all letters have settled (last letter: 400ms delay + 420ms fall ≈ 820ms) */
-        setTimeout(function() {
-            if (wrap) wrap.classList.add('snacks-crunch');
-        }, 900);
+        var ov = document.getElementById('snacks-splash');
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2500);
+        }, 2200);
     })();
     </script>
 </div>
