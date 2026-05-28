@@ -7308,16 +7308,25 @@ try {
     try {
       var newDate = e && e.detail && e.detail.dateKey;
       if (!newDate) return;
+      // Live diagnostics from the multi-day audit showed window.currentScheduleDate
+      // typically updates 1.5-3 seconds AFTER campistry-date-changed fires (cloud
+      // round-trip via integration_hooks). Poll for up to 5000ms to safely cover
+      // the round-trip; if it still doesn't match, force-set the date so the
+      // loader reads the correct localStorage. Also re-run the load + render
+      // ONCE MORE after we observe currentScheduleDate flipped, since
+      // integration_hooks may overwrite dailyData asynchronously after we load.
       var start = Date.now();
+      var observedMatch = false;
       function _tryLoad() {
         var matched = window.currentScheduleDate === newDate;
-        if (!matched && Date.now() - start < 2000) {
+        if (!matched && Date.now() - start < 5000) {
           setTimeout(_tryLoad, 100);
           return;
         }
         if (!matched) {
-          // Hard cap: force the date so the loader reads the right localStorage.
-          window.currentScheduleDate = newDate;
+          window.currentScheduleDate = newDate; // hard cap: force so loader reads the right ls key
+        } else {
+          observedMatch = true;
         }
         try {
           if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
@@ -7327,6 +7336,21 @@ try {
             if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
           }
         } catch (_e1) { try { console.warn('[ResourceOverrides] reload-on-date-change failed:', _e1 && _e1.message); } catch (_e2) {} }
+        // Belt-and-braces: re-load + re-render once more 1.5s later in case
+        // integration_hooks finished its async cloud-load after our first read.
+        if (observedMatch) {
+          setTimeout(function () {
+            try {
+              if (window.currentScheduleDate !== newDate) return;
+              if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
+              var resPanel2 = document.getElementById('da-resources-container');
+              if (resPanel2 && resPanel2.offsetParent !== null && typeof renderResourceOverridesUI === 'function') {
+                renderResourceOverridesUI();
+                if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
+              }
+            } catch (_e3) {}
+          }, 1500);
+        }
       }
       // Start polling after one tick to let the dispatch chain settle.
       setTimeout(_tryLoad, 50);
