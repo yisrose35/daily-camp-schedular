@@ -932,6 +932,24 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
+        // ★★★ DAY 17 FIX: frequencyDays as a real cooldown hard-gate ★★★
+        // The UI labels this "Min days between visits:" (facilities.js:3262)
+        // and existing usage in scheduler config treats it as a cooldown.
+        // Previously the engine only used _cdForEsc as a modulation parameter
+        // for getEscalationBonus when min/exact frequency was set — no hard
+        // gate at all. Live-observed: Quints 7 got Triple Fun on 5/28 and
+        // 5/29 with frequencyDays=3 (only 1-day gap).
+        //
+        // Hard-block if the bunk did this activity within the cooldown window.
+        // Skip daysSince=0 (same-day; variety score handles intra-day dup).
+        // Skip null/undefined (never done; nothing to cooldown from).
+        if (_cdForEsc > 0) {
+            var _daysSinceCD = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+            if (typeof _daysSinceCD === 'number' && _daysSinceCD > 0 && _daysSinceCD < _cdForEsc) {
+                return Infinity;
+            }
+        }
+
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
         if (divisionName && props.maxUsagePerGrade && props.maxUsagePerGrade[divisionName] > 0) {

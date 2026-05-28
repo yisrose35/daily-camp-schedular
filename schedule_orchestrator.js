@@ -266,11 +266,24 @@
 
             allData[dateKey] = merged;
 
+            // ★★★ DAY 17 FIX: bump cap from 5 → 30 dates ★★★
+            // The previous 5-date cap silently broke exactFrequency / minFrequency /
+            // rotationCohort week-counts. Utils.getPeriodActivityCount reads
+            // window.loadAllDailyData() which is just this localStorage, so a
+            // 7-day-week query on day 8 only saw 4-5 prior days (off-by-1+).
+            // Live-observed: Trios 2 got Drama 3x in 3 days with exactFrequency=2,
+            // because the count function couldn't see the oldest placement.
+            //
+            // 30 is enough to cover a full month and span any 'half' period for
+            // typical 4-week sessions. localStorage limit (5-10MB per origin) is
+            // not at risk: ~30 dates × ~50KB = ~1.5MB. bulkHydrateLocalStorage
+            // already trims to 14 only on QuotaExceededError (scheduler_core_utils.js
+            // ~2566), so this orchestrator-side cap should match that ceiling.
             const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
             const dateKeys = Object.keys(allData).filter(k => DATE_RE.test(k));
-            if (dateKeys.length > 5) {
+            if (dateKeys.length > 30) {
                 dateKeys.sort();
-                dateKeys.slice(0, dateKeys.length - 5).forEach(k => delete allData[k]);
+                dateKeys.slice(0, dateKeys.length - 30).forEach(k => delete allData[k]);
             }
 
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(allData));
