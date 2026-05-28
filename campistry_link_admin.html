@@ -265,12 +265,17 @@
                 <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;">
                     <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
                     <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
-                    <button class="lk-tab" onclick="filterAdminMsgs('pickup',this)">Pickup Requests</button>
                 </div>
-                <button class="btn btn-primary btn-sm" onclick="switchMsgTab('outbox',null)" style="flex-shrink:0;">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    Compose
-                </button>
+                <div style="display:flex;align-items:center;gap:8px;">
+                    <a href="campistry_live.html" class="btn btn-secondary btn-sm" style="display:inline-flex;align-items:center;gap:5px;font-size:.75rem;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+                        Pickup requests → Live
+                    </a>
+                    <button class="btn btn-primary btn-sm" onclick="switchMsgTab('outbox',null)" style="flex-shrink:0;">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Compose
+                    </button>
+                </div>
             </div>
             <div class="lk-card" style="padding:0;overflow:hidden;">
                 <div id="adminMsgList"></div>
@@ -924,15 +929,13 @@ function renderSent() {}
 
 // ─── ADMIN MESSAGES ───────────────────────────────────────────────────────────
 var adminMessages = [
-    { id:1, from:'Sarah Miller', role:'Parent', subject:'Question about visiting day', preview:'When is visiting day exactly? We have a conflict...', body:'<p>Hi,</p><p>When is visiting day exactly? We have a potential conflict and wanted to confirm the date. Also, can family members other than parents attend?</p><p>Thank you,<br>Sarah Miller</p>', date:'2h ago', read:false, tag:'general' },
-    { id:2, from:'David Cohen',  role:'Parent', subject:"Eli's medication reminder",    preview:"Just a reminder that Eli needs his afternoon dose...", body:'<p>Hi,</p><p>Just a reminder that Eli needs his afternoon medication (Ritalin 10mg) at 2:00 PM. The nurse should have the prescription on file. Please confirm.</p><p>Thanks,<br>David Cohen</p>', date:'5h ago', read:false, tag:'general' },
-    { id:3, from:'Rachel Stern', role:'Parent', subject:'Late pickup Thursday',        preview:'We need to pick Noah up 30 minutes late Thursday...', body:'<p>Hello,</p><p>We need to pick Noah up about 30 minutes after the normal dismissal time this Thursday (July 3). Is that okay? Who should we speak to when we arrive?</p><p>Rachel Stern</p>', date:'1d ago', read:true, tag:'pickup' }
+    { id:1, from:'Sarah Miller', role:'Parent', subject:'Question about visiting day', preview:'When is visiting day exactly? We have a conflict...', body:'<p>Hi,</p><p>When is visiting day exactly? We have a potential conflict and wanted to confirm the date. Also, can family members other than parents attend?</p><p>Thank you,<br>Sarah Miller</p>', date:'2h ago', read:false },
+    { id:2, from:'David Cohen',  role:'Parent', subject:"Eli's medication reminder",    preview:"Just a reminder that Eli needs his afternoon dose...", body:'<p>Hi,</p><p>Just a reminder that Eli needs his afternoon medication (Ritalin 10mg) at 2:00 PM. The nurse should have the prescription on file. Please confirm.</p><p>Thanks,<br>David Cohen</p>', date:'5h ago', read:false }
 ];
 
 function renderAdminMsgs(filter) {
     var list = adminMessages;
     if (filter === 'unread') list = adminMessages.filter(function(m) { return !m.read; });
-    if (filter === 'pickup') list = adminMessages.filter(function(m) { return m.tag === 'pickup'; });
     var c = document.getElementById('adminMsgList');
     if (!list.length) {
         c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';
