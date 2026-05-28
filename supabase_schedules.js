@@ -637,19 +637,53 @@
         // not here — auto-saves and edits to existing dates should never be blocked.
 
         // ★★★ DAY 16 FIX: Empty-data wipe guard ★★★
-        // Block writes with empty scheduleAssignments unless the caller
-        // explicitly opts in. The orchestrator's doCloudSaveWithVerification
-        // has the same guard but only for paths that go through it — direct
-        // ScheduleDB.saveSchedule callers (visibilitychange/beforeunload
-        // fallbacks, propagation paths, offline-queue replays, etc.) could
-        // wipe a populated cloud row by writing an empty payload. Persist
-        // the offending stack to localStorage so we can find any remaining
-        // call sites after the guard catches them.
-        if (originalBunkCount === 0 && !options.allowEmpty) {
+        // Block writes that would wipe a populated cloud row. The orchestrator's
+        // doCloudSaveWithVerification has a bunkCount === 0 guard but only for
+        // paths that go through it — direct ScheduleDB.saveSchedule callers
+        // (visibilitychange/beforeunload fallbacks, propagation paths,
+        // offline-queue replays, post-edit bypass saves, iron-gate listener,
+        // etc.) bypass that guard. We catch three wipe shapes here:
+        //
+        //   (a) scheduleAssignments is an empty object {}
+        //   (b) scheduleAssignments has bunk keys but every slot is null/empty
+        //       AND unifiedTimes is empty — "structural skeleton with no data"
+        //   (c) filter-induced empty (filteredBunkCount=0 with original>0,
+        //       handled below after filtering)
+        //
+        // Generated schedules always have unifiedTimes populated, so an empty
+        // unifiedTimes alongside bunk keys is a strong wipe signal. Persist the
+        // offending stack to localStorage so the source survives reload.
+        const sa = data?.scheduleAssignments || {};
+        const utLen = Array.isArray(data?.unifiedTimes) ? data.unifiedTimes.length
+                    : (Array.isArray(window.unifiedTimes) ? window.unifiedTimes.length : 0);
+        let activitySlotCount = 0;
+        if (originalBunkCount > 0) {
+            outer: for (const bk of Object.keys(sa)) {
+                const arr = sa[bk];
+                if (!Array.isArray(arr)) continue;
+                for (const slot of arr) {
+                    if (slot && typeof slot === 'object') {
+                        const act = slot._activity || slot.activity || slot.field || slot.sport;
+                        if (act && act !== 'Free' && act !== '+ Add') {
+                            activitySlotCount++;
+                            if (activitySlotCount > 0) break outer;
+                        }
+                    }
+                }
+            }
+        }
+        const wipeShape =
+            originalBunkCount === 0 ? 'empty-bunks' :
+            (utLen === 0 && activitySlotCount === 0) ? 'structural-skeleton' :
+            null;
+        if (wipeShape && !options.allowEmpty) {
             const trace = {
                 ts: new Date().toISOString(),
                 dateKey,
                 originalBunkCount,
+                unifiedTimesLen: utLen,
+                activitySlotCount,
+                wipeShape,
                 skipFilter: !!options.skipFilter,
                 stack: (new Error('empty-save-blocked')).stack || ''
             };
@@ -660,10 +694,37 @@
                 // Keep the last 25 blocks so the log doesn't grow forever
                 while (existing.length > 25) existing.shift();
                 localStorage.setItem(key, JSON.stringify(existing));
+                // Also append to the unified save trace
+                const traceKey = '__campistry_save_trace';
+                const fullTrace = JSON.parse(localStorage.getItem(traceKey) || '[]');
+                fullTrace.push({ ...trace, outcome: 'blocked-' + wipeShape, allowEmpty: false });
+                while (fullTrace.length > 50) fullTrace.shift();
+                localStorage.setItem(traceKey, JSON.stringify(fullTrace));
             } catch (_) {}
-            console.warn('[ScheduleDB.saveSchedule] BLOCKED empty-data write for', dateKey, '— see localStorage["__campistry_empty_save_blocks"] for stack');
-            return { success: true, target: 'empty-blocked', bunkCount: 0 };
+            console.warn('[ScheduleDB.saveSchedule] BLOCKED', wipeShape, 'write for', dateKey, '— see localStorage["__campistry_empty_save_blocks"] for stack');
+            return { success: true, target: 'wipe-blocked-' + wipeShape, bunkCount: originalBunkCount };
         }
+
+        // ★ Save trace: log EVERY save attempt (allowed + blocked) so the
+        // full save timeline is reconstructable after a reload. Capped at
+        // 50 entries to bound localStorage size.
+        try {
+            const traceKey = '__campistry_save_trace';
+            const trace = JSON.parse(localStorage.getItem(traceKey) || '[]');
+            trace.push({
+                ts: new Date().toISOString(),
+                dateKey,
+                originalBunkCount,
+                unifiedTimesLen: utLen,
+                activitySlotCount,
+                skipFilter: !!options.skipFilter,
+                allowEmpty: !!options.allowEmpty,
+                outcome: 'allowed',
+                stack: (new Error('save-trace')).stack?.split('\n').slice(2, 8).join('\n') || ''
+            });
+            while (trace.length > 50) trace.shift();
+            localStorage.setItem(traceKey, JSON.stringify(trace));
+        } catch (_) {}
 
         try {
             // ★★★ FIXED FILTERING - Uses AccessControl instead of PermissionsDB ★★★
@@ -698,6 +759,11 @@
                     existing.push(trace);
                     while (existing.length > 25) existing.shift();
                     localStorage.setItem(key, JSON.stringify(existing));
+                    const traceKey = '__campistry_save_trace';
+                    const fullTrace = JSON.parse(localStorage.getItem(traceKey) || '[]');
+                    fullTrace.push({ ...trace, outcome: 'blocked-filter-stripped' });
+                    while (fullTrace.length > 50) fullTrace.shift();
+                    localStorage.setItem(traceKey, JSON.stringify(fullTrace));
                 } catch (_) {}
                 console.warn('[ScheduleDB.saveSchedule] BLOCKED filter-stripped-empty write for', dateKey, '— see localStorage["__campistry_empty_save_blocks"]');
                 return { success: true, target: 'empty-blocked-by-filter', bunkCount: 0 };
@@ -1113,7 +1179,7 @@
                 console.log(`Empty-save blocks captured: ${blocks.length}`);
                 console.log('═══════════════════════════════════════════════════════');
                 blocks.forEach((b, i) => {
-                    console.log(`\n[${i + 1}] ${b.ts} — date=${b.dateKey} originalBunkCount=${b.originalBunkCount}${b.reason ? ' reason=' + b.reason : ''}`);
+                    console.log(`\n[${i + 1}] ${b.ts} — date=${b.dateKey} originalBunkCount=${b.originalBunkCount} utLen=${b.unifiedTimesLen} actSlots=${b.activitySlotCount}${b.reason ? ' reason=' + b.reason : ''}${b.wipeShape ? ' shape=' + b.wipeShape : ''}`);
                     console.log(b.stack);
                 });
                 if (blocks.length === 0) console.log('(none — no empty save attempts blocked)');
@@ -1127,6 +1193,30 @@
         clearEmptySaveBlocks: () => {
             try { localStorage.removeItem('__campistry_empty_save_blocks'); } catch (_) {}
             console.log('Cleared empty-save block log.');
+        },
+
+        // ★★★ DAY 16: inspect full save trace (allowed + blocked, survives reload) ★★★
+        inspectSaveTrace: (limit = 30) => {
+            try {
+                const trace = JSON.parse(localStorage.getItem('__campistry_save_trace') || '[]');
+                console.log('═══════════════════════════════════════════════════════');
+                console.log(`Save trace entries: ${trace.length} (showing last ${Math.min(limit, trace.length)})`);
+                console.log('═══════════════════════════════════════════════════════');
+                trace.slice(-limit).forEach((t, i) => {
+                    console.log(`\n[${i + 1}] ${t.ts} — date=${t.dateKey} bunks=${t.originalBunkCount} utLen=${t.unifiedTimesLen} actSlots=${t.activitySlotCount} skipFilter=${t.skipFilter} outcome=${t.outcome}`);
+                    console.log(t.stack);
+                });
+                if (trace.length === 0) console.log('(no saves traced yet)');
+                console.log('═══════════════════════════════════════════════════════');
+                return trace;
+            } catch (e) {
+                console.error('inspectSaveTrace error:', e);
+                return [];
+            }
+        },
+        clearSaveTrace: () => {
+            try { localStorage.removeItem('__campistry_save_trace'); } catch (_) {}
+            console.log('Cleared save trace log.');
         },
 
         // State
