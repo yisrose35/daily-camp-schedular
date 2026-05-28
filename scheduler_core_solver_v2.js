@@ -2437,6 +2437,158 @@
       })();
     } catch (_eFQ2) {}
 
+    // ★ ACTIVE PAIRING PASS v2 — form new pairs by SWAPPING a partner.
+    //   Mirrors v1's _activePairingPass but validates each swap via
+    //   detectHardViolations and REVERTS if the swap creates any new hard
+    //   violation (field access/time/capacity/sharing/cooldown/sport-cap).
+    //   Runs before _pairingReoptV2 so any newly-formed pairs get tagged.
+    try {
+      (function _activePairingPassV2() {
+        const sched = window.scheduleAssignments || {};
+        const bunkGradeP = {};
+        for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGradeP[String(b)] = g; }); }
+        const _sizeMap = (ctx._bunkSize || {});
+        function _szV2(b) {
+          if (typeof _sizeMap[b] === 'number') return _sizeMap[b];
+          try {
+            const bmd = window.getBunkMetaData && window.getBunkMetaData();
+            if (bmd && bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+          } catch (_e) {}
+          return 0;
+        }
+        const sm = ctx.sportMetaData || (typeof window.getSportMetaData === 'function' ? window.getSportMetaData() : (window.sportMetaData || {}));
+        function _reqsOf(sport) {
+          const m = sm && sm[sport];
+          if (!m) return null;
+          return { minPlayers: m.minPlayers || null, maxPlayers: m.maxPlayers || null };
+        }
+        const _flds = ctx.fields || [];
+        const fieldByName = {};
+        _flds.forEach(function (f) { if (f && f.name) fieldByName[f.name] = f; });
+        function _fieldHosts(fname, sport) {
+          const f = fieldByName[fname];
+          if (!f) return false;
+          return (f.activities || []).some(function (a) { return String(a).toLowerCase().trim() === String(sport).toLowerCase().trim(); });
+        }
+        function _fieldCap(fname) {
+          const f = fieldByName[fname];
+          if (!f) return 1;
+          return parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+            || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+        }
+        function _fieldSharable(fname) {
+          const f = fieldByName[fname];
+          if (!f) return false;
+          const t = (f.sharableWith && f.sharableWith.type) || 'not_sharable';
+          return t !== 'not_sharable' && _fieldCap(fname) >= 2;
+        }
+        function _fieldOccupants(fname, st, en, excludeBunk) {
+          const occ = [];
+          Object.keys(sched).forEach(function (b) {
+            if (String(b) === String(excludeBunk)) return;
+            (sched[b] || []).forEach(function (ss) {
+              if (!ss || ss.continuation || ss.field !== fname) return;
+              const sst = ss._startMin != null ? ss._startMin : ss.startMin;
+              const sse = ss._endMin != null ? ss._endMin : ss.endMin;
+              if (sst < en && sse > st) occ.push({ bunk: String(b), slot: ss });
+            });
+          });
+          return occ;
+        }
+        const skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
+        let baseline = detectHardViolations(sched, ctx).length;
+        let formedPairs = 0, scannedUnderMin = 0;
+        Object.keys(sched).forEach(function (aBunk) {
+          const aSlots = sched[aBunk] || [];
+          for (let aIdx = 0; aIdx < aSlots.length; aIdx++) {
+            const aSlot = aSlots[aIdx];
+            if (!aSlot || aSlot.continuation) continue;
+            if (aSlot._pairLock) continue;
+            if (aSlot._pinned || aSlot._autoSpecial || aSlot._isRotationEvent || aSlot._isPrep || aSlot._league) continue;
+            const sport = aSlot._activity || aSlot.sport;
+            if (!sport) continue;
+            if (skipActs.indexOf(String(sport).toLowerCase()) >= 0) continue;
+            const reqs = _reqsOf(sport);
+            if (!reqs || !reqs.minPlayers) continue;
+            const aSize = _szV2(aBunk);
+            if (!aSize || aSize >= reqs.minPlayers) continue;
+            const st = aSlot._startMin, en = aSlot._endMin;
+            if (st == null || en == null) continue;
+            const aField = aSlot.field;
+            if (!aField || aField === 'Free') continue;
+            if (!_fieldSharable(aField)) continue;
+            if (!_fieldHosts(aField, sport)) continue;
+            const cap = _fieldCap(aField);
+            const occBefore = _fieldOccupants(aField, st, en, aBunk);
+            if (occBefore.length + 1 >= cap) continue;
+            if (occBefore.some(function (o) { return (o.slot._activity || o.slot.sport) !== sport; })) continue;
+            const myGrade = bunkGradeP[String(aBunk)];
+            if (!myGrade) continue;
+            scannedUnderMin++;
+            const partners = (ctx.divisions[myGrade] && ctx.divisions[myGrade].bunks || []).map(String).filter(function (b) { return b !== String(aBunk); });
+            const partnerCandidates = [];
+            partners.forEach(function (bBunk) {
+              const bSize = _szV2(bBunk);
+              if (!bSize) return;
+              const combined = aSize + bSize;
+              if (combined < reqs.minPlayers) return;
+              if (reqs.maxPlayers && combined > reqs.maxPlayers) return;
+              const bSlots = sched[bBunk] || [];
+              let bIdx = -1, bSlot = null;
+              for (let bi = 0; bi < bSlots.length; bi++) {
+                const bs = bSlots[bi];
+                if (!bs || bs.continuation) continue;
+                const bst = bs._startMin, bse = bs._endMin;
+                if (bst === st && bse === en) { bIdx = bi; bSlot = bs; break; }
+              }
+              if (bIdx < 0) return;
+              for (let di = 0; di < bSlots.length; di++) {
+                if (di === bIdx) continue;
+                const ds2 = bSlots[di];
+                if (ds2 && (ds2._activity === sport || ds2.sport === sport)) return;
+              }
+              if (bSlot._pinned || bSlot._autoSpecial || bSlot._isRotationEvent || bSlot._isPrep || bSlot._league || bSlot._pairLock) return;
+              const bActLower = String(bSlot._activity || bSlot.sport || '').toLowerCase();
+              if (skipActs.indexOf(bActLower) >= 0 && bActLower !== 'free' && bActLower !== 'general activity slot' && bActLower !== '') return;
+              const isFree = (bActLower === 'free' || bActLower === '' || bActLower === 'general activity slot');
+              const score = isFree ? 100 : 50;
+              partnerCandidates.push({ bunk: bBunk, idx: bIdx, slot: bSlot, score, combined, isFree });
+            });
+            if (!partnerCandidates.length) continue;
+            partnerCandidates.sort(function (x, y) { return y.score - x.score; });
+            const pick = partnerCandidates[0];
+            // Speculative swap with revert-on-violation
+            const orig = sched[pick.bunk][pick.idx];
+            const newBSlot = {
+              field: aField, sport: sport, _activity: sport,
+              _fixed: true, _bunkOverride: true, _activityLocked: false,
+              _autoMode: true, _capacityChecked: true,
+              _startMin: st, _endMin: en,
+              _pinned: true, _pairLock: true,
+              _pairCombinedSize: pick.combined, _pairedWith: String(aBunk),
+              _source: pick.isFree ? 'pairing-active-fill-v2' : 'pairing-active-swap-v2',
+              continuation: false
+            };
+            sched[pick.bunk][pick.idx] = newBSlot;
+            const newViol = detectHardViolations(sched, ctx).length;
+            if (newViol > baseline) {
+              // Revert
+              sched[pick.bunk][pick.idx] = orig;
+              continue;
+            }
+            baseline = newViol;
+            // Tag A
+            aSlot._pinned = true;
+            aSlot._pairLock = true;
+            aSlot._pairCombinedSize = pick.combined;
+            aSlot._pairedWith = String(pick.bunk);
+            formedPairs++;
+          }
+        });
+        try { console.log('[ACTIVE-PAIRING-v2] scannedUnderMin=' + scannedUnderMin + ', formedPairs=' + formedPairs); } catch (_eL) {}
+      })();
+    } catch (_eAP2) {}
+
     // ★ FORCED BUNK-PAIRING tag pass — re-validates and re-tags pairs after SA.
     //   v1's `_pairingReopt` already tags pairs as `_pinned` before v2 reads the
     //   seed, and `_isMovable` honors `_pinned` so SA does not break pairs. This
