@@ -496,6 +496,63 @@
       }
     } catch (_eSp) { /* never let rule-checking break the solver */ }
 
+    // ── Category 9: sport pair-infeasibility ────────────────────────────────
+    //   A sport with minPlayers placed on a bunk whose GRADE cannot field a
+    //   viable team (no single bunk meets min, and no two bunks combined fall
+    //   in [min, max]). v2 SA moves that route such a sport into the grade
+    //   (e.g. crossSwap copying Baseball from a feasible grade into Minors)
+    //   are otherwise unconstrained — _candidateActivities filters new picks
+    //   but cross-bunk swaps copy slot CONTENTS, bypassing it. Hard-violating
+    //   these forces SA to keep infeasible sports OUT of small-grade bunks.
+    try {
+      const _sm9 = ctx.sportMetaData || {};
+      const _sz9 = ctx._bunkSize || {};
+      const _gradeBunksCache = {};
+      function _gradeBunks9(grade) {
+        if (!_gradeBunksCache[grade]) {
+          _gradeBunksCache[grade] = (ctx.divisions && ctx.divisions[grade] && ctx.divisions[grade].bunks || []).map(String);
+        }
+        return _gradeBunksCache[grade];
+      }
+      const _pairFeasCache = {};
+      function _gradeCanPairForSport(grade, sportName) {
+        const key = grade + '|' + sportName;
+        if (_pairFeasCache[key] != null) return _pairFeasCache[key];
+        const meta = _sm9[sportName];
+        if (!meta || !meta.minPlayers) { _pairFeasCache[key] = true; return true; }
+        const min = meta.minPlayers, max = meta.maxPlayers || Infinity;
+        const bks = _gradeBunks9(grade);
+        for (let i = 0; i < bks.length; i++) {
+          const sz_i = _sz9[bks[i]] || 0;
+          if (!sz_i) continue;
+          if (sz_i >= min && sz_i <= max) { _pairFeasCache[key] = true; return true; }
+          for (let j = i + 1; j < bks.length; j++) {
+            const sz_j = _sz9[bks[j]] || 0;
+            if (!sz_j) continue;
+            if (sz_i + sz_j >= min && sz_i + sz_j <= max) { _pairFeasCache[key] = true; return true; }
+          }
+        }
+        _pairFeasCache[key] = false;
+        return false;
+      }
+      for (const [bunk, slots] of Object.entries(schedule)) {
+        if (!Array.isArray(slots)) continue;
+        let grade = null;
+        for (const [d, info] of Object.entries(ctx.divisions || {})) if ((info.bunks||[]).includes(bunk)) { grade = d; break; }
+        if (!grade) continue;
+        for (let si = 0; si < slots.length; si++) {
+          const slot = slots[si];
+          if (!slot || slot.continuation) continue;
+          const sport = slot._activity || slot.sport;
+          if (!sport) continue;
+          if (!_sm9[sport] || !_sm9[sport].minPlayers) continue;
+          if (!_gradeCanPairForSport(grade, sport)) {
+            out.push({ bunk, idx: si, reason: 'pair-infeasible:' + sport + ' (grade ' + grade + ' cannot reach min ' + _sm9[sport].minPlayers + ')' });
+          }
+        }
+      }
+    } catch (_ePF) { /* never break the solver */ }
+
     return out;
   }
 
