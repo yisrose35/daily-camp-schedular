@@ -707,7 +707,21 @@
 
         // ★ Save trace: log EVERY save attempt (allowed + blocked) so the
         // full save timeline is reconstructable after a reload. Capped at
-        // 50 entries to bound localStorage size.
+        // 50 entries to bound localStorage size. Also count activities
+        // fully (not early-exit) so the trace reflects actual payload size.
+        let fullActivityCount = 0;
+        if (originalBunkCount > 0) {
+            for (const bk of Object.keys(sa)) {
+                const arr = sa[bk];
+                if (!Array.isArray(arr)) continue;
+                for (const slot of arr) {
+                    if (slot && typeof slot === 'object') {
+                        const act = slot._activity || slot.activity || slot.field || slot.sport;
+                        if (act && act !== 'Free' && act !== '+ Add') fullActivityCount++;
+                    }
+                }
+            }
+        }
         try {
             const traceKey = '__campistry_save_trace';
             const trace = JSON.parse(localStorage.getItem(traceKey) || '[]');
@@ -716,11 +730,11 @@
                 dateKey,
                 originalBunkCount,
                 unifiedTimesLen: utLen,
-                activitySlotCount,
+                activitySlotCount: fullActivityCount,
                 skipFilter: !!options.skipFilter,
                 allowEmpty: !!options.allowEmpty,
                 outcome: 'allowed',
-                stack: (new Error('save-trace')).stack?.split('\n').slice(2, 8).join('\n') || ''
+                stack: (new Error('save-trace')).stack || ''
             });
             while (trace.length > 50) trace.shift();
             localStorage.setItem(traceKey, JSON.stringify(trace));
@@ -1203,8 +1217,10 @@
                 console.log(`Save trace entries: ${trace.length} (showing last ${Math.min(limit, trace.length)})`);
                 console.log('═══════════════════════════════════════════════════════');
                 trace.slice(-limit).forEach((t, i) => {
-                    console.log(`\n[${i + 1}] ${t.ts} — date=${t.dateKey} bunks=${t.originalBunkCount} utLen=${t.unifiedTimesLen} actSlots=${t.activitySlotCount} skipFilter=${t.skipFilter} outcome=${t.outcome}`);
-                    console.log(t.stack);
+                    console.log(`\n[${i + 1}] ${t.ts} — bunks=${t.originalBunkCount} utLen=${t.unifiedTimesLen} acts=${t.activitySlotCount} skipFilter=${t.skipFilter} → ${t.outcome}`);
+                    // Render the stack with the Error-header line stripped, keep all callers
+                    const stackLines = (t.stack || '').split('\n').filter(l => !/^Error[:\s]/.test(l));
+                    console.log(stackLines.join('\n'));
                 });
                 if (trace.length === 0) console.log('(no saves traced yet)');
                 console.log('═══════════════════════════════════════════════════════');
