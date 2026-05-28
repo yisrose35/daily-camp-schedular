@@ -7291,6 +7291,16 @@ function loadCurrentOverrides() {
     try { localStorage.setItem('campBunkOverrides_' + dateKey, JSON.stringify(bunkOv)); } catch(e) {}
   }
   currentOverrides.bunkActivityOverrides = bunkOv;
+  // Diagnostic: expose what was loaded so tests can verify the right snapshot
+  try {
+    window._daResourcesLoadDiag = {
+      ts: Date.now(),
+      dateKey: dateKey,
+      sticksDisabled: (currentOverrides.disabledFields || []).indexOf('7 Sticks') >= 0,
+      beltsHasRule: !!(currentOverrides.dailyFieldAvailability && currentOverrides.dailyFieldAvailability.Belts && currentOverrides.dailyFieldAvailability.Belts.length),
+      bbf1BaseballOff: !!(currentOverrides.dailyDisabledSportsByField && (currentOverrides.dailyDisabledSportsByField['Baseball Field 1'] || []).includes('Baseball'))
+    };
+  } catch (_eD) {}
 }
 
 // ── Resources panel: reload overrides + re-render on date change ──
