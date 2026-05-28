@@ -164,14 +164,29 @@
 
     function setLocalData(data) {
         try {
-            pruneOldDates(data, 5);
+            // ★★★ DAY 17 FIX: bump cap from 5 → 30 dates ★★★
+            // This is the most aggressive trimmer — fires on EVERY cloud
+            // save's local-write path (setLocalSchedule → setLocalData).
+            // With cap=5 it kept overwriting the orchestrator's wider-cap
+            // localStorage write back down to 5 dates after every save.
+            // That broke getPeriodActivityCount's week-window count and
+            // silently disabled exactFrequency / rotationCohort enforcement.
+            // 30 matches the orchestrator's setLocalData cap and gives the
+            // rotation engine a full month of history to score against.
+            pruneOldDates(data, 30);
             localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
         } catch (e) {
             if (e.name === 'QuotaExceededError') {
-                pruneOldDates(data, 2);
+                // Step down progressively under genuine quota pressure
+                pruneOldDates(data, 14);
                 try {
                     localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
-                } catch (_) { /* cloud has it */ }
+                } catch (_) {
+                    pruneOldDates(data, 7);
+                    try {
+                        localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, JSON.stringify(data));
+                    } catch (_) { /* cloud has it */ }
+                }
             } else {
                 logError('Failed to write local storage:', e);
             }
