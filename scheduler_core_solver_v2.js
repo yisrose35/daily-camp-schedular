@@ -2858,6 +2858,7 @@
     //   anchors/specials block A's time window for would-be partners; etc.).
     try {
       (function _dropAndRefillUnderMinV2() {
+        try { window.__dropRefillEntered = (window.__dropRefillEntered || 0) + 1; } catch (_eF) {}
         const sched = window.scheduleAssignments || {};
         const bunkGradeP = {};
         for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGradeP[String(b)] = g; }); }
@@ -2954,8 +2955,9 @@
           }
         });
         try { console.log('[DROP-REFILL-v2] scanned=' + scanned + ', replaced=' + replaced); } catch (_eL) {}
+        try { window.__dropRefillFinished = { scanned, replaced }; } catch (_eF2) {}
       })();
-    } catch (_eDR2) {}
+    } catch (_eDR2) { try { window.__dropRefillError = String(_eDR2 && _eDR2.message || _eDR2); window.__dropRefillStack = String(_eDR2 && _eDR2.stack || ''); } catch (_eF3) {} }
 
     // ★ FORCED BUNK-PAIRING tag pass — re-validates and re-tags pairs after SA.
     //   v1's `_pairingReopt` already tags pairs as `_pinned` before v2 reads the
