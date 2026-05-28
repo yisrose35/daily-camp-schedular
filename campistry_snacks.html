@@ -29,20 +29,37 @@
         width: 220px; height: auto;
         animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
     }
-    /* White circle centred at the top-right corner of the logo.
-       Grows from scale(0) → scale(1) to reveal a clean circular bite.
-       130px diameter = 65px radius; top:-65px right:-65px places the
-       circle's centre exactly at the logo's top-right corner (220,0). */
+    /* White circle centred at the top-right corner of the logo (r=90px).
+       top:-90px right:-90px places the circle's centre exactly at (220,0). */
     #snacks-bite {
         position: absolute;
-        width: 130px; height: 130px;
+        width: 180px; height: 180px;
         border-radius: 50%;
         background: #fff;
-        top: -65px; right: -65px;
+        top: -90px; right: -90px;
         transform: scale(0);
-        transform-origin: center;
+        transform-origin: center; /* centre = (90,90) = logo corner (220,0) */
         animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
     }
+    /* Three tooth-mark circles (r=14px each), centred exactly on the r=90
+       bite arc. Each tooth's transform-origin is set to the logo's top-right
+       corner (220,0) so all four elements expand from the same point. The
+       half of each tooth that extends beyond the main bite circle appears as
+       a scalloped bump — the tooth-mark impression in the cookie. */
+    .snacks-tooth {
+        position: absolute;
+        width: 28px; height: 28px;
+        border-radius: 50%;
+        background: #fff;
+        transform: scale(0);
+        animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
+    }
+    /* α≈170°: centre (131,16) → top:2 left:117 → origin: (103px,-2px) = (220,0) */
+    .st1 { top:  2px; left: 117px; transform-origin: 103px -2px; }
+    /* α≈155°: centre (138,38) → top:24 left:124 → origin: (96px,-24px) = (220,0) */
+    .st2 { top: 24px; left: 124px; transform-origin:  96px -24px; }
+    /* α≈140°: centre (151,58) → top:44 left:137 → origin: (83px,-44px) = (220,0) */
+    .st3 { top: 44px; left: 137px; transform-origin:  83px -44px; }
     @keyframes snacks-fall {
         0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
         65%  { transform: translateY(16px) rotate(4deg); opacity: 1; }
@@ -54,8 +71,8 @@
         0%   { transform: scale(0); }
         100% { transform: scale(1); }
     }
-    /* Crumbs: inside the 65px-radius bite zone (top-right corner area).
-       All positions verified: (220−left)²+top² < 65² = 4225. */
+    /* Crumbs: inside the 90px-radius bite zone. All positions verified:
+       (220−left)²+top² < 90² = 8100. */
     .snacks-crumb { position: absolute; opacity: 0; }
     .sc1 { width:13px; height:10px; top: 4px; left:168px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
     .sc2 { width:10px; height: 8px; top:18px; left:162px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.88s ease-in 1.34s forwards; }
@@ -80,6 +97,9 @@
     <div id="snacks-splash-wrap">
         <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
         <div id="snacks-bite"></div>
+        <div class="snacks-tooth st1"></div>
+        <div class="snacks-tooth st2"></div>
+        <div class="snacks-tooth st3"></div>
         <div class="snacks-crumb sc1"></div>
         <div class="snacks-crumb sc2"></div>
         <div class="snacks-crumb sc3"></div>
