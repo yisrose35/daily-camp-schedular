@@ -29,37 +29,17 @@
         width: 220px; height: auto;
         animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
     }
-    /* White circle centred at the top-right corner of the logo (r=90px).
-       top:-90px right:-90px places the circle's centre exactly at (220,0). */
+    /* SVG bite: slides down from above and stamps a scalloped bite mark
+       across the top of the logo. Shape = solid top strip (y 0–8) + five
+       downward semicircle scallops (r=22px each, 44px wide = 5×44=220px).
+       Total height 30px. Starts translateY(-30px) → snaps to 0. */
     #snacks-bite {
         position: absolute;
-        width: 180px; height: 180px;
-        border-radius: 50%;
-        background: #fff;
-        top: -90px; right: -90px;
-        transform: scale(0);
-        transform-origin: center; /* centre = (90,90) = logo corner (220,0) */
-        animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
+        top: 0; left: 0;
+        width: 220px; height: 30px;
+        transform: translateY(-30px);
+        animation: snacks-bite-down 0.18s ease-in 1.32s forwards;
     }
-    /* Three tooth-mark circles (r=14px each), centred exactly on the r=90
-       bite arc. Each tooth's transform-origin is set to the logo's top-right
-       corner (220,0) so all four elements expand from the same point. The
-       half of each tooth that extends beyond the main bite circle appears as
-       a scalloped bump — the tooth-mark impression in the cookie. */
-    .snacks-tooth {
-        position: absolute;
-        width: 28px; height: 28px;
-        border-radius: 50%;
-        background: #fff;
-        transform: scale(0);
-        animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
-    }
-    /* α≈170°: centre (131,16) → top:2 left:117 → origin: (103px,-2px) = (220,0) */
-    .st1 { top:  2px; left: 117px; transform-origin: 103px -2px; }
-    /* α≈155°: centre (138,38) → top:24 left:124 → origin: (96px,-24px) = (220,0) */
-    .st2 { top: 24px; left: 124px; transform-origin:  96px -24px; }
-    /* α≈140°: centre (151,58) → top:44 left:137 → origin: (83px,-44px) = (220,0) */
-    .st3 { top: 44px; left: 137px; transform-origin:  83px -44px; }
     @keyframes snacks-fall {
         0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
         65%  { transform: translateY(16px) rotate(4deg); opacity: 1; }
@@ -67,39 +47,41 @@
         90%  { transform: translateY(4px) rotate(1deg); }
         100% { transform: translateY(0) rotate(0deg); opacity: 1; }
     }
-    @keyframes snacks-bite-grow {
-        0%   { transform: scale(0); }
-        100% { transform: scale(1); }
+    @keyframes snacks-bite-down {
+        0%   { transform: translateY(-30px); }
+        72%  { transform: translateY(4px); }
+        100% { transform: translateY(0); }
     }
-    /* Crumbs: inside the 90px-radius bite zone. All positions verified:
-       (220−left)²+top² < 90² = 8100. */
+    /* Crumbs along the scallop edge (y≈14–28, spread across x). Scatter
+       down and sideways when the bite hits. */
     .snacks-crumb { position: absolute; opacity: 0; }
-    .sc1 { width:13px; height:10px; top: 4px; left:168px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
-    .sc2 { width:10px; height: 8px; top:18px; left:162px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.88s ease-in 1.34s forwards; }
-    .sc3 { width: 7px; height: 7px; top: 9px; left:180px; background:#6B3110; border-radius:50%;             animation:sc3 0.70s ease-in 1.33s forwards; }
-    .sc4 { width:12px; height: 9px; top:25px; left:172px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.12s ease-in 1.36s forwards; }
-    .sc5 { width: 8px; height: 6px; top: 7px; left:195px; background:#7B3A0F; border-radius:2px 3px 1px 2px; animation:sc5 0.76s ease-in 1.32s forwards; }
-    .sc6 { width:15px; height: 9px; top:38px; left:175px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.22s ease-in 1.38s forwards; }
-    .sc7 { width: 6px; height: 5px; top:16px; left:163px; background:#6B3110; border-radius:50%;             animation:sc7 0.66s ease-in 1.34s forwards; }
-    .sc8 { width:11px; height: 8px; top:12px; left:172px; background:#934018; border-radius:3px 1px 2px 3px; animation:sc8 0.94s ease-in 1.35s forwards; }
-    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    35%{opacity:1;transform:translate(22px,-32px)rotate(65deg)}  100%{opacity:0;transform:translate(48px,70px)rotate(215deg)} }
-    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    40%{opacity:1;transform:translate(30px,-20px)rotate(-50deg)} 100%{opacity:0;transform:translate(56px,64px)rotate(-192deg)} }
-    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    30%{opacity:1;transform:translate(20px,-24px)rotate(88deg)}  100%{opacity:0;transform:translate(40px,50px)rotate(248deg)} }
-    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    25%{opacity:1;transform:translate(14px,-14px)rotate(82deg)}  100%{opacity:0;transform:translate(32px,84px)rotate(298deg)} }
-    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    100%{opacity:0;transform:translate(26px,54px)rotate(-126deg)} }
-    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    20%{opacity:1;transform:translate(10px,-10px)rotate(36deg)}  100%{opacity:0;transform:translate(24px,94px)rotate(332deg)} }
-    @keyframes sc7 { 0%{opacity:1;transform:translate(0,0)}              100%{opacity:0;transform:translate(44px,36px)} }
-    @keyframes sc8 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    45%{opacity:1;transform:translate(26px,-28px)rotate(-74deg)} 100%{opacity:0;transform:translate(54px,74px)rotate(-242deg)} }
+    .sc1 { width:13px; height:10px; top:20px; left: 24px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
+    .sc2 { width:10px; height: 8px; top:14px; left: 66px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.88s ease-in 1.34s forwards; }
+    .sc3 { width: 7px; height: 7px; top:22px; left:108px; background:#6B3110; border-radius:50%;             animation:sc3 0.70s ease-in 1.33s forwards; }
+    .sc4 { width:12px; height: 9px; top:16px; left:150px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.12s ease-in 1.36s forwards; }
+    .sc5 { width: 8px; height: 6px; top:21px; left:192px; background:#7B3A0F; border-radius:2px 3px 1px 2px; animation:sc5 0.76s ease-in 1.32s forwards; }
+    .sc6 { width:15px; height: 9px; top:18px; left: 44px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.22s ease-in 1.38s forwards; }
+    .sc7 { width: 6px; height: 5px; top:24px; left: 86px; background:#6B3110; border-radius:50%;             animation:sc7 0.66s ease-in 1.34s forwards; }
+    .sc8 { width:11px; height: 8px; top:19px; left:170px; background:#934018; border-radius:3px 1px 2px 3px; animation:sc8 0.94s ease-in 1.35s forwards; }
+    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    35%{opacity:1;transform:translate(-18px,8px)rotate(55deg)}   100%{opacity:0;transform:translate(-40px,68px)rotate(205deg)} }
+    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    40%{opacity:1;transform:translate(14px,6px)rotate(-40deg)}   100%{opacity:0;transform:translate(30px,62px)rotate(-180deg)} }
+    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    30%{opacity:1;transform:translate(-10px,10px)rotate(72deg)}  100%{opacity:0;transform:translate(-22px,58px)rotate(232deg)} }
+    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    25%{opacity:1;transform:translate(16px,8px)rotate(62deg)}    100%{opacity:0;transform:translate(36px,72px)rotate(278deg)} }
+    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    100%{opacity:0;transform:translate(20px,56px)rotate(-116deg)} }
+    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    20%{opacity:1;transform:translate(-14px,12px)rotate(26deg)}  100%{opacity:0;transform:translate(-32px,82px)rotate(322deg)} }
+    @keyframes sc7 { 0%{opacity:1;transform:translate(0,0)}              100%{opacity:0;transform:translate(18px,48px)} }
+    @keyframes sc8 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    45%{opacity:1;transform:translate(22px,10px)rotate(-54deg)}  100%{opacity:0;transform:translate(44px,70px)rotate(-232deg)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
         <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
-        <div id="snacks-bite"></div>
-        <div class="snacks-tooth st1"></div>
-        <div class="snacks-tooth st2"></div>
-        <div class="snacks-tooth st3"></div>
+        <!-- 5 scallop arcs (r=22, 44px wide each) across the full 220px logo.
+             Solid strip y=0–8 + 5 CCW downward semicircles from y=8 to y=30. -->
+        <svg id="snacks-bite" viewBox="0 0 220 30" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path d="M0,0 L220,0 L220,8 A22,22 0 0,0 176,8 A22,22 0 0,0 132,8 A22,22 0 0,0 88,8 A22,22 0 0,0 44,8 A22,22 0 0,0 0,8 Z" fill="white"/>
+        </svg>
         <div class="snacks-crumb sc1"></div>
         <div class="snacks-crumb sc2"></div>
         <div class="snacks-crumb sc3"></div>
