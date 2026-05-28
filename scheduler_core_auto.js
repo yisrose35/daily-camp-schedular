@@ -4717,6 +4717,99 @@
                 return null;
             }
 
+            // ─────────────────────────────────────────────────────────
+            // FORCED BUNK-PAIRING (sport minPlayers)
+            // ─────────────────────────────────────────────────────────
+            // When a small bunk (size < sport.minPlayers) draft-claims a sport on a
+            // sharable field, also draft-claim the same sport at the same time+field
+            // for a same-grade partner so the combined size meets minPlayers. The
+            // draft entries are later honored by Phase 3's findBestSport via the
+            // +12000 (any-time) / +15000 (time-matched) draft-match bonus, and the
+            // post-write `_pairingReopt` pass tags both halves with `_pinned` so v2
+            // SA does not split them.
+            //
+            // No-ops when:
+            //   • sport has no minPlayers in sportMetaData (rules.js),
+            //   • placing bunk's size already meets minPlayers,
+            //   • no same-grade partner is free at [startMin,endMin] with combined
+            //     size in [min, max],
+            //   • field can't accept the partner (capacity, access, sharing).
+            //
+            // Returns the partner bunk name if paired, else null.
+            function _bunkSizeForPairing(bunkName, fallbackFromList) {
+                if (fallbackFromList != null) return fallbackFromList;
+                try {
+                    var bmd = window.getBunkMetaData && window.getBunkMetaData();
+                    if (bmd && bmd[bunkName] && typeof bmd[bunkName].size === 'number') return bmd[bunkName].size;
+                } catch (_e) {}
+                return 0;
+            }
+            function _tryPairSportForMinPlayers(aBunk, aGrade, sportInfo, fieldName, startMin, endMin) {
+                try {
+                    if (!sportInfo || !sportInfo.name) return null;
+                    var reqs = sportInfo.playerReqs;
+                    if (!reqs && window.SchedulerCoreUtils && window.SchedulerCoreUtils.getSportPlayerRequirements) {
+                        reqs = window.SchedulerCoreUtils.getSportPlayerRequirements(sportInfo.name);
+                    }
+                    if (!reqs || !reqs.minPlayers) return null;
+                    var aSize = _bunkSizeForPairing(aBunk, sportInfo.bunkSize);
+                    if (!aSize || aSize >= reqs.minPlayers) return null; // pairing not needed
+
+                    var sameGradeBunks = getBunksForGrade(aGrade, divisions).map(String);
+                    var aNum = parseInt(String(aBunk).replace(/\D/g, '')) || 0;
+                    var candidates = [];
+                    for (var i = 0; i < sameGradeBunks.length; i++) {
+                        var B = sameGradeBunks[i];
+                        if (B === String(aBunk)) continue;
+                        var bResult = draftResults[B];
+                        if (!bResult) continue;
+                        // B must not already have this sport in its draft
+                        if (bResult.usedActivities && bResult.usedActivities.has(sportInfo.name)) continue;
+                        // B must be free for the whole [startMin, endMin] window
+                        var bSl = shoppingLists[B];
+                        if (!bSl) continue;
+                        var bFw = getUpdatedFreeWindowsForBunk(B, bSl, bResult);
+                        var fits = false;
+                        for (var k = 0; k < bFw.length; k++) {
+                            if (bFw[k].start <= startMin && bFw[k].end >= endMin) { fits = true; break; }
+                        }
+                        if (!fits) continue;
+                        // Combined size must be within [min, max]
+                        var bSize = _bunkSizeForPairing(B, bSl.bunkSize);
+                        if (!bSize) continue;
+                        var combined = aSize + bSize;
+                        if (combined < reqs.minPlayers) continue;
+                        if (reqs.maxPlayers && combined > reqs.maxPlayers) continue;
+                        var dist = Math.abs((parseInt(String(B).replace(/\D/g, '')) || 0) - aNum);
+                        candidates.push({ bunk: B, dist: dist });
+                    }
+                    candidates.sort(function (a, b) { return a.dist - b.dist; });
+                    for (var c = 0; c < candidates.length; c++) {
+                        var pb = candidates[c].bunk;
+                        // Capacity + access + sharing check via the planner helper
+                        if (!isFieldStillAvailableGP(fieldName, startMin, endMin, pb, aGrade, sportInfo.name)) continue;
+                        if (!claimFieldGlobal(fieldName, startMin, endMin, pb, aGrade, sportInfo.name)) continue;
+                        var pbResult = draftResults[pb];
+                        pbResult.sports.push({
+                            name: sportInfo.name, type: 'sport', rotationScore: sportInfo.rotationScore || 0,
+                            dMin: sportInfo.dMin, dMax: sportInfo.dMax, dIdeal: sportInfo.dIdeal,
+                            fields: sportInfo.fields, needsPairing: true,
+                            playerReqs: reqs, bunkSize: _bunkSizeForPairing(pb, shoppingLists[pb] && shoppingLists[pb].bunkSize),
+                            isIndoor: sportInfo.isIndoor, _layer: sportInfo._layer,
+                            claimedTime: { startMin: startMin, endMin: endMin },
+                            claimedField: fieldName,
+                            _pairedWith: String(aBunk),
+                            _pairLock: true
+                        });
+                        pbResult.usedActivities.add(sportInfo.name);
+                        return pb;
+                    }
+                } catch (_ePair) {
+                    try { log('[Pairing] error: ' + _ePair.message); } catch (_eL) {}
+                }
+                return null;
+            }
+
             // ═══════════════════════════════════════════════════════
             // PHASE A: GAME PLAN — Scarce-First Special Allocation
             // ═══════════════════════════════════════════════════════
@@ -5202,6 +5295,9 @@
                         for (var fli = 0; fli < fields.length; fli++) {
                             if (!isFieldStillAvailableGP(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
                             if (!claimFieldGlobal(fields[fli], slotStart, slotEnd, bunk, grade, sport.name)) continue;
+                            var _pairedB1 = (sport.needsPairing)
+                                ? _tryPairSportForMinPlayers(bunk, grade, sport, fields[fli], slotStart, slotEnd)
+                                : null;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
@@ -5209,7 +5305,9 @@
                                 playerReqs: sport.playerReqs, bunkSize: sport.bunkSize,
                                 isIndoor: sport.isIndoor, _layer: sport._layer,
                                 claimedTime: { startMin: slotStart, endMin: slotEnd },
-                                claimedField: fields[fli]
+                                claimedField: fields[fli],
+                                _pairedWith: _pairedB1 || undefined,
+                                _pairLock: _pairedB1 ? true : undefined
                             });
                             result.usedActivities.add(sport.name);
                             assigned = true;
@@ -5253,13 +5351,18 @@
                             }
                             if (!_b3OK) continue;
                             if (!claimFieldGlobal(fields[j], time.startMin, time.endMin, bunk, grade, sport.name)) continue;
+                            var _pairedB3 = (sport.needsPairing)
+                                ? _tryPairSportForMinPlayers(bunk, grade, sport, fields[j], time.startMin, time.endMin)
+                                : null;
                             result.sports.push({
                                 name: sport.name, type: 'sport', rotationScore: sport.rotationScore,
                                 dMin: sport.dMin, dMax: sport.dMax, dIdeal: sport.dIdeal,
                                 fields: sport.fields, needsPairing: sport.needsPairing,
                                 playerReqs: sport.playerReqs, bunkSize: sport.bunkSize,
                                 isIndoor: sport.isIndoor, _layer: sport._layer,
-                                claimedTime: time, claimedField: fields[j]
+                                claimedTime: time, claimedField: fields[j],
+                                _pairedWith: _pairedB3 || undefined,
+                                _pairLock: _pairedB3 ? true : undefined
                             });
                             result.usedActivities.add(sport.name);
                             break;
@@ -21366,6 +21469,90 @@
                 if (moved > 0) log('  🏟️ Field-quality re-opt: moved ' + moved + ' placement(s) to a better-ranked field.');
             })();
         } catch (_eFQ) { try { warn('[FieldQualityReopt] ' + (_eFQ && _eFQ.message)); } catch (_e2) {} }
+
+        // ── Forced bunk-pairing tag pass (sport minPlayers) ──
+        // Detects same-grade/same-sport/same-time/same-field block PAIRS in
+        // scheduleAssignments — these are the pairs the planner drafted (via
+        // _tryPairSportForMinPlayers) so a small bunk reaches a sport's
+        // minPlayers. Tags both halves with `_pinned: true` so v2 SA's
+        // `_isMovable` returns false and the pair is preserved through the
+        // simulated-annealing pass. Engine-agnostic — runs at the v1 tail, so
+        // v2 reads the tagged seed.
+        try {
+            (function _pairingReopt() {
+                var sa = window.scheduleAssignments || {};
+                if (!sa || typeof sa !== 'object') return;
+                var bunkGradeP = {};
+                allGrades.forEach(function (g) {
+                    getBunksForGrade(g, divisions).forEach(function (b) { bunkGradeP[String(b)] = g; });
+                });
+                var bmd = (window.getBunkMetaData && window.getBunkMetaData()) || {};
+                function _szOf(b) {
+                    if (bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+                    var ds = (divisions && divisions[bunkGradeP[b]] && divisions[bunkGradeP[b]].bunkSizes) || {};
+                    return ds[b] || 0;
+                }
+                var getReqs = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getSportPlayerRequirements);
+                if (!getReqs) return;
+                // Group by (grade | sport | start | end | field)
+                var slotIdxP = {};
+                Object.keys(sa).forEach(function (b) {
+                    (sa[b] || []).forEach(function (s, i) {
+                        if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        var sport = s._activity || s.sport;
+                        if (!sport) return;
+                        var st = (s._startMin != null ? s._startMin : s.startMin);
+                        var en = (s._endMin != null ? s._endMin : s.endMin);
+                        if (st == null || en == null) return;
+                        var g = bunkGradeP[String(b)];
+                        if (!g) return;
+                        var key = g + '|' + sport + '|' + st + '|' + en + '|' + s.field;
+                        (slotIdxP[key] = slotIdxP[key] || []).push({ bunk: String(b), idx: i, slot: s });
+                    });
+                });
+                var pairedTagged = 0, underMinSolo = 0;
+                Object.keys(slotIdxP).forEach(function (key) {
+                    var entries = slotIdxP[key];
+                    if (entries.length < 2) return;
+                    var parts = key.split('|');
+                    var sportName = parts[1];
+                    var reqs = getReqs(sportName);
+                    if (!reqs || !reqs.minPlayers) return;
+                    var combined = 0, anyUnder = false;
+                    for (var ei = 0; ei < entries.length; ei++) {
+                        var sz = _szOf(entries[ei].bunk);
+                        combined += sz;
+                        if (sz < reqs.minPlayers) anyUnder = true;
+                    }
+                    if (!anyUnder) return;
+                    if (combined < reqs.minPlayers) return; // pair doesn't actually meet min
+                    if (reqs.maxPlayers && combined > reqs.maxPlayers) return; // over max
+                    for (var ej = 0; ej < entries.length; ej++) {
+                        entries[ej].slot._pinned = true;
+                        entries[ej].slot._pairLock = true;
+                        entries[ej].slot._pairCombinedSize = combined;
+                        pairedTagged++;
+                    }
+                });
+                // Visibility: count solo under-min sport placements still without a partner
+                Object.keys(sa).forEach(function (b) {
+                    (sa[b] || []).forEach(function (s) {
+                        if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                        if (s._pairLock) return;
+                        var sport = s._activity || s.sport;
+                        if (!sport) return;
+                        var reqs = getReqs(sport);
+                        if (!reqs || !reqs.minPlayers) return;
+                        if (_szOf(String(b)) >= reqs.minPlayers) return;
+                        underMinSolo++;
+                    });
+                });
+                try {
+                    console.log('[PAIRING-REOPT] pairedHalvesTagged=' + pairedTagged + ', underMinSolo=' + underMinSolo);
+                } catch (_eLP) {}
+                if (pairedTagged > 0) log('  🤝 Pairing tag: ' + pairedTagged + ' paired slot(s) pinned for v2 preservation.');
+            })();
+        } catch (_ePR) { try { warn('[PairingReopt] ' + (_ePR && _ePR.message)); } catch (_e2) {} }
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 

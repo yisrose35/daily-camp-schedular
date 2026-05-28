@@ -2437,6 +2437,86 @@
       })();
     } catch (_eFQ2) {}
 
+    // ★ FORCED BUNK-PAIRING tag pass — re-validates and re-tags pairs after SA.
+    //   v1's `_pairingReopt` already tags pairs as `_pinned` before v2 reads the
+    //   seed, and `_isMovable` honors `_pinned` so SA does not break pairs. This
+    //   pass re-verifies on the final v2 state: scans for same-grade/same-sport/
+    //   same-time/same-field block clusters where any member is under the sport's
+    //   minPlayers and the combined size meets it; tags each member `_pinned`+
+    //   `_pairLock`. Self-healing if some new co-location formed during SA.
+    try {
+      (function _pairingReoptV2() {
+        const sched = window.scheduleAssignments || {};
+        const bunkGradeP = {};
+        for (const [g, info] of Object.entries(ctx.divisions || {})) { (info.bunks || []).forEach(function (b) { bunkGradeP[String(b)] = g; }); }
+        const _sizeMap = (ctx._bunkSize || {});
+        function _szOfV2(b) {
+          if (typeof _sizeMap[b] === 'number') return _sizeMap[b];
+          try {
+            const bmd = window.getBunkMetaData && window.getBunkMetaData();
+            if (bmd && bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+          } catch (_e) {}
+          return 0;
+        }
+        const sm = ctx.sportMetaData || (typeof window.getSportMetaData === 'function' ? window.getSportMetaData() : (window.sportMetaData || {}));
+        function _reqsOf(sport) {
+          const m = sm && sm[sport];
+          if (!m) return null;
+          return { minPlayers: m.minPlayers || null, maxPlayers: m.maxPlayers || null };
+        }
+        const slotIdxV2 = {};
+        Object.keys(sched).forEach(function (b) {
+          (sched[b] || []).forEach(function (s, i) {
+            if (!s || s.continuation || !s.field || s.field === 'Free') return;
+            const sport = s._activity || s.sport;
+            if (!sport) return;
+            const st = s._startMin, en = s._endMin;
+            if (st == null || en == null) return;
+            const g = bunkGradeP[String(b)];
+            if (!g) return;
+            const key = g + '|' + sport + '|' + st + '|' + en + '|' + s.field;
+            (slotIdxV2[key] = slotIdxV2[key] || []).push({ bunk: String(b), idx: i, slot: s });
+          });
+        });
+        let pairedTaggedV2 = 0, underMinSoloV2 = 0;
+        Object.keys(slotIdxV2).forEach(function (key) {
+          const entries = slotIdxV2[key];
+          if (entries.length < 2) return;
+          const sportName = key.split('|')[1];
+          const reqs = _reqsOf(sportName);
+          if (!reqs || !reqs.minPlayers) return;
+          let combined = 0, anyUnder = false;
+          for (let i = 0; i < entries.length; i++) {
+            const sz = _szOfV2(entries[i].bunk);
+            combined += sz;
+            if (sz < reqs.minPlayers) anyUnder = true;
+          }
+          if (!anyUnder) return;
+          if (combined < reqs.minPlayers) return;
+          if (reqs.maxPlayers && combined > reqs.maxPlayers) return;
+          for (let j = 0; j < entries.length; j++) {
+            entries[j].slot._pinned = true;
+            entries[j].slot._pairLock = true;
+            entries[j].slot._pairCombinedSize = combined;
+            pairedTaggedV2++;
+          }
+        });
+        Object.keys(sched).forEach(function (b) {
+          (sched[b] || []).forEach(function (s) {
+            if (!s || s.continuation || !s.field || s.field === 'Free') return;
+            if (s._pairLock) return;
+            const sport = s._activity || s.sport;
+            if (!sport) return;
+            const reqs = _reqsOf(sport);
+            if (!reqs || !reqs.minPlayers) return;
+            if (_szOfV2(String(b)) >= reqs.minPlayers) return;
+            underMinSoloV2++;
+          });
+        });
+        try { console.log('[PAIRING-REOPT-v2] pairedHalvesTagged=' + pairedTaggedV2 + ', underMinSolo=' + underMinSoloV2); } catch (_eL) {}
+      })();
+    } catch (_ePR2) {}
+
     // ★ Day 22.5+ FINAL NULL BACKFILL — guarantee 100% fill rate.
     //   smartRepair's Pass 3 tries to fill nulls with real activities, but
     //   gives up if no top-5 activity has a valid field for the slot. That
