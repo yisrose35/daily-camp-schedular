@@ -1277,23 +1277,7 @@
             console.log('[Sync] RBAC ready, performing initial hydration');
 
             const dateKey = getCurrentDateKey();
-            // ★★★ DAY 16b FIX: don't force-overwrite memory on init.
-            // The orchestrator's loadSchedule (kicked off in parallel from
-            // schedule_orchestrator.js initialize()) is the authoritative
-            // loader — it queries cloud directly, writes memory + localStorage.
-            // If we forceOverwrite here BEFORE the orchestrator finishes,
-            // we read whatever stale slice was in localStorage from a
-            // previous session and clobber the orchestrator's fresh load.
-            //
-            // forceOverwrite=false means "fill memory only if it's empty",
-            // which is the correct init behavior: cover the case where the
-            // orchestrator failed but localStorage has data, while letting
-            // the orchestrator's good load stand.
-            //
-            // Realtime-update call sites (line ~1201 cloud-hydrated listener,
-            // line ~416 refreshMultiSchedulerView) keep forceOverwrite=true
-            // since those represent fresh remote updates we want to apply.
-            forceHydrateFromLocalStorage(dateKey, false);
+            forceHydrateFromLocalStorage(dateKey, true);
             ensureEmptyStateForUnscheduledDivisions();
             
             if (window.MultiSchedulerSystem?.initializeView) {
