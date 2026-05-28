@@ -23,128 +23,90 @@
         width: 220px; height: 68px;
         flex-shrink: 0;
     }
-    /* Logo sits inside wrapper — dim/de-saturated as if seen through the plastic,
-       pops to full color and size once the wrapper is pulled away */
+    /* Logo slams down from way above, overshoots, one bounce, settles */
     #snacks-splash-logo {
         position: absolute; top: 0; left: 0;
         width: 220px; height: auto;
-        animation: logo-reveal 0.36s ease 0.88s both;
+        animation: logo-stamp 0.72s cubic-bezier(0.22,0.61,0.36,1) forwards;
     }
-    @keyframes logo-reveal {
-        0%   { filter: brightness(0.7) saturate(0.5); transform: scale(0.92); }
-        65%  { filter: brightness(1.06) saturate(1.1); transform: scale(1.06); }
-        100% { filter: brightness(1)    saturate(1);   transform: scale(1);    }
+    @keyframes logo-stamp {
+        0%   { transform: translateY(-115vh) scale(0.88); opacity: 0.8; }
+        70%  { transform: translateY(11px)   scale(1.05); opacity: 1;   }
+        85%  { transform: translateY(-5px)   scale(0.98);               }
+        100% { transform: translateY(0)      scale(1);    opacity: 1;   }
     }
-    /* Shared stripe pattern for body + twist strands:
-       white-ish base with bold diagonal red stripes + glossy top sheen */
-    .cw-body, .cs {
-        background:
-            linear-gradient(to bottom, rgba(255,255,255,0.58) 0, transparent 38%, rgba(255,255,255,0.1) 100%),
-            repeating-linear-gradient(-38deg, #CF121D 0px, #CF121D 9px, #F2F2F2 9px, #F2F2F2 24px);
-    }
-    /* Main wrapper body — extends 14px beyond logo on L/R, 10px T/B */
-    .cw-body {
+    /* Two concentric impact rings pulse outward from logo center on landing */
+    .ir {
         position: absolute;
-        top: -10px; left: -14px;
-        width: 248px; height: 88px;
-        border-radius: 5px;
-        border: 1.5px solid rgba(130,6,12,0.25);
-        box-shadow: 0 2px 12px rgba(0,0,0,0.1), inset 0 0 0 1px rgba(255,255,255,0.5);
-        z-index: 1;
-        animation: body-collapse 0.32s ease 0.55s forwards;
-    }
-    /* Body snaps tight then collapses — mimics wrapper being pulled free */
-    @keyframes body-collapse {
-        0%   { transform: scaleY(1);                  opacity: 1; }
-        28%  { transform: scaleY(1.1) scaleX(0.95);   opacity: 1; }
-        100% { transform: scaleY(0);                  opacity: 0; }
-    }
-    /* Twist-end containers sit flush against each end of the body.
-       Body: left=-14, width=248 → right edge at 234. */
-    .cw-twist {
-        position: absolute;
-        top: -10px; width: 58px; height: 88px;
-        z-index: 2;
-    }
-    .cw-twist-left  {
-        left: -72px; /* -14 - 58 */
-        animation: twist-left-fly 0.68s cubic-bezier(0.38,0,0.72,0.56) 0.22s forwards;
-    }
-    .cw-twist-right {
-        left: 234px; /* -14 + 248 */
-        animation: twist-right-fly 0.68s cubic-bezier(0.38,0,0.72,0.56) 0.22s forwards;
-    }
-    /* Left end spins counter-clockwise and flies left+up */
-    @keyframes twist-left-fly {
-        0%   { transform: translate(0,0)         rotate(0deg);    opacity: 1; }
-        30%  { opacity: 1; }
-        100% { transform: translate(-82px,-22px) rotate(-486deg); opacity: 0; }
-    }
-    /* Right end spins clockwise and flies right+up */
-    @keyframes twist-right-fly {
-        0%   { transform: translate(0,0)        rotate(0deg);   opacity: 1; }
-        30%  { opacity: 1; }
-        100% { transform: translate(82px,-22px) rotate(486deg); opacity: 0; }
-    }
-    /* Three fanned ellipse strands form each twist end.
-       Left strands pivot from their right edge (where they attach to the body);
-       right strands pivot from their left edge. */
-    .cs {
-        position: absolute;
-        height: 18px; width: 54px;
+        top: 34px; left: 110px;
+        width: 56px; height: 56px;
         border-radius: 50%;
+        transform: translate(-50%,-50%) scale(0);
+        opacity: 0;
+        pointer-events: none;
     }
-    .cw-twist-left .cs {
-        right: 2px;
-        top: calc(50% - 9px);
-        transform-origin: right center;
+    .ir1 { border: 3px solid rgba(207,18,29,0.6);   animation: ring-out 0.55s ease-out 0.50s forwards; }
+    .ir2 { border: 2px solid rgba(245,166,35,0.45); animation: ring-out 0.55s ease-out 0.62s forwards; }
+    @keyframes ring-out {
+        0%   { transform: translate(-50%,-50%) scale(0);   opacity: 0.85; }
+        100% { transform: translate(-50%,-50%) scale(3.4); opacity: 0;    }
     }
-    .cw-twist-left  .cs:nth-child(1) { transform: rotate(-24deg); opacity: 0.78; }
-    .cw-twist-left  .cs:nth-child(2) { transform: rotate(  0deg); opacity: 1.00; }
-    .cw-twist-left  .cs:nth-child(3) { transform: rotate( 24deg); opacity: 0.78; }
-    .cw-twist-right .cs {
-        left: 2px;
-        top: calc(50% - 9px);
-        transform-origin: left center;
+    /* Candy burst — all pieces start at logo center, fly outward on impact.
+       Circles = Skittles, rectangles with border-radius = Starburst pieces. */
+    .cd {
+        position: absolute;
+        top: 28px; left: 106px;
+        opacity: 0;
     }
-    .cw-twist-right .cs:nth-child(1) { transform: rotate( 24deg); opacity: 0.78; }
-    .cw-twist-right .cs:nth-child(2) { transform: rotate(  0deg); opacity: 1.00; }
-    .cw-twist-right .cs:nth-child(3) { transform: rotate(-24deg); opacity: 0.78; }
-    /* Small wrapper fragments scatter when body snaps */
-    .wt { position: absolute; opacity: 0; z-index: 3; border-radius: 2px; background: #CF121D; }
-    .wt1 { width:4px; height:7px;  top:24px; left: 68px; animation: wt1 0.44s ease-in 0.58s forwards; }
-    .wt2 { width:5px; height:5px;  top:38px; left:132px; background:#F2F2F2; border:1.5px solid #CF121D; border-radius:50%; animation: wt2 0.50s ease-in 0.56s forwards; }
-    .wt3 { width:3px; height:8px;  top:22px; left:170px; animation: wt3 0.40s ease-in 0.60s forwards; }
-    .wt4 { width:5px; height:4px;  top:44px; left:110px; background:#F2F2F2; border:1.5px solid #CF121D; border-radius:50%; animation: wt4 0.46s ease-in 0.57s forwards; }
-    @keyframes wt1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-24px,40px)rotate(68deg)} }
-    @keyframes wt2 { 0%{opacity:1;transform:translate(0,0)}            100%{opacity:0;transform:translate(18px,46px)} }
-    @keyframes wt3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(22px,34px)rotate(-58deg)} }
-    @keyframes wt4 { 0%{opacity:1;transform:translate(0,0)}            100%{opacity:0;transform:translate(-16px,42px)} }
+    /* Skittles — solid circles in full candy palette */
+    .cd1  { width:10px; height:10px; border-radius:50%; background:#E8231C; animation: d1  0.60s ease-out 0.49s forwards; }
+    .cd2  { width: 8px; height: 8px; border-radius:50%; background:#F5A623; animation: d2  0.54s ease-out 0.50s forwards; }
+    .cd3  { width: 9px; height: 9px; border-radius:50%; background:#F5E63A; animation: d3  0.62s ease-out 0.48s forwards; }
+    .cd4  { width: 7px; height: 7px; border-radius:50%; background:#4CB944; animation: d4  0.50s ease-out 0.51s forwards; }
+    .cd5  { width:11px; height:11px; border-radius:50%; background:#7C2FBE; animation: d5  0.66s ease-out 0.48s forwards; }
+    .cd6  { width: 8px; height: 8px; border-radius:50%; background:#F06292; animation: d6  0.56s ease-out 0.51s forwards; }
+    .cd7  { width: 9px; height: 9px; border-radius:50%; background:#2196F3; animation: d7  0.58s ease-out 0.49s forwards; }
+    .cd8  { width: 7px; height: 7px; border-radius:50%; background:#00BCD4; animation: d8  0.48s ease-out 0.51s forwards; }
+    /* Starburst — small rectangles that spin as they fly */
+    .cd9  { width:11px; height:7px; border-radius:2px; background:#E8231C; animation: d9  0.62s ease-out 0.49s forwards; }
+    .cd10 { width:10px; height:6px; border-radius:2px; background:#F5A623; animation: d10 0.56s ease-out 0.50s forwards; }
+    .cd11 { width: 9px; height:6px; border-radius:2px; background:#F5E63A; animation: d11 0.52s ease-out 0.48s forwards; }
+    .cd12 { width:10px; height:7px; border-radius:2px; background:#4CB944; animation: d12 0.58s ease-out 0.50s forwards; }
+    /* Each piece flies in a unique direction */
+    @keyframes d1  { 0%{opacity:1;transform:translate(0,0)scale(1.3)}             100%{opacity:0;transform:translate( 68px,-10px)scale(0.5)} }
+    @keyframes d2  { 0%{opacity:1;transform:translate(0,0)scale(1.2)}             100%{opacity:0;transform:translate( 54px, 52px)scale(0.5)} }
+    @keyframes d3  { 0%{opacity:1;transform:translate(0,0)scale(1.3)}             100%{opacity:0;transform:translate( 12px, 76px)scale(0.5)} }
+    @keyframes d4  { 0%{opacity:1;transform:translate(0,0)scale(1.1)}             100%{opacity:0;transform:translate(-44px, 66px)scale(0.5)} }
+    @keyframes d5  { 0%{opacity:1;transform:translate(0,0)scale(1.4)}             100%{opacity:0;transform:translate(-70px, 16px)scale(0.6)} }
+    @keyframes d6  { 0%{opacity:1;transform:translate(0,0)scale(1.2)}             100%{opacity:0;transform:translate(-62px,-40px)scale(0.5)} }
+    @keyframes d7  { 0%{opacity:1;transform:translate(0,0)scale(1.3)}             100%{opacity:0;transform:translate(-16px,-74px)scale(0.5)} }
+    @keyframes d8  { 0%{opacity:1;transform:translate(0,0)scale(1.1)}             100%{opacity:0;transform:translate( 36px,-70px)scale(0.5)} }
+    @keyframes d9  { 0%{opacity:1;transform:translate(0,0)rotate(0)scale(1.2)}    100%{opacity:0;transform:translate( 60px,-40px)rotate( 85deg)scale(0.5)} }
+    @keyframes d10 { 0%{opacity:1;transform:translate(0,0)rotate(0)scale(1.2)}    100%{opacity:0;transform:translate( 46px, 60px)rotate(-70deg)scale(0.5)} }
+    @keyframes d11 { 0%{opacity:1;transform:translate(0,0)rotate(0)scale(1.2)}    100%{opacity:0;transform:translate(-52px,-54px)rotate( 95deg)scale(0.5)} }
+    @keyframes d12 { 0%{opacity:1;transform:translate(0,0)rotate(0)scale(1.1)}    100%{opacity:0;transform:translate(-26px, 70px)rotate(-80deg)scale(0.5)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
         <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
-        <!-- White + red-stripe wrapper body (larger than the logo, like real packaging) -->
-        <div class="cw-body"></div>
-        <!-- Left twisted end — 3 fanned ellipse strands -->
-        <div class="cw-twist cw-twist-left">
-            <span class="cs"></span>
-            <span class="cs"></span>
-            <span class="cs"></span>
-        </div>
-        <!-- Right twisted end — 3 fanned ellipse strands -->
-        <div class="cw-twist cw-twist-right">
-            <span class="cs"></span>
-            <span class="cs"></span>
-            <span class="cs"></span>
-        </div>
-        <!-- Wrapper fragments scatter when body snaps -->
-        <div class="wt wt1"></div>
-        <div class="wt wt2"></div>
-        <div class="wt wt3"></div>
-        <div class="wt wt4"></div>
+        <!-- Impact rings pulse from logo center on landing -->
+        <div class="ir ir1"></div>
+        <div class="ir ir2"></div>
+        <!-- Candy burst — 8 Skittles circles + 4 Starburst rectangles -->
+        <div class="cd cd1"></div>
+        <div class="cd cd2"></div>
+        <div class="cd cd3"></div>
+        <div class="cd cd4"></div>
+        <div class="cd cd5"></div>
+        <div class="cd cd6"></div>
+        <div class="cd cd7"></div>
+        <div class="cd cd8"></div>
+        <div class="cd cd9"></div>
+        <div class="cd cd10"></div>
+        <div class="cd cd11"></div>
+        <div class="cd cd12"></div>
     </div>
     <script>
     (function() {
