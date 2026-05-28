@@ -18,100 +18,95 @@
         transition: opacity 0.4s ease;
     }
     #snacks-splash.hide { opacity: 0; pointer-events: none; }
-    /* Wrapper matches rendered logo size: 304×95 original → 220×68px at width:220px */
     #snacks-splash-wrap {
         position: relative;
         width: 220px; height: 68px;
         flex-shrink: 0;
     }
-    #snacks-splash-logo {
-        position: absolute; top: 0; left: 0;
-        width: 220px; height: auto;
-        animation: snacks-fall 1.1s cubic-bezier(0.23,1,0.32,1) forwards;
+    /* JS adds this class at t=900ms — after all letters have landed */
+    #snacks-splash-wrap.snacks-crunch {
+        animation: snacks-crunch 0.55s ease forwards;
     }
-    /* Applied by JS at t=1540ms (after bite SVG fully grows). Clips the logo
-       to the remaining-after-bite shape so the scalloped edge is the literal
-       boundary of the logo image — always clearly visible against the white
-       background. Path mirrors the bite SVG boundary in logo px coordinates. */
-    #snacks-splash-logo.snacks-bitten {
-        clip-path: path("M0,0 L130,0 C100,4 100,28 140,30 C108,34 108,56 144,58 C130,62 130,69 200,69 L0,69 Z");
-    }
-    /* White SVG bite at the top-right corner. Scales from the corner outward.
-       120×68px covers the right 120px of the 220px logo (logo x=100→220).
-       SVG (0,0)=logo(100,0); SVG(120,0)=logo(220,0)=bite corner.
-       3 large cubic-bezier scallops eat into 'a','c','k','s' letters. */
-    #snacks-bite {
+    /* Six letter slices — PNG sprite, each div shows one letter via background-position.
+       304×95 original scaled to 220×68. Letter x-offsets: S=0, n=37, a=73, c=110, k=146, s=183 */
+    .sl {
         position: absolute;
-        top: 0; right: 0;
-        width: 120px; height: 68px;
-        transform: scale(0);
-        transform-origin: top right;
-        animation: snacks-bite-grow 0.22s ease-in 1.32s forwards;
+        height: 68px;
+        background: url('Snacks_clean.png') no-repeat;
+        background-size: 220px 68px;
+        opacity: 0;
+        animation: letter-drop 0.42s cubic-bezier(0.22,1,0.36,1) forwards;
     }
-    @keyframes snacks-fall {
-        0%   { transform: translateY(-110vh) rotate(-8deg); opacity: 0.85; }
-        65%  { transform: translateY(16px) rotate(4deg); opacity: 1; }
-        80%  { transform: translateY(-8px) rotate(-2deg); }
-        90%  { transform: translateY(4px) rotate(1deg); }
-        100% { transform: translateY(0) rotate(0deg); opacity: 1; }
+    .sl0 { left:  0px; width:37px; background-position:   0px 0; animation-delay: 0.00s; }
+    .sl1 { left: 37px; width:36px; background-position: -37px 0; animation-delay: 0.08s; }
+    .sl2 { left: 73px; width:37px; background-position: -73px 0; animation-delay: 0.16s; }
+    .sl3 { left:110px; width:36px; background-position:-110px 0; animation-delay: 0.24s; }
+    .sl4 { left:146px; width:37px; background-position:-146px 0; animation-delay: 0.32s; }
+    .sl5 { left:183px; width:37px; background-position:-183px 0; animation-delay: 0.40s; }
+    @keyframes letter-drop {
+        0%   { opacity: 0; transform: translateY(-80px) rotate(-6deg); }
+        55%  { opacity: 1; transform: translateY(9px)   rotate(1.5deg); }
+        78%  { transform: translateY(-4px) rotate(-0.5deg); }
+        100% { opacity: 1; transform: translateY(0)     rotate(0deg); }
     }
-    @keyframes snacks-bite-grow {
-        0%   { transform: scale(0); }
-        100% { transform: scale(1); }
+    @keyframes snacks-crunch {
+        0%   { transform: translate(0,0)       rotate(0deg);    }
+        8%   { transform: translate(-4px, 1px) rotate(-2deg);   }
+        18%  { transform: translate( 4px,-1px) rotate( 2deg);   }
+        30%  { transform: translate(-3px, 1px) rotate(-1.5deg); }
+        40%  { transform: translate( 3px, 0)   rotate( 1.5deg); }
+        52%  { transform: translate(-4px,-1px) rotate(-2deg);   }
+        62%  { transform: translate( 4px, 1px) rotate( 2deg);   }
+        74%  { transform: translate(-1px, 0)   rotate(-0.5deg); }
+        86%  { transform: translate( 1px,-1px) rotate( 0.3deg); }
+        100% { transform: translate(0,0)       rotate(0deg);    }
     }
-    /* Crumbs near the scallop tips (logo x=106–134, y=12–52). Scatter
-       down and left — away from the top-right bite corner. */
+    /* Crumbs fire at t=900ms, spread across the full word width */
     .snacks-crumb { position: absolute; opacity: 0; }
-    .sc1 { width:13px; height:10px; top:12px; left:112px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 1.0s  ease-in 1.34s forwards; }
-    .sc2 { width:10px; height: 8px; top:28px; left:106px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.88s ease-in 1.34s forwards; }
-    .sc3 { width: 7px; height: 7px; top:44px; left:116px; background:#6B3110; border-radius:50%;             animation:sc3 0.70s ease-in 1.33s forwards; }
-    .sc4 { width:12px; height: 9px; top:16px; left:126px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.12s ease-in 1.36s forwards; }
-    .sc5 { width: 8px; height: 6px; top:52px; left:120px; background:#7B3A0F; border-radius:2px 3px 1px 2px; animation:sc5 0.76s ease-in 1.32s forwards; }
-    .sc6 { width:15px; height: 9px; top:36px; left:108px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.22s ease-in 1.38s forwards; }
-    .sc7 { width: 6px; height: 5px; top:22px; left:134px; background:#6B3110; border-radius:50%;             animation:sc7 0.66s ease-in 1.34s forwards; }
-    .sc8 { width:11px; height: 8px; top:48px; left:130px; background:#934018; border-radius:3px 1px 2px 3px; animation:sc8 0.94s ease-in 1.35s forwards; }
-    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    35%{opacity:1;transform:translate(-8px,-12px)rotate(45deg)}   100%{opacity:0;transform:translate(-28px,56px)rotate(195deg)} }
-    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    40%{opacity:1;transform:translate(-16px,-8px)rotate(-40deg)}  100%{opacity:0;transform:translate(-34px,50px)rotate(-180deg)} }
-    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    30%{opacity:1;transform:translate(-6px,-10px)rotate(68deg)}   100%{opacity:0;transform:translate(-20px,48px)rotate(228deg)} }
-    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    25%{opacity:1;transform:translate(-12px,-14px)rotate(58deg)}  100%{opacity:0;transform:translate(-26px,60px)rotate(268deg)} }
-    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    100%{opacity:0;transform:translate(-18px,44px)rotate(-110deg)} }
-    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    20%{opacity:1;transform:translate(-10px,-8px)rotate(22deg)}   100%{opacity:0;transform:translate(-24px,54px)rotate(312deg)} }
-    @keyframes sc7 { 0%{opacity:1;transform:translate(0,0)}              100%{opacity:0;transform:translate(-16px,42px)} }
-    @keyframes sc8 { 0%{opacity:1;transform:translate(0,0)rotate(0)}    45%{opacity:1;transform:translate(-14px,-12px)rotate(-50deg)} 100%{opacity:0;transform:translate(-32px,46px)rotate(-222deg)} }
+    .sc1 { width:11px; height:8px;  top:18px; left: 35px; background:#7B3A0F; border-radius:3px 1px 4px 2px; animation:sc1 0.85s ease-in 0.90s forwards; }
+    .sc2 { width: 8px; height:7px;  top:48px; left: 75px; background:#A05020; border-radius:2px 4px 1px 3px; animation:sc2 0.90s ease-in 0.90s forwards; }
+    .sc3 { width: 7px; height:6px;  top:12px; left:128px; background:#6B3110; border-radius:50%;             animation:sc3 0.72s ease-in 0.92s forwards; }
+    .sc4 { width:10px; height:7px;  top:40px; left:162px; background:#934018; border-radius:1px 3px 2px 4px; animation:sc4 1.00s ease-in 0.90s forwards; }
+    .sc5 { width: 6px; height:5px;  top:52px; left:108px; background:#7B3A0F; border-radius:50%;             animation:sc5 0.78s ease-in 0.91s forwards; }
+    .sc6 { width:13px; height:8px;  top:28px; left:188px; background:#A05020; border-radius:4px 2px 3px 1px; animation:sc6 1.10s ease-in 0.90s forwards; }
+    @keyframes sc1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-32px,55px)rotate(200deg)} }
+    @keyframes sc2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-18px,58px)rotate(-180deg)} }
+    @keyframes sc3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(22px,52px)rotate(240deg)} }
+    @keyframes sc4 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(28px,62px)rotate(280deg)} }
+    @keyframes sc5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-10px,50px)rotate(-120deg)} }
+    @keyframes sc6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(16px,58px)rotate(310deg)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
-        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
-        <!-- Corner bite from top-right. SVG 120×68 covers logo x=100–220.
-             SVG(120,0)=logo(220,0)=corner. 3 cubic-bezier scallops sweep
-             deep into the 'a','c','k' letters, exiting at logo x≈200,y=68. -->
-        <svg id="snacks-bite" viewBox="0 0 120 68" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <path d="M120,0 L30,0 C0,4 0,28 40,30 C8,34 8,56 44,58 C30,62 30,68 100,68 L120,68 Z" fill="white"/>
-        </svg>
+        <!-- Six letter slices — S, n, a, c, k, s — each drops in with 80ms stagger -->
+        <div class="sl sl0"></div>
+        <div class="sl sl1"></div>
+        <div class="sl sl2"></div>
+        <div class="sl sl3"></div>
+        <div class="sl sl4"></div>
+        <div class="sl sl5"></div>
+        <!-- Crumbs scatter on the crunch at t=900ms -->
         <div class="snacks-crumb sc1"></div>
         <div class="snacks-crumb sc2"></div>
         <div class="snacks-crumb sc3"></div>
         <div class="snacks-crumb sc4"></div>
         <div class="snacks-crumb sc5"></div>
         <div class="snacks-crumb sc6"></div>
-        <div class="snacks-crumb sc7"></div>
-        <div class="snacks-crumb sc8"></div>
     </div>
     <script>
     (function() {
         var ov   = document.getElementById('snacks-splash');
-        var logo = document.getElementById('snacks-splash-logo');
-        /* Snap the logo clip-path once the bite SVG has fully grown (1320+220ms).
-           The scalloped edge becomes the literal edge of the logo image. */
+        var wrap = document.getElementById('snacks-splash-wrap');
+        /* Crunch shake fires once all letters have settled (last letter: 400ms delay + 420ms fall ≈ 820ms) */
         setTimeout(function() {
-            if (logo) logo.classList.add('snacks-bitten');
-        }, 1540);
+            if (wrap) wrap.classList.add('snacks-crunch');
+        }, 900);
         setTimeout(function() {
             ov.classList.add('hide');
             setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
-        }, 2800);
+        }, 2500);
     })();
     </script>
 </div>
