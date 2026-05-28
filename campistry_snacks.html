@@ -23,72 +23,107 @@
         width: 220px; height: 68px;
         flex-shrink: 0;
     }
+    /* Logo sits inside the wrapper — starts dim and slightly compressed,
+       brightens and pops forward as the wrapper opens */
     #snacks-splash-logo {
         position: absolute; top: 0; left: 0;
         width: 220px; height: auto;
-        animation: logo-pop 0.28s ease 0.78s both;
+        animation: logo-reveal 0.34s ease 0.76s both;
     }
-    @keyframes logo-pop {
-        0%   { transform: scale(1);    }
-        55%  { transform: scale(1.06); }
-        100% { transform: scale(1);    }
+    @keyframes logo-reveal {
+        0%   { filter: brightness(0.8); transform: scale(0.94); }
+        65%  { filter: brightness(1.06); transform: scale(1.05); }
+        100% { filter: brightness(1);   transform: scale(1);    }
     }
-    /* Wrapper panels — orange candy-wrapper gradient with diagonal stripe texture.
-       Left panel covers x=0–114, right panel covers x=106–224 (8px overlap at seam).
-       Both extend 8px above/below the logo for full coverage. */
+    /* Foil seal line down the center — fades as panels pull apart */
+    .wp-seam {
+        position: absolute;
+        top: -12px; left: 109px;
+        width: 2px; height: 92px;
+        background: linear-gradient(to bottom, rgba(255,255,255,0.7) 0, rgba(255,255,255,0.4) 100%);
+        z-index: 0;
+        animation: seam-fade 0.12s ease 0.36s forwards;
+    }
+    @keyframes seam-fade { to { opacity: 0; } }
+    /* Two wrapper halves — extend 20px beyond the logo on each side and
+       12px above/below, making them visibly larger than the product inside.
+       Outer ends have a crimped pinch shape. Inner edges have a zigzag tear seam.
+       ::after adds a dark gradient shadow over each crimped end cap. */
     .wp {
         position: absolute;
-        top: -8px; height: 84px;
+        top: -12px; height: 92px;
         background:
-            repeating-linear-gradient(-45deg, rgba(255,255,255,0.12) 0, rgba(255,255,255,0.12) 3px, transparent 3px, transparent 9px),
-            linear-gradient(170deg, #F5841A 0%, #CF5A0E 48%, #F5841A 100%);
+            /* Top fold edge highlight */
+            linear-gradient(to bottom, rgba(255,255,255,0.32) 0, rgba(255,255,255,0.32) 5px, transparent 5px),
+            /* Bottom shadow edge */
+            linear-gradient(to top, rgba(0,0,0,0.22) 0, rgba(0,0,0,0.22) 4px, transparent 4px),
+            /* Surface sheen */
+            linear-gradient(162deg, rgba(255,255,255,0.22) 0, transparent 42%, rgba(255,255,255,0.07) 100%),
+            /* Diagonal candy-wrapper stripe texture */
+            repeating-linear-gradient(-45deg, rgba(255,255,255,0.07) 0, rgba(255,255,255,0.07) 2px, transparent 2px, transparent 8px),
+            /* Warm orange base */
+            linear-gradient(170deg, #F08020 0%, #CB5510 48%, #F08020 100%);
         z-index: 1;
     }
-    /* Zigzag inner edges simulate a torn wrapper seam */
+    /* Left half: crimped left end (narrows 8% at top+bottom), zigzag right tear edge */
     .wp-left {
-        left: -4px; width: 118px;
-        clip-path: polygon(0 0, 100% 0, 90% 20%, 100% 40%, 90% 60%, 100% 80%, 90% 100%, 0 100%);
-        animation: wp-left-tear 0.48s cubic-bezier(0.55,0,1,0.45) 0.28s forwards;
+        left: -20px; width: 145px;
+        clip-path: polygon(0% 18%, 8% 0%, 90% 0%, 100% 17%, 90% 33%, 100% 50%, 90% 67%, 100% 83%, 90% 100%, 8% 100%, 0% 82%);
+        animation: wp-left-tear 0.52s cubic-bezier(0.62,0,0.88,0.52) 0.28s forwards;
     }
+    /* Right half: zigzag left tear edge, crimped right end */
     .wp-right {
-        left: 106px; width: 118px;
-        clip-path: polygon(10% 0, 100% 0, 100% 100%, 10% 100%, 0 80%, 10% 60%, 0 40%, 10% 20%);
-        animation: wp-right-tear 0.48s cubic-bezier(0.55,0,1,0.45) 0.28s forwards;
+        left: 95px; width: 145px;
+        clip-path: polygon(10% 0%, 92% 0%, 100% 18%, 100% 82%, 92% 100%, 10% 100%, 0% 83%, 10% 67%, 0% 50%, 10% 33%, 0% 17%);
+        animation: wp-right-tear 0.52s cubic-bezier(0.62,0,0.88,0.52) 0.28s forwards;
+    }
+    /* Crimped end shadow — dark gradient over the pinched/folded end section */
+    .wp-left::after {
+        content: '';
+        position: absolute; top: 0; left: 0; width: 34px; height: 100%;
+        background: linear-gradient(to right, rgba(0,0,0,0.44) 0, rgba(0,0,0,0.16) 65%, transparent 100%);
+    }
+    .wp-right::after {
+        content: '';
+        position: absolute; top: 0; right: 0; width: 34px; height: 100%;
+        background: linear-gradient(to left, rgba(0,0,0,0.44) 0, rgba(0,0,0,0.16) 65%, transparent 100%);
     }
     @keyframes wp-left-tear {
         0%   { transform: translateX(0);      opacity: 1; }
-        55%  { opacity: 1; }
-        100% { transform: translateX(-130px); opacity: 0; }
+        52%  { opacity: 1; }
+        100% { transform: translateX(-150px); opacity: 0; }
     }
     @keyframes wp-right-tear {
         0%   { transform: translateX(0);     opacity: 1; }
-        55%  { opacity: 1; }
-        100% { transform: translateX(130px); opacity: 0; }
+        52%  { opacity: 1; }
+        100% { transform: translateX(150px); opacity: 0; }
     }
-    /* Tiny wrapper bits fly off the tear seam (x≈110) in all directions */
-    .wt { position: absolute; opacity: 0; z-index: 2; border-radius: 2px; background: #C05010; }
-    .wt1 { width:4px; height:9px;  top: 2px; left:107px; animation: wt1 0.50s ease-in 0.30s forwards; }
-    .wt2 { width:5px; height:7px;  top:24px; left:111px; animation: wt2 0.40s ease-in 0.28s forwards; }
-    .wt3 { width:3px; height:8px;  top:48px; left:108px; animation: wt3 0.55s ease-in 0.32s forwards; }
-    .wt4 { width:5px; height:5px;  top:14px; left:112px; border-radius:50%; animation: wt4 0.42s ease-in 0.29s forwards; }
-    .wt5 { width:4px; height:6px;  top:36px; left:109px; animation: wt5 0.48s ease-in 0.31s forwards; }
-    .wt6 { width:3px; height:5px;  top:58px; left:110px; animation: wt6 0.38s ease-in 0.33s forwards; }
-    @keyframes wt1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-22px,-28px)rotate(50deg)} }
-    @keyframes wt2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(18px,22px)rotate(-65deg)} }
-    @keyframes wt3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-16px,34px)rotate(80deg)} }
-    @keyframes wt4 { 0%{opacity:1;transform:translate(0,0)}            100%{opacity:0;transform:translate(24px,-22px)} }
-    @keyframes wt5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-20px,18px)rotate(-90deg)} }
-    @keyframes wt6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(14px,30px)rotate(120deg)} }
+    /* Wrapper debris flies off the center seam as the tear happens */
+    .wt { position: absolute; opacity: 0; z-index: 2; border-radius: 2px; background: #B84A0A; }
+    .wt1 { width:5px; height:10px; top: 0px; left:107px; animation: wt1 0.55s ease-in 0.30s forwards; }
+    .wt2 { width:6px; height: 8px; top:22px; left:112px; animation: wt2 0.42s ease-in 0.28s forwards; }
+    .wt3 { width:4px; height: 9px; top:46px; left:108px; animation: wt3 0.58s ease-in 0.32s forwards; }
+    .wt4 { width:6px; height: 6px; top:12px; left:113px; border-radius:50%; animation: wt4 0.44s ease-in 0.29s forwards; }
+    .wt5 { width:5px; height: 7px; top:34px; left:109px; animation: wt5 0.50s ease-in 0.31s forwards; }
+    .wt6 { width:4px; height: 6px; top:58px; left:111px; animation: wt6 0.40s ease-in 0.33s forwards; }
+    @keyframes wt1 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-26px,-32px)rotate(55deg)} }
+    @keyframes wt2 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(22px, 26px)rotate(-70deg)} }
+    @keyframes wt3 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-20px, 38px)rotate(85deg)} }
+    @keyframes wt4 { 0%{opacity:1;transform:translate(0,0)}            100%{opacity:0;transform:translate(28px,-26px)} }
+    @keyframes wt5 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(-24px, 22px)rotate(-95deg)} }
+    @keyframes wt6 { 0%{opacity:1;transform:translate(0,0)rotate(0)}   100%{opacity:0;transform:translate(18px, 34px)rotate(125deg)} }
 </style>
 </head>
 <body>
 <div id="snacks-splash">
     <div id="snacks-splash-wrap">
         <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
-        <!-- Two wrapper panels tear apart left+right to reveal the logo -->
+        <!-- Foil seal line at the tear seam -->
+        <div class="wp-seam"></div>
+        <!-- Two wrapper halves — larger than the logo, with crimped ends -->
         <div class="wp wp-left"></div>
         <div class="wp wp-right"></div>
-        <!-- Debris from the wrapper tear seam -->
+        <!-- Wrapper debris from the center tear -->
         <div class="wt wt1"></div>
         <div class="wt wt2"></div>
         <div class="wt wt3"></div>
