@@ -21887,6 +21887,167 @@
             })();
         } catch (_eTR) { try { warn('[TimeRelocPairing] ' + (_eTR && _eTR.message)); } catch (_e2) {} }
 
+        // ── DROP-AND-REFILL pass: replace remaining under-min solos with bunk-solo-feasible sports ──
+        // Final safety net for under-min sport placements that pairing genuinely
+        // couldn't fix (no partner with a slot at A's exact time of matching
+        // duration; no partner playing the same sport elsewhere with matching
+        // duration; bunk slot grids that don't align with A's). Replaces the
+        // under-min sport with one the BUNK's size can play solo. Iterates
+        // candidate activities filtered to (size >= minPlayers) AND (size <=
+        // maxPlayers), validates via _validateWritePlacement + capacity counts
+        // + sport-roster max + cooldown (SchedulingRules). Source tag
+        // 'pairing-drop-refill'. Last resort — never reverts to under-min.
+        try {
+            (function _dropAndRefillUnderMin() {
+                var sa = window.scheduleAssignments || {};
+                var bmd = (window.getBunkMetaData && window.getBunkMetaData()) || {};
+                var bunkGradeP = {};
+                allGrades.forEach(function (g) {
+                    getBunksForGrade(g, divisions).forEach(function (b) { bunkGradeP[String(b)] = g; });
+                });
+                function _sz(b) {
+                    if (bmd[b] && typeof bmd[b].size === 'number') return bmd[b].size;
+                    var ds = (divisions && divisions[bunkGradeP[b]] && divisions[bunkGradeP[b]].bunkSizes) || {};
+                    return ds[b] || 0;
+                }
+                var getReqs = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getSportPlayerRequirements;
+                if (!getReqs) return;
+                var _gs = getGlobalSettings();
+                var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                var fieldByName = {};
+                _flds.forEach(function (f) { if (f && f.name) fieldByName[f.name] = f; });
+                function _fieldHosts(fname, act) {
+                    var f = fieldByName[fname];
+                    if (!f) return false;
+                    return (f.activities || []).some(function (a) { return String(a).toLowerCase().trim() === String(act).toLowerCase().trim(); });
+                }
+                function _fieldCap(fname) {
+                    var f = fieldByName[fname];
+                    if (!f) return 1;
+                    return parseInt(f.sharableWith && f.sharableWith.capacity) || parseInt(f.capacity)
+                        || ((f.sharableWith && f.sharableWith.type === 'not_sharable') ? 1 : 2);
+                }
+                function _fieldOccupants(fname, st, en, excludeBunk) {
+                    var occ = [];
+                    Object.keys(sa).forEach(function (b) {
+                        if (String(b) === String(excludeBunk)) return;
+                        (sa[b] || []).forEach(function (ss) {
+                            if (!ss || ss.continuation || ss.field !== fname) return;
+                            var sst = ss._startMin != null ? ss._startMin : ss.startMin;
+                            var sse = ss._endMin != null ? ss._endMin : ss.endMin;
+                            if (sst < en && sse > st) occ.push({ bunk: String(b), slot: ss });
+                        });
+                    });
+                    return occ;
+                }
+                function _candidatesForGrade(grade) {
+                    var acts = new Set();
+                    _flds.forEach(function (f) {
+                        if (!f || !f.name) return;
+                        var ar = f.accessRestrictions;
+                        if (ar && ar.enabled) {
+                            var divs = ar.divisions || {};
+                            if (!(grade in divs) && !(String(grade) in divs)) return;
+                        }
+                        (f.activities || []).forEach(function (a) { acts.add(a); });
+                    });
+                    return Array.from(acts);
+                }
+                var skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
+                var scanned = 0, replaced = 0;
+                Object.keys(sa).forEach(function (aBunk) {
+                    var aSlots = sa[aBunk] || [];
+                    var grade = bunkGradeP[String(aBunk)];
+                    if (!grade) return;
+                    var aSize = _sz(aBunk);
+                    if (!aSize) return;
+                    for (var aIdx = 0; aIdx < aSlots.length; aIdx++) {
+                        var aSlot = aSlots[aIdx];
+                        if (!aSlot || aSlot.continuation || aSlot._pairLock) continue;
+                        if (aSlot._pinned || aSlot._autoSpecial || aSlot._isRotationEvent || aSlot._isPrep || aSlot._league) continue;
+                        var sport = aSlot._activity || aSlot.sport;
+                        if (!sport) continue;
+                        if (skipActs.indexOf(String(sport).toLowerCase()) >= 0) continue;
+                        var reqs = getReqs(sport);
+                        if (!reqs || !reqs.minPlayers) continue;
+                        if (aSize >= reqs.minPlayers) continue;
+                        scanned++;
+                        var st = aSlot._startMin != null ? aSlot._startMin : aSlot.startMin;
+                        var en = aSlot._endMin != null ? aSlot._endMin : aSlot.endMin;
+                        if (st == null || en == null) continue;
+                        var pool = _candidatesForGrade(grade);
+                        var playedToday = new Set();
+                        for (var ti = 0; ti < aSlots.length; ti++) {
+                            var ts = aSlots[ti];
+                            if (!ts) continue;
+                            var tn = ts._activity || ts.sport;
+                            if (tn) playedToday.add(String(tn).toLowerCase());
+                        }
+                        var replacements = [];
+                        for (var pi = 0; pi < pool.length; pi++) {
+                            var act = pool[pi];
+                            if (String(act).toLowerCase() === String(sport).toLowerCase()) continue;
+                            if (skipActs.indexOf(String(act).toLowerCase()) >= 0) continue;
+                            if (playedToday.has(String(act).toLowerCase())) continue;
+                            var actReqs = getReqs(act);
+                            if (actReqs && actReqs.minPlayers && aSize < actReqs.minPlayers) continue;
+                            if (actReqs && actReqs.maxPlayers && aSize > actReqs.maxPlayers) continue;
+                            for (var fi = 0; fi < _flds.length; fi++) {
+                                var f = _flds[fi];
+                                if (!f || !f.name) continue;
+                                if (!_fieldHosts(f.name, act)) continue;
+                                replacements.push({ act: act, field: f.name });
+                            }
+                        }
+                        var orig = aSlots[aIdx];
+                        var success = false;
+                        for (var ri = 0; ri < replacements.length && !success; ri++) {
+                            var cand = replacements[ri];
+                            var why = _validateWritePlacement(cand.field, cand.act, grade, aBunk, st, en);
+                            if (why) continue;
+                            var occ = _fieldOccupants(cand.field, st, en, aBunk);
+                            if (occ.length + 1 > _fieldCap(cand.field)) continue;
+                            if (occ.some(function (o) { return (o.slot._activity || o.slot.sport) !== cand.act; })) continue;
+                            var aMax = getReqs(cand.act);
+                            if (aMax && aMax.maxPlayers) {
+                                var occRoster = 0;
+                                for (var oi = 0; oi < occ.length; oi++) occRoster += _sz(occ[oi].bunk);
+                                if (occRoster + aSize > aMax.maxPlayers) continue;
+                            }
+                            if (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function') {
+                                var bTemplate = [];
+                                for (var bi = 0; bi < aSlots.length; bi++) {
+                                    if (bi === aIdx) continue;
+                                    var bs = aSlots[bi];
+                                    if (!bs || bs.continuation) continue;
+                                    var bst = bs._startMin != null ? bs._startMin : bs.startMin;
+                                    var bse = bs._endMin != null ? bs._endMin : bs.endMin;
+                                    if (bst == null) continue;
+                                    bTemplate.push({ type: 'sport', event: bs._activity, field: bs.field, startMin: bst, endMin: bse });
+                                }
+                                try {
+                                    if (!window.SchedulingRules.isCandidateAllowed({ type: 'sport', event: cand.act, field: cand.field, startMin: st, endMin: en }, bTemplate, { mode: 'auto' })) continue;
+                                } catch (_eCD) {}
+                            }
+                            aSlots[aIdx] = {
+                                field: cand.field, sport: cand.act, _activity: cand.act,
+                                _fixed: true, _bunkOverride: true, _activityLocked: false,
+                                _autoMode: true, _autoSolved: true, _capacityChecked: true,
+                                _startMin: st, _endMin: en,
+                                _source: 'pairing-drop-refill',
+                                continuation: false
+                            };
+                            success = true;
+                            replaced++;
+                        }
+                        if (!success) aSlots[aIdx] = orig;
+                    }
+                });
+                try { console.log('[DROP-REFILL] scanned=' + scanned + ', replaced=' + replaced); } catch (_eL) {}
+                if (replaced > 0) log('  🪄 Drop-and-refill: replaced ' + replaced + ' under-min placement(s) with bunk-solo-feasible sport(s).');
+            })();
+        } catch (_eDR) { try { warn('[DropRefillUnderMin] ' + (_eDR && _eDR.message)); } catch (_e2) {} }
+
         // ── Forced bunk-pairing tag pass (sport minPlayers) ──
         // Detects same-grade/same-sport/same-time/same-field block PAIRS in
         // scheduleAssignments — these are the pairs the planner drafted (via
