@@ -22,41 +22,6 @@
         .lk-page-hero h1 { font-family:var(--font-display); font-size:1.45rem; font-weight:700; margin-bottom:2px; color:var(--slate-900); }
         .lk-page-hero p { font-size:.84rem; color:var(--slate-400); }
 
-        /* Pickup queue rows */
-        .lk-pickup-row { display:flex; align-items:center; gap:12px; padding:13px 0; border-bottom:1px solid var(--slate-100); }
-        .lk-pickup-row:last-child { border-bottom:none; }
-        .lk-pickup-icon-circle { width:36px; height:36px; border-radius:50%; display:flex; align-items:center; justify-content:center; flex-shrink:0; }
-        .lk-pickup-icon-circle.amber { background:var(--amber-50); color:var(--amber-600); }
-        .lk-pickup-icon-circle.blue { background:var(--blue-50); color:var(--blue-500); }
-        .lk-pickup-icon-circle.purple { background:var(--purple-50); color:var(--purple-500); }
-        .lk-pickup-icon-circle.green { background:var(--green-50); color:var(--green-600); }
-        .lk-pickup-row-info { flex:1; min-width:0; }
-        .lk-pickup-row-name { font-size:.86rem; font-weight:600; color:var(--slate-900); }
-        .lk-pickup-row-sub { font-size:.75rem; color:var(--text-muted); margin-top:1px; }
-        .lk-pickup-row-meta { font-size:.73rem; color:var(--slate-500); margin-top:2px; }
-        .lk-pickup-row-actions { display:flex; align-items:center; gap:6px; flex-shrink:0; }
-
-        /* Health visit dots */
-        .lk-health-visit { display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--slate-100); }
-        .lk-health-visit:last-child { border-bottom:none; }
-        .lk-health-visit-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; margin-top:4px; }
-        .lk-health-visit-dot.routine { background:var(--green-500); }
-        .lk-health-visit-dot.attention { background:var(--amber-500); }
-        .lk-health-visit-dot.sent-home { background:var(--red-500); }
-        .lk-health-visit-body { flex:1; min-width:0; }
-        .lk-health-visit-title { font-size:.86rem; font-weight:600; color:var(--slate-900); margin-bottom:2px; }
-        .lk-health-visit-note { font-size:.8rem; color:var(--slate-500); line-height:1.5; margin-bottom:4px; }
-        .lk-health-visit-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:.72rem; color:var(--text-muted); }
-        .lk-health-visit-meta span { display:inline-flex; align-items:center; gap:4px; }
-
-        /* Health docs */
-        .lk-health-doc { display:flex; align-items:center; gap:12px; padding:11px 0; border-bottom:1px solid var(--slate-100); }
-        .lk-health-doc:last-child { border-bottom:none; }
-        .lk-health-doc-icon { width:36px; height:36px; border-radius:var(--radius-sm); background:var(--slate-100); display:flex; align-items:center; justify-content:center; color:var(--slate-500); flex-shrink:0; }
-        .lk-health-doc-info { flex:1; min-width:0; }
-        .lk-health-doc-name { font-size:.84rem; font-weight:600; color:var(--slate-900); }
-        .lk-health-doc-meta { font-size:.73rem; color:var(--text-muted); margin-top:1px; }
-
         /* Admin messages */
         .msg-item { display:flex; align-items:flex-start; gap:10px; padding:13px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
         .msg-item:hover { background:var(--slate-50); }
@@ -147,11 +112,6 @@
             Dashboard
         </button>
         <div class="lk-nav-divider"></div>
-        <div class="lk-nav-label">Camp Day</div>
-        <button class="lk-nav-item" data-page="pickup" onclick="nav('pickup')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
-            Pickup &amp; Arrival
-        </button>
         <button class="lk-nav-item" data-page="messages" onclick="nav('messages')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             Messages
@@ -173,12 +133,6 @@
             Canteen
         </button>
         <div class="lk-nav-divider"></div>
-        <div class="lk-nav-label">Health</div>
-        <button class="lk-nav-item" data-page="health" onclick="nav('health')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-            Nurse Portal
-        </button>
-        <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -197,17 +151,9 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
         Home
     </button>
-    <button class="lk-bnav-item" data-page="pickup" onclick="nav('pickup')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
-        Pickup
-    </button>
     <button class="lk-bnav-item" data-page="messages" onclick="nav('messages')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
         Messages
-    </button>
-    <button class="lk-bnav-item" data-page="health" onclick="nav('health')">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        Health
     </button>
     <button class="lk-bnav-item" data-page="compose" onclick="nav('compose')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
@@ -239,43 +185,12 @@
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
                 Compose Message
             </button>
-            <button class="btn btn-secondary btn-sm" onclick="nav('pickup')">Pickup Queue</button>
             <button class="btn btn-secondary btn-sm" onclick="nav('directory')">Parent Directory</button>
             <button class="btn btn-secondary btn-sm" onclick="nav('campers')">Camper Lookup</button>
             <a href="campistry_me.html" class="btn btn-secondary btn-sm">Open Me</a>
         </div>
     </div>
     <div class="lk-card" id="dashDataCheck"></div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════ -->
-<!--  PICKUP & ARRIVAL QUEUE                            -->
-<!-- ═══════════════════════════════════════════════════ -->
-<div class="lk-page" id="page-pickup">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
-        </div>
-        <div>
-            <h1>Pickup &amp; Arrival</h1>
-            <p>Incoming requests from parents — confirm via Campistry Live</p>
-        </div>
-    </div>
-
-    <!-- Pickup stats -->
-    <div class="lk-stats" id="pickupStats"></div>
-
-    <!-- Request queue card -->
-    <div class="lk-card">
-        <div class="lk-card-head">
-            <h2>Today's Requests</h2>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span class="badge badge-neutral" id="pickupCountBadge">3 requests</span>
-                <span style="font-size:.72rem;color:var(--text-muted);">Syncs with Campistry Live</span>
-            </div>
-        </div>
-        <div id="pickupQueueList"></div>
-    </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════ -->
@@ -479,158 +394,6 @@
 </div>
 
 <!-- ═══════════════════════════════════════════════════ -->
-<!--  NURSE PORTAL                                       -->
-<!-- ═══════════════════════════════════════════════════ -->
-<div class="lk-page" id="page-health">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-        </div>
-        <div>
-            <h1>Nurse Portal</h1>
-            <p>Health records — powered by Campistry Health</p>
-        </div>
-    </div>
-
-    <div class="lk-tabs">
-        <button class="lk-tab active" id="healthTabVisitLog" onclick="switchHealthTab('visitlog',this)">Visit Log</button>
-        <button class="lk-tab" id="healthTabDocs" onclick="switchHealthTab('docs',this)">Health Documents</button>
-    </div>
-
-    <!-- Visit Log tab -->
-    <div id="healthPanelVisitlog">
-        <!-- Add visit note form -->
-        <div class="lk-card" style="border-left:4px solid var(--link-color);">
-            <div class="lk-card-head"><h2>Add Visit Note</h2></div>
-            <div class="lk-field">
-                <label>Camper</label>
-                <select class="lk-select" id="visitCamperSelect">
-                    <option value="">Select camper...</option>
-                    <option>Eli Miller</option>
-                    <option>Mia Miller</option>
-                    <option>Sophie Cohen</option>
-                    <option>Noah Stern</option>
-                    <option>Jake Levy</option>
-                    <option>Aviva Gold</option>
-                </select>
-            </div>
-            <div class="lk-field">
-                <label>Severity</label>
-                <select class="lk-select" id="visitSeverity">
-                    <option value="routine">Routine</option>
-                    <option value="attention">Attention</option>
-                    <option value="sent-home">Sent Home</option>
-                </select>
-            </div>
-            <div class="lk-field">
-                <label>Visit Note</label>
-                <textarea class="lk-textarea" id="visitNote" placeholder="Describe the visit, treatment provided, and outcome..." style="min-height:90px;"></textarea>
-            </div>
-            <button class="btn btn-primary btn-sm" onclick="saveVisitNote()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                Save Visit Note
-            </button>
-        </div>
-
-        <!-- Visit log list -->
-        <div class="lk-card">
-            <div class="lk-card-head"><h2>Visit Log</h2><span class="badge badge-neutral" id="visitLogCount">4 entries</span></div>
-            <div id="visitLogList">
-                <div class="lk-health-visit">
-                    <div class="lk-health-visit-dot attention"></div>
-                    <div class="lk-health-visit-body">
-                        <div class="lk-health-visit-title">Mild sunburn on shoulders</div>
-                        <div class="lk-health-visit-note">Applied aloe vera and a cool compress. Child was comfortable and returned to activity. SPF 50+ recommended going forward.</div>
-                        <div class="lk-health-visit-meta">
-                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 2:15 PM</span>
-                            <span>Nurse Rachel</span>
-                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Eli Miller</span>
-                            <span class="badge badge-warn" style="font-size:.6rem;padding:2px 7px;">Attention</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="lk-health-visit">
-                    <div class="lk-health-visit-dot routine"></div>
-                    <div class="lk-health-visit-body">
-                        <div class="lk-health-visit-title">Morning medication administered</div>
-                        <div class="lk-health-visit-note">Morning medications given as per parent instructions. Child cooperative and in good spirits.</div>
-                        <div class="lk-health-visit-meta">
-                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 8:45 AM</span>
-                            <span>Nurse Rachel</span>
-                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Eli Miller</span>
-                            <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="lk-health-visit">
-                    <div class="lk-health-visit-dot attention"></div>
-                    <div class="lk-health-visit-body">
-                        <div class="lk-health-visit-title">Bee sting on left arm</div>
-                        <div class="lk-health-visit-note">Bee sting treated with antihistamine cream. No signs of allergic reaction. Parents notified via app.</div>
-                        <div class="lk-health-visit-meta">
-                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Yesterday, 3:30 PM</span>
-                            <span>Nurse Rachel</span>
-                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Sophie Cohen</span>
-                            <span class="badge badge-warn" style="font-size:.6rem;padding:2px 7px;">Attention</span>
-                        </div>
-                    </div>
-                </div>
-                <div class="lk-health-visit">
-                    <div class="lk-health-visit-dot routine"></div>
-                    <div class="lk-health-visit-body">
-                        <div class="lk-health-visit-title">Scraped knee</div>
-                        <div class="lk-health-visit-note">Small scrape on right knee from field activity. Cleaned and bandaged. No further intervention needed.</div>
-                        <div class="lk-health-visit-meta">
-                            <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Yesterday, 4:20 PM</span>
-                            <span>Nurse Rachel</span>
-                            <span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">Noah Stern</span>
-                            <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Health Documents tab -->
-    <div id="healthPanelDocs" style="display:none;">
-        <div class="lk-card">
-            <div class="lk-card-head">
-                <h2>Health Documents</h2>
-                <input type="text" class="lk-input" placeholder="Search documents..." style="width:220px;" oninput="filterHealthDocs(this.value)">
-            </div>
-            <p style="font-size:.8rem;color:var(--slate-400);margin-bottom:14px;">Documents uploaded by parents — allergy plans, insurance cards, and other health records.</p>
-            <div id="healthDocList">
-                <div class="lk-health-doc">
-                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
-                    <div class="lk-health-doc-info">
-                        <div class="lk-health-doc-name">Allergy Action Plan — Tree Nuts</div>
-                        <div class="lk-health-doc-meta">Eli Miller · #0001 — Uploaded Jun 1</div>
-                    </div>
-                    <button class="btn btn-secondary btn-sm">View</button>
-                </div>
-                <div class="lk-health-doc">
-                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
-                    <div class="lk-health-doc-info">
-                        <div class="lk-health-doc-name">Insurance Card — Blue Cross</div>
-                        <div class="lk-health-doc-meta">Eli Miller · #0001 — Uploaded May 28</div>
-                    </div>
-                    <button class="btn btn-secondary btn-sm">View</button>
-                </div>
-                <div class="lk-health-doc">
-                    <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
-                    <div class="lk-health-doc-info">
-                        <div class="lk-health-doc-name">Allergy Action Plan — None</div>
-                        <div class="lk-health-doc-meta">Mia Miller · #0002 — Uploaded Jun 1</div>
-                    </div>
-                    <button class="btn btn-secondary btn-sm">View</button>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- ═══════════════════════════════════════════════════ -->
 <!--  PHOTOS                                             -->
 <!-- ═══════════════════════════════════════════════════ -->
 <div class="lk-page" id="page-photos">
@@ -814,7 +577,6 @@ function nav(p) {
     if (p === 'directory') renderDir('');
     if (p === 'campers') renderCampers('');
     if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
-    if (p === 'pickup') renderPickupQueue();
     if (p === 'messages') renderAdminMsgs('all');
 }
 
@@ -1019,70 +781,6 @@ function updateSmartBadge() {
 // ─── SENT / BROADCASTS (kept for compat) ─────────────────────────────────────
 function renderSent() {}
 
-// ─── PICKUP QUEUE ─────────────────────────────────────────────────────────────
-var pickupRequests = [
-    { idx:0, child:'Eli Miller',   type:'Early Pickup',       color:'amber', time:'10:42 AM', person:'David Miller',  personLabel:'Pickup',  status:'Pending' },
-    { idx:1, child:'Sophie Cohen', type:'Going With Friend',  color:'purple', time:'11:15 AM', person:'Levi Cohen',    personLabel:'Friend',  status:'Confirmed' },
-    { idx:2, child:'Noah Stern',   type:'Late Arrival',       color:'green',  time:'8:30 AM',  person:'Expected 9:30', personLabel:'Arrival', status:'Released' }
-];
-
-function confirmRequest(idx) {
-    var r = pickupRequests.find(function(x) { return x.idx === idx; });
-    if (!r) return;
-    if (r.status === 'Pending')   { r.status = 'Confirmed'; toast(r.child + ' — request confirmed!'); }
-    else if (r.status === 'Confirmed') { r.status = 'Released'; toast(r.child + ' — released!'); }
-    renderPickupQueue();
-}
-
-function renderPickupQueue() {
-    var list = document.getElementById('pickupQueueList');
-    if (!list) return;
-    var pending   = pickupRequests.filter(function(r) { return r.status === 'Pending'; }).length;
-    var confirmed = pickupRequests.filter(function(r) { return r.status === 'Confirmed'; }).length;
-    var released  = pickupRequests.filter(function(r) { return r.status === 'Released'; }).length;
-
-    // Pickup stats
-    var ps = document.getElementById('pickupStats');
-    if (ps) {
-        ps.innerHTML =
-            stat('amber', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>', pickupRequests.length, "Today's Requests") +
-            stat('amber', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>', pending, 'Pending') +
-            stat('blue',  '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>', confirmed, 'Confirmed') +
-            stat('green', '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="9 11 12 14 22 4"/></svg>', released, 'Released');
-    }
-    var countBadge = document.getElementById('pickupCountBadge');
-    if (countBadge) countBadge.textContent = pickupRequests.length + ' requests';
-
-    var statusBadge = { Pending:'badge-warn', Confirmed:'badge-info', Released:'badge-ok' };
-    var typeIcon = {
-        'Early Pickup':      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>',
-        'Going With Friend': '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>',
-        'Late Arrival':      '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>',
-        'Pickup Change':     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/></svg>'
-    };
-
-    var h = '';
-    pickupRequests.forEach(function(r) {
-        var icon = typeIcon[r.type] || '';
-        var badgeCls = statusBadge[r.status] || 'badge-neutral';
-        var canAct = r.status !== 'Released';
-        var actionLabel = r.status === 'Pending' ? 'Confirm' : 'Release';
-        h += '<div class="lk-pickup-row">' +
-            '<div class="lk-pickup-icon-circle ' + r.color + '">' + icon + '</div>' +
-            '<div class="lk-pickup-row-info">' +
-                '<div class="lk-pickup-row-name">' + esc(r.child) + ' <span style="font-weight:400;color:var(--text-muted);font-size:.8rem;">— ' + esc(r.type) + '</span></div>' +
-                '<div class="lk-pickup-row-sub">Submitted ' + esc(r.time) + '</div>' +
-                '<div class="lk-pickup-row-meta">' + esc(r.personLabel) + ': ' + esc(r.person) + '</div>' +
-            '</div>' +
-            '<div class="lk-pickup-row-actions">' +
-                '<span class="badge ' + badgeCls + '">' + esc(r.status) + '</span>' +
-                (canAct ? '<button class="btn btn-secondary btn-sm" onclick="confirmRequest(' + r.idx + ')">' + actionLabel + '</button>' : '') +
-            '</div>' +
-        '</div>';
-    });
-    list.innerHTML = h || '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></div><h3>No requests today</h3></div>';
-}
-
 // ─── ADMIN MESSAGES ───────────────────────────────────────────────────────────
 var adminMessages = [
     { id:1, from:'Sarah Miller', role:'Parent', subject:'Question about visiting day', preview:'When is visiting day exactly? We have a conflict...', body:'<p>Hi,</p><p>When is visiting day exactly? We have a potential conflict and wanted to confirm the date. Also, can family members other than parents attend?</p><p>Thank you,<br>Sarah Miller</p>', date:'2h ago', read:false, tag:'general' },
@@ -1142,57 +840,6 @@ function closeAdminMsgDetail() {
     document.getElementById('adminMsgListView').style.display = '';
     document.getElementById('adminMsgDetailView').style.display = 'none';
     renderAdminMsgs('all');
-}
-
-// ─── HEALTH TAB SWITCHER ─────────────────────────────────────────────────────
-function switchHealthTab(tab, btn) {
-    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
-    document.getElementById('healthPanelVisitlog').style.display = tab === 'visitlog' ? '' : 'none';
-    document.getElementById('healthPanelDocs').style.display     = tab === 'docs'     ? '' : 'none';
-}
-
-// ─── SAVE VISIT NOTE ─────────────────────────────────────────────────────────
-function saveVisitNote() {
-    var camper = document.getElementById('visitCamperSelect').value;
-    var severity = document.getElementById('visitSeverity').value;
-    var note = document.getElementById('visitNote').value.trim();
-    if (!camper) { toast('Select a camper'); return; }
-    if (!note)   { toast('Enter a visit note'); return; }
-    var now = new Date();
-    var timeStr = 'Today, ' + (now.getHours() % 12 || 12) + ':' + (now.getMinutes() < 10 ? '0' : '') + now.getMinutes() + (now.getHours() < 12 ? ' AM' : ' PM');
-    var dotClass = severity === 'sent-home' ? 'sent-home' : (severity === 'attention' ? 'attention' : 'routine');
-    var badgeCls = severity === 'sent-home' ? 'badge-err' : (severity === 'attention' ? 'badge-warn' : 'badge-ok');
-    var badgeLabel = severity === 'sent-home' ? 'Sent Home' : (severity === 'attention' ? 'Attention' : 'Routine');
-    var clockSvg = '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>';
-    var html = '<div class="lk-health-visit">' +
-        '<div class="lk-health-visit-dot ' + dotClass + '"></div>' +
-        '<div class="lk-health-visit-body">' +
-            '<div class="lk-health-visit-title">' + esc(note.slice(0, 60)) + (note.length > 60 ? '...' : '') + '</div>' +
-            '<div class="lk-health-visit-note">' + esc(note) + '</div>' +
-            '<div class="lk-health-visit-meta">' +
-                '<span>' + clockSvg + ' ' + timeStr + '</span>' +
-                '<span>Nurse</span>' +
-                '<span style="font-size:.72rem;font-weight:700;color:var(--slate-600);">' + esc(camper) + '</span>' +
-                '<span class="badge ' + badgeCls + '" style="font-size:.6rem;padding:2px 7px;">' + badgeLabel + '</span>' +
-            '</div>' +
-        '</div>' +
-    '</div>';
-    document.getElementById('visitLogList').insertAdjacentHTML('afterbegin', html);
-    // update count badge
-    var entries = document.getElementById('visitLogList').querySelectorAll('.lk-health-visit').length;
-    document.getElementById('visitLogCount').textContent = entries + ' entr' + (entries === 1 ? 'y' : 'ies');
-    document.getElementById('visitNote').value = '';
-    document.getElementById('visitCamperSelect').value = '';
-    toast('Visit note saved for ' + camper + '!');
-}
-
-// ─── HEALTH DOC FILTER ───────────────────────────────────────────────────────
-function filterHealthDocs(q) {
-    q = (q || '').toLowerCase();
-    document.querySelectorAll('#healthDocList .lk-health-doc').forEach(function(row) {
-        var txt = row.textContent.toLowerCase();
-        row.style.display = (!q || txt.indexOf(q) >= 0) ? '' : 'none';
-    });
 }
 
 // ─── CANTEEN FILTER ──────────────────────────────────────────────────────────
@@ -1284,7 +931,6 @@ function previewPhotos() {
 function boot() {
     renderDash();
     updateSmartBadge();
-    renderPickupQueue();
     renderAdminMsgs('all');
 
     window.addEventListener('campistry-cloud-hydrated', function() {
