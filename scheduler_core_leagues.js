@@ -874,6 +874,47 @@
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
+        // ★★★ CHINUCH: Pre-compute which teams attend chinuch at each league period ★★★
+        // Each team misses exactly one league game per day; which period rotates daily.
+        window.chinuchSchedule = {};
+        (function () {
+            function _seededShuffle(arr, seed) {
+                const a = arr.slice();
+                let s = 0;
+                for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) & 0x7fffffff;
+                for (let i = a.length - 1; i > 0; i--) {
+                    s = ((s * 1664525) + 1013904223) & 0x7fffffff;
+                    const j = s % (i + 1);
+                    const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+                }
+                return a;
+            }
+            const _enabledLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+            for (const league of _enabledLeagues) {
+                if (!league.chinuch?.enabled || !league.enabled) continue;
+                if (disabledLeagues?.includes(league.name)) continue;
+                const teams = (league.teams || []).slice();
+                if (teams.length < 1) continue;
+
+                // Collect all time-keys that have a block belonging to this league's divisions
+                const periodKeys = sortedTimeKeys.filter(tk => {
+                    const divs = Object.keys(blocksByTime[tk].byDivision);
+                    return divs.some(d => (league.divisions || []).includes(d));
+                });
+                if (periodKeys.length === 0) continue;
+
+                // Shuffle teams with date as seed so each day gives a different rotation
+                const shuffled = _seededShuffle(teams, dayId + league.name);
+                const numPeriods = periodKeys.length;
+                const bunkSchedule = {};
+                shuffled.forEach((team, idx) => {
+                    bunkSchedule[team] = Number(periodKeys[idx % numPeriods]);
+                });
+                window.chinuchSchedule[league.name] = bunkSchedule;
+                console.log('[Chinuch] "' + league.name + '": ' + Object.keys(bunkSchedule).length + ' team(s) assigned across ' + numPeriods + ' period(s)');
+            }
+        })();
+
         // ★★★ OFF-CAMPUS: Auto-detect consecutive league slots as back-to-back pairs ★★★
         for (var i = 0; i < sortedTimeKeys.length - 1; i++) {
             var tk1 = sortedTimeKeys[i], tk2 = sortedTimeKeys[i + 1];
@@ -1092,6 +1133,23 @@
                     continue;
                 }
 
+                // ★★★ CHINUCH: Filter out teams on chinuch this period ★★★
+                let activeTeams = leagueTeams;
+                if (league.chinuch?.enabled && window.chinuchSchedule?.[league.name]) {
+                    const chinuchHere = Object.entries(window.chinuchSchedule[league.name])
+                        .filter(([, sm]) => Number(sm) === Number(timeKey))
+                        .map(([name]) => name);
+                    if (chinuchHere.length > 0) {
+                        activeTeams = leagueTeams.filter(t => !chinuchHere.includes(t));
+                        console.log(`   [Chinuch] Teams on chinuch this period: [${chinuchHere.join(', ')}]`);
+                        console.log(`   [Chinuch] Active teams: [${activeTeams.join(', ')}]`);
+                    }
+                }
+                if (activeTeams.length < 2) {
+                    console.log(`   ⚠️ Not enough active teams after chinuch`);
+                    continue;
+                }
+
                 // ★★★ CHRONOLOGICAL GAME NUMBERING ★★★
                 // Initialize counter for this league if not done
                 if (leagueGameCounters[league.name] === undefined) {
@@ -1146,7 +1204,7 @@
                         continue;
                     }
                 } else {
-                    const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+                    const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     matchups = fullSchedule[roundIndex] || [];
                 }
