@@ -47,10 +47,16 @@
     <img id="health-splash-logo" src="Health_clean.png" alt="">
     <script>
     (function() {
+        /* The FOUC prevention above sets body{opacity:0} until css-ready.
+           Force body visible now — the splash covers the page during load. */
+        document.body.style.opacity = '1';
         var ov = document.getElementById('health-splash');
         setTimeout(function() {
             ov.classList.add('hide');
-            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+            setTimeout(function() {
+                if (ov) ov.style.display = 'none';
+                document.body.style.opacity = ''; /* restore CSS control */
+            }, 500);
         }, 2600);
     })();
     </script>
