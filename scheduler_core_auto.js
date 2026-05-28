@@ -18136,57 +18136,98 @@
         });
 
         // ── TRIP MULTI-SLOT WRITE: force ALL slots overlapping a trip to be Trip ──
-        // Trip blocks in bunkTimelines are pinned at [tStart, tEnd], often spanning
-        // multiple slots in the per-bunk grid. The generic pinned-write above only
-        // writes to ONE slot (the first matching by exact or overlap-fallback), so
-        // a 3-hour trip ends up filling a single 40-minute slot — leaving the
-        // remaining slots free for Phase 3 sport-fill to drop other activities into
-        // the trip's time window. This pass scans bunkTimelines for `_isTrip` blocks
-        // and OVERWRITES every overlapping slot with a Trip entry (first slot is
-        // the anchor, subsequent are continuation). Also preserves _isTrip so the
-        // renderer / future code can identify trip slots.
+        // bunkTimelines' trip block gets truncated to a single slot by earlier
+        // integrity / overlap-resolution passes (when a Phase 3 sport-fill lands
+        // in slots 1+ that should belong to the trip, the integrity pass trims
+        // the trip end to match). To restore the trip's full intended range we
+        // read directly from the saved Trip data (localStorage primary, dailyData
+        // fallback) — same source as Phase 0 trip injection — then for each bunk
+        // in each trip's grade(s) we OVERWRITE every slot in the per-bunk grid
+        // that overlaps the trip's [startMin, endMin]. First slot is the anchor,
+        // subsequent are continuation:true. Preserves _isTrip so renderer can
+        // identify the slots as one trip block.
         let tripWriteCount = 0;
-        allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
-            if (!pbs) return;
-            getBunksForGrade(grade, divisions).forEach(bunk => {
-                const arr = pbs[String(bunk)] || [];
-                if (!arr.length) return;
-                const tripBlocks = (bunkTimelines[bunk] || []).filter(b => b && (b._isTrip || b.type === 'trip'));
-                for (const trip of tripBlocks) {
-                    const tStart = trip.startMin, tEnd = trip.endMin;
-                    if (tStart == null || tEnd == null) continue;
-                    // Find every slot whose range overlaps the trip.
-                    const overlaps = [];
-                    for (let i = 0; i < arr.length; i++) {
-                        const s = arr[i];
-                        if (!s || s.startMin == null || s.endMin == null) continue;
-                        if (s.startMin < tEnd && s.endMin > tStart) overlaps.push(i);
+        try {
+            // Read trips from the SAME sources Phase 0 reads (localStorage primary,
+            // dailyData fallback) so this pass is immune to bunkTimeline corruption.
+            const _tripsDateKey = window.currentScheduleDate || '';
+            let _trips = [];
+            try { const _s = localStorage.getItem('campDailyTrips_' + _tripsDateKey); if (_s) _trips = JSON.parse(_s); } catch (_e) {}
+            if (!Array.isArray(_trips) || !_trips.length) _trips = (dailyData && dailyData.dailyTrips) || [];
+            // Expand parent divisions to leaf grades (mirrors Phase 0 helper).
+            function _tripDivToGradesWrite(divList) {
+                const out = [], seen = {};
+                (divList || []).forEach(d => {
+                    if (!d) return;
+                    const info = divisions[d];
+                    if (info && info.isParent) {
+                        const children = Array.isArray(info.children) ? info.children : (Array.isArray(info.grades) ? info.grades : null);
+                        if (children && children.length) { children.forEach(c => { if (!seen[c]) { seen[c] = 1; out.push(c); } }); return; }
+                        Object.keys(divisions).forEach(k => {
+                            const ki = divisions[k];
+                            if (!ki || ki.isParent) return;
+                            if (ki.parent === d || ki.parentDivision === d) { if (!seen[k]) { seen[k] = 1; out.push(k); } }
+                        });
+                        return;
                     }
-                    if (overlaps.length === 0) continue;
-                    overlaps.forEach((idx, i) => {
-                        const slot = arr[idx];
-                        const isFirst = (i === 0);
-                        window.scheduleAssignments[String(bunk)][idx] = {
-                            field: trip.event || 'Trip',
-                            sport: null,
-                            _activity: trip.event || 'Trip',
-                            _isTrip: true,
-                            _tripEvent: trip.event || 'Trip',
-                            _fixed: true,
-                            _pinned: true,
-                            _bunkOverride: true,
-                            _activityLocked: true,
-                            _autoMode: true,
-                            continuation: !isFirst, // first slot = anchor, rest = continuation
-                            _startMin: slot.startMin,
-                            _endMin: slot.endMin
-                        };
-                        tripWriteCount++;
+                    if (!seen[d]) { seen[d] = 1; out.push(d); }
+                });
+                return out;
+            }
+            _trips.forEach(trip => {
+                const rawGrades = Array.isArray(trip.division) ? trip.division : [trip.division];
+                const grades = _tripDivToGradesWrite(rawGrades);
+                const tStartRaw = trip.startMin != null ? trip.startMin : parseTimeToMinutes(trip.startTime);
+                const tEndRaw = trip.endMin != null ? trip.endMin : parseTimeToMinutes(trip.endTime);
+                if (tStartRaw == null || tEndRaw == null) return;
+                grades.forEach(grade => {
+                    if (!grade || !divisions[grade]) return;
+                    if (allowedSet && !allowedSet.has(String(grade))) return;
+                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    if (!pbs) return;
+                    // Clip the trip to the division's day window so partial-day
+                    // trips don't try to write to slots that don't exist.
+                    const gradeStart = parseTimeToMinutes(divisions[grade].startTime) || 0;
+                    const gradeEnd = parseTimeToMinutes(divisions[grade].endTime) || 1440;
+                    const tStart = Math.max(tStartRaw, gradeStart);
+                    const tEnd = Math.min(tEndRaw, gradeEnd);
+                    if (tEnd <= tStart) return;
+                    getBunksForGrade(grade, divisions).forEach(bunk => {
+                        const arr = pbs[String(bunk)] || [];
+                        if (!arr.length) return;
+                        // Overlap = slot has any positive intersection with [tStart, tEnd).
+                        const overlaps = [];
+                        for (let i = 0; i < arr.length; i++) {
+                            const s = arr[i];
+                            if (!s || s.startMin == null || s.endMin == null) continue;
+                            if (s.startMin < tEnd && s.endMin > tStart) overlaps.push(i);
+                        }
+                        if (!overlaps.length) return;
+                        overlaps.forEach((idx, i) => {
+                            const slot = arr[idx];
+                            const isFirst = (i === 0);
+                            window.scheduleAssignments[String(bunk)][idx] = {
+                                field: trip.event || 'Trip',
+                                sport: null,
+                                _activity: trip.event || 'Trip',
+                                _isTrip: true,
+                                _tripEvent: trip.event || 'Trip',
+                                _tripId: trip.id || null,
+                                _fixed: true,
+                                _pinned: true,
+                                _bunkOverride: true,
+                                _activityLocked: true,
+                                _autoMode: true,
+                                continuation: !isFirst,
+                                _startMin: slot.startMin,
+                                _endMin: slot.endMin
+                            };
+                            tripWriteCount++;
+                        });
                     });
-                }
+                });
             });
-        });
+        } catch (_eTrip) { try { warn('[TripMultiSlotWrite] ' + (_eTrip && _eTrip.message)); } catch (_e2) {} }
 
         // Write capacity-checked sport blocks
         let sportWriteCount = 0;
