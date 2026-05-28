@@ -719,12 +719,74 @@
             // ═══════════════════════════════════════════════════════════════
             // STEP 6: Subscribe to realtime updates for this date
             // ═══════════════════════════════════════════════════════════════
-            
+
             if (window.ScheduleSync?.subscribe) {
                 log('Step 6: Subscribing to realtime for', dateKey);
                 window.ScheduleSync.subscribe(dateKey).catch(e => {
                     logWarn('Realtime subscription failed:', e.message);
                 });
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // ★★★ DAY 16b FIX: delayed re-apply guard ★★★
+            //
+            // Live trace showed window.scheduleAssignments gets CLEARED to {}
+            // ~300ms after our hydrateWindowGlobals runs (an unidentified
+            // downstream path — likely a parallel init that races us). The
+            // subsequent rebuild from localStorage is partial (only ~57% of
+            // activities survive — anchor blocks like lunch/Change/Main
+            // activity/Cleanup are nulled). Final memory state ends at the
+            // partial count.
+            //
+            // Rather than hunt the clearing path through every init listener,
+            // re-apply our merged cloud result twice with growing delays.
+            // The cloud row is the source of truth; if anyone clobbered
+            // memory in between, we restore. Idempotent — safe to re-apply
+            // identical data.
+            //
+            // Only fires when loaded from cloud (source = 'cloud-direct')
+            // to avoid replaying stale localStorage on offline paths.
+            // ═══════════════════════════════════════════════════════════════
+            if (result.source === 'cloud-direct' && result.bunkCount > 0) {
+                const stableResult = result.data;
+                const reApply = (label) => {
+                    try {
+                        const currentActs = (() => {
+                            let n = 0;
+                            const sa = window.scheduleAssignments || {};
+                            for (const bk of Object.keys(sa)) {
+                                for (const s of (sa[bk] || [])) {
+                                    if (s && (s._activity || s.activity)) {
+                                        const a = s._activity || s.activity;
+                                        if (a && a !== 'Free') n++;
+                                    }
+                                }
+                            }
+                            return n;
+                        })();
+                        const expectedActs = (() => {
+                            let n = 0;
+                            const sa = stableResult?.scheduleAssignments || {};
+                            for (const bk of Object.keys(sa)) {
+                                for (const s of (sa[bk] || [])) {
+                                    if (s && (s._activity || s.activity)) {
+                                        const a = s._activity || s.activity;
+                                        if (a && a !== 'Free') n++;
+                                    }
+                                }
+                            }
+                            return n;
+                        })();
+                        if (currentActs < expectedActs) {
+                            log('[load re-apply ' + label + '] memory drift detected: ' + currentActs + ' < ' + expectedActs + ' — re-applying cloud data');
+                            hydrateWindowGlobals(stableResult);
+                            if (window.updateTable) window.updateTable();
+                        }
+                    } catch (e) { logWarn('re-apply ' + label + ' failed:', e); }
+                };
+                setTimeout(() => reApply('500ms'), 500);
+                setTimeout(() => reApply('2s'), 2000);
+                setTimeout(() => reApply('5s'), 5000);
             }
 
             log('═══════════════════════════════════════════════════════');
