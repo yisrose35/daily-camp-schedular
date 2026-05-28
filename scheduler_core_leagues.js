@@ -875,7 +875,10 @@
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
         // ★★★ CHINUCH: Pre-compute which teams attend chinuch at each league period ★★★
-        // Each team misses exactly one league game per day; which period rotates daily.
+        // timesPerDay  — how many periods get a chinuch session (defaults to all league periods)
+        // teamsPerRound — how many teams go simultaneously per session (defaults to 1)
+        // Teams are shuffled by date, grouped into batches of teamsPerRound, spread across
+        // the active periods so each team is assigned exactly one chinuch period per day.
         window.chinuchSchedule = {};
         (function () {
             function _seededShuffle(arr, seed) {
@@ -896,22 +899,31 @@
                 const teams = (league.teams || []).slice();
                 if (teams.length < 1) continue;
 
-                // Collect all time-keys that have a block belonging to this league's divisions
-                const periodKeys = sortedTimeKeys.filter(tk => {
+                // Collect all time-keys for this league's divisions today
+                const allPeriodKeys = sortedTimeKeys.filter(tk => {
                     const divs = Object.keys(blocksByTime[tk].byDivision);
                     return divs.some(d => (league.divisions || []).includes(d));
                 });
-                if (periodKeys.length === 0) continue;
+                if (allPeriodKeys.length === 0) continue;
 
-                // Shuffle teams with date as seed so each day gives a different rotation
+                // Respect user-configured timesPerDay (cap to available periods)
+                const teamsPerRound = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : 1;
+                const maxPeriods = league.chinuch.timesPerDay
+                    ? Math.min(league.chinuch.timesPerDay, allPeriodKeys.length)
+                    : allPeriodKeys.length;
+                const activePeriodKeys = allPeriodKeys.slice(0, maxPeriods);
+
+                // Shuffle teams using date+leagueName seed for daily variety
                 const shuffled = _seededShuffle(teams, dayId + league.name);
-                const numPeriods = periodKeys.length;
+
+                // Group into batches of teamsPerRound, assign each batch to a period
                 const bunkSchedule = {};
                 shuffled.forEach((team, idx) => {
-                    bunkSchedule[team] = Number(periodKeys[idx % numPeriods]);
+                    const periodIdx = Math.floor(idx / teamsPerRound) % activePeriodKeys.length;
+                    bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
                 });
                 window.chinuchSchedule[league.name] = bunkSchedule;
-                console.log('[Chinuch] "' + league.name + '": ' + Object.keys(bunkSchedule).length + ' team(s) assigned across ' + numPeriods + ' period(s)');
+                console.log('[Chinuch] "' + league.name + '": ' + Object.keys(bunkSchedule).length + ' team(s), ' + teamsPerRound + '/session, ' + activePeriodKeys.length + ' period(s)');
             }
         })();
 

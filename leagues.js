@@ -251,8 +251,13 @@
             //   to "shut off" until the user re-toggled it.
             playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined,
             chinuch: (league.chinuch && typeof league.chinuch === 'object')
-                ? { enabled: league.chinuch.enabled === true, bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {} }
-                : { enabled: false, bunkFacilities: {} }
+                ? {
+                    enabled: league.chinuch.enabled === true,
+                    timesPerDay: (Number.isInteger(league.chinuch.timesPerDay) && league.chinuch.timesPerDay > 0) ? league.chinuch.timesPerDay : null,
+                    teamsPerRound: (Number.isInteger(league.chinuch.teamsPerRound) && league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : 1,
+                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
+                  }
+                : { enabled: false, timesPerDay: null, teamsPerRound: 1, bunkFacilities: {} }
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1221,7 +1226,7 @@
         container.appendChild(awayCard);
 
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
-        if (!league.chinuch) league.chinuch = { enabled: false, bunkFacilities: {} };
+        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: 1, bunkFacilities: {} };
 
         const chinuchCard = document.createElement('div');
         chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
@@ -1239,7 +1244,7 @@
         };
         chinuchHeader.appendChild(chinuchCb);
         const chinuchTitle = document.createElement('div');
-        chinuchTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Chinuch</div><div style="font-size:0.75rem; color:#64748B;">Each team misses one league game per day for chinuch class</div>';
+        chinuchTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Chinuch</div><div style="font-size:0.75rem; color:#64748B;">Teams rotate through chinuch class during league time</div>';
         chinuchHeader.appendChild(chinuchTitle);
         chinuchCard.appendChild(chinuchHeader);
 
@@ -1247,32 +1252,89 @@
             const chinuchBody = document.createElement('div');
             chinuchBody.style.cssText = 'padding:14px;';
 
-            const chinuchNote = document.createElement('p');
-            chinuchNote.style.cssText = 'font-size:0.8rem; color:#64748B; margin:0 0 12px 0;';
-            chinuchNote.textContent = 'Each team rotates through chinuch once per day. Assign a fixed facility for each team below:';
-            chinuchBody.appendChild(chinuchNote);
+            // ── Schedule shape row ──────────────────────────────────────────
+            const shapeRow = document.createElement('div');
+            shapeRow.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; color:#374151; margin-bottom:14px;';
+
+            // "X sessions per day"
+            const timesInput = document.createElement('input');
+            timesInput.type = 'number'; timesInput.min = '1';
+            timesInput.value = league.chinuch.timesPerDay || '';
+            timesInput.placeholder = 'auto';
+            timesInput.style.cssText = 'width:58px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+            timesInput.title = 'How many league periods get a chinuch session each day (leave blank to use all league periods)';
+            timesInput.onchange = function () {
+                const v = parseInt(timesInput.value);
+                league.chinuch.timesPerDay = (v > 0) ? v : null;
+                saveLeaguesData();
+            };
+
+            // "Y teams per session"
+            const perRoundInput = document.createElement('input');
+            perRoundInput.type = 'number'; perRoundInput.min = '1';
+            perRoundInput.value = league.chinuch.teamsPerRound || 1;
+            perRoundInput.style.cssText = 'width:58px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+            perRoundInput.title = 'How many teams attend chinuch simultaneously each session';
+            perRoundInput.onchange = function () {
+                const v = parseInt(perRoundInput.value);
+                league.chinuch.teamsPerRound = (v > 0) ? v : 1;
+                saveLeaguesData();
+            };
+
+            shapeRow.appendChild(timesInput);
+            shapeRow.appendChild(document.createTextNode(' sessions per day,  '));
+            shapeRow.appendChild(perRoundInput);
+            shapeRow.appendChild(document.createTextNode(' team(s) per session'));
+            chinuchBody.appendChild(shapeRow);
+
+            // ── Per-team facility (dropdown from Facilities tab) ────────────
+            const facilityHeader = document.createElement('div');
+            facilityHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:8px;';
+            facilityHeader.textContent = 'Chinuch Location per Team';
+            chinuchBody.appendChild(facilityHeader);
+
+            const allFacilities = (typeof window.getFacilities === 'function') ? window.getFacilities() : [];
+
+            if (allFacilities.length === 0) {
+                const noFac = document.createElement('div');
+                noFac.style.cssText = 'font-size:0.8rem; color:#F59E0B; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-bottom:8px;';
+                noFac.textContent = 'No facilities found — add rooms in the Facilities tab first, then come back here.';
+                chinuchBody.appendChild(noFac);
+            }
 
             (league.teams || []).forEach(function (team) {
                 const row = document.createElement('div');
                 row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:8px;';
 
                 const label = document.createElement('span');
-                label.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:100px; flex:1;';
+                label.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
                 label.textContent = team;
 
-                const facilityInput = document.createElement('input');
-                facilityInput.type = 'text';
-                facilityInput.value = (league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[team]) || '';
-                facilityInput.placeholder = 'Room / facility';
-                facilityInput.style.cssText = 'flex:2; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:white;';
-                facilityInput.onchange = function () {
+                const facSelect = document.createElement('select');
+                facSelect.style.cssText = 'flex:2; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:white; max-width:220px;';
+
+                const blankOpt = document.createElement('option');
+                blankOpt.value = '';
+                blankOpt.textContent = '— choose facility —';
+                facSelect.appendChild(blankOpt);
+
+                const currentVal = (league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[team]) || '';
+                allFacilities.forEach(function (fac) {
+                    const opt = document.createElement('option');
+                    opt.value = fac.name;
+                    opt.textContent = fac.name;
+                    if (fac.name === currentVal) opt.selected = true;
+                    facSelect.appendChild(opt);
+                });
+
+                facSelect.onchange = function () {
                     if (!league.chinuch.bunkFacilities) league.chinuch.bunkFacilities = {};
-                    league.chinuch.bunkFacilities[team] = facilityInput.value.trim();
+                    league.chinuch.bunkFacilities[team] = facSelect.value;
                     saveLeaguesData();
                 };
 
                 row.appendChild(label);
-                row.appendChild(facilityInput);
+                row.appendChild(facSelect);
                 chinuchBody.appendChild(row);
             });
 
