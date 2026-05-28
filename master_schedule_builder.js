@@ -1862,8 +1862,9 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     html += `<div class="ms-daw-grade-header">
       <span class="ms-daw-grade-tag">${gradeKey}</span>${_ovBadge}
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
-      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}">+</button>
-      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}">Clear</button>
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}" title="Add a new layer to this grade">+</button>
+      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${gradeKey}" title="Override individual bunks' activities (Day 24)">Bunks</button>
+      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}" title="Remove all layers from this grade">Clear</button>
     </div>`;
 
     // Collect period boundary pixel positions for this grade (used by notch clip-paths)
@@ -2364,6 +2365,21 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         layerSource[grade] = [];
         onSave();
         onRender();
+      }
+    };
+  });
+
+  // ★ Day 24: Bunk overrides — open the per-bunk DAW grid for this grade so
+  //   the user can override any bunk's activity for any layer slot.
+  //   `openAutoBunkOverridesPanel` is module-scope; the click handler is
+  //   guarded so a missing function doesn't break the rest of the toolbar.
+  gridEl.querySelectorAll('[data-action="bunk-overrides"]').forEach(btn => {
+    btn.onclick = () => {
+      const grade = btn.dataset.grade;
+      if (typeof openAutoBunkOverridesPanel === 'function') {
+        openAutoBunkOverridesPanel(grade);
+      } else {
+        try { (window.showAlert || window.alert)('Bunk overrides panel unavailable.'); } catch (_e) {}
       }
     };
   });
