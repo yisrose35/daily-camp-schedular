@@ -7291,6 +7291,37 @@ function loadCurrentOverrides() {
   currentOverrides.bunkActivityOverrides = bunkOv;
 }
 
+// ── Resources panel: reload overrides + re-render on date change ──
+// When the user switches the calendar date picker, calendar.js dispatches
+// `campistry-date-changed`. Before this listener, the in-memory
+// `currentOverrides` stayed pinned to the OLD date — the panel still showed
+// the previous date's toggles, time rules, and per-field sport disables, even
+// though the GENERATOR was correctly reading the new date's localStorage
+// (so schedules were right but the UI was misleading and any new toggle in
+// the panel would write to the wrong date's storage).
+try {
+  window.addEventListener('campistry-date-changed', function (e) {
+    try {
+      // Wait one tick so window.currentScheduleDate is fully updated by
+      // upstream listeners (orchestrator/integration_hooks) before we read it.
+      setTimeout(function () {
+        try {
+          if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
+          // Only re-render if the Resources panel is currently mounted.
+          var resPanel = document.getElementById('da-resources-container');
+          if (resPanel && resPanel.offsetParent !== null && typeof renderResourceOverridesUI === 'function') {
+            renderResourceOverridesUI();
+            // If a facility/league was previously selected, the detail pane
+            // also needs to refresh so its time-rule and sport-disable lists
+            // match the new date.
+            if (typeof renderOverrideDetailPane === 'function') renderOverrideDetailPane();
+          }
+        } catch (_e1) { try { console.warn('[ResourceOverrides] reload-on-date-change failed:', _e1 && _e1.message); } catch (_e2) {} }
+      }, 50);
+    } catch (_e0) {}
+  });
+} catch (_e) {}
+
 // =================================================================
 // MAIN INIT
 // =================================================================
