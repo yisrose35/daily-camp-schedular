@@ -32,6 +32,7 @@
     let selectedLeagueName = null;
     let listEl = null;
     let detailPaneEl = null;
+    const _advancedOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
     let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
@@ -1118,7 +1119,49 @@
       teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
 
-        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        // \u2500\u2500\u2500 Advanced Settings Collapsible \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        const advancedOpen = _advancedOpenLeagues.has(league.name);
+        const advancedWrap = document.createElement('div');
+        advancedWrap.style.cssText = 'margin-top:14px;';
+
+        const advancedToggle = document.createElement('button');
+        advancedToggle.type = 'button';
+        advancedToggle.style.cssText = 'display:flex; align-items:center; gap:8px; width:100%; padding:10px 12px; background:transparent; border:none; border-top:1px solid #E5E7EB; cursor:pointer; font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; text-align:left;';
+        const advancedChevron = document.createElement('span');
+        advancedChevron.textContent = advancedOpen ? '\u25be' : '\u25b8';
+        advancedChevron.style.cssText = 'display:inline-block; width:12px; color:#9CA3AF; font-size:0.85rem;';
+        const advancedLabel = document.createElement('span');
+        advancedLabel.textContent = 'Advanced Settings';
+        advancedToggle.appendChild(advancedChevron);
+        advancedToggle.appendChild(advancedLabel);
+
+        // Summary chip when collapsed
+        const _summaryBits = [];
+        if (league.offCampus?.enabled) _summaryBits.push('Away Games');
+        if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
+        if (_summaryBits.length > 0) {
+            const summary = document.createElement('span');
+            summary.textContent = _summaryBits.join(' \u00b7 ');
+            summary.style.cssText = 'margin-left:auto; font-size:0.7rem; font-weight:500; text-transform:none; letter-spacing:0; color:#16A34A; background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; padding:2px 8px;';
+            advancedToggle.appendChild(summary);
+        }
+
+        const advancedBody = document.createElement('div');
+        advancedBody.style.cssText = 'display:' + (advancedOpen ? 'block' : 'none') + '; padding-top:4px;';
+
+        advancedToggle.onclick = function () {
+            const nowOpen = !_advancedOpenLeagues.has(league.name);
+            if (nowOpen) _advancedOpenLeagues.add(league.name);
+            else _advancedOpenLeagues.delete(league.name);
+            advancedBody.style.display = nowOpen ? 'block' : 'none';
+            advancedChevron.textContent = nowOpen ? '\u25be' : '\u25b8';
+        };
+
+        advancedWrap.appendChild(advancedToggle);
+        advancedWrap.appendChild(advancedBody);
+        container.appendChild(advancedWrap);
+
+        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         if (!league.offCampus) league.offCampus = { enabled: false, zone: '', teamsPerDay: 0 };
         const settings = window.loadGlobalSettings?.() || {};
         const locationZones = settings.locationZones || settings.global?.locationZones || {};
@@ -1223,7 +1266,7 @@
             awayCard.appendChild(awayBody);
         }
 
-        container.appendChild(awayCard);
+        advancedBody.appendChild(awayCard);
 
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
         if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: 1, bunkFacilities: {} };
@@ -1354,7 +1397,7 @@
             chinuchCard.appendChild(chinuchBody);
         }
 
-        container.appendChild(chinuchCard);
+        advancedBody.appendChild(chinuchCard);
     }
 
     // =========================================================================
