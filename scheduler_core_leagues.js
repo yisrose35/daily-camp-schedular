@@ -558,9 +558,13 @@
             let bestOption = null;
             let bestScore = -Infinity;
 
-            for (const option of availablePool) {
-                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
+            // ★ INDOOR HARD CONSTRAINT: restrict to indoor (or non-indoor) when
+            // the rule requires it AND such a field is available; otherwise use
+            // the full eligible set so the matchup always gets a sport.
+            const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
+            const _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
+            for (const option of _pool) {
                 let score = 0;
 
                 // Heavy weight on sport need (main priority in this mode)
@@ -617,13 +621,22 @@
         const usedFields = new Set();
 
         // Sort matchups by how many times they've played (least played first)
+        const _indoorReqMV = leagueRules && leagueRules.indoorRequirement;
+        const _indoorCountsMV = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const matchupCount = getMatchupCount(leagueName, t1, t2, history);
-            return { t1, t2, matchupCount };
+            const indoorMin = Math.min(_indoorCountsMV[t1] || 0, _indoorCountsMV[t2] || 0);
+            return { t1, t2, matchupCount, indoorMin };
         });
 
-        // Process matchups with fewest prior meetings first
-        matchupsWithPriority.sort((a, b) => a.matchupCount - b.matchupCount);
+        // Process matchups with fewest prior meetings first. When an indoor
+        // requirement is active, the neediest indoor pair goes first so it
+        // claims a scarce indoor field before others.
+        if (_indoorReqMV && _indoorReqMV.enabled) {
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.matchupCount - b.matchupCount);
+        } else {
+            matchupsWithPriority.sort((a, b) => a.matchupCount - b.matchupCount);
+        }
 
         console.log(`   📊 [MatchupVariety] Matchup priorities:`);
         matchupsWithPriority.forEach(m => {
@@ -634,9 +647,11 @@
             let bestOption = null;
             let bestScore = -Infinity;
 
-            for (const option of availablePool) {
-                if (_isFieldUsedConsideringCombos(usedFields, option.field)) continue;
+            // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
+            const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
+            const _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
 
+            for (const option of _pool) {
                 let score = 0;
 
                 // In matchup variety mode, sport variety is secondary
@@ -698,7 +713,47 @@
     }
 
     // =========================================================================
-    // ★★★ INDOOR REQUIREMENT SCORING HELPER ★★★
+    // ★★★ INDOOR REQUIREMENT — HARD (non-blocking) CONSTRAINT ★★★
+    // An option is "indoor" if its facility is flagged indoor in Facilities
+    // (rainyDayAvailable === true; isIndoor kept as a fallback).
+    // =========================================================================
+    function _optIsIndoor(option) {
+        const fo = option && option.fieldObj;
+        return !!(fo && (fo.rainyDayAvailable === true || fo.isIndoor === true));
+    }
+
+    // Hard-constraint direction for a matchup given the league rule + each
+    // team's running indoor count today:
+    //   +1 → this game MUST be indoor (a team is still below its floor)
+    //   -1 → this game MUST avoid indoor (a team would exceed its ceiling)
+    //    0 → no constraint
+    function _indoorConstraintDir(t1, t2, leagueRules) {
+        const req = leagueRules && leagueRules.indoorRequirement;
+        if (!req || !req.enabled) return 0;
+        const counts = (leagueRules && leagueRules.indoorCounts) || {};
+        const op = req.op || '>=';
+        const target = Number.isFinite(req.count) ? req.count : 1;
+        const c1 = counts[t1] || 0, c2 = counts[t2] || 0;
+        const lo = Math.min(c1, c2), hi = Math.max(c1, c2);
+        if (op === '>=') return lo < target ? 1 : 0;       // below floor → require indoor
+        if (op === '<=') return hi >= target ? -1 : 0;      // at/over ceiling → forbid indoor
+        if (op === '=')  { if (lo < target) return 1; if (hi >= target) return -1; return 0; }
+        return 0;
+    }
+
+    // Apply the HARD indoor constraint to the eligible (unused) options for a
+    // matchup, WITH FALLBACK: if the required field type has no available
+    // option, return the eligible set unchanged so the matchup still receives a
+    // sport. The indoor rule never causes a game to go unscheduled.
+    function _applyIndoorHardFilter(eligible, t1, t2, leagueRules) {
+        const dir = _indoorConstraintDir(t1, t2, leagueRules);
+        if (dir === 1) { const ind = eligible.filter(_optIsIndoor); return ind.length ? ind : eligible; }
+        if (dir === -1) { const out = eligible.filter(function (o) { return !_optIsIndoor(o); }); return out.length ? out : eligible; }
+        return eligible;
+    }
+
+    // =========================================================================
+    // ★★★ INDOOR REQUIREMENT SCORING HELPER (tie-break within the filtered set) ★★★
     // Returns a score adjustment for picking `option` for the matchup (t1, t2),
     // given the league's indoor rule and each team's running indoor count today.
     // Higher = more desirable. Used by both SportVariety and MatchupVariety.
