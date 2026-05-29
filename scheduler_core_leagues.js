@@ -707,7 +707,15 @@
         const req = leagueRules && leagueRules.indoorRequirement;
         if (!req || !req.enabled) return 0;
         const counts = (leagueRules && leagueRules.indoorCounts) || {};
-        const isIndoor = !!(option && option.fieldObj && option.fieldObj.isIndoor);
+        // ★★★ INDOOR FIX: indoor/outdoor is defined in Facilities via the
+        // weather toggle, stored as field.rainyDayAvailable (indoor ⟺ true —
+        // see scheduler_core_main.js rainy-day filter + facilities.js
+        // renderWeatherSettings). The scorer previously read fieldObj.isIndoor,
+        // which fields don't carry, so the indoor requirement never detected
+        // any indoor field. Read the canonical rainyDayAvailable flag (keep
+        // isIndoor as a fallback in case any field carries it explicitly).
+        const _fo = option && option.fieldObj;
+        const isIndoor = !!(_fo && (_fo.rainyDayAvailable === true || _fo.isIndoor === true));
         const op = req.op || '>=';
         const target = Number.isFinite(req.count) ? req.count : 1;
 
@@ -1547,7 +1555,10 @@
                     const ic = indoorCountsByLeague[league.name];
                     assignments.forEach(function (a) {
                         const fObj = availablePool.find(function (p) { return p.field === a.field && p.sport === a.sport; });
-                        if (fObj && fObj.fieldObj && fObj.fieldObj.isIndoor) {
+                        // ★ INDOOR FIX: read the canonical Facilities indoor flag
+                        // (rainyDayAvailable), with isIndoor as a fallback.
+                        const _f = fObj && fObj.fieldObj;
+                        if (_f && (_f.rainyDayAvailable === true || _f.isIndoor === true)) {
                             if (a.team1) ic[a.team1] = (ic[a.team1] || 0) + 1;
                             if (a.team2) ic[a.team2] = (ic[a.team2] || 0) + 1;
                         }
