@@ -899,8 +899,13 @@
                 const teams = (league.teams || []).slice();
                 if (teams.length < 1) continue;
 
-                // Collect all time-keys for this league's divisions today
+                // Collect all time-keys for this league — mirror the same matching logic
+                // used in the main per-time-key loop: leagueName hint takes priority over
+                // division membership, so leagues configured without assigned divisions
+                // (but referenced by name on skeleton blocks) are still found correctly.
                 const allPeriodKeys = sortedTimeKeys.filter(tk => {
+                    const blocks = blocksByTime[tk].allBlocks;
+                    if (blocks.some(b => b.leagueName === league.name)) return true;
                     const divs = Object.keys(blocksByTime[tk].byDivision);
                     return divs.some(d => (league.divisions || []).includes(d));
                 });
