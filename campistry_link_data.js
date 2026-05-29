@@ -90,7 +90,14 @@
 
     /** Get unified state from campGlobalSettings_v1 with fallbacks */
     data.getGlobalState = function() {
-        // Try all known keys that Me writes to
+        // integration_hooks provides _localCache (full state; camperRoster not stripped)
+        if (typeof window.loadGlobalSettings === 'function') {
+            try {
+                var lgs = window.loadGlobalSettings();
+                if (lgs && (lgs.app1 || lgs.campStructure || lgs.campistryMe)) return lgs;
+            } catch (_) {}
+        }
+        // Fallback: localStorage keys (camperRoster may be stripped on big camps)
         var keys = [GLOBAL_STORE, 'CAMPISTRY_LOCAL_CACHE', 'CAMPISTRY_UNIFIED_STATE'];
         for (var i = 0; i < keys.length; i++) {
             try {
