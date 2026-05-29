@@ -1152,13 +1152,14 @@
 
                 // ★★★ CHINUCH: Filter out teams on chinuch this period ★★★
                 let activeTeams = leagueTeams;
+                let chinuchTeamsHere = [];
                 if (league.chinuch?.enabled && window.chinuchSchedule?.[league.name]) {
-                    const chinuchHere = Object.entries(window.chinuchSchedule[league.name])
+                    chinuchTeamsHere = Object.entries(window.chinuchSchedule[league.name])
                         .filter(([, sm]) => Number(sm) === Number(timeKey))
                         .map(([name]) => name);
-                    if (chinuchHere.length > 0) {
-                        activeTeams = leagueTeams.filter(t => !chinuchHere.includes(t));
-                        console.log(`   [Chinuch] Teams on chinuch this period: [${chinuchHere.join(', ')}]`);
+                    if (chinuchTeamsHere.length > 0) {
+                        activeTeams = leagueTeams.filter(t => !chinuchTeamsHere.includes(t));
+                        console.log(`   [Chinuch] Teams on chinuch this period: [${chinuchTeamsHere.join(', ')}]`);
                         console.log(`   [Chinuch] Active teams: [${activeTeams.join(', ')}]`);
                     }
                 }
@@ -1512,6 +1513,11 @@ window._debugLeagueTimeData = timeData;
         const _firstSport = (assignments.find(a => a && a.sport) || {}).sport
             || (league.sports && league.sports[0])
             || '';
+        // ★ CHINUCH: append "Team — Chinuch (Facility)" lines for teams on chinuch this period
+        const _chinuchLines = chinuchTeamsHere.map(function (t) {
+            const fac = league.chinuch?.bunkFacilities?.[t] || 'Chinuch';
+            return `${t} — Chinuch (${fac})`;
+        });
         const pick = {
                             field: `League: ${league.name}`,
                             sport: _firstSport,
@@ -1521,7 +1527,7 @@ window._debugLeagueTimeData = timeData;
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
-                            ),
+                            ).concat(_chinuchLines),
                             _gameLabel: _gameLbl,
                             _playoffRound: playoffRoundNum || null
                         };
