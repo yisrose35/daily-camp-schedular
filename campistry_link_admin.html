@@ -101,7 +101,10 @@
 
         /* Mobile */
         @media(max-width:768px) {
-            .lk-sidebar { transform:translateX(-100%); transition:transform .25s ease; }
+            /* campistry_link.css sets display:none on the sidebar for the parent
+               portal (which has no hamburger). Override it here for the admin page
+               so the slide-in animation works. */
+            .lk-sidebar { display:block; transform:translateX(-100%); transition:transform .25s ease; }
             body.sidebar-open .lk-sidebar { transform:translateX(0); }
             .lk-main { margin-left:0; padding:16px 16px 80px; }
             .lk-sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:49; }
