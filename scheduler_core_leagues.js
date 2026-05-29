@@ -1035,12 +1035,22 @@
                     }
                     const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
 
+                    // ★★★ CHINUCH FIX: cap chinuch attendance to teamsPerSession ×
+                    // periodsNeeded teams. The old forEach gave EVERY team a chinuch
+                    // slot — so "1 team/session" on a single league period actually
+                    // pulled ALL teams to chinuch, leaving nobody to play (then the
+                    // activeTeams<2 guard skipped the whole league). Only the first
+                    // `cap` shuffled teams attend chinuch today; the rest play their
+                    // league game. The daily date-seeded shuffle rotates which teams
+                    // attend so it evens out over the week.
+                    const _cap = teamsPerSession * periodsNeeded;
                     shuffled.forEach((team, idx) => {
+                        if (idx >= _cap) return; // remaining teams play (no chinuch today)
                         const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
                         bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
                     });
                     _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
-                    _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active';
+                    _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s), cap ' + Math.min(_cap, teams.length) + '/' + teams.length + ' team(s)';
                 }
 
                 window.chinuchSchedule[league.name] = bunkSchedule;

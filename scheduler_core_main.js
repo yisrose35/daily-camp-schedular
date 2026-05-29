@@ -3011,53 +3011,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.SchedulerCoreLeagues.processRegularLeagues(leagueContext);
         }
 
-        // ★★★ STEP 5.1: CHINUCH PER-BUNK WRITEBACK (manual mode) ★★★
-        // processRegularLeagues above populated window.chinuchSchedule.
-        // In manual mode fillBlock works at the division level, so we write
-        // chinuch to individual bunk scheduleAssignments here.
-        if (window.chinuchSchedule && Object.keys(window.chinuchSchedule).length > 0) {
-            const _allLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
-            leagueBlocks.forEach(function (lb) {
-                // Determine which league applies to this block
-                const _lnHint = lb.leagueName || null;
-                const _divBunks = lb.bunks || [];
-                const _slots = lb.slots || [];
-                if (_slots.length === 0 || _divBunks.length === 0) return;
-                const _slotIdx = _slots[0];
-                const _blockStartMin = lb.startTime; // already in minutes
-
-                // Find the applicable league(s) for this block
-                const _applicableLeagues = _allLeagues.filter(function (l) {
-                    if (!l.chinuch?.enabled || !l.enabled) return false;
-                    if (_lnHint) return l.name === _lnHint;
-                    return (l.divisions || []).includes(lb.divName);
-                });
-
-                _applicableLeagues.forEach(function (league) {
-                    const _cs = window.chinuchSchedule[league.name];
-                    if (!_cs) return;
-                    _divBunks.forEach(function (bunk) {
-                        if (_cs[bunk] == null) return;
-                        if (Number(_cs[bunk]) !== Number(_blockStartMin)) return;
-                        // This bunk is on chinuch at this league period
-                        if (!window.scheduleAssignments[bunk]) return;
-                        const facility = league.chinuch?.bunkFacilities?.[bunk] || 'Chinuch';
-                        window.scheduleAssignments[bunk][_slotIdx] = {
-                            field: facility,
-                            _activity: 'Chinuch',
-                            _isChinuch: true,
-                            sport: null,
-                            _startMin: _blockStartMin,
-                            _endMin: lb.endTime,
-                            _fixed: true,
-                            continuation: false
-                        };
-                    });
-                });
-            });
-            const _chinuchCount = Object.values(window.chinuchSchedule).reduce(function (acc, m) { return acc + Object.keys(m).length; }, 0);
-            console.log('[STEP 5.1] Chinuch writeback: ' + _chinuchCount + ' team assignment(s) written to scheduleAssignments');
-        }
+        // ★★★ CHINUCH (manual mode) — matchup-display level, NOT per-bunk ★★★
+        // Teams and bunks are SEPARATE concepts. A chinuch team is shown in the
+        // league game's matchup display as "Team X — Chinuch (Facility)", built
+        // by processRegularLeagues (it appends those lines to pick._allMatchups,
+        // which fillBlock stores into leagueAssignments[divName][slot].matchups).
+        // We do NOT override any individual bunk's schedule slot for chinuch —
+        // the old STEP 5.1 per-bunk writeback was the wrong model (and, because
+        // window.chinuchSchedule is keyed by TEAM label while it indexed by BUNK
+        // key, it never matched anyway). Removed: chinuch now lives purely in the
+        // matchup display, consistent with how the league block itself renders.
         // =========================================================================
 
         console.log("\n[STEP 5.5] Consolidating league assignments...");
