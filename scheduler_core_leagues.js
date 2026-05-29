@@ -1544,6 +1544,16 @@ window._debugLeagueTimeData = timeData;
             const fac = league.chinuch?.bunkFacilities?.[t] || 'Chinuch';
             return `${t} — Chinuch (${fac})`;
         });
+        // ★ BYE: any active team not in a matchup is on a bye — show it explicitly so
+        // every team appears on the schedule every period (no silently-dropped teams).
+        const _playingTeams = new Set();
+        assignments.forEach(function (a) {
+            if (a.team1) _playingTeams.add(a.team1);
+            if (a.team2) _playingTeams.add(a.team2);
+        });
+        const _byeLines = (activeTeams || [])
+            .filter(function (t) { return !_playingTeams.has(t); })
+            .map(function (t) { return `${t} — Bye`; });
         const pick = {
                             field: `League: ${league.name}`,
                             sport: _firstSport,
@@ -1553,7 +1563,7 @@ window._debugLeagueTimeData = timeData;
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
-                            ).concat(_chinuchLines),
+                            ).concat(_byeLines).concat(_chinuchLines),
                             _gameLabel: _gameLbl,
                             _playoffRound: playoffRoundNum || null
                         };
