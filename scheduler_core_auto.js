@@ -17897,6 +17897,19 @@
                 }
             });
             if (!Object.keys(flexPrepMap).length) return;
+            // ★ Day 19 (user decision: "displace a sport for prep"): a slot is
+            // displaceable by a flexible-prep block only when it holds a plain
+            // regular SPORT — never an anchor (_pinned: swim/lunch/change/lineup),
+            // special/prep (_autoSpecial/_isPrep), league (_league), scheduled
+            // activity (_isRotationEvent), trip (_isTrip), or a pair-locked sport
+            // (_pairLock — those satisfy a minPlayers pairing). Overwriting one of
+            // these would corrupt a hard constraint; a regular sport is the only
+            // safe sacrifice and leaves no hole (prep fills the slot).
+            function _prepDisplaceable(e) {
+                return !!e && !e.continuation && !!e.sport &&
+                    !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep &&
+                    !e._league && !e._isRotationEvent && !e._isTrip;
+            }
             var syncedDone = {};
             allGrades.forEach(function(grade) {
                 var pbs = window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots;
@@ -17922,14 +17935,26 @@
                     if (!affected.length) return;
                     var deadline = Math.min.apply(null, affected.map(function(b) { return bunkStarts[b]; }));
                     var refArr = pbs[String(affected[0])] || [];
-                    var bestSi = -1;
+                    var bestSi = -1, _syncDisplaced = false;
+                    // Pass 1 (preferred, zero-cost): a common slot where EVERY affected
+                    // bunk is empty.
                     for (var si2 = refArr.length - 1; si2 >= 0; si2--) {
                         var slot2 = refArr[si2];
                         if (!slot2 || slot2.endMin > deadline) continue;
                         if ((slot2.endMin - slot2.startMin) < pi.duration) continue;
                         if (affected.every(function(b) { return !window.scheduleAssignments[String(b)][si2]; })) { bestSi = si2; break; }
                     }
-                    if (bestSi < 0) { log('[flexPrep] no common slot for sync ' + actName + ' grade ' + grade); return; }
+                    // ★ Day 19 dense fallback: a common slot where every affected bunk is
+                    // empty OR holds a displaceable regular sport (which prep overwrites).
+                    if (bestSi < 0) {
+                        for (var si2b = refArr.length - 1; si2b >= 0; si2b--) {
+                            var slot2b = refArr[si2b];
+                            if (!slot2b || slot2b.endMin > deadline) continue;
+                            if ((slot2b.endMin - slot2b.startMin) < pi.duration) continue;
+                            if (affected.every(function(b) { var _e = window.scheduleAssignments[String(b)][si2b]; return !_e || _prepDisplaceable(_e); })) { bestSi = si2b; _syncDisplaced = true; break; }
+                        }
+                    }
+                    if (bestSi < 0) { log('[flexPrep] no common slot (incl. displaceable) for sync ' + actName + ' grade ' + grade); return; }
                     affected.forEach(function(bunk) {
                         var sl3 = pbs[String(bunk)] && pbs[String(bunk)][bestSi];
                         if (!sl3) return;
@@ -17951,18 +17976,31 @@
                             if (asgn[si4] && asgn[si4]._activity === actName) { actIdx = si4; actStart = arr[si4] ? arr[si4].startMin : Infinity; break; }
                         }
                         if (actIdx < 0) return;
-                        var bestSi2 = -1;
+                        var bestSi2 = -1, _stagDisplaced = null;
+                        // Pass 1 (preferred, zero-cost): nearest EMPTY slot before the activity.
                         for (var si5 = actIdx - 1; si5 >= 0; si5--) {
                             var sl4 = arr[si5];
                             if (!sl4 || sl4.endMin > actStart) continue;
                             if ((sl4.endMin - sl4.startMin) < pi.duration) continue;
                             if (!asgn[si5]) { bestSi2 = si5; break; }
                         }
-                        if (bestSi2 < 0) { log('[flexPrep] no slot for staggered ' + actName + ' prep bunk ' + bunk); return; }
+                        // ★ Day 19 dense fallback: no empty slot precedes the activity, so
+                        // reserve prep room by overwriting the nearest displaceable regular
+                        // sport (never anchor/special/league/rotation/trip/pair-locked). No
+                        // hole results — the prep fills the sacrificed sport's slot.
+                        if (bestSi2 < 0) {
+                            for (var si5b = actIdx - 1; si5b >= 0; si5b--) {
+                                var sl4b = arr[si5b];
+                                if (!sl4b || sl4b.endMin > actStart) continue;
+                                if ((sl4b.endMin - sl4b.startMin) < pi.duration) continue;
+                                if (_prepDisplaceable(asgn[si5b])) { bestSi2 = si5b; _stagDisplaced = (asgn[si5b]._activity || asgn[si5b].sport); break; }
+                            }
+                        }
+                        if (bestSi2 < 0) { log('[flexPrep] no slot (incl. displaceable) for staggered ' + actName + ' prep bunk ' + bunk); return; }
                         var sl5 = arr[bestSi2];
                         asgn[bestSi2] = { field: pi.location || null, sport: null, _activity: actName + ' (Prep)', _isPrep: true, _prepFor: actName, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: sl5.startMin, _endMin: sl5.endMin };
                         if (pi.location && window.AutoFieldLocks) window.AutoFieldLocks.lockField(pi.location, sl5.startMin, sl5.endMin, grade, actName + ' Prep', 'auto_prep');
-                        log('[flexPrep] staggered ' + actName + ' prep bunk ' + bunk + ' slot ' + bestSi2);
+                        log('[flexPrep] staggered ' + actName + ' prep bunk ' + bunk + ' slot ' + bestSi2 + (_stagDisplaced ? ' (displaced ' + _stagDisplaced + ')' : ''));
                     });
                 });
             });
