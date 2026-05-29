@@ -22,6 +22,13 @@
     const LIVE_KEY = 'campistry_live_v1';
 
     function readGlobal() {
+        // integration_hooks provides _localCache (full state, roster not stripped)
+        if (typeof window.loadGlobalSettings === 'function') {
+            try {
+                var s = window.loadGlobalSettings();
+                if (s && (s.app1 || s.campStructure || s.campistryMe)) return s;
+            } catch (_) {}
+        }
         try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (e) { return {}; }
     }
     function getRoster() { const g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
