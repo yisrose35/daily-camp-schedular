@@ -718,13 +718,6 @@
         const isIndoor = !!(_fo && (_fo.rainyDayAvailable === true || _fo.isIndoor === true));
         const op = req.op || '>=';
         const target = Number.isFinite(req.count) ? req.count : 1;
-        // ★ TEMP DIAG (indoor verify) — remove after confirming
-        try {
-            const _b = (function(){ const c1=counts[t1]||0,c2=counts[t2]||0; let s=0;
-                [c1,c2].forEach(cur=>{ if(op==='>='){ if(isIndoor){ s+= cur<target?1500*(target-cur):-200; } else { s+= cur<target?-800*(target-cur):0; } } });
-                return s; })();
-            console.log('[IndoorDiag] field='+(option&&option.field)+' rainyDayAvailable='+(_fo&&_fo.rainyDayAvailable)+' isIndoor='+isIndoor+' op='+op+' bias='+_b);
-        } catch(_) {}
 
         function teamDelta(team) {
             const cur = counts[team] || 0;
