@@ -17815,8 +17815,28 @@
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
                 (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).forEach(block => {
-                    const idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
-                    if (idx === -1) return;
+                    let idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
+                    // ★ Day 19: multi-period special spanning. When no single grid slot
+                    // matches the special's [start,end] exactly — because the special
+                    // spans 2+ consecutive periods (e.g. an 80-min special across two
+                    // 40-min slots) or was placed non-period-aligned — fall back to
+                    // overlap-match and write the special across EVERY covered slot,
+                    // first slot as the anchor and the rest continuation:true. Mirrors
+                    // the trip multi-slot write. Exact match previously dropped these
+                    // blocks entirely (findIndex === -1 → return), silently leaving a
+                    // hole. Period-aligned single-slot specials still hit the exact
+                    // path below with unchanged behavior.
+                    let _spanIdxs = null;
+                    if (idx === -1) {
+                        _spanIdxs = [];
+                        for (let _si = 0; _si < arr.length; _si++) {
+                            const _s = arr[_si];
+                            if (_s && _s.startMin != null && _s.endMin != null &&
+                                _s.startMin < block.endMin && _s.endMin > block.startMin) _spanIdxs.push(_si);
+                        }
+                        if (!_spanIdxs.length) return;
+                        idx = _spanIdxs[0];
+                    }
                     const fn = block._specialLocation || block._assignedSpecial;
                     const _why = _validateWritePlacement(fn, block._assignedSpecial, grade, bunk, block.startMin, block.endMin);
                     if (_why) {
@@ -17833,23 +17853,31 @@
                     // window.getActivityDisplayName(slot) helper. _activity
                     // stays unchanged for cross-day matching/analytics.
                     const _mpInfo = getMultiPartInfo(bunk, block._assignedSpecial);
-                    window.scheduleAssignments[String(bunk)][idx] = {
-                        field: fn, sport: null, _activity: block._assignedSpecial,
-                        _fixed: true, _bunkOverride: true, _activityLocked: true,
-                        _autoSpecial: true, _autoMode: true, continuation: false,
-                        _startMin: block.startMin, _endMin: block.endMin,
-                        _partNumber: _mpInfo ? _mpInfo.partNumber : null,
-                        _totalParts: _mpInfo ? _mpInfo.totalParts : null,
-                        _partLabel: _mpInfo ? (block._assignedSpecial + ' ' + _mpInfo.partNumber + '/' + _mpInfo.totalParts) : null
-                    };
-                    registerSpecialFieldUsage([idx], fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
+                    const _mpLabel = _mpInfo ? (block._assignedSpecial + ' ' + _mpInfo.partNumber + '/' + _mpInfo.totalParts) : null;
+                    const _writeIdxs = _spanIdxs || [idx];
+                    _writeIdxs.forEach((wIdx, wPos) => {
+                        const _slot = arr[wIdx];
+                        window.scheduleAssignments[String(bunk)][wIdx] = {
+                            field: fn, sport: null, _activity: block._assignedSpecial,
+                            _fixed: true, _bunkOverride: true, _activityLocked: true,
+                            _autoSpecial: true, _autoMode: true, continuation: wPos > 0,
+                            // Single-slot (exact) write keeps the block's own range for
+                            // backward compat; multi-slot spanning uses each slot's range.
+                            _startMin: _spanIdxs ? _slot.startMin : block.startMin,
+                            _endMin: _spanIdxs ? _slot.endMin : block.endMin,
+                            _partNumber: _mpInfo ? _mpInfo.partNumber : null,
+                            _totalParts: _mpInfo ? _mpInfo.totalParts : null,
+                            _partLabel: _mpLabel
+                        };
+                    });
+                    registerSpecialFieldUsage(_writeIdxs, fn, String(bunk), block._assignedSpecial, grade, fieldUsageBySlot);
                     // ★ v4.0: Write to BOTH lock systems — AutoFieldLocks for the solver,
                     // GlobalFieldLocks for downstream code (fillers, post-edit, canBlockFit)
                     if (fn && window.AutoFieldLocks) {
                         window.AutoFieldLocks.lockField(fn, block.startMin, block.endMin, grade, block._assignedSpecial, 'auto_special');
                     }
                     if (fn && window.GlobalFieldLocks) {
-                        window.GlobalFieldLocks.lockField(fn, [idx], { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial, startMin: block.startMin, endMin: block.endMin });
+                        window.GlobalFieldLocks.lockField(fn, _writeIdxs, { lockedBy: 'auto_special', division: grade, activity: block._assignedSpecial, startMin: block.startMin, endMin: block.endMin });
                     }
                     specialWriteCount++;
                 });
