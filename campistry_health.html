@@ -103,6 +103,7 @@
     <div class="header-right">
         <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
         <span class="nav-user" id="navUserEmail">Nurse</span>
+        <div style="width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,rgba(139,92,246,.15),rgba(139,92,246,.25));color:var(--health);font-size:.75rem;font-weight:700;display:flex;align-items:center;justify-content:center;cursor:pointer;" id="healthAvatar">NR</div>
     </div>
 </header>
 
@@ -129,8 +130,12 @@
 
 <!-- ── DASHBOARD ── -->
 <div id="page-dashboard" class="health-page active">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+        <div><h1>Health Dashboard</h1><p>Nurse center — medications, visits, and camper wellness</p></div>
+    </div>
     <div class="page-header">
-        <div><div class="page-title">Health Dashboard</div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
+        <div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
         <div class="page-actions">
             <button class="btn btn-secondary" onclick="CampistryHealth.openModal('visitModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg> Log Visit</button>
             <button class="btn btn-primary" onclick="CampistryHealth.openModal('medModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Dispense Med</button>
@@ -151,51 +156,76 @@
 
 <!-- ── MEDICATIONS ── -->
 <div id="page-medications" class="health-page">
-    <div class="page-header"><div><div class="page-title">Medications</div><div class="page-subtitle">Synced from camper profiles in Campistry Me</div></div><div class="page-actions"><button class="btn btn-primary" onclick="CampistryHealth.openModal('medModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Log Dispensing</button></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3"/></svg></div>
+        <div><h1>Medications</h1><p>Synced from camper profiles in Campistry Me</p></div>
+    </div>
+    <div class="page-actions" style="margin-bottom:16px"><button class="btn btn-primary" onclick="CampistryHealth.openModal('medModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Log Dispensing</button></div>
     <div class="card"><table class="data-table"><thead><tr><th>Camper</th><th>Medication</th><th>Bunk</th><th>Division</th><th>Status</th><th></th></tr></thead><tbody id="medTableBody"><tr><td colspan="6" class="empty-state">Loading...</td></tr></tbody></table></div>
 </div>
 
 <!-- ── SICK VISITS ── -->
 <div id="page-sick-visits" class="health-page">
-    <div class="page-header"><div><div class="page-title">Sick Visits</div><div class="page-subtitle">Health center visit log</div></div><div class="page-actions"><button class="btn btn-primary" onclick="CampistryHealth.openModal('visitModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Visit</button></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></div>
+        <div><h1>Sick Visits</h1><p>Health center visit log</p></div>
+    </div>
+    <div class="page-actions" style="margin-bottom:16px"><button class="btn btn-primary" onclick="CampistryHealth.openModal('visitModal')"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> New Visit</button></div>
     <div class="card"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Bunk</th><th>Complaint</th><th>Treatment</th><th>Disposition</th><th>Nurse</th></tr></thead><tbody id="visitsTableBody"><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody></table></div>
 </div>
 
 <!-- ── DOCTOR VISITS ── -->
 <div id="page-doctor" class="health-page">
-    <div class="page-header"><div><div class="page-title">Doctor Visits</div><div class="page-subtitle">Camp doctor consultations</div></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4l3 3"/></svg></div>
+        <div><h1>Doctor Visits</h1><p>Camp doctor consultations</p></div>
+    </div>
     <div class="card"><table class="data-table"><thead><tr><th>Date</th><th>Camper</th><th>Reason</th><th>Diagnosis</th><th>Restrictions</th><th>Cleared</th></tr></thead><tbody id="doctorTableBody"><tr><td colspan="6" class="empty-state">Loading...</td></tr></tbody></table></div>
 </div>
 
 <!-- ── ALLERGIES ── -->
 <div id="page-allergies" class="health-page">
-    <div class="page-header"><div><div class="page-title">Allergies &amp; Dietary</div><div class="page-subtitle">Synced from Campistry Me — source of truth for medical flags</div></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126z"/></svg></div>
+        <div><h1>Allergies &amp; Dietary</h1><p>Synced from Campistry Me — source of truth for medical flags</p></div>
+    </div>
     <div class="card"><table class="data-table"><thead><tr><th>Camper</th><th>Detail</th><th>Type</th><th>Severity</th><th>Bunk</th></tr></thead><tbody id="allergyTableBody"><tr><td colspan="5" class="empty-state">Loading...</td></tr></tbody></table></div>
 </div>
 
 <!-- ── NIGHTTIME CARE ── -->
 <div id="page-nighttime" class="health-page">
-    <div class="page-header"><div><div class="page-title">Nighttime Care</div><div class="page-subtitle">Discreet incident tracking</div></div><div class="page-actions"><button class="btn btn-primary"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Log Incident</button></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg></div>
+        <div><h1>Nighttime Care</h1><p>Discreet incident tracking</p></div>
+    </div>
+    <div class="page-actions" style="margin-bottom:16px"><button class="btn btn-primary"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Log Incident</button></div>
     <div class="card"><div class="card-header"><h2>Recent Logs</h2></div><div class="card-body" id="nighttimeBody"><div class="empty-state">Loading...</div></div></div>
 </div>
 
 <!-- ── CAMPER DIRECTORY ── -->
 <div id="page-campers" class="health-page">
-    <div class="page-header"><div><div class="page-title">Camper Directory</div><div class="page-subtitle">Real-time synced from Campistry Me — <span id="statDirCount">0</span> campers</div></div><div class="page-actions"><div class="sync-badge" style="font-size:.73rem;padding:7px 12px"><span class="sync-dot"></span> Live sync with Me</div></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div>
+        <div><h1>Camper Directory</h1><p>Real-time synced from Campistry Me — <span id="statDirCount">0</span> campers</p></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px"><div class="sync-badge" style="font-size:.73rem;padding:7px 12px"><span class="sync-dot"></span> Live sync with Me</div></div>
     <div class="search-bar"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="camperDirSearch" placeholder="Search by name, bunk, division, or allergy..."></div>
     <div class="card"><table class="data-table"><thead><tr><th></th><th>Camper</th><th>Age</th><th>Division</th><th>Bunk</th><th>Medical Flags</th><th>Emergency Contact</th></tr></thead><tbody id="camperDirBody"><tr><td colspan="7" class="empty-state">Loading...</td></tr></tbody></table></div>
 </div>
 
 <!-- ── MEDICAL FORMS INTAKE ── -->
 <div id="page-intake" class="health-page">
-    <div class="page-header"><div><div class="page-title">Pre-Camp Medical Forms</div><div class="page-subtitle">Parents submit online — nurse reviews before camp</div></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
+        <div><h1>Pre-Camp Medical Forms</h1><p>Parents submit online — nurse reviews before camp</p></div>
+    </div>
     <div class="stats-grid">
         <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="intakeApproved">—</div><div class="stat-label">Approved</div></div></div>
         <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div><div class="stat-value" id="intakePending">—</div><div class="stat-label">Pending</div></div></div>
         <div class="stat-card"><div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v3.75m9.303 3.376c.866 1.5-.217 3.374-1.948 3.374H4.645c-1.73 0-2.813-1.874-1.948-3.374L10.051 3.378c.866-1.5 3.032-1.5 3.898 0l7.748 13.748z"/></svg></div><div><div class="stat-value" id="intakeFlagged">—</div><div class="stat-label">Flagged</div></div></div>
         <div class="stat-card"><div class="stat-icon purple"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></div><div><div class="stat-value" id="intakeTotal">—</div><div class="stat-label">Total</div></div></div>
     </div>
-    <div class="card" style="margin-bottom:18px"><div class="card-body" style="padding:14px 18px"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="font-size:.8rem;font-weight:700">Completion</span><span style="font-size:.8rem;font-weight:700;color:var(--health)" id="intakePct">—</span></div><div style="height:9px;background:var(--slate-100);border-radius:var(--radius-full);overflow:hidden"><div id="intakeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--health),var(--health-light));border-radius:var(--radius-full);transition:width .5s"></div></div></div></div>
+    <div class="card" style="margin-bottom:18px"><div class="card-body" style="padding:14px 18px"><div style="display:flex;justify-content:space-between;margin-bottom:6px"><span style="font-size:.8rem;font-weight:700">Completion</span><span style="font-size:.8rem;font-weight:700;color:var(--health)" id="intakePct">—</span></div><div style="height:9px;background:#F1F5F9;border-radius:999px;overflow:hidden"><div id="intakeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--health),var(--health-light));border-radius:999px;transition:width .5s"></div></div></div></div>
     <div class="card"><table class="data-table"><thead><tr><th>Camper</th><th>Bunk</th><th>Status</th><th>Notes</th><th></th></tr></thead><tbody id="intakeTableBody"><tr><td colspan="5" class="empty-state">Loading...</td></tr></tbody></table></div>
 
     <!-- Parent-submitted documents from Campistry Link -->
@@ -204,11 +234,14 @@
 
 <!-- ── REPORTS ── -->
 <div id="page-reports" class="health-page">
-    <div class="page-header"><div><div class="page-title">Reports &amp; Export</div><div class="page-subtitle">Generate summaries and export health data</div></div></div>
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
+        <div><h1>Reports &amp; Export</h1><p>Generate summaries and export health data</p></div>
+    </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:14px">
-        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Daily Summary</div><div style="font-size:.75rem;color:var(--slate-500)">All visits, meds, incidents</div></div></div>
-        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Camper Health Card</div><div style="font-size:.75rem;color:var(--slate-500)">Full medical history (PDF)</div></div></div>
-        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Season Export</div><div style="font-size:.75rem;color:var(--slate-500)">Full CSV for end-of-summer</div></div></div>
+        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Daily Summary</div><div style="font-size:.75rem;color:#64748B">All visits, meds, incidents</div></div></div>
+        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Camper Health Card</div><div style="font-size:.75rem;color:#64748B">Full medical history (PDF)</div></div></div>
+        <div class="card" style="cursor:pointer"><div class="card-body" style="text-align:center;padding:28px 18px"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="var(--health)" stroke-width="1.5" style="margin:0 auto 10px"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg><div style="font-weight:700;font-size:.88rem;margin-bottom:3px">Season Export</div><div style="font-size:.75rem;color:#64748B">Full CSV for end-of-summer</div></div></div>
     </div>
 </div>
 
@@ -229,7 +262,39 @@
     <div class="form-group"><label class="form-label">Notes</label><input type="text" class="form-input" id="medNotes" placeholder="Optional..."></div>
 </div><div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryHealth.closeModal('medModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryHealth.saveDispensing()">Log Dispensing</button></div></div></div>
 
+<!-- ═══ BOTTOM NAV (mobile) ═══ -->
+<div class="cs-bnav" id="healthBnav">
+    <button class="cs-bnav-item active" onclick="triggerPage('dashboard', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Dashboard
+    </button>
+    <button class="cs-bnav-item" onclick="triggerPage('medications', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.5 1.5H8.25A2.25 2.25 0 006 3.75v16.5a2.25 2.25 0 002.25 2.25h7.5A2.25 2.25 0 0018 20.25V3.75a2.25 2.25 0 00-2.25-2.25H13.5m-3 0V3h3V1.5m-3 0h3"/></svg>
+        Meds
+    </button>
+    <button class="cs-bnav-item" onclick="triggerPage('sick-visits', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+        Visits
+    </button>
+    <button class="cs-bnav-item" onclick="triggerPage('campers', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        Directory
+    </button>
+    <button class="cs-bnav-item" onclick="triggerPage('intake', this)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        Forms
+    </button>
+</div>
+
 <!-- ═══ SCRIPTS ═══ -->
+<script>
+function triggerPage(p, btn) {
+    var sidebarBtn = document.querySelector('.sidebar-item[data-page="'+p+'"]');
+    if (sidebarBtn) sidebarBtn.click();
+    document.querySelectorAll('#healthBnav .cs-bnav-item').forEach(function(b){ b.classList.remove('active'); });
+    if (btn) btn.classList.add('active');
+}
+</script>
 <script src="campistry_health.js"></script>
 <script>
 // Sidebar (hamburger toggle — matches Flow/Me)
