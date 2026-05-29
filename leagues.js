@@ -32,6 +32,8 @@
     let selectedLeagueName = null;
     let listEl = null;
     let detailPaneEl = null;
+    const _advancedOpenLeagues = new Set();
+    const _chinuchOverrideOpenLeagues = new Set();
     let _isInitialized = false;
     let _refreshTimeout = null;
     let _saveInProgress = 0;  // ★ Counter: >0 means save in flight (prevents refresh)
@@ -249,7 +251,29 @@
             //   that ran right after a save (e.g. saving from the Playoff Hub)
             //   wiped enable/style/seeds/rounds and made the bracket appear
             //   to "shut off" until the user re-toggled it.
-            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined,
+            indoorRequirement: (league.indoorRequirement && typeof league.indoorRequirement === 'object')
+                ? {
+                    enabled: league.indoorRequirement.enabled === true,
+                    op: (['>=', '<=', '='].indexOf(league.indoorRequirement.op) !== -1) ? league.indoorRequirement.op : '>=',
+                    count: (Number.isInteger(league.indoorRequirement.count) && league.indoorRequirement.count >= 0) ? league.indoorRequirement.count : 1
+                  }
+                : { enabled: false, op: '>=', count: 1 },
+            chinuch: (league.chinuch && typeof league.chinuch === 'object')
+                ? {
+                    enabled: league.chinuch.enabled === true,
+                    // All override fields are null by default → solver auto-calculates
+                    timesPerDay: (Number.isInteger(league.chinuch.timesPerDay) && league.chinuch.timesPerDay > 0) ? league.chinuch.timesPerDay : null,
+                    teamsPerRound: (Number.isInteger(league.chinuch.teamsPerRound) && league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null,
+                    // Exact per-session counts (most specific). When set, overrides timesPerDay and teamsPerRound.
+                    perSessionCounts: (Array.isArray(league.chinuch.perSessionCounts) && league.chinuch.perSessionCounts.length > 0)
+                        ? league.chinuch.perSessionCounts
+                            .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : null; })
+                            .filter(function (n) { return n !== null; })
+                        : null,
+                    bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
+                  }
+                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} }
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1110,7 +1134,50 @@
       teamCard.appendChild(teamInput);
         container.appendChild(teamCard);
 
-        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        // \u2500\u2500\u2500 Advanced Settings Collapsible \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+        const advancedOpen = _advancedOpenLeagues.has(league.name);
+        const advancedWrap = document.createElement('div');
+        advancedWrap.style.cssText = 'margin-top:14px;';
+
+        const advancedToggle = document.createElement('button');
+        advancedToggle.type = 'button';
+        advancedToggle.style.cssText = 'display:flex; align-items:center; gap:8px; width:100%; padding:10px 12px; background:transparent; border:none; border-top:1px solid #E5E7EB; cursor:pointer; font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; text-align:left;';
+        const advancedChevron = document.createElement('span');
+        advancedChevron.textContent = advancedOpen ? '\u25be' : '\u25b8';
+        advancedChevron.style.cssText = 'display:inline-block; width:12px; color:#9CA3AF; font-size:0.85rem;';
+        const advancedLabel = document.createElement('span');
+        advancedLabel.textContent = 'Advanced Settings';
+        advancedToggle.appendChild(advancedChevron);
+        advancedToggle.appendChild(advancedLabel);
+
+        // Summary chip when collapsed
+        const _summaryBits = [];
+        if (league.offCampus?.enabled) _summaryBits.push('Away Games');
+        if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
+        if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
+        if (_summaryBits.length > 0) {
+            const summary = document.createElement('span');
+            summary.textContent = _summaryBits.join(' \u00b7 ');
+            summary.style.cssText = 'margin-left:auto; font-size:0.7rem; font-weight:500; text-transform:none; letter-spacing:0; color:#16A34A; background:#F0FDF4; border:1px solid #BBF7D0; border-radius:10px; padding:2px 8px;';
+            advancedToggle.appendChild(summary);
+        }
+
+        const advancedBody = document.createElement('div');
+        advancedBody.style.cssText = 'display:' + (advancedOpen ? 'block' : 'none') + '; padding-top:4px;';
+
+        advancedToggle.onclick = function () {
+            const nowOpen = !_advancedOpenLeagues.has(league.name);
+            if (nowOpen) _advancedOpenLeagues.add(league.name);
+            else _advancedOpenLeagues.delete(league.name);
+            advancedBody.style.display = nowOpen ? 'block' : 'none';
+            advancedChevron.textContent = nowOpen ? '\u25be' : '\u25b8';
+        };
+
+        advancedWrap.appendChild(advancedToggle);
+        advancedWrap.appendChild(advancedBody);
+        container.appendChild(advancedWrap);
+
+        // \u2500\u2500\u2500 Away Games Card \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         if (!league.offCampus) league.offCampus = { enabled: false, zone: '', teamsPerDay: 0 };
         const settings = window.loadGlobalSettings?.() || {};
         const locationZones = settings.locationZones || settings.global?.locationZones || {};
@@ -1215,7 +1282,313 @@
             awayCard.appendChild(awayBody);
         }
 
-        container.appendChild(awayCard);
+        advancedBody.appendChild(awayCard);
+
+        // ─── CARD: CHINUCH ──────────────────────────────────────────────────
+        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} };
+
+        const chinuchCard = document.createElement('div');
+        chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const chinuchHeader = document.createElement('label');
+        chinuchHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.chinuch.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.chinuch.enabled ? '1px solid #BBF7D0' : 'none') + ';';
+        const chinuchCb = document.createElement('input');
+        chinuchCb.type = 'checkbox';
+        chinuchCb.checked = league.chinuch.enabled === true;
+        chinuchCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
+        chinuchCb.onchange = function () {
+            league.chinuch.enabled = chinuchCb.checked;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        chinuchHeader.appendChild(chinuchCb);
+        const chinuchTitle = document.createElement('div');
+        chinuchTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Chinuch</div><div style="font-size:0.75rem; color:#64748B;">Teams rotate through chinuch class during league time</div>';
+        chinuchHeader.appendChild(chinuchTitle);
+        chinuchCard.appendChild(chinuchHeader);
+
+        if (league.chinuch.enabled) {
+            const chinuchBody = document.createElement('div');
+            chinuchBody.style.cssText = 'padding:14px;';
+
+            // ── Auto-distribution info chip ─────────────────────────────────
+            const customArr = Array.isArray(league.chinuch.perSessionCounts) ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; }) : [];
+            const hasCustomArr = customArr.length > 0;
+            const hasManualOverride = hasCustomArr || (league.chinuch.timesPerDay > 0) || (league.chinuch.teamsPerRound > 0);
+            // Panel is collapsed by default; only opens when the user explicitly toggles it.
+            const overrideOpen = _chinuchOverrideOpenLeagues.has(league.name);
+
+            const autoInfo = document.createElement('div');
+            autoInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:' + (hasManualOverride ? '#FEF3C7' : '#F0F9FF') + '; border:1px solid ' + (hasManualOverride ? '#FCD34D' : '#BAE6FD') + '; border-radius:8px; padding:8px 10px; margin-bottom:10px;';
+            const numTeams = (league.teams || []).length;
+            if (hasCustomArr) {
+                autoInfo.textContent = 'Manual override active: per-session counts [' + customArr.join(', ') + '].';
+            } else if (hasManualOverride) {
+                const tp = league.chinuch.timesPerDay ? (league.chinuch.timesPerDay + ' session' + (league.chinuch.timesPerDay === 1 ? '' : 's') + '/day') : 'auto sessions';
+                const tr = league.chinuch.teamsPerRound ? (league.chinuch.teamsPerRound + ' team' + (league.chinuch.teamsPerRound === 1 ? '' : 's') + '/session') : 'auto teams';
+                autoInfo.textContent = 'Manual override active: ' + tp + ', ' + tr + '.';
+            } else {
+                autoInfo.textContent = numTeams > 0
+                    ? 'Distribution is calculated automatically: ' + numTeams + ' team' + (numTeams === 1 ? '' : 's') + ' spread evenly across league sessions each day.'
+                    : 'Add teams above — distribution is calculated automatically based on team count and league sessions per day.';
+            }
+            chinuchBody.appendChild(autoInfo);
+
+            // ── Manual override toggle (subtle link) ────────────────────────
+            const overrideToggleWrap = document.createElement('div');
+            overrideToggleWrap.style.cssText = 'margin-bottom:14px;';
+            const overrideToggle = document.createElement('button');
+            overrideToggle.type = 'button';
+            overrideToggle.style.cssText = 'background:none; border:none; color:#2563EB; font-size:0.78rem; cursor:pointer; padding:0; text-decoration:underline;';
+            overrideToggle.textContent = overrideOpen ? '▾ Hide manual override' : '▸ Manual override';
+            overrideToggle.onclick = function () {
+                if (_chinuchOverrideOpenLeagues.has(league.name)) {
+                    _chinuchOverrideOpenLeagues.delete(league.name);
+                } else {
+                    _chinuchOverrideOpenLeagues.add(league.name);
+                }
+                renderConfigSections(league, container);
+            };
+            overrideToggleWrap.appendChild(overrideToggle);
+            chinuchBody.appendChild(overrideToggleWrap);
+
+            if (overrideOpen) {
+                const overrideBox = document.createElement('div');
+                overrideBox.style.cssText = 'border:1px dashed #D1D5DB; border-radius:8px; padding:12px; margin-bottom:14px; background:#FAFAFA;';
+
+                // ── Row 1: "X league games per day" ─────────────────────────
+                const gamesRow = document.createElement('div');
+                gamesRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.85rem; color:#374151; margin-bottom:10px;';
+
+                const timesInput = document.createElement('input');
+                timesInput.type = 'number'; timesInput.min = '1';
+                timesInput.value = league.chinuch.timesPerDay || '';
+                timesInput.placeholder = 'auto';
+                timesInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+                timesInput.title = 'How many league periods get a chinuch session each day (blank = auto)';
+                timesInput.onchange = function () {
+                    const v = parseInt(timesInput.value);
+                    league.chinuch.timesPerDay = (v > 0) ? v : null;
+                    saveLeaguesData();
+                    renderConfigSections(league, container);
+                };
+                gamesRow.appendChild(timesInput);
+                gamesRow.appendChild(document.createTextNode(' league sessions per day'));
+                overrideBox.appendChild(gamesRow);
+
+                // ── Row 2: "Y teams per session" ────────────────────────────
+                const perGameRow = document.createElement('div');
+                perGameRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.85rem; color:#374151; margin-bottom:10px;';
+
+                const perRoundInput = document.createElement('input');
+                perRoundInput.type = 'number'; perRoundInput.min = '1';
+                perRoundInput.value = league.chinuch.teamsPerRound || '';
+                perRoundInput.placeholder = 'auto';
+                perRoundInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; text-align:center; background:white;';
+                perRoundInput.title = 'How many teams attend chinuch simultaneously each session (blank = auto)';
+                perRoundInput.onchange = function () {
+                    const v = parseInt(perRoundInput.value);
+                    league.chinuch.teamsPerRound = (v > 0) ? v : null;
+                    saveLeaguesData();
+                    renderConfigSections(league, container);
+                };
+                perGameRow.appendChild(perRoundInput);
+                perGameRow.appendChild(document.createTextNode(' teams per session'));
+                overrideBox.appendChild(perGameRow);
+
+                // ── Divider ─────────────────────────────────────────────────
+                const divider = document.createElement('div');
+                divider.style.cssText = 'border-top:1px solid #E5E7EB; margin:10px 0;';
+                overrideBox.appendChild(divider);
+
+                // ── Per-session distribution (most specific override) ───────
+                const perSessLabel = document.createElement('div');
+                perSessLabel.style.cssText = 'font-size:0.78rem; font-weight:600; color:#374151; margin-bottom:4px;';
+                perSessLabel.textContent = 'Or set exact counts per session';
+                overrideBox.appendChild(perSessLabel);
+
+                const perSessHint = document.createElement('div');
+                perSessHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:6px;';
+                perSessHint.textContent = 'Comma-separated, one number per league session (e.g. 4, 2, 1, 0). Overrides the two fields above.';
+                overrideBox.appendChild(perSessHint);
+
+                const perSessInput = document.createElement('input');
+                perSessInput.type = 'text';
+                perSessInput.value = hasCustomArr ? customArr.join(', ') : '';
+                perSessInput.placeholder = 'e.g. 4, 2, 1, 0';
+                perSessInput.style.cssText = 'width:100%; max-width:240px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:white;';
+                perSessInput.onchange = function () {
+                    const raw = String(perSessInput.value || '').trim();
+                    if (!raw) {
+                        league.chinuch.perSessionCounts = null;
+                    } else {
+                        const parsed = raw.split(/[,\s]+/)
+                            .map(function (s) { return parseInt(s, 10); })
+                            .filter(function (n) { return Number.isFinite(n) && n >= 0; });
+                        league.chinuch.perSessionCounts = parsed.length > 0 ? parsed : null;
+                    }
+                    saveLeaguesData();
+                    renderConfigSections(league, container);
+                };
+                overrideBox.appendChild(perSessInput);
+
+                // ── Reset to auto ───────────────────────────────────────────
+                if (hasManualOverride) {
+                    const resetBtn = document.createElement('button');
+                    resetBtn.type = 'button';
+                    resetBtn.style.cssText = 'display:block; margin-top:12px; padding:5px 10px; background:white; color:#374151; border:1px solid #D1D5DB; border-radius:6px; font-size:0.78rem; cursor:pointer;';
+                    resetBtn.textContent = 'Reset to auto';
+                    resetBtn.onclick = function () {
+                        league.chinuch.timesPerDay = null;
+                        league.chinuch.teamsPerRound = null;
+                        league.chinuch.perSessionCounts = null;
+                        saveLeaguesData();
+                        renderConfigSections(league, container);
+                    };
+                    overrideBox.appendChild(resetBtn);
+                }
+
+                chinuchBody.appendChild(overrideBox);
+            }
+
+            // ── Per-team facility (dropdown from Facilities tab) ────────────
+            const facilityHeader = document.createElement('div');
+            facilityHeader.style.cssText = 'font-size:0.78rem; font-weight:600; text-transform:uppercase; letter-spacing:0.05em; color:#6B7280; margin-bottom:8px;';
+            facilityHeader.textContent = 'Chinuch Location per Team';
+            chinuchBody.appendChild(facilityHeader);
+
+            const allFacilities = (typeof window.getFacilities === 'function') ? window.getFacilities() : [];
+
+            if (allFacilities.length === 0) {
+                const noFac = document.createElement('div');
+                noFac.style.cssText = 'font-size:0.8rem; color:#F59E0B; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; padding:8px 10px; margin-bottom:8px;';
+                noFac.textContent = 'No facilities found — add rooms in the Facilities tab first, then come back here.';
+                chinuchBody.appendChild(noFac);
+            }
+
+            (league.teams || []).forEach(function (team) {
+                const row = document.createElement('div');
+                row.style.cssText = 'display:flex; align-items:center; gap:10px; margin-bottom:8px;';
+
+                const label = document.createElement('span');
+                label.style.cssText = 'font-size:0.83rem; font-weight:500; color:#374151; min-width:110px; flex:1;';
+                label.textContent = team;
+
+                const facSelect = document.createElement('select');
+                facSelect.style.cssText = 'flex:2; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.83rem; background:white; max-width:220px;';
+
+                const blankOpt = document.createElement('option');
+                blankOpt.value = '';
+                blankOpt.textContent = '— choose facility —';
+                facSelect.appendChild(blankOpt);
+
+                const currentVal = (league.chinuch.bunkFacilities && league.chinuch.bunkFacilities[team]) || '';
+                allFacilities.forEach(function (fac) {
+                    const opt = document.createElement('option');
+                    opt.value = fac.name;
+                    opt.textContent = fac.name;
+                    if (fac.name === currentVal) opt.selected = true;
+                    facSelect.appendChild(opt);
+                });
+
+                facSelect.onchange = function () {
+                    if (!league.chinuch.bunkFacilities) league.chinuch.bunkFacilities = {};
+                    league.chinuch.bunkFacilities[team] = facSelect.value;
+                    saveLeaguesData();
+                };
+
+                row.appendChild(label);
+                row.appendChild(facSelect);
+                chinuchBody.appendChild(row);
+            });
+
+            if ((league.teams || []).length === 0) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'font-size:0.8rem; color:#9CA3AF; text-align:center; padding:8px;';
+                empty.textContent = 'Add teams above to assign chinuch facilities.';
+                chinuchBody.appendChild(empty);
+            }
+
+            chinuchCard.appendChild(chinuchBody);
+        }
+
+        advancedBody.appendChild(chinuchCard);
+
+        // ─── CARD: INDOOR REQUIREMENT ───────────────────────────────────────
+        if (!league.indoorRequirement) league.indoorRequirement = { enabled: false, op: '>=', count: 1 };
+
+        const indoorCard = document.createElement('div');
+        indoorCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const indoorHeader = document.createElement('label');
+        indoorHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.indoorRequirement.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.indoorRequirement.enabled ? '1px solid #BBF7D0' : 'none') + ';';
+        const indoorCb = document.createElement('input');
+        indoorCb.type = 'checkbox';
+        indoorCb.checked = league.indoorRequirement.enabled === true;
+        indoorCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
+        indoorCb.onchange = function () {
+            league.indoorRequirement.enabled = indoorCb.checked;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        indoorHeader.appendChild(indoorCb);
+        const indoorTitle = document.createElement('div');
+        indoorTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Indoor Court Requirement</div><div style="font-size:0.75rem; color:#64748B;">Steer each team toward a target number of indoor games per day</div>';
+        indoorHeader.appendChild(indoorTitle);
+        indoorCard.appendChild(indoorHeader);
+
+        if (league.indoorRequirement.enabled) {
+            const indoorBody = document.createElement('div');
+            indoorBody.style.cssText = 'padding:14px;';
+
+            const ruleRow = document.createElement('div');
+            ruleRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
+
+            ruleRow.appendChild(document.createTextNode('Each team plays'));
+
+            const opSelect = document.createElement('select');
+            opSelect.style.cssText = 'padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; background:white;';
+            [
+                { v: '>=', label: '≥ (at least)' },
+                { v: '=',  label: '= (exactly)' },
+                { v: '<=', label: '≤ (at most)' }
+            ].forEach(function (o) {
+                const opt = document.createElement('option');
+                opt.value = o.v;
+                opt.textContent = o.label;
+                if (league.indoorRequirement.op === o.v) opt.selected = true;
+                opSelect.appendChild(opt);
+            });
+            opSelect.onchange = function () {
+                league.indoorRequirement.op = opSelect.value;
+                saveLeaguesData();
+            };
+            ruleRow.appendChild(opSelect);
+
+            const countInput = document.createElement('input');
+            countInput.type = 'number'; countInput.min = '0';
+            countInput.value = league.indoorRequirement.count;
+            countInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            countInput.onchange = function () {
+                const v = parseInt(countInput.value, 10);
+                league.indoorRequirement.count = (Number.isFinite(v) && v >= 0) ? v : 1;
+                saveLeaguesData();
+            };
+            ruleRow.appendChild(countInput);
+
+            ruleRow.appendChild(document.createTextNode('indoor game(s) per day'));
+
+            indoorBody.appendChild(ruleRow);
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+            hint.textContent = 'Indoor courts come from facilities marked Indoor in the Facilities tab. The solver biases assignments to meet the rule and runs a post-pass that swaps outdoor matchups for free indoor ones when teams are short.';
+            indoorBody.appendChild(hint);
+
+            indoorCard.appendChild(indoorBody);
+        }
+
+        advancedBody.appendChild(indoorCard);
     }
 
     // =========================================================================

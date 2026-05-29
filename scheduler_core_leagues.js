@@ -519,7 +519,7 @@
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots) {
+    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
         const usedSportsThisSlot = {};
@@ -532,16 +532,27 @@
             return Math.max(0, 100 - sportCount * 20);
         }
 
-        // Sort matchups so teams with less sport variety get processed first
+        // Sort matchups so teams with less sport variety get processed first.
+        // When an indoor requirement is active, the neediest team (lowest current
+        // indoor count) goes first so it gets first pick at any indoor option.
+        const _indoorReq = leagueRules && leagueRules.indoorRequirement;
+        const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = getTeamSportHistory(leagueName, t1, history);
             const h2 = getTeamSportHistory(leagueName, t2, history);
             const uniqueSports1 = new Set(h1).size;
             const uniqueSports2 = new Set(h2).size;
-            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2 };
+            const ic1 = _indoorCounts[t1] || 0;
+            const ic2 = _indoorCounts[t2] || 0;
+            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2, indoorMin: Math.min(ic1, ic2) };
         });
 
-        matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+        if (_indoorReq && _indoorReq.enabled) {
+            // Neediest pair (lowest min indoor count) first; tie-break on variety
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.varietyScore - b.varietyScore);
+        } else {
+            matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+        }
 
         for (const { t1, t2 } of matchupsWithPriority) {
             let bestOption = null;
@@ -564,6 +575,9 @@
                 } else {
                     score -= sportUsageThisSlot * 100;
                 }
+
+                // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
+                score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
                 score += Math.random() * 10;
 
@@ -598,7 +612,7 @@
     // SMART ASSIGNMENT ALGORITHM - MATCHUP VARIETY MODE
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots) {
+    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
 
@@ -635,6 +649,9 @@
                 // Small bonus for less-played sports (not the main factor)
                 score += Math.max(0, 50 - (sportCount1 + sportCount2) * 5);
 
+                // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
+                score += _scoreIndoorBias(option, t1, t2, leagueRules);
+
                 // Random factor for variety
                 score += Math.random() * 20;
 
@@ -668,16 +685,61 @@
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority) {
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules) {
         const mode = schedulingPriority || 'sport_variety';
-        
+
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
         if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots);
+            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
         } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots);
+            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
         }
+    }
+
+    // =========================================================================
+    // ★★★ INDOOR REQUIREMENT SCORING HELPER ★★★
+    // Returns a score adjustment for picking `option` for the matchup (t1, t2),
+    // given the league's indoor rule and each team's running indoor count today.
+    // Higher = more desirable. Used by both SportVariety and MatchupVariety.
+    // =========================================================================
+    function _scoreIndoorBias(option, t1, t2, leagueRules) {
+        const req = leagueRules && leagueRules.indoorRequirement;
+        if (!req || !req.enabled) return 0;
+        const counts = (leagueRules && leagueRules.indoorCounts) || {};
+        const isIndoor = !!(option && option.fieldObj && option.fieldObj.isIndoor);
+        const op = req.op || '>=';
+        const target = Number.isFinite(req.count) ? req.count : 1;
+
+        function teamDelta(team) {
+            const cur = counts[team] || 0;
+            if (op === '>=') {
+                if (isIndoor) {
+                    if (cur < target) return 1500 * (target - cur);
+                    return -200;
+                }
+                if (cur < target) return -800 * (target - cur);
+                return 0;
+            }
+            if (op === '=') {
+                if (isIndoor) {
+                    if (cur < target) return 1500 * (target - cur);
+                    return -3000;
+                }
+                if (cur < target) return -800 * (target - cur);
+                if (cur > target) return 200;
+                return 0;
+            }
+            // op === '<='
+            if (isIndoor) {
+                if (cur >= target) return -3000;
+                return 100;
+            }
+            if (cur < target) return 0;
+            return 200;
+        }
+
+        return teamDelta(t1) + teamDelta(t2);
     }
 // =========================================================================
     // ★★★ OFF-CAMPUS DOUBLE-HEADER ENGINE ★★★
@@ -846,6 +908,11 @@
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
         const leagueGameCounters = {};  // Tracks how many games each league has scheduled TODAY
 
+        // ★★★ INDOOR REQUIREMENT: per-team running indoor-game count for today ★★★
+        // Used by the scorer to bias matchup field choice toward indoor for teams
+        // that haven't met their league's indoor rule yet.
+        const indoorCountsByLeague = {};  // indoorCountsByLeague[leagueName][team] = number
+
         // Group blocks by time
         const blocksByTime = {};
 
@@ -873,6 +940,113 @@
 
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
+
+        // ★★★ CHINUCH: Pre-compute which teams attend chinuch at each league period ★★★
+        // Distribution is fully automatic: teamsPerSession = ceil(teams / numPeriods).
+        // Only periodsNeeded = ceil(teams / teamsPerSession) periods get chinuch — the
+        // rest are normal league periods. Each team is assigned exactly one chinuch
+        // period per day. Teams are shuffled daily for variety.
+        window.chinuchSchedule = {};
+        (function () {
+            function _seededShuffle(arr, seed) {
+                const a = arr.slice();
+                let s = 0;
+                for (let i = 0; i < seed.length; i++) s = (s * 31 + seed.charCodeAt(i)) & 0x7fffffff;
+                for (let i = a.length - 1; i > 0; i--) {
+                    s = ((s * 1664525) + 1013904223) & 0x7fffffff;
+                    const j = s % (i + 1);
+                    const tmp = a[i]; a[i] = a[j]; a[j] = tmp;
+                }
+                return a;
+            }
+            const _enabledLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+            for (const league of _enabledLeagues) {
+                if (!league.chinuch?.enabled || !league.enabled) continue;
+                if (disabledLeagues?.includes(league.name)) continue;
+                const teams = (league.teams || []).slice();
+                if (teams.length < 1) continue;
+
+                // Collect all time-keys for this league — mirror the same matching logic
+                // used in the main per-time-key loop: leagueName hint takes priority over
+                // division membership, so leagues configured without assigned divisions
+                // (but referenced by name on skeleton blocks) are still found correctly.
+                const allPeriodKeys = sortedTimeKeys.filter(tk => {
+                    const blocks = blocksByTime[tk].allBlocks;
+                    if (blocks.some(b => b.leagueName === league.name)) return true;
+                    const divs = Object.keys(blocksByTime[tk].byDivision);
+                    return divs.some(d => (league.divisions || []).includes(d));
+                });
+                if (allPeriodKeys.length === 0) continue;
+
+                // Distribution: three modes, highest priority first.
+                //   1. perSessionCounts [4,2,1,0] — exact count per period.
+                //   2. timesPerDay / teamsPerRound override (either or both).
+                //   3. Auto: teamsPerSession = ceil(teams / numPeriods); only as many
+                //      periods as needed — trailing periods get no chinuch that day.
+                // e.g. 8 teams, 4 periods → 2/session, [2,2,2,2]
+                // e.g. 6 teams, 4 periods → 2/session, [2,2,2,0]
+                // e.g. 5 teams, 4 periods → 2/session, [2,2,1,0]
+                const numPeriods = allPeriodKeys.length;
+                const customCounts = Array.isArray(league.chinuch.perSessionCounts)
+                    ? league.chinuch.perSessionCounts
+                        .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : 0; })
+                        .slice(0, numPeriods)
+                    : null;
+
+                // Shuffle teams using date+leagueName seed for daily variety
+                const shuffled = _seededShuffle(teams, dayId + league.name);
+                const bunkSchedule = {};
+                let _mode;
+                let _summary;
+
+                if (customCounts && customCounts.length > 0) {
+                    // Honor exact per-session counts. Walk shuffled teams sequentially
+                    // and pour into period buckets. If the array totals more than the
+                    // team count, later periods simply get fewer (or zero) teams. If
+                    // it totals less, leftover teams have no chinuch slot today (they
+                    // will appear in matchups or as byes).
+                    let teamIdx = 0;
+                    for (let p = 0; p < customCounts.length; p++) {
+                        const take = customCounts[p];
+                        for (let k = 0; k < take && teamIdx < shuffled.length; k++, teamIdx++) {
+                            bunkSchedule[shuffled[teamIdx]] = Number(allPeriodKeys[p]);
+                        }
+                    }
+                    _mode = 'custom';
+                    _summary = '[' + customCounts.join(',') + ']';
+                } else {
+                    const manualTeams = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null;
+                    const manualTimes = (league.chinuch.timesPerDay > 0) ? Math.min(league.chinuch.timesPerDay, numPeriods) : null;
+
+                    let teamsPerSession;
+                    let periodsNeeded;
+                    if (manualTeams && manualTimes) {
+                        teamsPerSession = manualTeams;
+                        periodsNeeded = manualTimes;
+                    } else if (manualTeams) {
+                        teamsPerSession = manualTeams;
+                        periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
+                    } else if (manualTimes) {
+                        periodsNeeded = manualTimes;
+                        teamsPerSession = Math.ceil(teams.length / periodsNeeded);
+                    } else {
+                        teamsPerSession = Math.ceil(teams.length / numPeriods);
+                        periodsNeeded = Math.ceil(teams.length / teamsPerSession);
+                    }
+                    const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
+
+                    shuffled.forEach((team, idx) => {
+                        const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
+                        bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
+                    });
+                    _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
+                    _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active';
+                }
+
+                window.chinuchSchedule[league.name] = bunkSchedule;
+                console.log('[Chinuch] "' + league.name + '" (' + _mode + '): ' + teams.length + ' team(s), ' + _summary);
+            }
+        })();
 
         // ★★★ OFF-CAMPUS: Auto-detect consecutive league slots as back-to-back pairs ★★★
         for (var i = 0; i < sortedTimeKeys.length - 1; i++) {
@@ -1092,6 +1266,24 @@
                     continue;
                 }
 
+                // ★★★ CHINUCH: Filter out teams on chinuch this period ★★★
+                let activeTeams = leagueTeams;
+                let chinuchTeamsHere = [];
+                if (league.chinuch?.enabled && window.chinuchSchedule?.[league.name]) {
+                    chinuchTeamsHere = Object.entries(window.chinuchSchedule[league.name])
+                        .filter(([, sm]) => Number(sm) === Number(timeKey))
+                        .map(([name]) => name);
+                    if (chinuchTeamsHere.length > 0) {
+                        activeTeams = leagueTeams.filter(t => !chinuchTeamsHere.includes(t));
+                        console.log(`   [Chinuch] Teams on chinuch this period: [${chinuchTeamsHere.join(', ')}]`);
+                        console.log(`   [Chinuch] Active teams: [${activeTeams.join(', ')}]`);
+                    }
+                }
+                if (activeTeams.length < 2) {
+                    console.log(`   ⚠️ Not enough active teams after chinuch`);
+                    continue;
+                }
+
                 // ★★★ CHRONOLOGICAL GAME NUMBERING ★★★
                 // Initialize counter for this league if not done
                 if (leagueGameCounters[league.name] === undefined) {
@@ -1146,7 +1338,7 @@
                         continue;
                     }
                 } else {
-                    const fullSchedule = generateRoundRobinSchedule(leagueTeams);
+                    const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
                     matchups = fullSchedule[roundIndex] || [];
                 }
@@ -1319,19 +1511,37 @@
                         assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
                     });
                 } else {
+                    if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
                     assignments = assignMatchupsToFieldsAndSports(
                         matchups,
                         availablePool,
                         league.name,
                         history,
                         slots,
-                        league.schedulingPriority || 'sport_variety'
+                        league.schedulingPriority || 'sport_variety',
+                        {
+                            indoorRequirement: league.indoorRequirement,
+                            indoorCounts: indoorCountsByLeague[league.name]
+                        }
                     );
                 }
 
                 if (assignments.length === 0) {
                     console.log(`   ❌ No assignments possible`);
                     continue;
+                }
+
+                // ★ INDOOR: increment per-team count for matchups that landed indoor
+                if (league.indoorRequirement?.enabled) {
+                    if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
+                    const ic = indoorCountsByLeague[league.name];
+                    assignments.forEach(function (a) {
+                        const fObj = availablePool.find(function (p) { return p.field === a.field && p.sport === a.sport; });
+                        if (fObj && fObj.fieldObj && fObj.fieldObj.isIndoor) {
+                            if (a.team1) ic[a.team1] = (ic[a.team1] || 0) + 1;
+                            if (a.team2) ic[a.team2] = (ic[a.team2] || 0) + 1;
+                        }
+                    });
                 }
 
                 // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
@@ -1437,6 +1647,21 @@ window._debugLeagueTimeData = timeData;
         const _firstSport = (assignments.find(a => a && a.sport) || {}).sport
             || (league.sports && league.sports[0])
             || '';
+        // ★ CHINUCH: append "Team — Chinuch (Facility)" lines for teams on chinuch this period
+        const _chinuchLines = chinuchTeamsHere.map(function (t) {
+            const fac = league.chinuch?.bunkFacilities?.[t] || 'Chinuch';
+            return `${t} — Chinuch (${fac})`;
+        });
+        // ★ BYE: any active team not in a matchup is on a bye — show it explicitly so
+        // every team appears on the schedule every period (no silently-dropped teams).
+        const _playingTeams = new Set();
+        assignments.forEach(function (a) {
+            if (a.team1) _playingTeams.add(a.team1);
+            if (a.team2) _playingTeams.add(a.team2);
+        });
+        const _byeLines = (activeTeams || [])
+            .filter(function (t) { return !_playingTeams.has(t); })
+            .map(function (t) { return `${t} — Bye`; });
         const pick = {
                             field: `League: ${league.name}`,
                             sport: _firstSport,
@@ -1446,7 +1671,7 @@ window._debugLeagueTimeData = timeData;
                             _fixed: true,
                             _allMatchups: assignments.map(a =>
                                 `${a.team1} vs ${a.team2} @ ${a.field} (${a.sport})`
-                            ),
+                            ).concat(_byeLines).concat(_chinuchLines),
                             _gameLabel: _gameLbl,
                             _playoffRound: playoffRoundNum || null
                         };

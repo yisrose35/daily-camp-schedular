@@ -18546,6 +18546,25 @@
                     const fi = bs.findIndex(s => s.startMin === lb.startMin);
                     if (fi === -1 || !window.scheduleAssignments[bk]) return;
                     const slotMeta = bs[fi];
+
+                    // ★ CHINUCH: If this bunk is assigned to chinuch at this league period, write chinuch
+                    if (window.chinuchSchedule?.[leagueName]?.[bk] != null &&
+                        Number(window.chinuchSchedule[leagueName][bk]) === lb.startMin) {
+                        const leagueObj = mla.find(l => l.name === leagueName);
+                        const facility = leagueObj?.chinuch?.bunkFacilities?.[bk] || 'Chinuch';
+                        window.scheduleAssignments[bk][fi] = {
+                            field: facility,
+                            _activity: 'Chinuch',
+                            _isChinuch: true,
+                            sport: null,
+                            _startMin: slotMeta?.startMin ?? lb.startMin,
+                            _endMin: slotMeta?.endMin ?? lb.endMin,
+                            _fixed: true, continuation: false
+                        };
+                        leagueWriteCount++;
+                        return;
+                    }
+
                     window.scheduleAssignments[bk][fi] = {
                         // ★ Day 20 fix #5: don't put gameLabel in `field`.
                         // sport here is often the gameLabel (e.g. "Game 1"); use
@@ -18576,6 +18595,24 @@
                         if (fi === -1 || !window.scheduleAssignments[bk]) return;
                         const existing = window.scheduleAssignments[bk][fi];
                         if (existing && existing._league && existing.matchups && existing.matchups.length > 0) return; // already written
+                        // ★ CHINUCH: also honor chinuch in fallback writeback path
+                        const _lnFb = asgn.leagueName || '';
+                        const _smFb = parseInt(startMinStr);
+                        if (window.chinuchSchedule?.[_lnFb]?.[bk] != null &&
+                            Number(window.chinuchSchedule[_lnFb][bk]) === _smFb) {
+                            const _leagueObjFb = (Array.isArray(mla) ? mla : Object.values(mla || {})).find(l => l.name === _lnFb);
+                            const _facilityFb = _leagueObjFb?.chinuch?.bunkFacilities?.[bk] || 'Chinuch';
+                            window.scheduleAssignments[bk][fi] = {
+                                field: _facilityFb,
+                                _activity: 'Chinuch',
+                                _isChinuch: true,
+                                sport: null,
+                                _startMin: _smFb,
+                                _fixed: true, continuation: false
+                            };
+                            leagueWriteCount++;
+                            return;
+                        }
                         window.scheduleAssignments[bk][fi] = {
                             field: asgn.sport || 'League Game', sport: asgn.sport || null,
                             _activity: 'League Game', _league: true, _leagueName: asgn.leagueName || '',
