@@ -1299,7 +1299,8 @@
 
             // ── Auto-distribution info chip ─────────────────────────────────
             const hasManualOverride = (league.chinuch.timesPerDay > 0) || (league.chinuch.teamsPerRound > 0);
-            const overrideOpen = _chinuchOverrideOpenLeagues.has(league.name) || hasManualOverride;
+            // Panel is collapsed by default; only opens when the user explicitly toggles it.
+            const overrideOpen = _chinuchOverrideOpenLeagues.has(league.name);
 
             const autoInfo = document.createElement('div');
             autoInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:' + (hasManualOverride ? '#FEF3C7' : '#F0F9FF') + '; border:1px solid ' + (hasManualOverride ? '#FCD34D' : '#BAE6FD') + '; border-radius:8px; padding:8px 10px; margin-bottom:10px;';
