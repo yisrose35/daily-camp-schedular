@@ -5905,9 +5905,19 @@
                             : specialCap;
                     }
 
+                    // ★ Day 19.5: sync the per-subcategory tally from what's actually
+                    // placed so the gate below restricts/caps correctly regardless of
+                    // which earlier pass placed the floor specials.
+                    result.subcategoryAssigned = {};
+                    result.specials.forEach(function (sp) { var _k = _gpCanonSub(sp.subcategory); result.subcategoryAssigned[_k] = (result.subcategoryAssigned[_k] || 0) + 1; });
                     for (const special of (sl.specials.priorityList || [])) {
                         if (result.specials.length >= targetTotal) break;
                         if (result.usedActivities.has(special.name)) continue;
+                        // ★ Day 19.5: honor the per-layer subcategory restriction + cap in this
+                        // balanced extra-specials pass too. The floor pass is gated by
+                        // _canPickSpecialBySubcategory, but this pass was NOT — so it leaked
+                        // Regular specials onto a Food-only layer (and could exceed a subcat cap).
+                        if (!_canPickSpecialBySubcategory(special, sl, result)) continue;
 
                         const dur = special.totalDuration || special.dMin || 30;
                         const fw  = getUpdatedFreeWindowsForBunk(bunk, sl, result);
@@ -5929,6 +5939,7 @@
                         registerSpecialAssignment(special.name, grade, time.startMin, time.endMin);
                         result.specials.push({ ...special, claimedTime: time, claimedField: special.location });
                         result.usedActivities.add(special.name);
+                        _markSpecialSubcategoryAssigned(special, result); // ★ Day 19.5: keep tally in sync for the gate
                     }
                 });
 
