@@ -19360,6 +19360,7 @@
                     _specialLocation: def.location,
                     _specialDuration: def.duration,
                     field: def.location || target.field,
+                    sport: null, // ★ Day 19: clear the displaced sport (was leaving a stale sport name on the special slot)
                     type: 'special',
                     event: def.name,
                     _source: 'phase4.9-recapture',
@@ -19370,6 +19371,48 @@
                     _partLabel: _p49MpInfo ? (def.name + ' ' + _p49MpInfo.partNumber + '/' + _p49MpInfo.totalParts) : null
                 });
                 slots[swapIdx] = newEntry;
+
+                // ★ Day 19: inject flexible prep for this RECAPTURED special.
+                // The main flexPrep injection runs BEFORE Phase 4.9, so a special
+                // placed here would silently lack its prep block. Mirror that logic:
+                // put a prep block in the nearest slot before the special — an empty
+                // slot first, else displace a plain sport (never anchor/special/
+                // league/pair-locked). No hole results. User requirement: "if there
+                // is a prep the system needs to make room for it."
+                try {
+                    const _p49PrepCfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(def.name, globalSettings) : null;
+                    const _p49Pc = _p49PrepCfg && _p49PrepCfg.prepConfig;
+                    const _p49PrepDur = parseInt(_p49PrepCfg && _p49PrepCfg.prepDuration) || 0;
+                    if (_p49Pc && _p49Pc.timing === 'flexible' && _p49PrepDur > 0) {
+                        let _p49HasPrep = false;
+                        for (let _ph = 0; _ph < swapIdx; _ph++) { if (slots[_ph] && slots[_ph]._isPrep && slots[_ph]._prepFor === def.name) { _p49HasPrep = true; break; } }
+                        if (!_p49HasPrep) {
+                            const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
+                            const _p49Disp = (e) => !!e && !e.continuation && !!e.sport && !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep && !e._league && !e._isRotationEvent && !e._isTrip;
+                            const _p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };
+                            let _p49PrepIdx = -1;
+                            // Pass 1: nearest EMPTY slot before the special (no sport sacrificed).
+                            for (let _pp = swapIdx - 1; _pp >= 0; _pp--) {
+                                if (_p49GridDur(_pp) < _p49PrepDur) continue;
+                                if (!slots[_pp] || !slots[_pp]._activity) { _p49PrepIdx = _pp; break; }
+                            }
+                            // Pass 2: displace nearest plain sport before the special.
+                            if (_p49PrepIdx < 0) {
+                                for (let _pp2 = swapIdx - 1; _pp2 >= 0; _pp2--) {
+                                    if (_p49GridDur(_pp2) < _p49PrepDur) continue;
+                                    if (_p49Disp(slots[_pp2])) { _p49PrepIdx = _pp2; break; }
+                                }
+                            }
+                            if (_p49PrepIdx >= 0) {
+                                const _pg = _p49pbs[_p49PrepIdx];
+                                slots[_p49PrepIdx] = { field: _p49Pc.location || null, sport: null, _activity: def.name + ' (Prep)', _isPrep: true, _prepFor: def.name, _fixed: true, _bunkOverride: true, _activityLocked: true, _autoSpecial: true, _autoMode: true, continuation: false, _startMin: _pg.startMin, _endMin: _pg.endMin };
+                                log('[Phase4.9] prep placed for recaptured ' + def.name + ' bunk ' + def.bunk + ' slot ' + _p49PrepIdx);
+                            } else {
+                                log('[Phase4.9] NO prep slot for recaptured ' + def.name + ' bunk ' + def.bunk);
+                            }
+                        }
+                    }
+                } catch (_p49PrepErr) { try { log('[Phase4.9] prep inject error: ' + (_p49PrepErr && _p49PrepErr.message)); } catch(_){} }
 
                 // ★ Day 19: claim the field so subsequent recaptures in this
                 // same pass see this slot as occupied. Without claimField the
