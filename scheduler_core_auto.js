@@ -132,7 +132,17 @@
         [...fromGetAll, ...fromGlobal, ...fromApp1].forEach(function(s) {
             if (s && s.name) merged.set(s.name, s);
         });
-        const result = Array.from(merged.values());
+        // ★ Day 19: 'not_sharable' means exactly 1 bunk at a time (matches the UI's
+        // "1 bunk at a time" display). Existing configs carry a stale capacity:2
+        // default that the capacity-first placement checks honored, letting 2 bunks
+        // share a not_sharable special. Normalize on read so every downstream check
+        // sees capacity 1. Clone the offending entries — never mutate stored config.
+        const result = Array.from(merged.values()).map(function(s) {
+            if (s && s.sharableWith && s.sharableWith.type === 'not_sharable' && parseInt(s.sharableWith.capacity) !== 1) {
+                return Object.assign({}, s, { sharableWith: Object.assign({}, s.sharableWith, { capacity: 1 }) });
+            }
+            return s;
+        });
         if (gs) gs[_CACHED_SPECIALS] = result;
         // Defensive: if a legacy persisted `_cachedSpecialsList` is still on
         //   the gs object, evict it so subsequent code paths can't read stale.

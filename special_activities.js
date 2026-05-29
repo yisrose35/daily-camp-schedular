@@ -123,6 +123,14 @@ function validateSpecialActivity(activity, activityName) {
         if (sharableWith.type === 'custom' && sharableWith.divisions.length === 0) sharableWith.type = 'same_division';
         if (sharableWith.type === 'all') sharableWith.type = 'same_division';
         sharableWith.capacity = parseInt(sharableWith.capacity, 10) || 2;
+        // ★ Day 19: 'not_sharable' means exactly 1 bunk at a time. The UI shows
+        // "1 bunk at a time" for not_sharable and the toggle sets capacity=1, but
+        // createDefaultActivity + this validator default capacity to 2 — so a
+        // never-toggled not_sharable special carried capacity:2, which the
+        // capacity-first placement checks honored and let 2 bunks share it
+        // (contradicting the displayed "1 bunk"). Force capacity=1 so every
+        // downstream reader (type-first or capacity-first) agrees on 1.
+        if (sharableWith.type === 'not_sharable') sharableWith.capacity = 1;
         // Normalize allowedPairs for cross_division
         if (sharableWith.type === 'cross_division') {
             if (!sharableWith.allowedPairs || typeof sharableWith.allowedPairs !== 'object') { sharableWith.allowedPairs = {}; }
