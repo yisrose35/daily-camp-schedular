@@ -911,28 +911,50 @@
                 });
                 if (allPeriodKeys.length === 0) continue;
 
-                // Auto-calculate: spread teams as evenly as possible across periods.
-                // teamsPerSession = ceil(teams / numPeriods); only use as many periods
-                // as needed — trailing periods get no chinuch that day.
+                // Distribution: auto by default; manual override (timesPerDay /
+                // teamsPerRound) honored when set. Either override field can be set
+                // alone — the other still falls back to auto.
+                // Auto rule: teamsPerSession = ceil(teams / numPeriods); only use as
+                // many periods as needed — trailing periods get no chinuch that day.
                 // e.g. 8 teams, 4 periods → 2/session, [2,2,2,2]
                 // e.g. 6 teams, 4 periods → 2/session, [2,2,2,0]
                 // e.g. 5 teams, 4 periods → 2/session, [2,2,1,0]
                 const numPeriods = allPeriodKeys.length;
-                const teamsPerSession = Math.ceil(teams.length / numPeriods);
-                const periodsNeeded = Math.ceil(teams.length / teamsPerSession);
+                const manualTeams = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null;
+                const manualTimes = (league.chinuch.timesPerDay > 0) ? Math.min(league.chinuch.timesPerDay, numPeriods) : null;
+
+                let teamsPerSession;
+                let periodsNeeded;
+                if (manualTeams && manualTimes) {
+                    teamsPerSession = manualTeams;
+                    periodsNeeded = manualTimes;
+                } else if (manualTeams) {
+                    teamsPerSession = manualTeams;
+                    periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
+                } else if (manualTimes) {
+                    periodsNeeded = manualTimes;
+                    teamsPerSession = Math.ceil(teams.length / periodsNeeded);
+                } else {
+                    teamsPerSession = Math.ceil(teams.length / numPeriods);
+                    periodsNeeded = Math.ceil(teams.length / teamsPerSession);
+                }
                 const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
 
                 // Shuffle teams using date+leagueName seed for daily variety
                 const shuffled = _seededShuffle(teams, dayId + league.name);
 
-                // Assign each team to a period bucket (no wrap-around — last period may have fewer)
+                // Assign each team to a period bucket. With manual override, teams
+                // may wrap around if total < teamsPerSession * periodsNeeded — that's
+                // fine; trailing periods just stay empty. Cap at periodsNeeded so we
+                // never overflow the active window.
                 const bunkSchedule = {};
                 shuffled.forEach((team, idx) => {
-                    const periodIdx = Math.floor(idx / teamsPerSession);
+                    const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
                     bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
                 });
                 window.chinuchSchedule[league.name] = bunkSchedule;
-                console.log('[Chinuch] "' + league.name + '": ' + teams.length + ' team(s), ' + teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active');
+                const _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
+                console.log('[Chinuch] "' + league.name + '" (' + _mode + '): ' + teams.length + ' team(s), ' + teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active');
             }
         })();
 
