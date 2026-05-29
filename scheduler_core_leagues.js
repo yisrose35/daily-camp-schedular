@@ -911,50 +911,73 @@
                 });
                 if (allPeriodKeys.length === 0) continue;
 
-                // Distribution: auto by default; manual override (timesPerDay /
-                // teamsPerRound) honored when set. Either override field can be set
-                // alone — the other still falls back to auto.
-                // Auto rule: teamsPerSession = ceil(teams / numPeriods); only use as
-                // many periods as needed — trailing periods get no chinuch that day.
+                // Distribution: three modes, highest priority first.
+                //   1. perSessionCounts [4,2,1,0] — exact count per period.
+                //   2. timesPerDay / teamsPerRound override (either or both).
+                //   3. Auto: teamsPerSession = ceil(teams / numPeriods); only as many
+                //      periods as needed — trailing periods get no chinuch that day.
                 // e.g. 8 teams, 4 periods → 2/session, [2,2,2,2]
                 // e.g. 6 teams, 4 periods → 2/session, [2,2,2,0]
                 // e.g. 5 teams, 4 periods → 2/session, [2,2,1,0]
                 const numPeriods = allPeriodKeys.length;
-                const manualTeams = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null;
-                const manualTimes = (league.chinuch.timesPerDay > 0) ? Math.min(league.chinuch.timesPerDay, numPeriods) : null;
-
-                let teamsPerSession;
-                let periodsNeeded;
-                if (manualTeams && manualTimes) {
-                    teamsPerSession = manualTeams;
-                    periodsNeeded = manualTimes;
-                } else if (manualTeams) {
-                    teamsPerSession = manualTeams;
-                    periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
-                } else if (manualTimes) {
-                    periodsNeeded = manualTimes;
-                    teamsPerSession = Math.ceil(teams.length / periodsNeeded);
-                } else {
-                    teamsPerSession = Math.ceil(teams.length / numPeriods);
-                    periodsNeeded = Math.ceil(teams.length / teamsPerSession);
-                }
-                const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
+                const customCounts = Array.isArray(league.chinuch.perSessionCounts)
+                    ? league.chinuch.perSessionCounts
+                        .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : 0; })
+                        .slice(0, numPeriods)
+                    : null;
 
                 // Shuffle teams using date+leagueName seed for daily variety
                 const shuffled = _seededShuffle(teams, dayId + league.name);
-
-                // Assign each team to a period bucket. With manual override, teams
-                // may wrap around if total < teamsPerSession * periodsNeeded — that's
-                // fine; trailing periods just stay empty. Cap at periodsNeeded so we
-                // never overflow the active window.
                 const bunkSchedule = {};
-                shuffled.forEach((team, idx) => {
-                    const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
-                    bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
-                });
+                let _mode;
+                let _summary;
+
+                if (customCounts && customCounts.length > 0) {
+                    // Honor exact per-session counts. Walk shuffled teams sequentially
+                    // and pour into period buckets. If the array totals more than the
+                    // team count, later periods simply get fewer (or zero) teams. If
+                    // it totals less, leftover teams have no chinuch slot today (they
+                    // will appear in matchups or as byes).
+                    let teamIdx = 0;
+                    for (let p = 0; p < customCounts.length; p++) {
+                        const take = customCounts[p];
+                        for (let k = 0; k < take && teamIdx < shuffled.length; k++, teamIdx++) {
+                            bunkSchedule[shuffled[teamIdx]] = Number(allPeriodKeys[p]);
+                        }
+                    }
+                    _mode = 'custom';
+                    _summary = '[' + customCounts.join(',') + ']';
+                } else {
+                    const manualTeams = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null;
+                    const manualTimes = (league.chinuch.timesPerDay > 0) ? Math.min(league.chinuch.timesPerDay, numPeriods) : null;
+
+                    let teamsPerSession;
+                    let periodsNeeded;
+                    if (manualTeams && manualTimes) {
+                        teamsPerSession = manualTeams;
+                        periodsNeeded = manualTimes;
+                    } else if (manualTeams) {
+                        teamsPerSession = manualTeams;
+                        periodsNeeded = Math.min(Math.ceil(teams.length / teamsPerSession), numPeriods);
+                    } else if (manualTimes) {
+                        periodsNeeded = manualTimes;
+                        teamsPerSession = Math.ceil(teams.length / periodsNeeded);
+                    } else {
+                        teamsPerSession = Math.ceil(teams.length / numPeriods);
+                        periodsNeeded = Math.ceil(teams.length / teamsPerSession);
+                    }
+                    const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
+
+                    shuffled.forEach((team, idx) => {
+                        const periodIdx = Math.min(Math.floor(idx / teamsPerSession), periodsNeeded - 1);
+                        bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
+                    });
+                    _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
+                    _summary = teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active';
+                }
+
                 window.chinuchSchedule[league.name] = bunkSchedule;
-                const _mode = (manualTeams || manualTimes) ? 'manual' : 'auto';
-                console.log('[Chinuch] "' + league.name + '" (' + _mode + '): ' + teams.length + ' team(s), ' + teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active');
+                console.log('[Chinuch] "' + league.name + '" (' + _mode + '): ' + teams.length + ' team(s), ' + _summary);
             }
         })();
 

@@ -255,12 +255,18 @@
             chinuch: (league.chinuch && typeof league.chinuch === 'object')
                 ? {
                     enabled: league.chinuch.enabled === true,
-                    // Both manual override fields are null by default → solver auto-calculates
+                    // All override fields are null by default → solver auto-calculates
                     timesPerDay: (Number.isInteger(league.chinuch.timesPerDay) && league.chinuch.timesPerDay > 0) ? league.chinuch.timesPerDay : null,
                     teamsPerRound: (Number.isInteger(league.chinuch.teamsPerRound) && league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : null,
+                    // Exact per-session counts (most specific). When set, overrides timesPerDay and teamsPerRound.
+                    perSessionCounts: (Array.isArray(league.chinuch.perSessionCounts) && league.chinuch.perSessionCounts.length > 0)
+                        ? league.chinuch.perSessionCounts
+                            .map(function (n) { return Number.isFinite(Number(n)) ? Math.max(0, Math.floor(Number(n))) : null; })
+                            .filter(function (n) { return n !== null; })
+                        : null,
                     bunkFacilities: (league.chinuch.bunkFacilities && typeof league.chinuch.bunkFacilities === 'object') ? league.chinuch.bunkFacilities : {}
                   }
-                : { enabled: false, timesPerDay: null, teamsPerRound: null, bunkFacilities: {} }
+                : { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} }
         };
 
         // ★ ORPHAN CLEANUP: Remove references to deleted divisions
@@ -1271,7 +1277,7 @@
         advancedBody.appendChild(awayCard);
 
         // ─── CARD: CHINUCH ──────────────────────────────────────────────────
-        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, bunkFacilities: {} };
+        if (!league.chinuch) league.chinuch = { enabled: false, timesPerDay: null, teamsPerRound: null, perSessionCounts: null, bunkFacilities: {} };
 
         const chinuchCard = document.createElement('div');
         chinuchCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
@@ -1298,14 +1304,18 @@
             chinuchBody.style.cssText = 'padding:14px;';
 
             // ── Auto-distribution info chip ─────────────────────────────────
-            const hasManualOverride = (league.chinuch.timesPerDay > 0) || (league.chinuch.teamsPerRound > 0);
+            const customArr = Array.isArray(league.chinuch.perSessionCounts) ? league.chinuch.perSessionCounts.filter(function (n) { return Number.isFinite(n) && n >= 0; }) : [];
+            const hasCustomArr = customArr.length > 0;
+            const hasManualOverride = hasCustomArr || (league.chinuch.timesPerDay > 0) || (league.chinuch.teamsPerRound > 0);
             // Panel is collapsed by default; only opens when the user explicitly toggles it.
             const overrideOpen = _chinuchOverrideOpenLeagues.has(league.name);
 
             const autoInfo = document.createElement('div');
             autoInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:' + (hasManualOverride ? '#FEF3C7' : '#F0F9FF') + '; border:1px solid ' + (hasManualOverride ? '#FCD34D' : '#BAE6FD') + '; border-radius:8px; padding:8px 10px; margin-bottom:10px;';
             const numTeams = (league.teams || []).length;
-            if (hasManualOverride) {
+            if (hasCustomArr) {
+                autoInfo.textContent = 'Manual override active: per-session counts [' + customArr.join(', ') + '].';
+            } else if (hasManualOverride) {
                 const tp = league.chinuch.timesPerDay ? (league.chinuch.timesPerDay + ' session' + (league.chinuch.timesPerDay === 1 ? '' : 's') + '/day') : 'auto sessions';
                 const tr = league.chinuch.teamsPerRound ? (league.chinuch.teamsPerRound + ' team' + (league.chinuch.teamsPerRound === 1 ? '' : 's') + '/session') : 'auto teams';
                 autoInfo.textContent = 'Manual override active: ' + tp + ', ' + tr + '.';
@@ -1378,15 +1388,52 @@
                 perGameRow.appendChild(document.createTextNode(' teams per session'));
                 overrideBox.appendChild(perGameRow);
 
+                // ── Divider ─────────────────────────────────────────────────
+                const divider = document.createElement('div');
+                divider.style.cssText = 'border-top:1px solid #E5E7EB; margin:10px 0;';
+                overrideBox.appendChild(divider);
+
+                // ── Per-session distribution (most specific override) ───────
+                const perSessLabel = document.createElement('div');
+                perSessLabel.style.cssText = 'font-size:0.78rem; font-weight:600; color:#374151; margin-bottom:4px;';
+                perSessLabel.textContent = 'Or set exact counts per session';
+                overrideBox.appendChild(perSessLabel);
+
+                const perSessHint = document.createElement('div');
+                perSessHint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-bottom:6px;';
+                perSessHint.textContent = 'Comma-separated, one number per league session (e.g. 4, 2, 1, 0). Overrides the two fields above.';
+                overrideBox.appendChild(perSessHint);
+
+                const perSessInput = document.createElement('input');
+                perSessInput.type = 'text';
+                perSessInput.value = hasCustomArr ? customArr.join(', ') : '';
+                perSessInput.placeholder = 'e.g. 4, 2, 1, 0';
+                perSessInput.style.cssText = 'width:100%; max-width:240px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:white;';
+                perSessInput.onchange = function () {
+                    const raw = String(perSessInput.value || '').trim();
+                    if (!raw) {
+                        league.chinuch.perSessionCounts = null;
+                    } else {
+                        const parsed = raw.split(/[,\s]+/)
+                            .map(function (s) { return parseInt(s, 10); })
+                            .filter(function (n) { return Number.isFinite(n) && n >= 0; });
+                        league.chinuch.perSessionCounts = parsed.length > 0 ? parsed : null;
+                    }
+                    saveLeaguesData();
+                    renderConfigSections(league, container);
+                };
+                overrideBox.appendChild(perSessInput);
+
                 // ── Reset to auto ───────────────────────────────────────────
                 if (hasManualOverride) {
                     const resetBtn = document.createElement('button');
                     resetBtn.type = 'button';
-                    resetBtn.style.cssText = 'margin-top:4px; padding:5px 10px; background:white; color:#374151; border:1px solid #D1D5DB; border-radius:6px; font-size:0.78rem; cursor:pointer;';
+                    resetBtn.style.cssText = 'display:block; margin-top:12px; padding:5px 10px; background:white; color:#374151; border:1px solid #D1D5DB; border-radius:6px; font-size:0.78rem; cursor:pointer;';
                     resetBtn.textContent = 'Reset to auto';
                     resetBtn.onclick = function () {
                         league.chinuch.timesPerDay = null;
                         league.chinuch.teamsPerRound = null;
+                        league.chinuch.perSessionCounts = null;
                         saveLeaguesData();
                         renderConfigSections(league, container);
                     };
