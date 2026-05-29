@@ -252,6 +252,13 @@
             //   wiped enable/style/seeds/rounds and made the bracket appear
             //   to "shut off" until the user re-toggled it.
             playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined,
+            indoorRequirement: (league.indoorRequirement && typeof league.indoorRequirement === 'object')
+                ? {
+                    enabled: league.indoorRequirement.enabled === true,
+                    op: (['>=', '<=', '='].indexOf(league.indoorRequirement.op) !== -1) ? league.indoorRequirement.op : '>=',
+                    count: (Number.isInteger(league.indoorRequirement.count) && league.indoorRequirement.count >= 0) ? league.indoorRequirement.count : 1
+                  }
+                : { enabled: false, op: '>=', count: 1 },
             chinuch: (league.chinuch && typeof league.chinuch === 'object')
                 ? {
                     enabled: league.chinuch.enabled === true,
@@ -1147,6 +1154,7 @@
         const _summaryBits = [];
         if (league.offCampus?.enabled) _summaryBits.push('Away Games');
         if (league.chinuch?.enabled) _summaryBits.push('Chinuch');
+        if (league.indoorRequirement?.enabled) _summaryBits.push('Indoor Rule');
         if (_summaryBits.length > 0) {
             const summary = document.createElement('span');
             summary.textContent = _summaryBits.join(' \u00b7 ');
@@ -1505,6 +1513,82 @@
         }
 
         advancedBody.appendChild(chinuchCard);
+
+        // ─── CARD: INDOOR REQUIREMENT ───────────────────────────────────────
+        if (!league.indoorRequirement) league.indoorRequirement = { enabled: false, op: '>=', count: 1 };
+
+        const indoorCard = document.createElement('div');
+        indoorCard.style.cssText = 'border:1px solid #E2E8F0; border-radius:12px; overflow:hidden; margin-top:8px;';
+
+        const indoorHeader = document.createElement('label');
+        indoorHeader.style.cssText = 'display:flex; align-items:center; gap:10px; padding:12px 14px; cursor:pointer; background:' + (league.indoorRequirement.enabled ? '#F0FDF4' : '#F9FAFB') + '; border-bottom:' + (league.indoorRequirement.enabled ? '1px solid #BBF7D0' : 'none') + ';';
+        const indoorCb = document.createElement('input');
+        indoorCb.type = 'checkbox';
+        indoorCb.checked = league.indoorRequirement.enabled === true;
+        indoorCb.style.cssText = 'width:16px; height:16px; accent-color:#16A34A;';
+        indoorCb.onchange = function () {
+            league.indoorRequirement.enabled = indoorCb.checked;
+            saveLeaguesData();
+            renderConfigSections(league, container);
+        };
+        indoorHeader.appendChild(indoorCb);
+        const indoorTitle = document.createElement('div');
+        indoorTitle.innerHTML = '<div style="font-size:0.85rem; font-weight:600; color:#1E293B;">Indoor Court Requirement</div><div style="font-size:0.75rem; color:#64748B;">Steer each team toward a target number of indoor games per day</div>';
+        indoorHeader.appendChild(indoorTitle);
+        indoorCard.appendChild(indoorHeader);
+
+        if (league.indoorRequirement.enabled) {
+            const indoorBody = document.createElement('div');
+            indoorBody.style.cssText = 'padding:14px;';
+
+            const ruleRow = document.createElement('div');
+            ruleRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; flex-wrap:wrap;';
+
+            ruleRow.appendChild(document.createTextNode('Each team plays'));
+
+            const opSelect = document.createElement('select');
+            opSelect.style.cssText = 'padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; background:white;';
+            [
+                { v: '>=', label: '≥ (at least)' },
+                { v: '=',  label: '= (exactly)' },
+                { v: '<=', label: '≤ (at most)' }
+            ].forEach(function (o) {
+                const opt = document.createElement('option');
+                opt.value = o.v;
+                opt.textContent = o.label;
+                if (league.indoorRequirement.op === o.v) opt.selected = true;
+                opSelect.appendChild(opt);
+            });
+            opSelect.onchange = function () {
+                league.indoorRequirement.op = opSelect.value;
+                saveLeaguesData();
+            };
+            ruleRow.appendChild(opSelect);
+
+            const countInput = document.createElement('input');
+            countInput.type = 'number'; countInput.min = '0';
+            countInput.value = league.indoorRequirement.count;
+            countInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
+            countInput.onchange = function () {
+                const v = parseInt(countInput.value, 10);
+                league.indoorRequirement.count = (Number.isFinite(v) && v >= 0) ? v : 1;
+                saveLeaguesData();
+            };
+            ruleRow.appendChild(countInput);
+
+            ruleRow.appendChild(document.createTextNode('indoor game(s) per day'));
+
+            indoorBody.appendChild(ruleRow);
+
+            const hint = document.createElement('div');
+            hint.style.cssText = 'font-size:0.72rem; color:#6B7280; margin-top:10px; line-height:1.4;';
+            hint.textContent = 'Indoor courts come from facilities marked Indoor in the Facilities tab. The solver biases assignments to meet the rule and runs a post-pass that swaps outdoor matchups for free indoor ones when teams are short.';
+            indoorBody.appendChild(hint);
+
+            indoorCard.appendChild(indoorBody);
+        }
+
+        advancedBody.appendChild(indoorCard);
     }
 
     // =========================================================================

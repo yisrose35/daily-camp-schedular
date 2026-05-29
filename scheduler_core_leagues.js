@@ -519,7 +519,7 @@
     // SMART ASSIGNMENT ALGORITHM - SPORT VARIETY MODE (Default)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots) {
+    function assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
         const usedSportsThisSlot = {};
@@ -532,16 +532,27 @@
             return Math.max(0, 100 - sportCount * 20);
         }
 
-        // Sort matchups so teams with less sport variety get processed first
+        // Sort matchups so teams with less sport variety get processed first.
+        // When an indoor requirement is active, the neediest team (lowest current
+        // indoor count) goes first so it gets first pick at any indoor option.
+        const _indoorReq = leagueRules && leagueRules.indoorRequirement;
+        const _indoorCounts = (leagueRules && leagueRules.indoorCounts) || {};
         const matchupsWithPriority = matchups.map(([t1, t2]) => {
             const h1 = getTeamSportHistory(leagueName, t1, history);
             const h2 = getTeamSportHistory(leagueName, t2, history);
             const uniqueSports1 = new Set(h1).size;
             const uniqueSports2 = new Set(h2).size;
-            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2 };
+            const ic1 = _indoorCounts[t1] || 0;
+            const ic2 = _indoorCounts[t2] || 0;
+            return { t1, t2, varietyScore: uniqueSports1 + uniqueSports2, indoorMin: Math.min(ic1, ic2) };
         });
 
-        matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+        if (_indoorReq && _indoorReq.enabled) {
+            // Neediest pair (lowest min indoor count) first; tie-break on variety
+            matchupsWithPriority.sort((a, b) => a.indoorMin - b.indoorMin || a.varietyScore - b.varietyScore);
+        } else {
+            matchupsWithPriority.sort((a, b) => a.varietyScore - b.varietyScore);
+        }
 
         for (const { t1, t2 } of matchupsWithPriority) {
             let bestOption = null;
@@ -564,6 +575,9 @@
                 } else {
                     score -= sportUsageThisSlot * 100;
                 }
+
+                // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
+                score += _scoreIndoorBias(option, t1, t2, leagueRules);
 
                 score += Math.random() * 10;
 
@@ -598,7 +612,7 @@
     // SMART ASSIGNMENT ALGORITHM - MATCHUP VARIETY MODE
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots) {
+    function assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules) {
         const assignments = [];
         const usedFields = new Set();
 
@@ -635,6 +649,9 @@
                 // Small bonus for less-played sports (not the main factor)
                 score += Math.max(0, 50 - (sportCount1 + sportCount2) * 5);
 
+                // ★ INDOOR REQUIREMENT: bias toward/away from indoor based on rule + running counts
+                score += _scoreIndoorBias(option, t1, t2, leagueRules);
+
                 // Random factor for variety
                 score += Math.random() * 20;
 
@@ -668,16 +685,61 @@
     // UNIFIED ASSIGNMENT FUNCTION (Delegates based on priority mode)
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority) {
+    function assignMatchupsToFieldsAndSports(matchups, availablePool, leagueName, history, slots, schedulingPriority, leagueRules) {
         const mode = schedulingPriority || 'sport_variety';
-        
+
         console.log(`   🎯 Scheduling Priority: ${mode === 'sport_variety' ? 'Sport Variety' : 'Matchup Variety'}`);
 
         if (mode === 'matchup_variety') {
-            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots);
+            return assignMatchupsToFieldsAndSports_MatchupVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
         } else {
-            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots);
+            return assignMatchupsToFieldsAndSports_SportVariety(matchups, availablePool, leagueName, history, slots, leagueRules);
         }
+    }
+
+    // =========================================================================
+    // ★★★ INDOOR REQUIREMENT SCORING HELPER ★★★
+    // Returns a score adjustment for picking `option` for the matchup (t1, t2),
+    // given the league's indoor rule and each team's running indoor count today.
+    // Higher = more desirable. Used by both SportVariety and MatchupVariety.
+    // =========================================================================
+    function _scoreIndoorBias(option, t1, t2, leagueRules) {
+        const req = leagueRules && leagueRules.indoorRequirement;
+        if (!req || !req.enabled) return 0;
+        const counts = (leagueRules && leagueRules.indoorCounts) || {};
+        const isIndoor = !!(option && option.fieldObj && option.fieldObj.isIndoor);
+        const op = req.op || '>=';
+        const target = Number.isFinite(req.count) ? req.count : 1;
+
+        function teamDelta(team) {
+            const cur = counts[team] || 0;
+            if (op === '>=') {
+                if (isIndoor) {
+                    if (cur < target) return 1500 * (target - cur);
+                    return -200;
+                }
+                if (cur < target) return -800 * (target - cur);
+                return 0;
+            }
+            if (op === '=') {
+                if (isIndoor) {
+                    if (cur < target) return 1500 * (target - cur);
+                    return -3000;
+                }
+                if (cur < target) return -800 * (target - cur);
+                if (cur > target) return 200;
+                return 0;
+            }
+            // op === '<='
+            if (isIndoor) {
+                if (cur >= target) return -3000;
+                return 100;
+            }
+            if (cur < target) return 0;
+            return 200;
+        }
+
+        return teamDelta(t1) + teamDelta(t2);
     }
 // =========================================================================
     // ★★★ OFF-CAMPUS DOUBLE-HEADER ENGINE ★★★
@@ -845,6 +907,11 @@
 
         // ★★★ TRACK GAMES PER LEAGUE FOR THIS DAY ★★★
         const leagueGameCounters = {};  // Tracks how many games each league has scheduled TODAY
+
+        // ★★★ INDOOR REQUIREMENT: per-team running indoor-game count for today ★★★
+        // Used by the scorer to bias matchup field choice toward indoor for teams
+        // that haven't met their league's indoor rule yet.
+        const indoorCountsByLeague = {};  // indoorCountsByLeague[leagueName][team] = number
 
         // Group blocks by time
         const blocksByTime = {};
@@ -1444,19 +1511,37 @@
                         assignments.push({ team1: teamA, team2: teamB, field: pick.field, sport: pick.sport });
                     });
                 } else {
+                    if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
                     assignments = assignMatchupsToFieldsAndSports(
                         matchups,
                         availablePool,
                         league.name,
                         history,
                         slots,
-                        league.schedulingPriority || 'sport_variety'
+                        league.schedulingPriority || 'sport_variety',
+                        {
+                            indoorRequirement: league.indoorRequirement,
+                            indoorCounts: indoorCountsByLeague[league.name]
+                        }
                     );
                 }
 
                 if (assignments.length === 0) {
                     console.log(`   ❌ No assignments possible`);
                     continue;
+                }
+
+                // ★ INDOOR: increment per-team count for matchups that landed indoor
+                if (league.indoorRequirement?.enabled) {
+                    if (!indoorCountsByLeague[league.name]) indoorCountsByLeague[league.name] = {};
+                    const ic = indoorCountsByLeague[league.name];
+                    assignments.forEach(function (a) {
+                        const fObj = availablePool.find(function (p) { return p.field === a.field && p.sport === a.sport; });
+                        if (fObj && fObj.fieldObj && fObj.fieldObj.isIndoor) {
+                            if (a.team1) ic[a.team1] = (ic[a.team1] || 0) + 1;
+                            if (a.team2) ic[a.team2] = (ic[a.team2] || 0) + 1;
+                        }
+                    });
                 }
 
                 // ★★★ INCREMENT TODAY'S GAME COUNTER ★★★
