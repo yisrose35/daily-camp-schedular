@@ -8,6 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry-unified.css">
     <link rel="stylesheet" href="campistry_notes.css">
 </head>
 <body>
@@ -45,7 +46,9 @@
             <span>New Note</span>
         </button>
 
-        <div style="height:12px;"></div>
+        <div style="height:4px;"></div>
+
+        <div class="nt-nav-label">Views</div>
 
         <button class="nt-nav-item active" data-view="all" onclick="switchView('all')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
@@ -70,14 +73,19 @@
 
         <div class="nt-sidebar-divider"></div>
 
+        <div class="nt-nav-label">Tags</div>
+
+        <!-- Tags section -->
+        <div id="sidebarTagsBox" class="nt-sidebar-tags" style="padding:4px 12px;"></div>
+
+        <div class="nt-sidebar-divider"></div>
+
         <button class="nt-nav-item" data-view="trash" onclick="switchView('trash')">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
             <span>Trash</span>
             <span class="nt-nav-count" id="cnt-trash"></span>
         </button>
 
-        <!-- Tags section -->
-        <div id="sidebarTagsBox" class="nt-sidebar-tags" style="display:none; padding:8px 10px;"></div>
     </aside>
 
     <!-- MAIN -->
@@ -212,6 +220,25 @@
 </div>
 
 <div id="nt-toast-box"></div>
+
+<div class="cs-bnav">
+    <button class="cs-bnav-item active" onclick="switchView('all');this.closest('.cs-bnav').querySelectorAll('.cs-bnav-item').forEach(function(b){b.classList.remove('active')});this.classList.add('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        All Notes
+    </button>
+    <button class="cs-bnav-item" onclick="switchView('pinned');this.closest('.cs-bnav').querySelectorAll('.cs-bnav-item').forEach(function(b){b.classList.remove('active')});this.classList.add('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/></svg>
+        Pinned
+    </button>
+    <button class="cs-bnav-item" onclick="switchView('shared');this.closest('.cs-bnav').querySelectorAll('.cs-bnav-item').forEach(function(b){b.classList.remove('active')});this.classList.add('active')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+        Shared
+    </button>
+    <button class="cs-bnav-item" onclick="createAndOpen()">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+        New
+    </button>
+</div>
 
 <script src="campistry_notes.js"></script>
 <script>
