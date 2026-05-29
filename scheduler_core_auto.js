@@ -19274,7 +19274,26 @@
                 // Find a swap candidate: a sport-placed slot whose duration
                 // exactly equals the special's duration. We must also verify
                 // the special is allowed at that time per access/time rules.
-                let swapIdx = -1;
+                // ★ Day 19: prep-aware swap selection. For a flexible-prep special,
+                // prefer a swap slot that has room BEFORE it for the prep block, so
+                // the recapture doesn't park a prep-special at the day's edge (slot 0)
+                // where prep can't precede it — the Phase 4.9 analog of the Phase 2.5
+                // prep-room placement preference.
+                const _p49PrepCfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(def.name, globalSettings) : null;
+                const _p49Pc = _p49PrepCfg && _p49PrepCfg.prepConfig;
+                const _p49PrepDur = (_p49Pc && _p49Pc.timing === 'flexible') ? (parseInt(_p49PrepCfg.prepDuration) || 0) : 0;
+                const _p49IsPrepSpecial = _p49PrepDur > 0;
+                const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
+                const _p49Disp = (e) => !!e && !e.continuation && !!e.sport && !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep && !e._league && !e._isRotationEvent && !e._isTrip;
+                const _p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };
+                const _p49HasPrepRoomBefore = (idx) => {
+                    for (let _k = idx - 1; _k >= 0; _k--) {
+                        if (_p49GridDur(_k) < _p49PrepDur) continue;
+                        if (!slots[_k] || !slots[_k]._activity || _p49Disp(slots[_k])) return true;
+                    }
+                    return false;
+                };
+                let swapIdx = -1, _swapIdxPrepRoom = -1;
                 for (let _si = 0; _si < slots.length; _si++) {
                     const s = slots[_si];
                     if (!s || s.continuation) continue;
@@ -19337,9 +19356,14 @@
                             if (_shareType === 'same_division' && _crossDiv) continue;
                         } catch (e) { /* fail-open on gate error */ }
                     }
-                    swapIdx = _si;
-                    break;
+                    // Valid candidate. Non-prep specials keep first-match. Prep specials
+                    // prefer the first candidate that has prep room before it; the first
+                    // valid candidate is kept as a fallback if none has room.
+                    if (swapIdx < 0) swapIdx = _si;
+                    if (!_p49IsPrepSpecial) break;
+                    if (_p49HasPrepRoomBefore(_si)) { _swapIdxPrepRoom = _si; break; }
                 }
+                if (_p49IsPrepSpecial && _swapIdxPrepRoom >= 0) swapIdx = _swapIdxPrepRoom;
 
                 if (swapIdx < 0) {
                     unrecapturable.push(def);
@@ -19380,16 +19404,10 @@
                 // league/pair-locked). No hole results. User requirement: "if there
                 // is a prep the system needs to make room for it."
                 try {
-                    const _p49PrepCfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(def.name, globalSettings) : null;
-                    const _p49Pc = _p49PrepCfg && _p49PrepCfg.prepConfig;
-                    const _p49PrepDur = parseInt(_p49PrepCfg && _p49PrepCfg.prepDuration) || 0;
-                    if (_p49Pc && _p49Pc.timing === 'flexible' && _p49PrepDur > 0) {
+                    if (_p49IsPrepSpecial) {
                         let _p49HasPrep = false;
                         for (let _ph = 0; _ph < swapIdx; _ph++) { if (slots[_ph] && slots[_ph]._isPrep && slots[_ph]._prepFor === def.name) { _p49HasPrep = true; break; } }
                         if (!_p49HasPrep) {
-                            const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
-                            const _p49Disp = (e) => !!e && !e.continuation && !!e.sport && !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep && !e._league && !e._isRotationEvent && !e._isTrip;
-                            const _p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };
                             let _p49PrepIdx = -1;
                             // Pass 1: nearest EMPTY slot before the special (no sport sacrificed).
                             for (let _pp = swapIdx - 1; _pp >= 0; _pp--) {
