@@ -14838,6 +14838,26 @@
                         const specialDur = configuredDur || special.duration || (special.claimedTime.endMin - special.claimedTime.startMin);
                         const fieldName = special.claimedField || special.location;
                         const draftStart = special.claimedTime.startMin;
+                        // ★ Day 19 (user: "if there is a prep the system needs to make room for it"):
+                        // flexible-prep duration for this special. A flexible prep is a separate
+                        // block placed BEFORE the activity, so the activity must NOT be parked at
+                        // the day's edge with no room before it. Used by the scoring below to steer
+                        // placement toward positions that leave >= prepDuration of free time before
+                        // the activity (where the write-phase injection then places the prep — into
+                        // an empty slot or by displacing a sport).
+                        var _fpCfgP25 = getSpecialConfig(special.name || special.event || '', globalSettings);
+                        var _fpPrep = (_fpCfgP25 && _fpCfgP25.prepConfig && _fpCfgP25.prepConfig.timing === 'flexible' && (parseInt(_fpCfgP25.prepDuration) || 0) > 0) ? (parseInt(_fpCfgP25.prepDuration) || 0) : 0;
+                        // Free room before a candidate position, summed across the bunk's open gaps
+                        // (gaps become displaceable sports after Phase 3, so this == future prep room).
+                        var _p25RoomBefore = function(_atPos) {
+                            var _rb = 0;
+                            for (var _rbi = 0; _rbi < allGapsForBunk.length; _rbi++) {
+                                var _rbg = allGapsForBunk[_rbi];
+                                var _rbEnd = Math.min(_rbg.e, _atPos);
+                                if (_rbEnd > _rbg.s) _rb += (_rbEnd - _rbg.s);
+                            }
+                            return _rb;
+                        };
 
                         // Use the user's configured sport dMin STRICTLY for dead-gap
                         // detection — no adaptive reduction. If Phase 3 will enforce
@@ -15202,6 +15222,13 @@
                                     }
                                 }
 
+                                // ★ Day 19: prep-room preference — penalize positions that leave no
+                                // room before the activity for a flexible prep. Penalty (-5000) exceeds
+                                // the dead-gap penalty so prep room dominates, but it's a soft penalty
+                                // not a hard reject: if NO position has room, the special still places
+                                // (flexPrep then logs that prep couldn't fit).
+                                if (_fpPrep > 0 && _p25RoomBefore(pos) < _fpPrep) score -= 5000;
+
                                 candidatePositions.push({ pos: pos, score: score, deadGapCount: deadGapCount });
                             }
 
@@ -15236,6 +15263,8 @@
                                         if (endPos === draftStart) endScore += 25;
                                         if (_p25PreChgStarts[endPos + specialDur]) endScore += 350;
                                         if (_p25PostChgEnds[endPos])               endScore += 350;
+                                        // ★ Day 19: prep-room preference (see main loop).
+                                        if (_fpPrep > 0 && _p25RoomBefore(endPos) < _fpPrep) endScore -= 5000;
                                         candidatePositions.push({ pos: endPos, score: endScore, deadGapCount: endDeadGaps });
                                     }
                                 }
