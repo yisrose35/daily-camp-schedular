@@ -772,6 +772,16 @@
 
         const globalSettings = getGlobalSettings();
 
+        // ★ Day 19: invalidate the per-run specials-list cache at the START of every
+        // generation. getGlobalSettings() returns a PERSISTENT object, and
+        // getSpecialActivitiesList caches its merged list on it via a Symbol key —
+        // so the cache otherwise survives across generations and a mid-session
+        // special-config edit (without a page reload) would be silently ignored
+        // (observed: prep config change not picked up until reload). Clearing here
+        // rebuilds the list from current config each gen, while still caching within
+        // this gen (many getSpecialActivitiesList calls reuse it).
+        try { if (globalSettings) delete globalSettings[_CACHED_SPECIALS]; } catch (_) {}
+
         // Bootstrap window.campPeriods from saved global settings if it wasn't
         // loaded by period_editor.js (scheduler runs independently of the editor UI).
         if (!window.campPeriods || Object.keys(window.campPeriods).length === 0) {
