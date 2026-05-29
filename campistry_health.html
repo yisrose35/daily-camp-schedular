@@ -295,6 +295,10 @@ function triggerPage(p, btn) {
     if (btn) btn.classList.add('active');
 }
 </script>
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
 <script src="campistry_health.js"></script>
 <script>
 // Sidebar (hamburger toggle — matches Flow/Me)
@@ -321,6 +325,18 @@ function triggerPage(p, btn) {
 document.querySelectorAll('.modal-overlay').forEach(function(o){o.addEventListener('click',function(e){if(e.target===o)o.classList.remove('open')})});
 // Init Health engine
 if (window.CampistryHealth) CampistryHealth.init();
+// Re-render when cloud data arrives (campers loaded from Supabase)
+window.addEventListener('campistry-cloud-hydrated', function(){
+    if (!window.CampistryHealth) return;
+    console.log('[Health] Cloud hydrated — refreshing camper data');
+    CampistryHealth.renderDashboard();
+    // Re-render whichever page is currently active
+    var active = document.querySelector('.health-page.active');
+    if (active && active.id) {
+        var page = active.id.replace('page-','');
+        CampistryHealth.onPageChange(page);
+    }
+});
 </script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script src="campistry_notes_quick.js"></script>
