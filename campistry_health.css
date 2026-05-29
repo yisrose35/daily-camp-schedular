@@ -35,7 +35,7 @@ button { font-family: inherit; cursor: pointer; border: none; background: none; 
 .app-logo-full { display:block; flex-shrink:0; object-fit:contain; vertical-align:middle; }
 .header-app-switch { display:flex; align-items:center; margin-left:12px; transition:opacity .2s; }
 .header-app-switch:hover { opacity:.7; }
-.hamburger-btn { display:none; flex-direction:column; justify-content:center; gap:4px; width:36px; height:36px; padding:8px; border:1px solid var(--slate-200); border-radius:var(--r); background:#fff; }
+.hamburger-btn { display:flex; flex-direction:column; justify-content:center; gap:4px; width:36px; height:36px; padding:8px; border:1px solid var(--slate-200); border-radius:var(--r); background:#fff; }
 .hamburger-btn span { display:block; height:2px; background:var(--slate-700); border-radius:1px; }
 .hamburger-btn:hover { border-color:var(--health); background:var(--health-tint); }
 .sync-badge { display:flex; align-items:center; gap:5px; padding:4px 10px; background:var(--slate-100); border-radius:999px; font-size:.7rem; font-weight:500; color:var(--slate-500); }
@@ -60,7 +60,7 @@ body.sidebar-open .sidebar { transform:translateX(0); }
 
 /* ══ DESKTOP LAYOUT ══════════════════════════════════════════ */
 @media (min-width: 769px) {
-    .sidebar { transform:translateX(0) !important; background:#fff; }
+    .sidebar { transform:translateX(0); }
     .app-content { margin-left:240px; }
     .hamburger-btn { display:none; }
     .sidebar-backdrop { display:none !important; }
@@ -175,6 +175,7 @@ body.sidebar-open .sidebar { transform:translateX(0); }
     .header-app-switch { display:none; }
     .app-content { padding:12px 12px 80px; }
     .stats-grid { grid-template-columns:repeat(2,1fr); }
+    .activity-grid { grid-template-columns:1fr; }
     .page-header { flex-direction:column; }
-    .hamburger-btn { display:flex; }
+    .cs-bnav { display:flex; }
 }
