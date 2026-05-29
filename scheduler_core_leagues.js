@@ -875,10 +875,10 @@
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
         // ★★★ CHINUCH: Pre-compute which teams attend chinuch at each league period ★★★
-        // timesPerDay  — how many periods get a chinuch session (defaults to all league periods)
-        // teamsPerRound — how many teams go simultaneously per session (defaults to 1)
-        // Teams are shuffled by date, grouped into batches of teamsPerRound, spread across
-        // the active periods so each team is assigned exactly one chinuch period per day.
+        // Distribution is fully automatic: teamsPerSession = ceil(teams / numPeriods).
+        // Only periodsNeeded = ceil(teams / teamsPerSession) periods get chinuch — the
+        // rest are normal league periods. Each team is assigned exactly one chinuch
+        // period per day. Teams are shuffled daily for variety.
         window.chinuchSchedule = {};
         (function () {
             function _seededShuffle(arr, seed) {
@@ -911,24 +911,28 @@
                 });
                 if (allPeriodKeys.length === 0) continue;
 
-                // Respect user-configured timesPerDay (cap to available periods)
-                const teamsPerRound = (league.chinuch.teamsPerRound > 0) ? league.chinuch.teamsPerRound : 1;
-                const maxPeriods = league.chinuch.timesPerDay
-                    ? Math.min(league.chinuch.timesPerDay, allPeriodKeys.length)
-                    : allPeriodKeys.length;
-                const activePeriodKeys = allPeriodKeys.slice(0, maxPeriods);
+                // Auto-calculate: spread teams as evenly as possible across periods.
+                // teamsPerSession = ceil(teams / numPeriods); only use as many periods
+                // as needed — trailing periods get no chinuch that day.
+                // e.g. 8 teams, 4 periods → 2/session, [2,2,2,2]
+                // e.g. 6 teams, 4 periods → 2/session, [2,2,2,0]
+                // e.g. 5 teams, 4 periods → 2/session, [2,2,1,0]
+                const numPeriods = allPeriodKeys.length;
+                const teamsPerSession = Math.ceil(teams.length / numPeriods);
+                const periodsNeeded = Math.ceil(teams.length / teamsPerSession);
+                const activePeriodKeys = allPeriodKeys.slice(0, periodsNeeded);
 
                 // Shuffle teams using date+leagueName seed for daily variety
                 const shuffled = _seededShuffle(teams, dayId + league.name);
 
-                // Group into batches of teamsPerRound, assign each batch to a period
+                // Assign each team to a period bucket (no wrap-around — last period may have fewer)
                 const bunkSchedule = {};
                 shuffled.forEach((team, idx) => {
-                    const periodIdx = Math.floor(idx / teamsPerRound) % activePeriodKeys.length;
+                    const periodIdx = Math.floor(idx / teamsPerSession);
                     bunkSchedule[team] = Number(activePeriodKeys[periodIdx]);
                 });
                 window.chinuchSchedule[league.name] = bunkSchedule;
-                console.log('[Chinuch] "' + league.name + '": ' + Object.keys(bunkSchedule).length + ' team(s), ' + teamsPerRound + '/session, ' + activePeriodKeys.length + ' period(s)');
+                console.log('[Chinuch] "' + league.name + '": ' + teams.length + ' team(s), ' + teamsPerSession + '/session, ' + periodsNeeded + '/' + numPeriods + ' period(s) active');
             }
         })();
 

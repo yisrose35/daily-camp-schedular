@@ -1295,46 +1295,14 @@
             const chinuchBody = document.createElement('div');
             chinuchBody.style.cssText = 'padding:14px;';
 
-            // ── Schedule shape row ──────────────────────────────────────────
-            const shapeRow = document.createElement('div');
-            shapeRow.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; gap:6px; font-size:0.85rem; color:#374151; margin-bottom:14px;';
-
-            // ── Row 1: "X league games per day" ─────────────────────────────
-            const gamesRow = document.createElement('div');
-            gamesRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; margin-bottom:10px;';
-
-            const timesInput = document.createElement('input');
-            timesInput.type = 'number'; timesInput.min = '1';
-            timesInput.value = league.chinuch.timesPerDay || '';
-            timesInput.placeholder = 'auto';
-            timesInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
-            timesInput.title = 'How many league periods get a chinuch session each day (leave blank to use all league periods)';
-            timesInput.onchange = function () {
-                const v = parseInt(timesInput.value);
-                league.chinuch.timesPerDay = (v > 0) ? v : null;
-                saveLeaguesData();
-            };
-            gamesRow.appendChild(timesInput);
-            gamesRow.appendChild(document.createTextNode(' league games per day'));
-            chinuchBody.appendChild(gamesRow);
-
-            // ── Row 2: "Y teams per game" ───────────────────────────────────
-            const perGameRow = document.createElement('div');
-            perGameRow.style.cssText = 'display:flex; align-items:center; gap:8px; font-size:0.88rem; color:#374151; margin-bottom:16px;';
-
-            const perRoundInput = document.createElement('input');
-            perRoundInput.type = 'number'; perRoundInput.min = '1';
-            perRoundInput.value = league.chinuch.teamsPerRound || 1;
-            perRoundInput.style.cssText = 'width:64px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.88rem; text-align:center; background:white;';
-            perRoundInput.title = 'How many teams attend chinuch simultaneously each league game';
-            perRoundInput.onchange = function () {
-                const v = parseInt(perRoundInput.value);
-                league.chinuch.teamsPerRound = (v > 0) ? v : 1;
-                saveLeaguesData();
-            };
-            perGameRow.appendChild(perRoundInput);
-            perGameRow.appendChild(document.createTextNode(' teams per game'));
-            chinuchBody.appendChild(perGameRow);
+            // ── Auto-distribution info chip ─────────────────────────────────
+            const autoInfo = document.createElement('div');
+            autoInfo.style.cssText = 'font-size:0.78rem; color:#374151; background:#F0F9FF; border:1px solid #BAE6FD; border-radius:8px; padding:8px 10px; margin-bottom:14px;';
+            const numTeams = (league.teams || []).length;
+            autoInfo.textContent = numTeams > 0
+                ? 'Distribution is calculated automatically: ' + numTeams + ' team' + (numTeams === 1 ? '' : 's') + ' spread evenly across league sessions each day.'
+                : 'Add teams above — distribution is calculated automatically based on team count and league sessions per day.';
+            chinuchBody.appendChild(autoInfo);
 
             // ── Per-team facility (dropdown from Facilities tab) ────────────
             const facilityHeader = document.createElement('div');
