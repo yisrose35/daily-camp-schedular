@@ -62,6 +62,8 @@
     <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
     <div class="sidebar-label">Reports</div>
     <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
+    <div class="sidebar-label">Parent</div>
+    <button class="sidebar-item" data-page="parent-requests"><span class="sidebar-dot"></span> Parent Requests <span class="sb-badge warn" id="sbParentReqCount" style="display:none;">0</span></button>
 </aside>
 
 <!-- ═══ MAIN CONTENT ═══ -->
@@ -161,6 +163,17 @@
     <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
 </div>
 
+<!-- ── PARENT REQUESTS ── -->
+<div id="page-parent-requests" class="live-page">
+    <div class="page-header">
+        <div><div class="page-title">Parent Requests</div><div class="page-subtitle">Late arrivals &amp; dismissal changes submitted by parents via Campistry Link</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="ParentRequests.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+        </div>
+    </div>
+    <div id="parentRequestsBody"><div class="empty-state">No parent requests yet — they'll appear here when parents submit from Campistry Link</div></div>
+</div>
+
 </div><!-- end app-content -->
 
 <!-- ═══ ABSENCE MODAL ═══ -->
@@ -218,8 +231,129 @@
             document.querySelectorAll('.live-page').forEach(function(x){x.classList.remove('active')});
             var t=document.getElementById('page-'+p); if(t) t.classList.add('active');
             close();
+            if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
         });
     });
+})();
+</script>
+<script>
+// ── Parent Requests bridge — reads from campistry_parent_requests_v1 ──────────
+var ParentRequests = (function(){
+    var PKEY = 'campistry_parent_requests_v1';
+    var LIVE_KEY = 'campistry_live_v1';
+
+    function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
+    function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
+    function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
+    function getLive(){try{return JSON.parse(localStorage.getItem(LIVE_KEY)||'{}');}catch(e){return{};}}
+    function saveLive(d){try{d.updated_at=new Date().toISOString();localStorage.setItem(LIVE_KEY,JSON.stringify(d));}catch(e){}}
+    function todayKey(){var d=new Date();d.setHours(12,0,0,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+    function getTodayData(){var data=getLive(),key=todayKey();if(!data[key])data[key]={attendance:{},absences:[],earlyPickups:[],notes:''};return data[key];}
+    function saveTodayData(t){var d=getLive();d[todayKey()]=t;saveLive(d);}
+
+    function liveToast(msg){
+        var el=document.getElementById('toastEl');if(!el)return;
+        el.textContent=msg;el.className='toast';
+        requestAnimationFrame(function(){el.classList.add('show');setTimeout(function(){el.classList.remove('show');},2500);});
+    }
+
+    function fmtTime(ts){
+        if(!ts)return'';
+        var d=new Date(ts),now=new Date(),diff=now-d;
+        if(diff<60000)return'Just now';
+        if(diff<3600000)return Math.floor(diff/60000)+'m ago';
+        if(diff<86400000)return Math.floor(diff/3600000)+'h ago';
+        return (d.getMonth()+1)+'/'+d.getDate();
+    }
+
+    function updateBadge(){
+        var count=getReqs().filter(function(r){return r.status==='Pending';}).length;
+        var badge=document.getElementById('sbParentReqCount');
+        if(badge){badge.textContent=String(count);badge.style.display=count?'':'none';}
+    }
+
+    function render(){
+        var reqs=getReqs();
+        var body=document.getElementById('parentRequestsBody');if(!body)return;
+        updateBadge();
+        if(!reqs.length){body.innerHTML='<div class="empty-state">No parent requests yet — they\'ll appear here when parents submit from Campistry Link</div>';return;}
+
+        var typeLabel={early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
+        var typeClr={early:'var(--amber-600)',change:'var(--blue-500)',friend:'var(--purple-500)',late:'var(--red-500)'};
+        var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
+        reqs.forEach(function(r,i){
+            var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
+            var details=[];
+            if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+            else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
+            else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
+            else if(r.type==='late'){if(r.arrivalTime)details.push('Arriving: '+r.arrivalTime);if(r.reason)details.push(r.reason);}
+            if(r.notes)details.push('“'+r.notes+'”');
+            var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+            var actions=r.status==='Pending'?
+                '<div style="display:flex;gap:6px;margin-top:6px;">'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.confirm('+i+')">Confirm</button>'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.decline('+i+')">Decline</button>'+
+                '</div>':'';
+            html+=
+                '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
+                '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+                '<div style="flex:1;min-width:0;">'+
+                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
+                        '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
+                        (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
+                        '<span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--slate-50);color:'+typeClr[r.type||'early']+';">'+esc(r.label)+'</span>'+
+                    '</div>'+
+                    '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
+                    (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                    actions+
+                '</div>'+
+                '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
+                '</div>';
+        });
+        html+='</div></div>';
+        body.innerHTML=html;
+    }
+
+    function confirm(i){
+        var reqs=getReqs(),r=reqs[i];
+        if(!r||r.status!=='Pending')return;
+        r.status='Confirmed';
+        saveReqs(reqs);
+        // Inject into Live's own data store
+        var today=getTodayData();
+        var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
+        if(r.type==='late'){
+            if(!today.absences.some(function(a){return a.name===r.childName;})){
+                today.absences.push({name:r.childName,reason:'late',notes:'Late arrival'+(r.arrivalTime?' — '+r.arrivalTime:'')+(r.notes?' ('+r.notes+')':''),time:timeStr,timestamp:Date.now(),fromParent:true});
+                today.attendance[r.childName]=false;
+            }
+        } else {
+            if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
+                today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||r.arrivalTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
+            }
+        }
+        saveTodayData(today);
+        if(window.CampistryLive) CampistryLive.refresh();
+        render();
+        liveToast(r.childName+' — '+r.label+' confirmed');
+    }
+
+    function decline(i){
+        var reqs=getReqs(),r=reqs[i];
+        if(!r||r.status!=='Pending')return;
+        r.status='Declined';
+        saveReqs(reqs);
+        render();
+        liveToast((r.label||'Request')+' declined');
+    }
+
+    function refresh(){render();}
+
+    // Update badge on load
+    updateBadge();
+
+    return {render:render,confirm:confirm,decline:decline,refresh:refresh,updateBadge:updateBadge};
 })();
 </script>
 <script src="campistry_notes_quick.js"></script>

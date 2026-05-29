@@ -229,6 +229,68 @@
         tbody.innerHTML = h;
     }
 
+    // ── Parent-submitted health documents ─────────────────────────────────
+    var HSUBMIT_KEY = 'campistry_health_submissions_v1';
+    function getSubmissions(){ try{return JSON.parse(localStorage.getItem(HSUBMIT_KEY)||'[]');}catch(e){return[];} }
+    function saveSubmissions(arr){ try{localStorage.setItem(HSUBMIT_KEY,JSON.stringify(arr));}catch(e){} }
+
+    function fmtDocTime(ts){
+        if(!ts)return'';
+        var d=new Date(ts),now=new Date(),diff=now-d;
+        if(diff<60000)return'Just now';
+        if(diff<3600000)return Math.floor(diff/60000)+'m ago';
+        if(diff<86400000)return Math.floor(diff/3600000)+'h ago';
+        return (d.getMonth()+1)+'/'+d.getDate();
+    }
+
+    function renderParentDocs(){
+        var section=document.getElementById('parentDocsSection'); if(!section)return;
+        var docs=getSubmissions();
+        var pending=docs.filter(function(d){return d.status==='pending';}).length;
+        // Update form count badge to include parent docs
+        var badge=document.getElementById('sbFormCount');
+        if(badge) badge.textContent=String(pending||0);
+
+        if(!docs.length){section.innerHTML='';return;}
+        var h='<div class="card"><div class="card-header"><h2>Parent-Submitted Documents</h2>'+
+            (pending?'<span class="badge badge-warn">'+pending+' pending review</span>':'')+
+            '</div><table class="data-table"><thead><tr><th>Camper</th><th>File</th><th>Submitted</th><th>Status</th><th></th></tr></thead><tbody>';
+        docs.forEach(function(doc){
+            var statusBdg=doc.status==='approved'?bdg('Approved','green'):doc.status==='flagged'?bdg('Flagged','red'):bdg('Pending','amber');
+            var actions=doc.status==='pending'?
+                '<button class="btn btn-sm btn-primary" onclick="CampistryHealth.approveParentDoc(\''+je(doc.id)+'\')">Approve</button>&nbsp;'+
+                '<button class="btn btn-sm btn-danger" onclick="CampistryHealth.flagParentDoc(\''+je(doc.id)+'\')">Flag</button>':
+                '<button class="btn btn-sm btn-ghost">View</button>';
+            h+='<tr>'+
+                '<td style="font-weight:700;">'+esc(doc.camperName||'—')+'</td>'+
+                '<td><span style="font-size:.75rem;">'+esc(doc.fileName||'—')+'</span></td>'+
+                '<td style="font-size:.75rem;color:var(--slate-500);">'+fmtDocTime(doc.submittedAt)+'</td>'+
+                '<td>'+statusBdg+'</td>'+
+                '<td>'+actions+'</td>'+
+                '</tr>';
+        });
+        h+='</tbody></table></div>';
+        section.innerHTML=h;
+    }
+
+    function approveParentDoc(id){
+        var docs=getSubmissions();
+        var doc=docs.find(function(d){return d.id===id;});
+        if(!doc)return;
+        doc.status='approved'; doc.reviewedAt=Date.now();
+        saveSubmissions(docs); renderParentDocs();
+        toast(doc.camperName+' — document approved','ok');
+    }
+
+    function flagParentDoc(id){
+        var docs=getSubmissions();
+        var doc=docs.find(function(d){return d.id===id;});
+        if(!doc)return;
+        doc.status='flagged'; doc.reviewedAt=Date.now();
+        saveSubmissions(docs); renderParentDocs();
+        toast(doc.camperName+' — document flagged','err');
+    }
+
     function renderIntake() {
         var roster = getRoster(), names = Object.keys(roster).sort(), hd = getHealth();
         var forms = hd.medicalForms||{};
@@ -250,6 +312,7 @@
             h+='<tr><td style="font-weight:700">'+esc(name)+'</td><td>'+esc(c.bunk||'—')+'</td><td>'+sb+'</td><td style="font-size:.75rem;color:var(--slate-500)">'+esc(f.notes||'—')+'</td><td>'+ab+'</td></tr>';
         });
         tbody.innerHTML=h;
+        renderParentDocs();
     }
 
     // ══════════════════════════════════════════════════════════════════════
@@ -364,6 +427,7 @@
         renderSickVisits:renderSickVisits, renderDoctorVisits:renderDoctorVisits,
         renderAllergies:renderAllergies, renderNighttime:renderNighttime,
         renderCamperDirectory:renderCamperDirectory, renderIntake:renderIntake,
+        renderParentDocs:renderParentDocs, approveParentDoc:approveParentDoc, flagParentDoc:flagParentDoc,
         logDispensing:logDispensing, saveSickVisit:saveSickVisit, saveDispensing:saveDispensing,
         viewCamper:viewCamper, getRoster:getRoster, getStructure:getStructure,
         getHealth:getHealth, saveHealth:saveHealth,
