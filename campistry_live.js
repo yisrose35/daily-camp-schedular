@@ -579,18 +579,9 @@
     }
 
     // =========================================================================
-    // CLOCK & AUTO-REFRESH
+    // AUTO-REFRESH
     // =========================================================================
-    let _clockInterval = null;
     let _refreshInterval = null;
-
-    function startClock() {
-        const el = document.getElementById('liveClock');
-        if (!el) return;
-        function tick() { el.textContent = formatTimeNow(); }
-        tick();
-        _clockInterval = setInterval(tick, 1000);
-    }
 
     function startAutoRefresh() {
         // Refresh dashboard every 60 seconds for live updates
@@ -615,7 +606,6 @@
 
     function init() {
         console.log('[Live] Initializing...');
-        startClock();
         startAutoRefresh();
 
         // Wait for cloud hydration if available

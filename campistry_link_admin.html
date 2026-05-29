@@ -69,10 +69,6 @@
         .msg-preview { font-size:.78rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         .msg-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
 
-        /* Canteen table row highlight */
-        .canteen-low { background:var(--amber-50) !important; }
-        .canteen-empty { background:var(--red-50) !important; }
-
         /* Empty state */
         .lk-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:36px 20px; color:var(--text-muted); text-align:center; }
         .lk-empty h3 { font-size:.95rem; font-weight:600; margin-bottom:4px; color:var(--slate-400); }
@@ -124,6 +120,10 @@
         .lk-back-btn:hover { color:var(--slate-700); background:var(--slate-100); }
         .lk-back-btn svg { flex-shrink:0; }
         @media(max-width:768px) { .lk-back-btn { display:none; } }
+        /* Dashboard back card */
+        .lk-dash-back-card { display:inline-flex; align-items:center; gap:8px; margin-top:16px; padding:10px 16px; border-radius:var(--radius-md); border:1px solid var(--slate-200); background:var(--slate-50); color:var(--slate-500); font-size:.82rem; font-weight:600; text-decoration:none; transition:background .15s,color .15s,border-color .15s; }
+        .lk-dash-back-card:hover { background:#fff; color:var(--link-color); border-color:var(--link-color); }
+        .lk-dash-back-card svg { flex-shrink:0; }
     </style>
 </head>
 <body>
@@ -190,12 +190,6 @@
             Camper Lookup
         </button>
         <div class="lk-nav-divider"></div>
-        <div class="lk-nav-label">Financial</div>
-        <button class="lk-nav-item" data-page="canteen" onclick="nav('canteen')">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
-            Canteen
-        </button>
-        <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Content</div>
         <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
@@ -238,6 +232,10 @@
     </div>
     <div class="lk-stats" id="dashStats"></div>
     <div class="lk-card" id="dashDataCheck"></div>
+    <a href="dashboard.html" class="lk-dash-back-card">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg>
+        <span>Back to Campistry Dashboard</span>
+    </a>
 </div>
 
 <!-- ═══════════════════════════════════════════════════ -->
@@ -299,7 +297,6 @@
                 <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">Bus Stops</button>
                 <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">Bunk Assignments</button>
                 <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">Schedule</button>
-                <button class="btn btn-primary btn-sm" onclick="smartSend('canteen')">Low Balance</button>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
@@ -483,122 +480,6 @@
         </table>
     </div>
 </div>
-
-<!-- ═══════════════════════════════════════════════════ -->
-<!--  CANTEEN                                            -->
-<!-- ═══════════════════════════════════════════════════ -->
-<div class="lk-page" id="page-canteen">
-    <div class="lk-page-hero">
-        <div class="lk-page-hero-icon">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg>
-        </div>
-        <div>
-            <h1>Canteen</h1>
-            <p>Manage all camper accounts — powered by Campistry Snacks</p>
-        </div>
-    </div>
-
-    <!-- Canteen overview stats -->
-    <div class="lk-stats">
-        <div class="lk-stat">
-            <div class="lk-stat-icon green">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
-            </div>
-            <div><div class="lk-stat-val">$123.50</div><div class="lk-stat-lbl">Total Balance</div></div>
-        </div>
-        <div class="lk-stat">
-            <div class="lk-stat-icon blue">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-            </div>
-            <div><div class="lk-stat-val">6</div><div class="lk-stat-lbl">Active Campers</div></div>
-        </div>
-        <div class="lk-stat">
-            <div class="lk-stat-icon amber">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
-            </div>
-            <div><div class="lk-stat-val">2</div><div class="lk-stat-lbl">Pending Deposits</div></div>
-        </div>
-        <div class="lk-stat">
-            <div class="lk-stat-icon" style="background:var(--red-50);color:var(--red-600);">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
-            </div>
-            <div><div class="lk-stat-val">2</div><div class="lk-stat-lbl">Low Balance Alerts</div></div>
-        </div>
-    </div>
-
-    <!-- Canteen accounts table -->
-    <div class="lk-card">
-        <div class="lk-card-head">
-            <h2>All Accounts</h2>
-            <input type="text" class="lk-input" placeholder="Search camper..." oninput="filterCanteen(this.value)" style="width:200px;">
-        </div>
-        <div style="overflow-x:auto;">
-            <table class="lk-table" id="canteenTable">
-                <thead>
-                    <tr>
-                        <th>Camper</th>
-                        <th>Division</th>
-                        <th>Balance</th>
-                        <th>Daily Limit</th>
-                        <th>Last Purchase</th>
-                        <th></th>
-                    </tr>
-                </thead>
-                <tbody id="canteenTableBody">
-                    <tr>
-                        <td class="bold">Eli Miller</td>
-                        <td>Juniors</td>
-                        <td><span class="badge badge-ok">$32.50</span></td>
-                        <td>$5/day</td>
-                        <td>Today 2:30 PM</td>
-                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Eli Miller!')">Add Funds</button></td>
-                    </tr>
-                    <tr>
-                        <td class="bold">Mia Miller</td>
-                        <td>Juniors</td>
-                        <td><span class="badge badge-ok">$15.00</span></td>
-                        <td>$3/day</td>
-                        <td>Today 1:15 PM</td>
-                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Mia Miller!')">Add Funds</button></td>
-                    </tr>
-                    <tr class="canteen-low">
-                        <td class="bold">Sophie Cohen</td>
-                        <td>Seniors</td>
-                        <td><span class="badge badge-warn">$8.25</span></td>
-                        <td>$5/day</td>
-                        <td>Yesterday</td>
-                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Sophie Cohen!')">Add Funds</button></td>
-                    </tr>
-                    <tr class="canteen-empty">
-                        <td class="bold">Noah Stern</td>
-                        <td>Seniors</td>
-                        <td><span class="badge badge-err">$0.00</span></td>
-                        <td>$5/day</td>
-                        <td>2d ago</td>
-                        <td><button class="btn btn-primary btn-sm" onclick="toast('Funds added for Noah Stern!')">Add Funds</button></td>
-                    </tr>
-                    <tr>
-                        <td class="bold">Jake Levy</td>
-                        <td>Juniors</td>
-                        <td><span class="badge badge-ok">$45.00</span></td>
-                        <td>$10/day</td>
-                        <td>Today 3:00 PM</td>
-                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Jake Levy!')">Add Funds</button></td>
-                    </tr>
-                    <tr>
-                        <td class="bold">Aviva Gold</td>
-                        <td>Seniors</td>
-                        <td><span class="badge badge-ok">$22.75</span></td>
-                        <td>$5/day</td>
-                        <td>Today 11:00 AM</td>
-                        <td><button class="btn btn-secondary btn-sm" onclick="toast('Funds added for Aviva Gold!')">Add Funds</button></td>
-                    </tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
 
 <!-- ═══════════════════════════════════════════════════ -->
 <!--  PHOTOS                                             -->
@@ -884,7 +765,6 @@ function smartSend(type) {
     if (type === 'bus')     r = cl.notify.sendBusStopNotifications(channels);
     else if (type === 'bunk')     r = cl.notify.sendBunkAssignments(channels);
     else if (type === 'schedule') r = cl.notify.sendDailySchedules(channels);
-    else if (type === 'canteen')  r = cl.notify.sendCanteenAlerts(channels);
     if (r && r.success) toast(r.sent + ' notifications sent!');
     else toast((r ? r.error || 'No data available' : 'Failed'));
     updateSmartBadge();
@@ -895,7 +775,6 @@ function smartPreview(type) {
     if (type === 'bus')     notifs = cl.notify.generateBusStopNotifications();
     else if (type === 'bunk') notifs = cl.notify.generateBunkAssignmentNotifications();
     else if (type === 'schedule') notifs = cl.notify.generateScheduleNotifications();
-    else if (type === 'canteen')  notifs = cl.notify.generateCanteenAlerts();
     var box = document.getElementById('smartPreviewBox');
     if (!notifs || !notifs.length) {
         box.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. Make sure data exists in Me' + (type === 'bus' ? ' and routes in Go' : '') + '.</div>';
@@ -1184,15 +1063,6 @@ function deleteFolderPrompt() {
     docFolders = docFolders.filter(function(x){ return x.id!==currentFolderId; });
     closeFolderDetail();
     toast('Folder deleted');
-}
-
-// ─── CANTEEN FILTER ──────────────────────────────────────────────────────────
-function filterCanteen(q) {
-    q = (q || '').toLowerCase();
-    document.querySelectorAll('#canteenTableBody tr').forEach(function(row) {
-        var txt = row.textContent.toLowerCase();
-        row.style.display = (!q || txt.indexOf(q) >= 0) ? '' : 'none';
-    });
 }
 
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────

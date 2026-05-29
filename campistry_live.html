@@ -43,8 +43,6 @@
         </a>
     </div>
     <div class="header-right">
-        <div class="live-clock" id="liveClock">--:-- --</div>
-        <div class="sync-badge"><span class="sync-dot"></span> Synced</div>
         <span class="nav-user" id="navUserEmail">Office</span>
     </div>
 </header>
@@ -52,7 +50,6 @@
 <!-- ═══ SIDEBAR ═══ -->
 <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 <aside id="sidebar" class="sidebar">
-    <div class="sidebar-label">Mission Control</div>
     <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
     <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
     <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
@@ -73,10 +70,10 @@
 <div id="page-dashboard" class="live-page active">
     <div class="page-hero">
         <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
-        <div><h1>Mission Control</h1><p>Live camp-wide attendance and activity overview</p></div>
+        <div><h1>Dashboard</h1><p>Live camp-wide attendance and activity overview</p></div>
     </div>
     <div class="page-header">
-        <div><div class="page-title">Camp Mission Control</div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
+        <div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
         <div class="page-actions">
             <button class="btn btn-secondary" onclick="CampistryLive.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
             <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg> Mark Absent</button>
