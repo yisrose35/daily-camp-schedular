@@ -642,11 +642,12 @@ function formatEntry(entry) {
     }
     var parts = [];
     var act = entry._activity || entry.sport || '';
+    var label = entry._partLabel || act; // \u2605 Day 19: show "Baking 1/3" for multiPart specials
     var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
     if (act && field && act !== field && field.indexOf(act) === -1 && act.indexOf(field) === -1) {
-        parts.push(act); parts.push(field);
-    } else if (field) { parts.push(field); }
-    else if (act) { parts.push(act); }
+        parts.push(label); parts.push(field);
+    } else if (field) { parts.push(entry._partLabel ? label : field); }
+    else if (act) { parts.push(label); }
     return parts.join(' \u2013 ');
 }
 
@@ -2369,7 +2370,7 @@ function renderBunkSheet(bunk) {
         var type = getEntryType(entry);
         var act = '', loc = '';
         if (entry && !entry.continuation) {
-            act = entry._activity || entry.sport || '';
+            act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
             loc = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
             if (!act && loc) { act = loc; loc = ''; }
         }
@@ -2950,7 +2951,7 @@ function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
     var entry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
     var slot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];
     if (!entry) return '';
-    var act = entry._activity || entry.sport || '';
+    var act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
     var field = (typeof entry.field === 'string') ? entry.field
         : (entry.field && entry.field.name ? entry.field.name : '');
     var title = act || field || 'Free';
@@ -4002,21 +4003,22 @@ function getExportActivityLocation(bunk, slotIdx) {
     }
 
     var act = entry._activity || entry.sport || '';
+    var label = entry._partLabel || act; // ★ Day 19: show "Baking 1/3" for multiPart specials
     var field = typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name ? entry.field.name : '');
 
     // If act and field are the same, don't duplicate
     if (act && field && (act === field || field.indexOf(act) >= 0)) {
-        return { activity: field, location: '' };
+        return { activity: label, location: '' };
     }
     if (act && field && act.indexOf(field) >= 0) {
-        return { activity: act, location: '' };
+        return { activity: label, location: '' };
     }
     // If there's a field but it looks like "Activity – Location", split it
     if (!act && field && field.indexOf(' \u2013 ') >= 0) {
         var parts = field.split(' \u2013 ');
         return { activity: parts[0].trim(), location: parts.slice(1).join(' \u2013 ').trim() };
     }
-    return { activity: act || field, location: (act && field) ? field : '' };
+    return { activity: label || field, location: (act && field) ? field : '' };
 }
 
 function buildExcelRows(item) {
