@@ -1,10 +1,10 @@
 // =============================================================================
-// campistry_cloud_bootstrap.js — Lightweight Camp Data Hydrator v1.0
+// campistry_cloud_bootstrap.js — Lightweight Camp Data Hydrator v1.1
 // =============================================================================
 //
-// Fetches campStructure + app1 (camperRoster) from Supabase camp_state_kv
-// and merges them into the shared campGlobalSettings_v1 localStorage key.
-// Dispatches 'campistry-cloud-hydrated' so any listening app JS can re-render.
+// Fetches campStructure + app1 (camperRoster) from Supabase camp_state_kv,
+// merges into campGlobalSettings_v1 localStorage, then dispatches
+// 'campistry-cloud-hydrated'. Always write BEFORE dispatch — no early fire.
 //
 // Loaded by: campistry_live.html, campistry_health.html,
 //            campistry_snacks.html, campistry_link_admin.html
@@ -16,8 +16,10 @@
     'use strict';
 
     var STORAGE_KEY = 'campGlobalSettings_v1';
-    // Keys from camp_state_kv that contain camper/structure data
-    var FETCH_KEYS   = ['campStructure', 'app1', 'bunkMetaData', 'fields'];
+    var FETCH_KEYS  = ['campStructure', 'app1', 'bunkMetaData', 'fields'];
+
+    // Guard: only one successful cloud hydration per page load
+    var _hydrated = false;
 
     function readLocal() {
         try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (_) { return {}; }
@@ -27,60 +29,52 @@
         try { localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); } catch (_) {}
     }
 
-    function dispatchHydrated() {
-        try { window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated')); } catch (_) {}
-    }
-
-    // Merge cloud keys into existing localStorage — cloud wins on a per-key basis
-    // but we never wipe keys that aren't in the fetched set (e.g. daily live data).
+    // Merge cloud keys into localStorage.
+    // ALWAYS re-read immediately before writing so we don't clobber
+    // keys another writer may have touched while the cloud fetch was in flight.
     function mergeIntoLocal(cloudData) {
-        var local = readLocal();
-        var changed = false;
+        // Fresh read right before write — minimises the race window
+        var current = readLocal();
+        var written = [];
 
         FETCH_KEYS.forEach(function (key) {
             if (cloudData[key] !== undefined) {
-                local[key] = cloudData[key];
-                changed = true;
+                current[key] = cloudData[key];
+                written.push(key);
             }
         });
 
-        if (changed) {
-            writeLocal(local);
-            console.log('[CampBootstrap] Merged cloud keys:', Object.keys(cloudData).filter(function(k){ return cloudData[k] !== undefined; }));
+        if (written.length) {
+            writeLocal(current);
+            console.log('[CampBootstrap] Wrote cloud keys to localStorage:', written.join(', '));
         }
-        return changed;
+        return written.length > 0;
+    }
+
+    function signalReady() {
+        // Set the flag Link admin polls for
+        window.__CAMPISTRY_CLOUD_READY__ = true;
+        // Dispatch the event every listener waits for
+        try { window.dispatchEvent(new CustomEvent('campistry-cloud-hydrated')); } catch (_) {}
     }
 
     async function bootstrap() {
-        // Wait for CampistryDB to finish auth + camp detection
         var db = window.CampistryDB;
         if (!db) {
-            console.warn('[CampBootstrap] CampistryDB not available — running localStorage-only');
-            dispatchHydrated();
+            console.warn('[CampBootstrap] CampistryDB not available — localStorage only');
+            signalReady();
             return;
         }
 
-        try {
-            await db.ready;
-        } catch (_) {}
+        try { await db.ready; } catch (_) {}
 
         var campId = db.getCampId();
         var client  = db.getClient();
 
         if (!campId || !client) {
-            console.warn('[CampBootstrap] No camp ID or Supabase client — using localStorage only');
-            dispatchHydrated();
+            console.warn('[CampBootstrap] No camp ID or Supabase client — localStorage only');
+            signalReady();
             return;
-        }
-
-        // Check if localStorage already has a roster — still fetch from cloud
-        // to ensure we have the latest (Me page may have been edited on another device)
-        var local = readLocal();
-        var hasLocalRoster = local.app1 && local.app1.camperRoster && Object.keys(local.app1.camperRoster).length > 0;
-
-        if (hasLocalRoster) {
-            // Dispatch immediately so the app renders right away with cached data
-            dispatchHydrated();
         }
 
         try {
@@ -92,50 +86,48 @@
 
             if (result.error) {
                 if (result.error.code === '42501') {
-                    // RLS denied — role doesn't have read access to this camp
-                    console.warn('[CampBootstrap] RLS denied camp_state_kv read — using localStorage');
+                    // RLS denied — user role can't read this camp's data
+                    console.warn('[CampBootstrap] RLS denied — using localStorage');
                 } else {
-                    console.warn('[CampBootstrap] camp_state_kv error:', result.error.message);
+                    console.warn('[CampBootstrap] Supabase error:', result.error.message);
                 }
-                if (!hasLocalRoster) dispatchHydrated();
+                signalReady();
                 return;
             }
 
             var rows = result.data || [];
-            if (rows.length === 0) {
-                console.warn('[CampBootstrap] No rows in camp_state_kv for camp', campId);
-                if (!hasLocalRoster) dispatchHydrated();
+            if (!rows.length) {
+                console.warn('[CampBootstrap] No camp_state_kv rows for camp', campId,
+                    '— Me may not have been set up yet');
+                signalReady();
                 return;
             }
 
-            // Reconstruct a flat object from the per-key rows
+            // Build flat object from per-key rows
             var cloudData = {};
-            rows.forEach(function (row) {
-                cloudData[row.key] = row.value;
-            });
+            rows.forEach(function (row) { cloudData[row.key] = row.value; });
 
             var rosterCount = cloudData.app1 && cloudData.app1.camperRoster
                 ? Object.keys(cloudData.app1.camperRoster).length : 0;
-            console.log('[CampBootstrap] Fetched', rows.length, 'keys from cloud —', rosterCount, 'campers');
+            console.log('[CampBootstrap] Cloud fetch OK —', rows.length, 'keys,', rosterCount, 'campers');
 
-            var changed = mergeIntoLocal(cloudData);
-
-            // Always dispatch after fetching — even if no change, listeners need to render
-            dispatchHydrated();
+            // Write first, signal after — never the other way around
+            mergeIntoLocal(cloudData);
+            _hydrated = true;
+            signalReady();
 
         } catch (e) {
-            console.warn('[CampBootstrap] Fetch failed:', e.message);
-            if (!hasLocalRoster) dispatchHydrated();
+            console.warn('[CampBootstrap] Fetch threw:', e.message || e);
+            signalReady();
         }
     }
 
-    // Run after DOM is ready so the Supabase client has had a chance to init
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', function () { setTimeout(bootstrap, 150); });
+        document.addEventListener('DOMContentLoaded', function () { setTimeout(bootstrap, 100); });
     } else {
-        setTimeout(bootstrap, 150);
+        setTimeout(bootstrap, 100);
     }
 
-    console.log('[CampBootstrap] Loaded — will hydrate camp data from Supabase');
+    console.log('[CampBootstrap] v1.1 loaded');
 
 })();

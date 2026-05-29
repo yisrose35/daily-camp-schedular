@@ -680,6 +680,7 @@ if (window.location.protocol === 'file:') {
 <script src="supabase_client.js"></script>
 <script src="campistry_security.js"></script>
 <script src="integration_hooks.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
 <script src="campistry_link_data.js"></script>
 <script src="campistry_link_photos.js"></script>
 <script>
@@ -1279,16 +1280,11 @@ function boot() {
     renderAdminMsgs('all');
 
     window.addEventListener('campistry-cloud-hydrated', function() {
-        console.log('[Link Admin] Cloud hydration complete — refreshing');
+        console.log('[Link Admin] Cloud hydrated — refreshing');
+        // Reload the data bridge so it sees the freshly written localStorage
+        if (window.CampistryLink) window.CampistryLink.refresh();
         renderDash();
     });
-    var checkCloud = setInterval(function() {
-        if (window.__CAMPISTRY_CLOUD_READY__) {
-            clearInterval(checkCloud);
-            renderDash();
-        }
-    }, 500);
-    setTimeout(function() { clearInterval(checkCloud); }, 10000);
 
     // Photo index restore
     var cp = CP();
