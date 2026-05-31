@@ -22376,7 +22376,19 @@
                         }
                         var orig = aSlots[aIdx];
                         var success = false;
-                        for (var ri = 0; ri < replacements.length && !success; ri++) {
+                        // ★ Day 23: among fully-valid refill candidates, PREFER fields that
+                        //   don't break same_division — i.e. empty, or occupied only by this
+                        //   bunk's OWN division. Co-locate cross-division ONLY when no
+                        //   same-division option exists (last resort — never reverts to
+                        //   under-min, so coverage is unchanged; this can only reduce
+                        //   same_division violations). _occDivOf reads the occupant slot's
+                        //   _division, falling back to the bunk-name division prefix.
+                        var _occDivOf = function (o) {
+                            return (o && o.slot && o.slot._division)
+                                || ((String((o && o.bunk) || '').match(/^[A-Za-z\/]+/) || [''])[0]);
+                        };
+                        var _chosen = null, _xdivFallback = null;
+                        for (var ri = 0; ri < replacements.length && !_chosen; ri++) {
                             var cand = replacements[ri];
                             var why = _validateWritePlacement(cand.field, cand.act, grade, aBunk, st, en);
                             if (why) continue;
@@ -22404,8 +22416,17 @@
                                     if (!window.SchedulingRules.isCandidateAllowed({ type: 'sport', event: cand.act, field: cand.field, startMin: st, endMin: en }, bTemplate, { mode: 'auto' })) continue;
                                 } catch (_eCD) {}
                             }
+                            // Fully valid. Respect same_division: take clean candidates
+                            // (empty / own-division occupants) immediately; stash the first
+                            // cross-division one as a fallback in case nothing cleaner exists.
+                            var _crossDiv = occ.some(function (o) { return _occDivOf(o) !== grade; });
+                            if (_crossDiv) { if (!_xdivFallback) _xdivFallback = cand; continue; }
+                            _chosen = cand;
+                        }
+                        if (!_chosen && _xdivFallback) _chosen = _xdivFallback;
+                        if (_chosen) {
                             aSlots[aIdx] = {
-                                field: cand.field, sport: cand.act, _activity: cand.act,
+                                field: _chosen.field, sport: _chosen.act, _activity: _chosen.act,
                                 _fixed: true, _bunkOverride: true, _activityLocked: false,
                                 _autoMode: true, _autoSolved: true, _capacityChecked: true,
                                 _startMin: st, _endMin: en,
