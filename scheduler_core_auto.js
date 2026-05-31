@@ -9053,10 +9053,26 @@
             });
             // ★ Day 22.5: prioritize most-constrained bunks FIRST.
             //   Primary: fieldOptions ASC (fewest options = most constrained = process first)
-            //   Tie-break: contention DESC (highest demand-supply deficit first)
-            //   Tie-break 2: by gap start time (earlier in day first, deterministic)
+            //   Tie-break: SMALL division first (≤3 bunks) — rotation staleness fix
+            //   Tie-break 2: contention DESC (highest demand-supply deficit first)
+            //   Tie-break 3: by gap start time (earlier in day first, deterministic)
+            // ★ Rotation fix: at EQUAL field-options, let a constrained small
+            //   division (≤3 bunks, e.g. Minors=2) claim its field BEFORE the
+            //   bigger divisions exhaust the same_division cap-2 fields at that
+            //   time. Without this the smallest division — which used to lose the
+            //   tie to the bigger divisions' higher contention — was left the one
+            //   leftover uncontended field (e.g. Jumprope) at its peak gap EVERY
+            //   day. Once it claims first, multiple fields are still free and the
+            //   rotation-aware findBestSport (L8416) picks its overdue sport, so
+            //   the same slot now varies across days. Precompute the small-division
+            //   set once (the comparator runs O(n log n) times).
+            var _smallDivSet = {};
+            try { allGrades.forEach(function (g) { _smallDivSet[g] = getBunksForGrade(g, divisions).length <= 3; }); } catch (_eSD) {}
             gapQueue.sort(function(a, b) {
                 if (a.fieldOptions !== b.fieldOptions) return a.fieldOptions - b.fieldOptions;
+                var aSmall = _smallDivSet[a.grade] ? 0 : 1;
+                var bSmall = _smallDivSet[b.grade] ? 0 : 1;
+                if (aSmall !== bSmall) return aSmall - bSmall;
                 if (a.contention !== b.contention) return b.contention - a.contention;
                 return a.gap.start - b.gap.start;
             });
