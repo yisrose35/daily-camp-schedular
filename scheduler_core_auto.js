@@ -22331,6 +22331,24 @@
                         var en = aSlot._endMin != null ? aSlot._endMin : aSlot.endMin;
                         if (st == null || en == null) continue;
                         var pool = _candidatesForGrade(grade);
+                        // ★ Day 24: honor a bunk sport-pool override active over this
+                        //   slot — the refill MUST stay inside the user's allowed-sport
+                        //   pool. If no pool sport turns out solo-feasible the
+                        //   replacements list ends up empty and we keep the (under-min)
+                        //   pool sport rather than substitute a non-pool one — the
+                        //   explicit restriction wins over the min-players preference.
+                        try {
+                            var _pools = (window._bunkSportPools && window._bunkSportPools[String(aBunk)]) || [];
+                            var _poolSports = null;
+                            for (var _pp = 0; _pp < _pools.length; _pp++) {
+                                var _pe = _pools[_pp];
+                                if (_pe && _pe.startMin < en && _pe.endMin > st && Array.isArray(_pe.sports) && _pe.sports.length) {
+                                    if (!_poolSports) _poolSports = new Set();
+                                    _pe.sports.forEach(function (s) { _poolSports.add(String(s).toLowerCase().trim()); });
+                                }
+                            }
+                            if (_poolSports) pool = pool.filter(function (a) { return _poolSports.has(String(a).toLowerCase().trim()); });
+                        } catch (_ePool) {}
                         var playedToday = new Set();
                         for (var ti = 0; ti < aSlots.length; ti++) {
                             var ts = aSlots[ti];
