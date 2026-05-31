@@ -750,6 +750,9 @@ body { font-family: var(--font-body); background: var(--bg-primary); color: var(
 .lk-upload-zone p { font-size: .73rem; color: var(--slate-400); }
 .lk-upload-zone input[type="file"] { display: none; }
 
+/* PHOTO GRID */
+.lk-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
+
 /* HEALTH VISIT LOG */
 .lk-health-visit {
     display: flex; align-items: flex-start; gap: 14px;

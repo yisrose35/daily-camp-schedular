@@ -116,10 +116,9 @@
         #toastBox { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }
 
         /* Back to dashboard */
-        .lk-back-btn { display:inline-flex; align-items:center; gap:4px; font-size:.77rem; font-weight:600; color:var(--slate-400); text-decoration:none; padding:5px 9px; border-radius:var(--radius-sm); transition:color .15s,background .15s; flex-shrink:0; }
+        .lk-back-btn { display:inline-flex; align-items:center; gap:4px; font-size:.77rem; font-weight:600; color:var(--slate-500); text-decoration:none; padding:5px 9px; border-radius:var(--radius-sm); transition:color .15s,background .15s; flex-shrink:0; }
         .lk-back-btn:hover { color:var(--slate-700); background:var(--slate-100); }
         .lk-back-btn svg { flex-shrink:0; }
-        @media(max-width:768px) { .lk-back-btn { display:none; } }
     </style>
 </head>
 <body>
@@ -487,23 +486,23 @@
         </div>
     </div>
     <div class="lk-stats" id="photoStats"></div>
-    <div class="lk-card" style="border-left:4px solid var(--link-color);">
-        <div class="lk-card-head"><h2>Step 1: Build Face Index</h2><span class="badge" id="indexBadge">Not built</span></div>
-        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Reads headshots from Me — used to tag campers automatically.</p>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 1: Set Up Recognition</h2><span class="badge" id="indexBadge">Not built</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Reads camper headshots from Me to learn who's who.</p>
         <button class="btn btn-primary btn-sm" onclick="buildIndex()">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
             Build Index
         </button>
         <div id="indexProg" style="display:none;margin-top:10px;"></div>
     </div>
     <div class="lk-card">
         <div class="lk-card-head"><h2>Step 2: Upload Photos</h2></div>
-        <label class="lk-upload-zone" for="photoInput" onclick="">
+        <label class="lk-upload-zone" for="photoInput">
             <div class="lk-upload-zone-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/><path d="M12 2v6m-3-3l3-3 3 3" style="stroke-dasharray:2 2;"/></svg>
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
             </div>
             <h4>Click to upload photos</h4>
-            <p>JPG or PNG, multiple files supported</p>
+            <p>JPG or PNG · multiple files supported</p>
             <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotos(this.files)">
         </label>
         <div id="uploadProg" style="display:none;margin-top:10px;"></div>
@@ -516,7 +515,7 @@
                 Refresh
             </button>
         </div>
-        <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px;"></div>
+        <div id="photoGrid" class="lk-photo-grid"></div>
         <div id="photoEmpty" class="lk-empty" style="display:none;">
             <div class="lk-empty-icon">
                 <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
