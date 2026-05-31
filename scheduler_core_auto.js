@@ -22750,6 +22750,58 @@
             const _bunkGrade = {};
             allGrades.forEach(g => getBunksForGrade(g, divisions).forEach(b => { _bunkGrade[String(b)] = g; }));
 
+            // Special-aware reason builder. A Free slot whose aligned _perBunkSlots
+            // entry is type:'special' was LOCKED to a specific special (slot.event).
+            // The generic "no available field / widen sport availability" text is
+            // misleading for these — the real causes are: (1) the assigned special
+            // is longer than the (clipped) slot, (2) its room is already in use,
+            // or (3) the bunk already hit its daily subcategory cap. Detect which
+            // and say so, with the actionable fix. Returns null → caller uses the
+            // generic special fallback line.
+            const _sfrCanonSub = (s) => (s && String(s).trim()) ? String(s).trim().toLowerCase() : 'uncategorized';
+            const _sfrList = (globalSettings && globalSettings.app1 && globalSettings.app1.specialActivities) || [];
+            const _sfrBy = {};
+            (Array.isArray(_sfrList) ? _sfrList : Object.values(_sfrList || {})).forEach((sp) => { if (sp && sp.name) _sfrBy[String(sp.name).toLowerCase()] = sp; });
+            function _specialFreeReason(name, bunk, grade, start, end, dur) {
+                try {
+                    const sp = _sfrBy[String(name).toLowerCase()];
+                    // (1) duration mismatch — slot too short for the assigned special
+                    let sd = null;
+                    try { sd = getSpecialDuration(name, activityProperties, globalSettings); } catch (e) {}
+                    if (!sd && sp) { const dd = Array.isArray(sp.durations) ? sp.durations.filter(Boolean) : []; sd = dd.length ? Math.min.apply(null, dd) : (sp.duration || sp.periodMin || null); }
+                    if (sd && dur && sd > dur) {
+                        return 'special “' + name + '” needs ' + sd + 'min but this slot is only ' + dur + 'min. Give this special layer a full ' + sd + '-min slot, or assign a special that fits ' + dur + 'min.';
+                    }
+                    const causes = [];
+                    // (2) room already in use by another bunk at this time
+                    const loc = sp ? (sp.location || sp.facility) : null;
+                    if (loc) {
+                        let busyBunk = null;
+                        Object.keys(_sa).forEach((ob) => {
+                            if (busyBunk || String(ob) === String(bunk)) return;
+                            const oa = Array.isArray(_sa[ob]) ? _sa[ob] : [];
+                            for (let k = 0; k < oa.length; k++) { const x = oa[k]; if (x && !x.continuation && x.field === loc && x._startMin < end && x._endMin > start) { busyBunk = ob; break; } }
+                        });
+                        if (busyBunk) causes.push('its room “' + loc + '” was already in use by ' + busyBunk);
+                    }
+                    // (3) daily subcategory cap already reached for this bunk
+                    const capEntry = (window._subcatCapsByBunk || {})[bunk];
+                    if (capEntry && capEntry.enforced && sp) {
+                        const subKey = _sfrCanonSub(sp.subcategory || sp.subCategory);
+                        const cap = capEntry.caps ? capEntry.caps[subKey] : null;
+                        if (cap != null) {
+                            let cnt = 0; const bslots = Array.isArray(_sa[bunk]) ? _sa[bunk] : [];
+                            bslots.forEach((x) => { if (x && !x.continuation && x._activity) { const s2 = _sfrBy[String(x._activity).toLowerCase()]; if (s2 && _sfrCanonSub(s2.subcategory || s2.subCategory) === subKey) cnt++; } });
+                            if (cnt >= cap) { const subDisp = (sp.subcategory && String(sp.subcategory).trim()) || 'uncategorized'; causes.push('this bunk already used its daily “' + subDisp + '” special limit (' + cap + ')'); }
+                        }
+                    }
+                    if (causes.length) {
+                        return dur + '-min special “' + name + '” couldn’t be placed — ' + causes.join('; ') + '. Fix: free that room at this time, raise the subcategory cap, or add another short special.';
+                    }
+                    return null;
+                } catch (e) { return null; }
+            }
+
             Object.entries(_sa).forEach(([_bunk, _slots]) => {
                 if (!Array.isArray(_slots)) return;
                 const _grade = _bunkGrade[String(_bunk)];
@@ -22777,7 +22829,15 @@
                         const _aName  = _after  ? (_after.event  || _after.type)  : 'day end';
                         _reason = _dur + '-min gap between "' + _bName + '" and "' + _aName + '" — minimum activity is ' + _fillMin + 'min. Widen or shift one of the adjacent layer windows to close this gap.';
                     } else if (_dur != null) {
-                        _reason = _dur + '-min slot had no available field. Add field capacity or widen sport availability for ' + (_grade || 'this grade') + '.';
+                        // Special-locked slot? Give a special-aware reason, not the
+                        // generic "widen sport availability" (misleading for specials).
+                        const _specName = (_slotInfo && _slotInfo.type === 'special') ? _slotInfo.event : null;
+                        if (_specName) {
+                            _reason = _specialFreeReason(_specName, _bunk, _grade, _start, _end, _dur) ||
+                                      (_dur + '-min special slot for “' + _specName + '” couldn’t be filled — no eligible special was available (room in use or daily subcategory limit). Free that room at this time, raise the subcategory cap, or add another short special.');
+                        } else {
+                            _reason = _dur + '-min slot had no available field. Add field capacity or widen sport availability for ' + (_grade || 'this grade') + '.';
+                        }
                     } else {
                         _reason = 'slot unfilled — check field availability and sport configuration.';
                     }
