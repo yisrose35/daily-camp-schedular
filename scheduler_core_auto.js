@@ -8616,6 +8616,18 @@
                             var ts = Math.floor(cursor / 30) * 30;
                             var demand = fieldDemand[fields[f] + ':' + ts] || 0;
                             var score = (isDrafted && !isUsed ? 1000 : (isUsed ? 0 : 500)) - demand * 10;
+                            // ★ Rotation fix: this backtracking gap-filler runs BEFORE
+                            //   findBestSport and, for a constrained small-division bunk
+                            //   (e.g. Minors, 2 bunks) whose narrow gap leaves only one
+                            //   uncontended field-available sport, it used to commit that
+                            //   same sport EVERY day — because (unlike findBestSport) it
+                            //   never consulted the cross-day rotation score. Subtract it
+                            //   here too (same sign/field as findBestSport L8416): an
+                            //   over-played sport (huge +rotationScore) sinks to the bottom
+                            //   so any non-stale field-available alternative is tried first.
+                            //   recurse still backtracks through the full set, so fill
+                            //   completeness (no holes / no under-min) is unchanged.
+                            if (typeof sport.rotationScore === 'number') score -= sport.rotationScore;
                             out.push({ name: sport.name, field: fields[f], score: score });
                         }
                     }
