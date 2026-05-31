@@ -7348,6 +7348,18 @@ try {
         }
         try {
           if (typeof loadCurrentOverrides === 'function') loadCurrentOverrides();
+          // ★ Day 20 fix: a date change must ALSO reload the auto-mode layer
+          //   set (daAutoLayers) for the new date. Without this, daAutoLayers
+          //   stays pinned to the previously-loaded date, so the grid shows the
+          //   wrong day AND — critically — Generate (runOptimizer) sees
+          //   daAutoLayers non-empty, skips its "reload if empty" fallback, and
+          //   generates the new date using the OLD date's layers (e.g. league
+          //   layers silently vanish on a date that should have them). Layer
+          //   edits auto-save per-date via saveDAAutoLayers() on every change,
+          //   so reloading here cannot lose unsaved work.
+          if (window._daBuilderMode === 'auto' && typeof loadDAAutoLayers === 'function') {
+            try { loadDAAutoLayers(); if (typeof renderGrid === 'function') renderGrid(); } catch (_eAL) {}
+          }
           // Re-render unconditionally (don't gate on visibility). The Resources
           // panel container may be in the DOM but offsetParent=null because a
           // parent tab is hidden; gating on visibility means the DOM stays
