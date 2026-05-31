@@ -22672,30 +22672,62 @@
                 var pbs = (_absDt[g] && _absDt[g]._perBunkSlots && _absDt[g]._perBunkSlots[bunk]) || [];
                 var _S = function (s, i) { return (s && s._startMin != null) ? s._startMin : (pbs[i] && pbs[i].startMin); };
                 var _E = function (s, i) { return (s && s._endMin != null) ? s._endMin : (pbs[i] && pbs[i].endMin); };
-                for (var i = 1; i < slots.length; i++) {
+                // a neighbour is absorbable if it's a real, flexible, placed SPORT
+                //   (not a fixed/pinned anchor, trip, league, chinuch, special, etc.)
+                var _eligNb = function (M) {
+                    return M && !M.continuation && M.field && M.field !== 'Free' && M.sport &&
+                        !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch || M._bunkOverride || M._isPrep || M._autoSpecial) &&
+                        !_ANCHOR_ABS.test(String(M._activity || ''));
+                };
+                var _gateOK = function (field, act, sport, mergeStart, mergeEnd, gapS, gapE) {
+                    if (typeof staysInPeriod === 'function' && !staysInPeriod(mergeStart, mergeEnd, g)) return false;
+                    if (typeof isFieldAvailable === 'function' && !isFieldAvailable(field, gapS, gapE, bunk, g, sport || act)) return false;
+                    if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(field, act, g, bunk, gapS, gapE) !== null) return false;
+                    return true;
+                };
+                for (var i = 0; i < slots.length; i++) {
                     var F = slots[i];
                     if (!F || F.continuation || F.field !== 'Free') continue;
                     if (F._intentionalFree || F._source === 'bunk-delete-override') continue;
-                    var N = slots[i - 1];
-                    if (!N || N.continuation) continue;
-                    if (!N.field || N.field === 'Free' || !N.sport) continue;            // only a real placed sport
-                    if (N._fixed || N._pinned || N._isTrip || N._trip || N._league || N._isChinuch || N._bunkOverride || N._isPrep || N._autoSpecial) continue;
-                    if (_ANCHOR_ABS.test(String(N._activity || ''))) continue;
-                    var fs = _S(F, i), fe = _E(F, i), ns = _S(N, i - 1), ne = _E(N, i - 1);
-                    if (fs == null || fe == null || ns == null || ne == null) continue;
-                    if (ne !== fs) continue;                                              // must be contiguous
-                    var act = N._activity || N.sport;
-                    if (typeof staysInPeriod === 'function' && !staysInPeriod(ns, fe, g)) continue;
-                    if (typeof isFieldAvailable === 'function' && !isFieldAvailable(N.field, fs, fe, bunk, g, N.sport || act)) continue;
-                    if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(N.field, act, g, bunk, fs, fe) !== null) continue;
-                    // Absorb: extend the anchor + flip the Free to a continuation of it.
-                    N._endMin = fe;
-                    slots[i] = {
-                        field: N.field, sport: (N.sport != null ? N.sport : null), _activity: act,
-                        continuation: true, _startMin: fs, _endMin: fe, _autoMode: true, _absorbedFree: true
-                    };
-                    try { if (typeof claimField === 'function') claimField(N.field, fs, fe, bunk, g, act); } catch (_eCF) {}
-                    _absorbed++;
+                    var fs = _S(F, i), fe = _E(F, i);
+                    if (fs == null || fe == null) continue;
+                    // (1) BACKWARD — extend the PRECEDING sport forward over the Free.
+                    var N = i > 0 ? slots[i - 1] : null;
+                    if (N && _eligNb(N)) {
+                        var ns = _S(N, i - 1), ne = _E(N, i - 1);
+                        if (ns != null && ne === fs) {
+                            var actB = N._activity || N.sport;
+                            if (_gateOK(N.field, actB, N.sport, ns, fe, fs, fe)) {
+                                N._endMin = fe;                       // anchor now spans ns..fe
+                                slots[i] = { field: N.field, sport: (N.sport != null ? N.sport : null), _activity: actB,
+                                    continuation: true, _startMin: fs, _endMin: fe, _autoMode: true, _absorbedFree: true };
+                                try { if (typeof claimField === 'function') claimField(N.field, fs, fe, bunk, g, actB); } catch (_e) {}
+                                _absorbed++;
+                                continue;
+                            }
+                        }
+                    }
+                    // (2) FORWARD — pull the FOLLOWING sport back over the Free. The
+                    //   continuation model merges into the PRECEDING slot, so we make
+                    //   the Free slot the ANCHOR (spanning fs..A.end) and flip the
+                    //   original next slot to a continuation — index-stable two-slot
+                    //   rewrite (the anchor's _endMin must be the FULL end so the grid,
+                    //   which reads anchor._endMin, paints the whole block).
+                    var A = (i < slots.length - 1) ? slots[i + 1] : null;
+                    if (A && _eligNb(A)) {
+                        var as = _S(A, i + 1), ae = _E(A, i + 1);
+                        if (ae != null && as === fe) {
+                            var actF = A._activity || A.sport;
+                            if (_gateOK(A.field, actF, A.sport, fs, ae, fs, fe)) {
+                                slots[i] = { field: A.field, sport: (A.sport != null ? A.sport : null), _activity: actF,
+                                    continuation: false, _startMin: fs, _endMin: ae, _autoMode: true, _absorbedFree: true };
+                                A.continuation = true;                // original next slot becomes a continuation
+                                try { if (typeof claimField === 'function') claimField(A.field, fs, fe, bunk, g, actF); } catch (_e) {}
+                                _absorbed++;
+                                continue;
+                            }
+                        }
+                    }
                 }
             });
             if (_absorbed > 0) {
