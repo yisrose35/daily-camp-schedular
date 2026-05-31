@@ -1365,7 +1365,56 @@
                     }
                 }
                 if (activeTeams.length < 2) {
-                    console.log(`   ⚠️ Not enough active teams after chinuch`);
+                    // ★ Day 20 fix: a period where (nearly) every team is on chinuch
+                    //   is a LEGITIMATE chinuch-only period — not an error. The old
+                    //   code just `continue`d, so nothing was written and the league
+                    //   layer block was left raw (_activity:"league" / the Phase-0
+                    //   "League Game" placeholder). That is exactly the reported
+                    //   "joint league leaves raw unprocessed blocks" symptom: it bit
+                    //   joint leagues (Duetos/Trios) hardest because with N teams and
+                    //   1 league period the auto distribution puts ALL teams on
+                    //   chinuch → 0 active → raw blocks on every participating bunk.
+                    //   Fix: when there are chinuch teams, write a chinuch-only block
+                    //   (no games) to every participating division's block so each
+                    //   bunk shows its team's chinuch activity. Mirrors the normal
+                    //   writeback below but with only the chinuch lines. We do NOT
+                    //   bump leagueGameCounters here — no game was played.
+                    if (chinuchTeamsHere.length > 0) {
+                        const _chOnlyLines = chinuchTeamsHere.map(function (t) {
+                            const fac = league.chinuch?.bunkFacilities?.[t] || 'Chinuch';
+                            return `${t} — Chinuch (${fac})`;
+                        });
+                        const _UtilsCh = window.SchedulerCoreUtils;
+                        let _chWrote = 0;
+                        filteredLeagueDivisions.forEach(divName => {
+                            const blocksForDiv = timeData.byDivision[divName];
+                            if (!blocksForDiv) return;
+                            blocksForDiv.filter(b => !b.leagueName || b.leagueName === league.name).forEach(block => {
+                                const _bk = (typeof block.startTime === 'number')
+                                    ? block.startTime
+                                    : (_UtilsCh?.parseTimeToMinutes?.(block.startTime) ?? block.startTime);
+                                if (Number(_bk) !== Number(timeKey)) return;
+                                const pick = {
+                                    field: `League: ${league.name}`,
+                                    sport: '',
+                                    _activity: `League: ${league.name}`,
+                                    _leagueName: league.name,
+                                    _h2h: true,
+                                    _fixed: true,
+                                    _allMatchups: _chOnlyLines.slice(),
+                                    _gameLabel: 'Chinuch',
+                                    _chinuchOnly: true,
+                                    _playoffRound: null
+                                };
+                                fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+                                block.processed = true;
+                                _chWrote++;
+                            });
+                        });
+                        console.log(`   [Chinuch] Chinuch-only period for "${league.name}" — wrote ${_chWrote} block(s) for [${chinuchTeamsHere.join(', ')}] across [${filteredLeagueDivisions.join(', ')}]`);
+                    } else {
+                        console.log(`   ⚠️ Not enough active teams after chinuch`);
+                    }
                     continue;
                 }
 
