@@ -22641,6 +22641,70 @@
             if (_delEvicted > 0) log('  🗑️ Bunk-delete overrides: cleared ' + _delEvicted + ' block(s) → Free.');
         } catch (_eDel) { try { warn('[BunkDeleteEnforce] ' + (_eDel && _eDel.message)); } catch (_e2) {} }
 
+        // ★ Free-absorption pass — reduce holes by extending an adjacent flexible
+        //   sport over a residual Free (empty) slot, so the bunk does that sport a
+        //   bit longer instead of having a gap. Runs AFTER all placement/healing
+        //   (incl. the Day-24 delete-enforcer + pairing reopt) and BEFORE the
+        //   Impossibility Report, so absorbed gaps aren't reported. SAFE-ONLY:
+        //   - backward-extend only (the continuation model merges a slot into the
+        //     PRECEDING anchor),
+        //   - neighbour must be a contiguous, non-pinned/non-anchor SPORT,
+        //   - the extension must stay inside ONE period (staysInPeriod),
+        //   - the field must have capacity across the gap (isFieldAvailable) AND
+        //     pass the write gate (_validateWritePlacement).
+        //   Cross-period / pinned-bounded / forward-only Frees are left as Free and
+        //   remain surfaced by the Impossibility Report below. NEVER splice — slot
+        //   indices are aligned with divisionTimes[grade]._perBunkSlots; we mutate
+        //   in place + flip the Free to a continuation of the extended anchor
+        //   (mirrors the multi-period special write) and claim the field so a
+        //   second absorption can't overbook it.
+        try {
+            var _absDt = window.divisionTimes || {};
+            var _absGrade = {};
+            allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _absGrade[String(b)] = g; }); });
+            var _ANCHOR_ABS = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|league game|specialty league|chinuch)$/i;
+            var _absorbed = 0;
+            Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                var slots = window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots)) return;
+                var g = _absGrade[String(bunk)];
+                if (!g) return;
+                var pbs = (_absDt[g] && _absDt[g]._perBunkSlots && _absDt[g]._perBunkSlots[bunk]) || [];
+                var _S = function (s, i) { return (s && s._startMin != null) ? s._startMin : (pbs[i] && pbs[i].startMin); };
+                var _E = function (s, i) { return (s && s._endMin != null) ? s._endMin : (pbs[i] && pbs[i].endMin); };
+                for (var i = 1; i < slots.length; i++) {
+                    var F = slots[i];
+                    if (!F || F.continuation || F.field !== 'Free') continue;
+                    if (F._intentionalFree || F._source === 'bunk-delete-override') continue;
+                    var N = slots[i - 1];
+                    if (!N || N.continuation) continue;
+                    if (!N.field || N.field === 'Free' || !N.sport) continue;            // only a real placed sport
+                    if (N._fixed || N._pinned || N._isTrip || N._trip || N._league || N._isChinuch || N._bunkOverride || N._isPrep || N._autoSpecial) continue;
+                    if (_ANCHOR_ABS.test(String(N._activity || ''))) continue;
+                    var fs = _S(F, i), fe = _E(F, i), ns = _S(N, i - 1), ne = _E(N, i - 1);
+                    if (fs == null || fe == null || ns == null || ne == null) continue;
+                    if (ne !== fs) continue;                                              // must be contiguous
+                    var act = N._activity || N.sport;
+                    if (typeof staysInPeriod === 'function' && !staysInPeriod(ns, fe, g)) continue;
+                    if (typeof isFieldAvailable === 'function' && !isFieldAvailable(N.field, fs, fe, bunk, g, N.sport || act)) continue;
+                    if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(N.field, act, g, bunk, fs, fe) !== null) continue;
+                    // Absorb: extend the anchor + flip the Free to a continuation of it.
+                    N._endMin = fe;
+                    slots[i] = {
+                        field: N.field, sport: (N.sport != null ? N.sport : null), _activity: act,
+                        continuation: true, _startMin: fs, _endMin: fe, _autoMode: true, _absorbedFree: true
+                    };
+                    try { if (typeof claimField === 'function') claimField(N.field, fs, fe, bunk, g, act); } catch (_eCF) {}
+                    _absorbed++;
+                }
+            });
+            if (_absorbed > 0) {
+                log('  🧲 Free-absorption: extended a neighbour over ' + _absorbed + ' residual Free slot(s).');
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+            }
+            try { console.log('[FREE-ABSORB] absorbed=' + _absorbed); } catch (_e) {}
+        } catch (_eAbs) { try { warn('[FreeAbsorb] ' + (_eAbs && _eAbs.message)); } catch (_e2) {} }
+
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
         // ─── Impossibility Report ─────────────────────────────────────────────
