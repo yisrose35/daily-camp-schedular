@@ -2077,6 +2077,11 @@
 
             // Capacity
             const overlapping = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
+            // ★ FLAG #1 — bunk-override exclusivity: a field pinned by a bunk override is
+            //   reserved EXCLUSIVELY for that bunk at that time. The override is the boss —
+            //   no other bunk may use the field then, regardless of its normal sharing cap.
+            //   (No-op when there are no override claims, so normal generation is unaffected.)
+            if (overlapping.some(c => c._bunkOverride && String(c.bunk) !== String(bunk))) return false;
             if (overlapping.length >= ledger.capacity) return false;
 
             // ★ PRIORITY ENFORCEMENT: if field uses priority order and this grade has lower
@@ -13055,9 +13060,15 @@
                     _assignedSport: isSport ? ov.activity : null,
                     _source: 'capacity_checked'
                 });
-                // Claim the field
-                if (assignedField && bunkGrade) {
-                    claimField(assignedField, tStart, tEnd, bunk, bunkGrade, ov.activity);
+                // ★ FLAG #1: the override is authoritative — reserve the field EXCLUSIVELY
+                //   for this bunk at this time. Claim UNCONDITIONALLY (the override wins even
+                //   if the field looks busy) and tag it _bunkOverride so isFieldAvailable
+                //   blocks every OTHER bunk from the field then (see the exclusivity check).
+                if (assignedField && fieldLedger[assignedField]) {
+                    fieldLedger[assignedField].claims.push({
+                        bunk: bunk, grade: bunkGrade, activity: ov.activity,
+                        startMin: tStart, endMin: tEnd, _bunkOverride: true
+                    });
                 }
                 overrideBlockCount++;
             });

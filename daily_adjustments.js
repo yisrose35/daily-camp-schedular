@@ -4082,6 +4082,11 @@ function saveDailySkeleton() {
 
   // Save to cloud
   try {
+    // ★ #15 audit fix: cold-start guard. If globalSettings hasn't hydrated yet,
+    //   masterSettings.app1 is undefined and the line below would throw — which
+    //   was caught + logged but SKIPPED the cloud save (skeleton stayed local
+    //   only, lost on logout/other devices). Ensure the container exists first.
+    if (!masterSettings.app1) masterSettings.app1 = {};
     if (!masterSettings.app1.dailySkeletons) {
       masterSettings.app1.dailySkeletons = {};
     }
@@ -4934,8 +4939,22 @@ if (success) {
           } catch (e) {
               if (e.name !== 'QuotaExceededError') console.warn('[Optimizer] localStorage save failed:', e);
           }
-          // Save to cloud
-          window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
+          // Save to cloud — ★ #16 audit fix: surface async failures. This was
+          //   fire-and-forget, so a rejected cloud write left local + cloud
+          //   divergent with the user told "saved". Catch the rejection + warn.
+          (function () {
+              try {
+                  const _csp = window.ScheduleDB?.saveSchedule?.(dateKey, freshData);
+                  if (_csp && typeof _csp.then === 'function') {
+                      _csp.catch(function (_e) {
+                          try {
+                              console.error('[Optimizer] CLOUD save rejected:', _e);
+                              if (typeof daShowAlert === 'function') daShowAlert('⚠️ Schedule saved on this device, but cloud sync failed — it may not appear on other devices or after logout.\n\n' + ((_e && _e.message) || _e));
+                          } catch (_) {}
+                      });
+                  }
+              } catch (_e2) { console.error('[Optimizer] cloud save threw:', _e2); }
+          })();
           console.log('[Optimizer] ★ Post-generation save complete:',
               Object.keys(freshData.scheduleAssignments).length, 'bunks,',
               Object.keys(freshData.leagueAssignments).length, 'league entries');
