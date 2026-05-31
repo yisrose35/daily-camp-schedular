@@ -1290,13 +1290,25 @@
                 if (!l.enabled) return false;
                 if (disabledLeagues?.includes(l.name)) return false;
                 if (!l.divisions || l.divisions.length === 0) return false;
-                
-                // ★★★ If blocks specify a league name, ONLY allow that league ★★★
-                if (specifiedLeagueNames.size > 0) {
-                    if (!specifiedLeagueNames.has(l.name)) return false;
+
+                const coveredDivs = divisionsAtTime.filter(div => l.divisions.includes(div));
+                if (coveredDivs.length === 0) return false;
+
+                // ★★★ If blocks specify a league name, ONLY allow that league —
+                // ★ Day 20 fix: EXCEPT a league still applies to a covered division
+                // whose block has NO leagueName (auto-bound / unnamed). Without this,
+                // an unnamed block that shares a time slot with named-league blocks in
+                // OTHER divisions gets its league filtered out entirely, so that
+                // division never receives matchups. (Observed: Minors' auto-bound
+                // "1st Grade" block shared time 650 with named Soloists / Duetos-Trios
+                // blocks → "1st Grade" excluded → Minors got no league game.)
+                if (specifiedLeagueNames.size > 0 && !specifiedLeagueNames.has(l.name)) {
+                    const hasUnnamedCoveredBlock = coveredDivs.some(div =>
+                        (timeData.byDivision[div] || []).some(b => !b.leagueName));
+                    if (!hasUnnamedCoveredBlock) return false;
                 }
-                
-                return divisionsAtTime.some(div => l.divisions.includes(div));
+
+                return true;
             });
 
             console.log(`   Applicable leagues: [${applicableLeagues.map(l => l.name).join(', ')}]`);
