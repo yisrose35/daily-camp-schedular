@@ -22528,6 +22528,73 @@
             })();
         } catch (_ePR) { try { warn('[PairingReopt] ' + (_ePR && _ePR.message)); } catch (_e2) {} }
 
+        // ★ Day 24: enforce bunk-override DELETE mode (final pass — runs AFTER
+        //   every placement/healing pass so nothing refills the freed slot).
+        //   window._bunkDeletedLayers[bunk] = [{startMin,endMin,layerType}] was
+        //   recorded in Phase 0 (the override's window is the deleted LAYER's
+        //   window, which for floater layers can be wide). Here we
+        //   type-match-and-evict: within each deleted window, replace ONLY the
+        //   placed blocks whose type matches the deleted layerType (plus their
+        //   continuation tails) with Free — mirrors the manual builder's
+        //   "delete layer → Free". Leagues / chinuch / trips are never touched.
+        try {
+            var _del = window._bunkDeletedLayers || {};
+            var _delEvicted = 0;
+            var _slotIsLayerType = function (slot, lt) {
+                lt = String(lt || '').toLowerCase();
+                var act = String(slot._activity || '').toLowerCase();
+                var fld = String(slot.field || '').toLowerCase();
+                if (lt === 'sport' || lt === 'sports') return !!slot.sport;
+                if (lt === 'special') return slot._autoSpecial === true;
+                if (lt === 'swim') return act === 'swim' || fld === 'swim';
+                if (lt === 'lunch') return act === 'lunch';
+                if (lt === 'snack' || lt === 'snacks') return act === 'snack' || act === 'snacks';
+                if (lt === 'custom') return !!(slot._customActivity || slot._customField);
+                return false;
+            };
+            Object.keys(_del).forEach(function (bunk) {
+                var slots = window.scheduleAssignments && window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots)) return;
+                (_del[bunk] || []).forEach(function (d) {
+                    var ds = d.startMin, de = d.endMin, lt = d.layerType;
+                    if (ds == null || de == null) return;
+                    var prevEvicted = false;
+                    for (var i = 0; i < slots.length; i++) {
+                        var s = slots[i];
+                        if (!s) { prevEvicted = false; continue; }
+                        var ss = s._startMin != null ? s._startMin : s.startMin;
+                        var se = s._endMin != null ? s._endMin : s.endMin;
+                        if (ss == null || se == null) { prevEvicted = false; continue; }
+                        var overlaps = (ss < de && se > ds);
+                        var _act = String(s._activity || '');
+                        var protectedSlot = s._league === true || s._isChinuch === true
+                            || s._isTrip === true || s._trip === true
+                            || /^(league game|specialty league|chinuch)$/i.test(_act)
+                            || (s._source && /trip/i.test(String(s._source)));
+                        var ev = false;
+                        if (overlaps && !protectedSlot) {
+                            if (_slotIsLayerType(s, lt)) ev = true;
+                            else if (s.continuation === true && prevEvicted) ev = true; // tail of an evicted block
+                        }
+                        if (ev) {
+                            slots[i] = {
+                                field: 'Free', sport: null, _activity: 'Free',
+                                _startMin: ss, _endMin: se, continuation: false,
+                                _autoMode: true, _bunkOverride: true,
+                                _intentionalFree: true, _source: 'bunk-delete-override'
+                            };
+                            _delEvicted++;
+                            prevEvicted = true;
+                        } else {
+                            prevEvicted = false;
+                        }
+                    }
+                });
+            });
+            try { console.log('[BUNK-DELETE] evicted=' + _delEvicted); } catch (_e) {}
+            if (_delEvicted > 0) log('  🗑️ Bunk-delete overrides: cleared ' + _delEvicted + ' block(s) → Free.');
+        } catch (_eDel) { try { warn('[BunkDeleteEnforce] ' + (_eDel && _eDel.message)); } catch (_e2) {} }
+
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
         // ─── Impossibility Report ─────────────────────────────────────────────
@@ -22549,6 +22616,9 @@
 
                 _slots.forEach((_s, _i) => {
                     if (!_s || _s.continuation || _s.field !== 'Free') return;
+                    // ★ Day 24: a bunk-override DELETE intentionally clears this slot
+                    //   to Free — that's the user's choice, not a scheduling failure.
+                    if (_s._intentionalFree || _s._source === 'bunk-delete-override') return;
                     const _slotInfo = Array.isArray(_pbs) ? _pbs[_i] : null;
                     const _start = _slotInfo?.startMin ?? _s._startMin;
                     const _end   = _slotInfo?.endMin   ?? _s._endMin;
