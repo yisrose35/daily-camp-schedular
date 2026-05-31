@@ -165,6 +165,16 @@
         } catch(e) { return {}; }
     };
 
+    /** Get camp name — checks Go setup, then Me/app1 */
+    data.getCampName = function() {
+        var go = data.getGoState();
+        if (go.setup && go.setup.campName) return go.setup.campName;
+        var g = data.getGlobalState();
+        if (g.app1 && g.app1.campName) return g.app1.campName;
+        if (g.campistryMe && g.campistryMe.campName) return g.campistryMe.campName;
+        return 'Camp';
+    };
+
     /** Get generated bus routes from Go */
     data.getBusRoutes = function() {
         var go = data.getGoState();
@@ -503,13 +513,13 @@
 
         var camperMap = data.getCamperParentMap();
         var busStops = data.getAllCamperBusStops();
-        var campName = data.getGoState().setup?.campName || 'Camp';
+        var campName = data.getCampName();
         var notifications = [];
 
         Object.entries(camperMap).forEach(function(entry) {
             var camperName = entry[0], info = entry[1];
             if (!info.parentEmail && !info.parentPhone && !info.parentName) return;
-            
+
             var busInfo = busStops[camperName];
             if (!busInfo) return;
 
@@ -517,7 +527,8 @@
             var body = _resolveTemplate(customBody, camperName, info, busInfo, campName);
 
             notifications.push({
-                camperName: camperName, parentName: info.parentName,
+                camperName: camperName, camperId: info.camperId || null,
+                parentName: info.parentName,
                 parentEmail: info.parentEmail, parentPhone: info.parentPhone,
                 familyId: info.familyId, subject: subject, body: body, busInfo: busInfo,
                 templateType: 'bus_stop'
@@ -543,7 +554,7 @@
             'Best regards,\n{campName}';
 
         var camperMap = data.getCamperParentMap();
-        var campName = data.getGoState().setup?.campName || 'Camp';
+        var campName = data.getCampName();
         var notifications = [];
 
         Object.entries(camperMap).forEach(function(entry) {
@@ -551,7 +562,8 @@
             if (!info.parentName && !info.parentEmail) return;
             if (!info.division && !info.bunk) return; // skip unassigned
             notifications.push({
-                camperName: name, parentName: info.parentName,
+                camperName: name, camperId: info.camperId || null,
+                parentName: info.parentName,
                 parentEmail: info.parentEmail, parentPhone: info.parentPhone,
                 familyId: info.familyId,
                 subject: _resolveTemplate(subject, name, info, null, campName),
@@ -564,29 +576,33 @@
 
     /**
      * Generate daily schedule notifications
-     * Reads the current day's schedule from Flow's daily data
+     * Reads from campDailyData_v1 — works for both manual builder (manualSkeleton)
+     * and auto builder (scheduleAssignments with _startMin/_endMin or divisionTimes).
      */
     notify.generateScheduleNotifications = function(opts) {
         opts = opts || {};
         var subject = opts.subject || '{camperFirstName}\'s Schedule for Today';
 
         var camperMap = data.getCamperParentMap();
-        var campName = data.getGoState().setup?.campName || 'Camp';
+        var campName = data.getCampName();
         var notifications = [];
 
-        // Try to read schedule from daily data
         var dateKey = opts.date || new Date().toISOString().split('T')[0];
         var dailyRaw = null;
         try { dailyRaw = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}'); } catch(e) {}
-        var dayData = dailyRaw && dailyRaw[dateKey] ? dailyRaw[dateKey] : null;
+        var dayData = (dailyRaw && dailyRaw[dateKey]) ? dailyRaw[dateKey] : null;
 
-        // Read skeleton (the day's structure)
-        var skeleton = [];
-        if (dayData && dayData.manualSkeleton) skeleton = dayData.manualSkeleton;
-        
-        // Read assignments 
-        var assignments = {};
-        if (dayData && dayData.scheduleAssignments) assignments = dayData.scheduleAssignments;
+        var assignments = (dayData && dayData.scheduleAssignments) ? dayData.scheduleAssignments : {};
+        var skeleton    = (dayData && dayData.manualSkeleton)     ? dayData.manualSkeleton     : [];
+        var divTimes    = (dayData && dayData.divisionTimes)       ? dayData.divisionTimes       : {};
+
+        function fmtMin(min) {
+            if (min == null) return '';
+            var h = Math.floor(min / 60), m = min % 60;
+            var ap = h < 12 ? 'AM' : 'PM';
+            h = h % 12 || 12;
+            return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
+        }
 
         Object.entries(camperMap).forEach(function(entry) {
             var name = entry[0], info = entry[1];
@@ -594,32 +610,50 @@
             var bunk = info.bunk;
             if (!bunk) return;
 
-            // Build schedule string for this bunk
-            var schedLines = [];
             var bunkSchedule = assignments[bunk];
-            if (bunkSchedule && Array.isArray(bunkSchedule)) {
-                // Match skeleton slots to assignments
-                var divSlots = skeleton.filter(function(s) { return s.division === info.grade || s.division === info.division; });
-                bunkSchedule.forEach(function(assignment, i) {
-                    var slot = divSlots[i];
-                    var time = slot ? (slot.startTime || '') : '';
-                    var activity = '';
-                    if (typeof assignment === 'string') activity = assignment;
-                    else if (assignment && assignment.field) activity = assignment.field;
-                    else if (assignment && assignment.event) activity = assignment.event;
-                    if (activity) schedLines.push(time + ' — ' + activity);
+            if (!bunkSchedule || !Array.isArray(bunkSchedule) || !bunkSchedule.length) return;
+
+            // Grade/division slots from divisionTimes (auto builder) or skeleton (manual)
+            var grade = info.grade || info.division;
+            var gradeSlots = null;
+            var dtEntry = divTimes[grade] || divTimes[info.division] || divTimes[info.grade];
+            if (dtEntry && dtEntry.slots) gradeSlots = dtEntry.slots;
+
+            var schedLines = [];
+            bunkSchedule.forEach(function(a, i) {
+                if (!a) return;
+                var activity = '';
+                if (typeof a === 'string')         activity = a;
+                else if (a._activity)              activity = a._activity;
+                else if (a.field)                  activity = a.field;
+                else if (a.sport)                  activity = a.sport;
+                else if (a.event)                  activity = a.event;
+                if (!activity || activity === 'Free') return;
+
+                // Time: prefer _startMin (auto builder), then gradeSlots, then skeleton
+                var time = '';
+                if (a._startMin != null) {
+                    time = fmtMin(a._startMin);
+                } else if (gradeSlots && gradeSlots[i]) {
+                    time = fmtMin(gradeSlots[i].startMin) || gradeSlots[i].startTime || '';
+                } else {
+                    var divSkel = skeleton.filter(function(s) { return s.division === grade; });
+                    var sk = divSkel[i];
+                    time = sk ? (sk.startTime || '') : '';
+                }
+                schedLines.push((time ? time + ' — ' : '') + activity);
+            });
+
+            // Pinned skeleton events (manual builder only)
+            if (!gradeSlots) {
+                skeleton.forEach(function(sk) {
+                    if ((sk.division === info.grade || sk.division === info.division) && sk.type === 'pinned') {
+                        schedLines.push((sk.startTime || '') + ' — ' + (sk.event || sk.type));
+                    }
                 });
             }
 
-            // Also include pinned events from skeleton
-            skeleton.forEach(function(sk) {
-                if ((sk.division === info.grade || sk.division === info.division) && sk.type === 'pinned') {
-                    schedLines.push((sk.startTime || '') + ' — ' + (sk.event || sk.type));
-                }
-            });
-
             if (!schedLines.length) schedLines.push('Schedule not yet generated for today.');
-
             var scheduleText = schedLines.join('\n');
 
             var bodyTemplate = opts.body ||
@@ -628,15 +662,13 @@
                 '{scheduleText}\n\n' +
                 'Have a great day!\n{campName}';
 
-            var resolvedBody = _resolveTemplate(bodyTemplate, name, info, null, campName)
-                .replace(/{scheduleText}/g, scheduleText);
-
             notifications.push({
-                camperName: name, parentName: info.parentName,
+                camperName: name, camperId: info.camperId || null,
+                parentName: info.parentName,
                 parentEmail: info.parentEmail, parentPhone: info.parentPhone,
                 familyId: info.familyId,
                 subject: _resolveTemplate(subject, name, info, null, campName),
-                body: resolvedBody,
+                body: _resolveTemplate(bodyTemplate, name, info, null, campName).replace(/{scheduleText}/g, scheduleText),
                 scheduleLines: schedLines,
                 templateType: 'daily_schedule'
             });
@@ -736,7 +768,8 @@
         notifications.forEach(function(n) {
             var record = {
                 id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
-                camperName: n.camperName, parentName: n.parentName,
+                camperName: n.camperName, camperId: n.camperId || null,
+                parentName: n.parentName,
                 parentEmail: n.parentEmail, parentPhone: n.parentPhone,
                 type: n.templateType || templateType || 'custom',
                 subject: n.subject, body: n.body,

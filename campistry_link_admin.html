@@ -284,14 +284,27 @@
         <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
             <div class="lk-card-head"><h2>Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div>
             <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click — each parent gets info for <strong>their child only</strong>.</p>
+            <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">
+                Bus → Campistry Go &nbsp;|&nbsp; Bunk &amp; Schedule → Campistry Me / Flow
+            </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-                <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">Bus Stops</button>
-                <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">Bunk Assignments</button>
-                <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">Schedule</button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
+                    Bus Stops
+                </button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                    Bunk Assignments
+                </button>
+                <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+                    Today's Schedule
+                </button>
             </div>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
                 <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
                 <button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">Preview Bunk</button>
+                <button class="btn btn-secondary btn-sm" onclick="smartPreview('schedule')">Preview Schedule</button>
                 <button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">Export CSV</button>
             </div>
             <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
@@ -753,27 +766,38 @@ function sendManual() {
 function smartSend(type) {
     var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
     var r;
-    if (type === 'bus')     r = cl.notify.sendBusStopNotifications(channels);
+    if (type === 'bus')          r = cl.notify.sendBusStopNotifications(channels);
     else if (type === 'bunk')     r = cl.notify.sendBunkAssignments(channels);
     else if (type === 'schedule') r = cl.notify.sendDailySchedules(channels);
-    if (r && r.success) toast(r.sent + ' notifications sent!');
-    else toast((r ? r.error || 'No data available' : 'Failed'));
+    if (r && r.success) toast(r.sent + ' notifications queued!');
+    else toast(r ? (r.error || 'No data found — check source apps') : 'Failed to load data bridge');
     updateSmartBadge();
 }
 function smartPreview(type) {
-    var cl = CL(); if (!cl) return;
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
     var notifs;
-    if (type === 'bus')     notifs = cl.notify.generateBusStopNotifications();
-    else if (type === 'bunk') notifs = cl.notify.generateBunkAssignmentNotifications();
+    if (type === 'bus')          notifs = cl.notify.generateBusStopNotifications();
+    else if (type === 'bunk')    notifs = cl.notify.generateBunkAssignmentNotifications();
     else if (type === 'schedule') notifs = cl.notify.generateScheduleNotifications();
     var box = document.getElementById('smartPreviewBox');
+    var hints = { bus: 'Make sure routes are generated in Campistry Go', bunk: 'Make sure campers have division/bunk in Campistry Me', schedule: 'Make sure a schedule is generated in Campistry Flow for today' };
     if (!notifs || !notifs.length) {
-        box.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. Make sure data exists in Me' + (type === 'bus' ? ' and routes in Go' : '') + '.</div>';
+        box.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. ' + (hints[type] || '') + '.</div>';
         box.style.display = 'block'; return;
     }
-    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:260px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">' + notifs.length + ' notifications</div>';
-    notifs.slice(0, 8).forEach(function(n) { h += '<div style="padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;"><strong>' + esc(n.camperName) + '</strong> — ' + esc(n.parentName || '?') + '<div style="color:var(--text-muted);font-size:.72rem;margin-top:2px;max-height:50px;overflow:hidden;">' + esc((n.body || '').substring(0, 120)) + '...</div></div>'; });
-    if (notifs.length > 8) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+' + (notifs.length - 8) + ' more</div>';
+    var label = { bus: 'Bus Stop', bunk: 'Bunk Assignment', schedule: 'Schedule' }[type] || type;
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:280px;overflow-y:auto;">' +
+        '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
+            '<span>' + notifs.length + ' ' + label + ' notifications</span>' +
+            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'smartPreviewBox\').style.display=\'none\'">✕</button>' +
+        '</div>';
+    notifs.slice(0, 10).forEach(function(n) {
+        h += '<div style="padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;">' +
+            '<div style="display:flex;justify-content:space-between;"><strong>' + esc(n.camperName) + '</strong><span style="color:var(--text-muted);font-size:.72rem;">' + esc(n.parentName || '?') + '</span></div>' +
+            '<div style="color:var(--text-muted);font-size:.72rem;margin-top:3px;white-space:pre-line;max-height:60px;overflow:hidden;">' + esc((n.body || '').substring(0, 160)) + '…</div>' +
+        '</div>';
+    });
+    if (notifs.length > 10) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (notifs.length - 10) + ' more</div>';
     h += '</div>';
     box.innerHTML = h; box.style.display = 'block';
 }
