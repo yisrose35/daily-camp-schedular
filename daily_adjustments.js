@@ -56,6 +56,14 @@ let _generationScope = null;
 // Only populated when the user partially selects within a division.
 let _generationBunkScope = null;
 
+// ★ Day 22.5 audit: re-entrancy guard for the Generate button. runOptimizer is
+//   async and the button isn't disabled during the multi-second solve, so a
+//   double-click (or a click mid-solve) would start a SECOND generation that
+//   shares window.scheduleAssignments + the pre-gen wipe with the first → a
+//   corrupted/half-written schedule. Also read by refreshFromCloud so a
+//   tab-visibility refresh can't reload stale state over a live generation.
+let _daOptimizerRunning = false;
+
 function _daIsBackToBack(ev) {
   if (!ev.leagueName || (ev.type !== 'league' && ev.type !== 'specialty_league')) return false;
   const parseT = window.SchedulerCoreUtils?.parseTimeToMinutes;
@@ -4567,6 +4575,10 @@ function _boToggleView() {
 async function runOptimizer() {
     if (!window.AccessControl?.checkEditAccess?.('run optimizer')) return;
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
+    // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
+    if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
+    _daOptimizerRunning = true;
+    try {
 
     // ★★★ v3.13: Apply generation scope from settings picker ★★★
     if (_generationScope && _generationScope.size > 0) {
@@ -4946,6 +4958,11 @@ if (success) {
       window.renderStaggeredView?.();
   } else { 
       await daShowAlert("❌ Error generating schedule. Check console."); 
+  }
+  } finally {
+      // ★ Day 22.5 audit fix: always release the re-entrancy guard, even if the
+      //   solver threw, so the Generate button is never permanently locked out.
+      _daOptimizerRunning = false;
   }
 }
   // =================================================================
@@ -7211,6 +7228,9 @@ function setupVisibilityHandler() {
 }
 
 function refreshFromCloud() {
+  // ★ Day 22.5 audit fix: never reload cloud/local state over an in-flight
+  //   generation — it would clobber the live solve or race the post-gen save.
+  if (_daOptimizerRunning) { try { console.log('[DA] refreshFromCloud skipped — generation in progress'); } catch (_e) {} return; }
   masterSettings.global = window.loadGlobalSettings?.() || {};
   masterSettings.app1 = masterSettings.global.app1 || {};
   masterSettings.leaguesByName = masterSettings.global.leaguesByName || {};
@@ -7326,6 +7346,11 @@ try {
     try {
       var newDate = e && e.detail && e.detail.dateKey;
       if (!newDate) return;
+      // ★ Day 22.5 audit fix: a date change clears any partial generation scope,
+      //   so a scope set for the previous date can't silently apply to the new
+      //   date (otherwise "Generate" would quietly regen only the old subset and
+      //   the user would believe the whole camp ran).
+      _generationScope = null; _generationBunkScope = null;
       // Live diagnostics from the multi-day audit showed window.currentScheduleDate
       // typically updates 1.5-3 seconds AFTER campistry-date-changed fires (cloud
       // round-trip via integration_hooks). Poll for up to 5000ms to safely cover
@@ -7359,6 +7384,14 @@ try {
           //   so reloading here cannot lose unsaved work.
           if (window._daBuilderMode === 'auto' && typeof loadDAAutoLayers === 'function') {
             try { loadDAAutoLayers(); if (typeof renderGrid === 'function') renderGrid(); } catch (_eAL) {}
+          }
+          // ★ Day 22.5 audit fix: symmetric reload for MANUAL mode. Without this,
+          //   switching dates left the PREVIOUS date's skeleton in the editor, so
+          //   an edit or Generate could save the old date's blocks under the new
+          //   date's key (cross-date contamination). Skeleton edits auto-save
+          //   per-date, so reloading here cannot lose unsaved work.
+          else if (window._daBuilderMode !== 'auto' && typeof loadDailySkeleton === 'function') {
+            try { loadDailySkeleton(); if (typeof renderGrid === 'function') renderGrid(); } catch (_eSk) {}
           }
           // Re-render unconditionally (don't gate on visibility). The Resources
           // panel container may be in the DOM but offsetParent=null because a
