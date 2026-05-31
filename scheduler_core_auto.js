@@ -19334,6 +19334,12 @@
                     const act = String(s._activity || '').toLowerCase();
                     if (/^(swim|lunch|cleanup|change|main\s*activity|shiur|dismissal|snack)/i.test(act)) continue;
                     if (s._assignedSpecial) continue; // already a special
+                    // ★ Day 20: NEVER displace a division's league game with a recaptured
+                    // special. League slots are written (with matchups) before Phase 4.9
+                    // runs and are _fixed but not _pinned, so without this guard a deferred
+                    // special could swap into a bunk's League Game — leaving ~1 bunk per
+                    // division missing its league game (and a stale _league slot).
+                    if (s._league === true || s._isChinuch === true || /^(league game|specialty league|chinuch)$/i.test(act)) continue;
                     const slotDur = (s._endMin != null && s._startMin != null) ? (s._endMin - s._startMin) : 0;
                     // ★ Day 19.5: def.duration is now the FOLDED duration
                     // (special + attached prep, courtesy of getSpecialDuration).
