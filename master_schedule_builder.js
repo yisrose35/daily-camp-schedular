@@ -1357,6 +1357,11 @@ const DAW_LAYER_TYPES = [
 
 const DAW_PIXELS_PER_MINUTE = 3;
 let dawLayers = {}; // { gradeKey: [{ id, type, startMin, endMin, qty, op }] }
+// ★ Day 24: the layer set used by the most recent renderDAWGrid call —
+//   `dawLayers` in the standalone master view, but the externalLayers arg in
+//   the Daily Adjustments auto view. openAutoBunkOverridesPanel reads this so
+//   the "Bunks" override panel finds the grade's layers in BOTH contexts.
+let _lastDAWLayerSource = null;
 let dawSelectedBand = null;
 let dawDragData = null;
 
@@ -1747,6 +1752,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
   // When called externally (from DA), use provided layers + callbacks
   const isExternal = !!externalEl;
   const layerSource = isExternal ? externalLayers : dawLayers;
+  _lastDAWLayerSource = layerSource; // ★ Day 24: remember for openAutoBunkOverridesPanel
   const onChanged = externalCallbacks?.onLayersChanged || null;
   const onSave = isExternal ? (onChanged || function(){}) : saveDAWLayers;
   const onRender = isExternal ? function(){ renderDAWGrid(externalEl, externalLayers, externalCallbacks); } : renderDAWGrid;
@@ -2992,7 +2998,12 @@ function openAutoBunkOverridesPanel(grade) {
         return na - nb || String(a).localeCompare(String(b));
     });
     if (bunks.length === 0) { window.showAlert?.('No bunks in this division.'); return; }
-    const layers = (dawLayers[grade] || []).slice().sort((a, b) => a.startMin - b.startMin);
+    // ★ Day 24: read the layers the grid ACTUALLY rendered — in the DA auto
+    //   view that's the externalLayers arg (daAutoLayers), not the module
+    //   dawLayers (which only holds the master-view template). Without this the
+    //   panel found no layers in the DA context and silently returned.
+    const _laySrc = _lastDAWLayerSource || dawLayers;
+    const layers = ((_laySrc && _laySrc[grade]) || []).slice().sort((a, b) => a.startMin - b.startMin);
     if (layers.length === 0) {
         window.showAlert?.('No layers in this grade yet. Add a layer first.');
         return;
