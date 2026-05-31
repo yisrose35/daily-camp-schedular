@@ -22686,7 +22686,7 @@
                         _reason = 'slot unfilled — check field availability and sport configuration.';
                     }
 
-                    _impossibilities.push({ bunk: _bunk, grade: _grade, reason: _reason });
+                    _impossibilities.push({ bunk: _bunk, grade: _grade, reason: _reason, start: _start, end: _end });
                 });
             });
 

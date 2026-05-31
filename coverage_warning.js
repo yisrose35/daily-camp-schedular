@@ -169,4 +169,96 @@
     window.__showCoverageWarning = function () {
         if (Array.isArray(window._coverageGaps)) { _items = window._coverageGaps.slice(); _open = true; render(); }
     };
+
+    // =========================================================================
+    // ★ FREE / UNFILLED-SLOT WARNING  (separate, MORE urgent than coverage gaps)
+    // -------------------------------------------------------------------------
+    // A "Free" block means a bunk has NO activity at that time — a real hole in
+    // the schedule, not just a missed nice-to-have. The generator dispatches
+    // `campistry-schedule-impossibilities` after every gen, but nothing used to
+    // listen, so Free blocks landed SILENTLY. This surfaces them loudly: a red
+    // banner (top-center, auto-EXPANDED so the user sees it without clicking)
+    // listing each unfilled slot's bunk · time · reason. Clears automatically on
+    // a clean (zero-Free) generation. Dismissable (×) / collapsible (–).
+    // =========================================================================
+    var FREE_WRAP_ID = 'campistry-free-warn';
+    var FREE_STYLE_ID = 'campistry-free-warn-style';
+    var _frees = [];
+    var _freeOpen = true;   // start EXPANDED — a hole must not be missed
+
+    function fmtTime(m) {
+        if (m == null || isNaN(m)) return '?';
+        var h = Math.floor(m / 60), mm = m % 60, ap = h < 12 ? 'am' : 'pm', hh = h % 12; if (hh === 0) hh = 12;
+        return hh + ':' + (mm < 10 ? '0' : '') + mm + ap;
+    }
+
+    function injectFreeStyle() {
+        if (document.getElementById(FREE_STYLE_ID)) return;
+        var css = '' +
+        '#' + FREE_WRAP_ID + '{position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:100000;' +
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;width:520px;max-width:94vw;}' +
+        '#' + FREE_WRAP_ID + ' *{box-sizing:border-box;}' +
+        '#' + FREE_WRAP_ID + ' .fw-panel{background:#fff;border:2px solid #dc2626;border-radius:12px;' +
+            'box-shadow:0 12px 34px rgba(220,38,38,.28);overflow:hidden;}' +
+        '#' + FREE_WRAP_ID + ' .fw-head{display:flex;align-items:center;gap:8px;padding:10px 12px;' +
+            'background:#fee2e2;border-bottom:1px solid #fecaca;color:#991b1b;cursor:pointer;}' +
+        '#' + FREE_WRAP_ID + ' .fw-head .fw-title{font-size:13.5px;font-weight:800;flex:1;}' +
+        '#' + FREE_WRAP_ID + ' .fw-head button{border:none;background:transparent;cursor:pointer;' +
+            'color:#991b1b;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;}' +
+        '#' + FREE_WRAP_ID + ' .fw-head button:hover{background:#fecaca;}' +
+        '#' + FREE_WRAP_ID + ' .fw-body{max-height:300px;overflow:auto;padding:6px 0;}' +
+        '#' + FREE_WRAP_ID + ' .fw-row{padding:6px 12px;border-bottom:1px solid #f3f4f6;font-size:12.5px;color:#374151;}' +
+        '#' + FREE_WRAP_ID + ' .fw-row:last-child{border-bottom:none;}' +
+        '#' + FREE_WRAP_ID + ' .fw-where{font-weight:700;color:#111827;}' +
+        '#' + FREE_WRAP_ID + ' .fw-why{color:#6b7280;font-size:11.5px;margin-top:1px;}' +
+        '#' + FREE_WRAP_ID + ' .fw-foot{padding:7px 12px;background:#fef2f2;border-top:1px solid #fecaca;' +
+            'font-size:11px;color:#991b1b;}';
+        var st = document.createElement('style');
+        st.id = FREE_STYLE_ID;
+        st.textContent = css;
+        (document.head || document.documentElement).appendChild(st);
+    }
+
+    function renderFree() {
+        var wrap = document.getElementById(FREE_WRAP_ID);
+        if (!_frees.length) { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); return; }
+        if (!document.body) { document.addEventListener('DOMContentLoaded', renderFree, { once: true }); return; }
+        injectFreeStyle();
+        if (!wrap) { wrap = document.createElement('div'); wrap.id = FREE_WRAP_ID; document.body.appendChild(wrap); }
+        var n = _frees.length;
+        var title = '⛔ ' + n + ' unfilled (Free) slot' + (n === 1 ? '' : 's') + ' in this schedule';
+        var head =
+            '<div class="fw-head" title="' + (_freeOpen ? 'Collapse' : 'Expand') + '">' +
+                '<span>⛔</span><span class="fw-title">' + esc(title) + '</span>' +
+                '<button class="fw-min" title="' + (_freeOpen ? 'Collapse' : 'Expand') + '">' + (_freeOpen ? '–' : '+') + '</button>' +
+                '<button class="fw-close" title="Dismiss">×</button>' +
+            '</div>';
+        var bodyHtml = '';
+        if (_freeOpen) {
+            var rows = '';
+            _frees.forEach(function (f) {
+                var where = (f.bunk || '?') + (f.grade ? ' (' + f.grade + ')' : '') +
+                    (f.start != null ? '  ·  ' + fmtTime(f.start) + '–' + fmtTime(f.end) : '');
+                rows += '<div class="fw-row"><div class="fw-where">' + esc(where) + '</div>' +
+                        '<div class="fw-why">' + esc(f.reason || 'unfilled slot') + '</div></div>';
+            });
+            bodyHtml = '<div class="fw-body">' + rows + '</div>' +
+                '<div class="fw-foot">These bunks have an empty slot — adjust layers/fields and re-generate, or fill manually.</div>';
+        }
+        wrap.innerHTML = '<div class="fw-panel">' + head + bodyHtml + '</div>';
+        wrap.querySelector('.fw-min').addEventListener('click', function (ev) { ev.stopPropagation(); _freeOpen = !_freeOpen; renderFree(); });
+        wrap.querySelector('.fw-close').addEventListener('click', function (ev) { ev.stopPropagation(); _frees = []; renderFree(); });
+        wrap.querySelector('.fw-head').addEventListener('click', function () { _freeOpen = !_freeOpen; renderFree(); });
+    }
+
+    function onImpossibilities(e) {
+        var d = (e && e.detail) || {};
+        _frees = Array.isArray(d.items) ? d.items.slice() : [];
+        _freeOpen = true;   // always surface expanded — never silent
+        renderFree();
+    }
+
+    window.addEventListener('campistry-schedule-impossibilities', onImpossibilities);
+    document.addEventListener('campistry-schedule-impossibilities', onImpossibilities);
+    window.__showFreeWarning = function () { renderFree(); };
 })();
