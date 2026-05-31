@@ -2345,6 +2345,71 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log(`[BunkOverride] Processed ${bunkOverrides.length} overrides`);
 
         // =========================================================================
+        // STEP 2.4: Daily Trips (off-campus) — honor campDailyTrips like AUTO does
+        // =========================================================================
+        //   Trips entered via the Trips popover are stored per-date in
+        //   campDailyTrips_<date> (+ dailyData.dailyTrips). The AUTO builder reads
+        //   this store directly (Phase 0). The MANUAL builder previously only saw
+        //   trips that were ALSO injected into the skeleton at add-time — which
+        //   only happens for manual-mode adds — so a trip added in AUTO mode was
+        //   silently ignored on a manual generation. Read the store and pin a trip
+        //   block over every bunk in the trip's division(s). Overwrite is
+        //   intentional: a trip means the bunk is off-site, so it supersedes
+        //   whatever else landed in that window (idempotent when the skeleton
+        //   already placed the same trip in manual-mode-add).
+        try {
+            const _dk = window.currentScheduleDate || '';
+            let _dTrips = [];
+            try { const _s = localStorage.getItem('campDailyTrips_' + _dk); if (_s) _dTrips = JSON.parse(_s); } catch (_e) {}
+            if (!Array.isArray(_dTrips) || !_dTrips.length) {
+                const _dd = window.loadCurrentDailyData?.() || {};
+                _dTrips = (_dd && _dd.dailyTrips) || [];
+            }
+            // Expand a (possibly parent) division to leaf division names present here.
+            const _expandTripDiv = (d) => {
+                if (!d) return [];
+                const info = divisions[d];
+                if (info && info.isParent) {
+                    const kids = Array.isArray(info.children) ? info.children
+                               : Array.isArray(info.grades) ? info.grades : null;
+                    if (kids && kids.length) return kids.filter(k => divisions[k]);
+                    return Object.keys(divisions).filter(k => {
+                        const ki = divisions[k];
+                        return ki && !ki.isParent && (ki.parent === d || ki.parentDivision === d);
+                    });
+                }
+                return divisions[d] ? [d] : [];
+            };
+            let _tripPinned = 0;
+            (_dTrips || []).forEach(trip => {
+                const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
+                const tStart = trip.startMin ?? Utils.parseTimeToMinutes(trip.startTime);
+                const tEnd = trip.endMin ?? Utils.parseTimeToMinutes(trip.endTime);
+                if (tStart == null || tEnd == null) return;
+                const tripName = trip.event || 'Trip';
+                const divSet = {};
+                rawDivs.forEach(rd => _expandTripDiv(rd).forEach(g => { divSet[g] = 1; }));
+                Object.keys(divSet).forEach(divName => {
+                    if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) return;
+                    const slots = Utils.findSlotsForRange(tStart, tEnd, divName);
+                    if (!slots || !slots.length) return;
+                    (divisions[divName].bunks || []).forEach(bunk => {
+                        if (!window.scheduleAssignments[bunk]) return;
+                        slots.forEach((slotIndex, i) => {
+                            window.scheduleAssignments[bunk][slotIndex] = {
+                                field: tripName, sport: null, continuation: i > 0,
+                                _fixed: true, _activity: tripName, _isTrip: true,
+                                _bunkOverride: true, _zone: 'offsite'
+                            };
+                        });
+                        _tripPinned++;
+                    });
+                });
+            });
+            if (_tripPinned > 0) console.log('[DailyTrips] Pinned ' + _tripPinned + ' bunk-trip block(s) from campDailyTrips (manual).');
+        } catch (_eTrip) { try { console.warn('[DailyTrips] ' + (_eTrip && _eTrip.message)); } catch (_e2) {} }
+
+        // =========================================================================
         // STEP 2.5: Process Elective Tiles
         // =========================================================================
 
