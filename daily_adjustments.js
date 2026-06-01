@@ -2127,7 +2127,34 @@ function daCleanupOrphanChangeTiles() {
   });
   if (dailyOverrideSkeleton.length !== before) {
     console.log(`[DA-CLEANUP] Removed ${before - dailyOverrideSkeleton.length} orphan Change tile(s)`);
-    if (typeof saveDailySkeleton === 'function') saveDailySkeleton();
+    // Persist only if the user can edit — this is an automatic cleanup, so a
+    // read-only session shouldn't trip the #5a "not saved" warning.
+    if (window.AccessControl?.canEdit?.() && typeof saveDailySkeleton === 'function') saveDailySkeleton();
+  }
+}
+
+// ★ Day 27: remove skeleton tiles whose division no longer exists in the camp
+//   (left over from a previous camp structure — invisible since no column renders
+//   them, but they persist + save to cloud and bloat the skeleton). GUARDED: it
+//   never prunes when the camp structure isn't loaded, so a transient empty
+//   window.divisions can't wipe valid tiles. Mirrors daCleanupOrphanChangeTiles.
+function daPruneOrphanDivisionTiles() {
+  if (!Array.isArray(dailyOverrideSkeleton) || dailyOverrideSkeleton.length === 0) return;
+  const campDivs = Object.keys(window.divisions || {});
+  if (campDivs.length === 0) return;   // camp structure not loaded — do nothing
+  const campSet = new Set(campDivs.map(String));
+  const before = dailyOverrideSkeleton.length;
+  const removed = [];
+  dailyOverrideSkeleton = dailyOverrideSkeleton.filter(t => {
+    if (!t || !t.division) return true;              // keep malformed / division-less tiles
+    if (campSet.has(String(t.division))) return true;
+    removed.push(t.division);
+    return false;
+  });
+  if (dailyOverrideSkeleton.length !== before) {
+    window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+    console.log('[DA-CLEANUP] Pruned ' + (before - dailyOverrideSkeleton.length) + ' orphan-division tile(s): ' + [...new Set(removed)].join(', '));
+    if (window.AccessControl?.canEdit?.() && typeof saveDailySkeleton === 'function') saveDailySkeleton();
   }
 }
 
@@ -2137,6 +2164,8 @@ function renderGrid() {
 
   // Drop stale Change tiles before painting
   daCleanupOrphanChangeTiles();
+  // ★ Day 27: drop tiles whose division no longer exists in the camp structure
+  daPruneOrphanDivisionTiles();
 
   // AUTO MODE: render DAW layer timeline instead of stacking grid
   if (window._daBuilderMode === 'auto') {
