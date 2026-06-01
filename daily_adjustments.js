@@ -2730,7 +2730,12 @@ function addResizeListeners(gridEl) {
           event.startTime = minutesToTime(Math.max(divStartMin, Math.round(newStartMin / SNAP_MINS) * SNAP_MINS));
           event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
         }
-        
+
+        // ★ Day 25 fix (#1): reconcile overlaps after a resize, mirroring the
+        //   move path. Resize previously wrote the new times without bumping
+        //   neighbors, leaving a SILENT visual overlap that generation would
+        //   see as two pinned blocks fighting for the same slot.
+        bumpOverlappingTiles(event, event.division);
         saveDailySkeleton();
         renderGrid();
       }
@@ -3167,7 +3172,7 @@ function addDropListeners(gridEl) {
         isNightActivity = times.isNight;
         const reservedFields = result.reservedFields || [];
         newEvent = {
-          id: Date.now().toString(), type: 'pinned', event: result.eventName.trim(),
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: result.eventName.trim(),
           division: divName, startTime: result.startTime, endTime: result.endTime,
           reservedFields: reservedFields,
           location: reservedFields.length === 1 ? reservedFields[0] : null,
@@ -3237,10 +3242,14 @@ function addDropListeners(gridEl) {
           }
         }
 
+        // ★ Day 25 fix (#3): one unique base id shared by the swim tile and its
+        //   pre/post Change strips (was Date.now() three times → collided across
+        //   rapid drops, making find()-by-id target the wrong tile).
+        const _swimBase = 'evt_' + Math.random().toString(36).slice(2, 9);
         // Pre-Change BEFORE swim
         if (daPreChange > 0) {
           dailyOverrideSkeleton.push({
-            id: Date.now().toString() + '_prechange',
+            id: _swimBase + '_prechange',
             type: 'pinned',
             event: 'Change',
             division: divName,
@@ -3254,7 +3263,7 @@ function addDropListeners(gridEl) {
 
         // Swim tile — keeps the user-entered window
         newEvent = {
-          id: Date.now().toString(), type: 'pinned', event: name, division: divName,
+          id: _swimBase, type: 'pinned', event: name, division: divName,
           startTime: minutesToTime(daSwimStart), endTime: minutesToTime(daSwimEnd),
           reservedFields,
           location: defaultLocation || (reservedFields.length > 0 ? reservedFields[0] : null),
@@ -3266,7 +3275,7 @@ function addDropListeners(gridEl) {
         // Post-Change AFTER swim (anchored to next period start if there's a gap)
         if (daPostChange > 0) {
           dailyOverrideSkeleton.push({
-            id: Date.now().toString() + '_postchange',
+            id: _swimBase + '_postchange',
             type: 'pinned',
             event: 'Change',
             division: divName,
@@ -3416,7 +3425,7 @@ function addDropListeners(gridEl) {
         if (!times) return;
         isNightActivity = times.isNight;
         newEvent = {
-          id: Date.now().toString(), type: finalType, event: name, division: divName,
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: finalType, event: name, division: divName,
           startTime: result.startTime, endTime: result.endTime, isNightActivity
         };
         if (tileData.type === 'special' && result.subcategory && result.subcategory !== '__add_new__') {
