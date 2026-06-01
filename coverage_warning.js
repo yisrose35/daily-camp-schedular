@@ -261,4 +261,91 @@
     window.addEventListener('campistry-schedule-impossibilities', onImpossibilities);
     document.addEventListener('campistry-schedule-impossibilities', onImpossibilities);
     window.__showFreeWarning = function () { renderFree(); };
+
+    // =====================================================================
+    // ★ OVERRIDE-ACCESS WARNING  (amber — Risk #2 "warn but allow")
+    // ---------------------------------------------------------------------
+    // A bunk OVERRIDE intentionally bypasses a field's access restriction
+    // (the user is the boss), but the bypass must never be SILENT. This
+    // surfaces an amber, dismissable heads-up listing each override placed
+    // on a field its division is access-restricted from. Less urgent than a
+    // Free hole (red) — the slot IS filled, just on a restricted field.
+    // Dispatched by scheduler_core_main.js after the bunk-override step.
+    // Anchored top-RIGHT so it never overlaps the centered Free/coverage panels.
+    // =====================================================================
+    var OA_WRAP_ID = 'campistry-override-access-warn';
+    var OA_STYLE_ID = 'campistry-override-access-warn-style';
+    var _oa = [];
+    var _oaOpen = true;
+
+    function injectOAStyle() {
+        if (document.getElementById(OA_STYLE_ID)) return;
+        var css = '' +
+        '#' + OA_WRAP_ID + '{position:fixed;top:12px;right:12px;z-index:99999;' +
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;width:440px;max-width:92vw;}' +
+        '#' + OA_WRAP_ID + ' *{box-sizing:border-box;}' +
+        '#' + OA_WRAP_ID + ' .oa-panel{background:#fff;border:2px solid #d97706;border-radius:12px;' +
+            'box-shadow:0 12px 34px rgba(217,119,6,.26);overflow:hidden;}' +
+        '#' + OA_WRAP_ID + ' .oa-head{display:flex;align-items:center;gap:8px;padding:10px 12px;' +
+            'background:#fef3c7;border-bottom:1px solid #fde68a;color:#92400e;cursor:pointer;}' +
+        '#' + OA_WRAP_ID + ' .oa-head .oa-title{font-size:13px;font-weight:800;flex:1;}' +
+        '#' + OA_WRAP_ID + ' .oa-head button{border:none;background:transparent;cursor:pointer;' +
+            'color:#92400e;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;}' +
+        '#' + OA_WRAP_ID + ' .oa-head button:hover{background:#fde68a;}' +
+        '#' + OA_WRAP_ID + ' .oa-body{max-height:280px;overflow:auto;padding:6px 0;}' +
+        '#' + OA_WRAP_ID + ' .oa-row{padding:6px 12px;border-bottom:1px solid #f3f4f6;font-size:12.5px;color:#374151;}' +
+        '#' + OA_WRAP_ID + ' .oa-row:last-child{border-bottom:none;}' +
+        '#' + OA_WRAP_ID + ' .oa-where{font-weight:700;color:#111827;}' +
+        '#' + OA_WRAP_ID + ' .oa-why{color:#6b7280;font-size:11.5px;margin-top:1px;}' +
+        '#' + OA_WRAP_ID + ' .oa-foot{padding:7px 12px;background:#fffbeb;border-top:1px solid #fde68a;' +
+            'font-size:11px;color:#92400e;}';
+        var st = document.createElement('style');
+        st.id = OA_STYLE_ID;
+        st.textContent = css;
+        (document.head || document.documentElement).appendChild(st);
+    }
+
+    function renderOA() {
+        var wrap = document.getElementById(OA_WRAP_ID);
+        if (!_oa.length) { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); return; }
+        if (!document.body) { document.addEventListener('DOMContentLoaded', renderOA, { once: true }); return; }
+        injectOAStyle();
+        if (!wrap) { wrap = document.createElement('div'); wrap.id = OA_WRAP_ID; document.body.appendChild(wrap); }
+        var n = _oa.length;
+        var title = n + ' override' + (n === 1 ? '' : 's') + ' on an access-restricted field';
+        var head =
+            '<div class="oa-head" title="' + (_oaOpen ? 'Collapse' : 'Expand') + '">' +
+                '<span>⚠️</span><span class="oa-title">' + esc(title) + '</span>' +
+                '<button class="oa-min">' + (_oaOpen ? '–' : '+') + '</button>' +
+                '<button class="oa-close" title="Dismiss">×</button>' +
+            '</div>';
+        var bodyHtml = '';
+        if (_oaOpen) {
+            var rows = '';
+            _oa.forEach(function (w) {
+                var where = (w.bunk || '?') + '  ·  ' + (w.activity || w.field || '?') +
+                    (w.startMin != null ? '  ·  ' + fmtTime(w.startMin) + '–' + fmtTime(w.endMin) : '');
+                var why = (w.division || 'This division') + ' is access-restricted from “' + (w.field || '?') + '” — placed anyway (manual override).';
+                rows += '<div class="oa-row"><div class="oa-where">' + esc(where) + '</div>' +
+                        '<div class="oa-why">' + esc(why) + '</div></div>';
+            });
+            bodyHtml = '<div class="oa-body">' + rows + '</div>' +
+                '<div class="oa-foot">Overrides win by design. To clear a warning: remove the override, or grant the division access to the field in Facilities.</div>';
+        }
+        wrap.innerHTML = '<div class="oa-panel">' + head + bodyHtml + '</div>';
+        wrap.querySelector('.oa-min').addEventListener('click', function (ev) { ev.stopPropagation(); _oaOpen = !_oaOpen; renderOA(); });
+        wrap.querySelector('.oa-close').addEventListener('click', function (ev) { ev.stopPropagation(); _oa = []; renderOA(); });
+        wrap.querySelector('.oa-head').addEventListener('click', function () { _oaOpen = !_oaOpen; renderOA(); });
+    }
+
+    function onOverrideAccess(e) {
+        var d = (e && e.detail) || {};
+        _oa = Array.isArray(d.items) ? d.items.slice() : [];
+        _oaOpen = true;   // always surface expanded — never silent
+        renderOA();
+    }
+
+    window.addEventListener('campistry-override-access-warnings', onOverrideAccess);
+    document.addEventListener('campistry-override-access-warnings', onOverrideAccess);
+    window.__showOverrideAccessWarning = function () { renderOA(); };
 })();

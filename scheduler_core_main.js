@@ -2345,6 +2345,55 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log(`[BunkOverride] Processed ${bunkOverrides.length} overrides`);
 
         // =========================================================================
+        // ★ Risk #2 (Day 28 — "warn but allow", user decision 2026-06-01):
+        //   Bunk overrides intentionally BYPASS field access restrictions (the
+        //   user is the boss), but a restricted placement must never be SILENT.
+        //   Scan the just-placed _bunkOverride blocks against each field's
+        //   accessRestrictions (mirrors the solver's hard check in
+        //   total_solver_engine.calculatePenaltyCost + scheduler_core_utils
+        //   canBlockFit) and emit a NON-BLOCKING heads-up consumed by
+        //   coverage_warning.js. Placement is unchanged — this only reports.
+        //   Fires every manual gen (empty payload clears stale warnings).
+        // =========================================================================
+        try {
+            const _oaProps = (typeof activityProperties !== 'undefined' && activityProperties) || window.activityProperties || {};
+            const _oaViolates = (fieldName, divName, bunk) => {
+                if (!fieldName || !divName) return false;
+                const ar = (_oaProps[fieldName] || {}).accessRestrictions;
+                if (!ar || ar.enabled !== true) return false;
+                const divs = ar.divisions || {};
+                // division allow-list (dual-key: string "3" or original 3) — mirrors solver
+                if (!(String(divName) in divs) && !(divName in divs)) return true;
+                const rule = (String(divName) in divs) ? divs[String(divName)] : divs[divName];
+                if (Array.isArray(rule) && rule.length > 0) {
+                    const bs = String(bunk), bn = parseInt(bunk);
+                    if (!rule.some(b => String(b) === bs || parseInt(b) === bn)) return true;
+                }
+                return false;
+            };
+            const _bunkDivOf = {};
+            Object.keys(divisions).forEach(dn => ((divisions[dn] || {}).bunks || []).forEach(b => { _bunkDivOf[String(b)] = dn; }));
+            const _oaWarn = [];
+            const _seenOA = {};
+            Object.keys(window.scheduleAssignments || {}).forEach(bk => {
+                (window.scheduleAssignments[bk] || []).forEach(s => {
+                    if (!s || s._bunkOverride !== true || s.continuation) return;
+                    if (s._isTrip || s._zone === 'offsite') return; // trips are off-site — no field access
+                    const fld = s.field;
+                    if (!fld || fld === 'Free') return;
+                    const dn = _bunkDivOf[String(bk)];
+                    if (!_oaViolates(fld, dn, bk)) return;
+                    const k = bk + '|' + fld + '|' + (s._startMin == null ? '' : s._startMin);
+                    if (_seenOA[k]) return; _seenOA[k] = 1;
+                    _oaWarn.push({ bunk: bk, division: dn, field: fld, activity: s._activity || fld, startMin: s._startMin, endMin: s._endMin });
+                });
+            });
+            window._overrideAccessWarnings = _oaWarn;
+            window.dispatchEvent(new CustomEvent('campistry-override-access-warnings', { detail: { count: _oaWarn.length, items: _oaWarn } }));
+            if (_oaWarn.length) console.warn('[BunkOverride] ⚠️ ' + _oaWarn.length + ' override(s) placed on access-restricted field(s) — ALLOWED (warn-but-allow). See heads-up panel.');
+        } catch (_eOA) { console.warn('[BunkOverride] access-warning scan error: ' + (_eOA && _eOA.message)); }
+
+        // =========================================================================
         // STEP 2.4: Daily Trips (off-campus) — honor campDailyTrips like AUTO does
         // =========================================================================
         //   Trips entered via the Trips popover are stored per-date in
