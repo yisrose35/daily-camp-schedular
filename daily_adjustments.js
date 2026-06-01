@@ -3926,27 +3926,42 @@ let tmpl = assignments[today] || assignments['Default'];
   const dateKey = window.currentScheduleDate || '';
   const dayLayerKey = `campAutoLayers_${dateKey}`;
   let loaded = false;
+  // ★ #10 audit fix: newest-wins between local + cloud (multi-device staleness).
+  //   localStorage normally wins (protects fresh same-session edits), but if the
+  //   CLOUD copy is STRICTLY newer (another device/scheduler saved it) prefer it,
+  //   so a stale local copy can't shadow a teammate's update. Backward-compatible:
+  //   with no timestamps (old data) _cloudIsNewer is false → unchanged local-first.
+  let _cloudIsNewer = false;
   try {
-    const stored = localStorage.getItem(dayLayerKey);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed && Object.keys(parsed).length > 0) {
-        daAutoLayers = parsed;
-        loaded = true;
-        console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+    const _lTs = localStorage.getItem(`campAutoLayers_ts_${dateKey}`) || null;
+    const _cTs = (g.app1?.dailyAutoLayersTs || {})[dateKey] || null;
+    _cloudIsNewer = !!_cTs && (!_lTs || _cTs > _lTs);
+  } catch (e) {}
+  if (!_cloudIsNewer) {
+    try {
+      const stored = localStorage.getItem(dayLayerKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && Object.keys(parsed).length > 0) {
+          daAutoLayers = parsed;
+          loaded = true;
+          console.log('[DailyAdj] ✅ Loaded daily auto layers from localStorage for', dateKey);
+        }
       }
-    }
-  } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
-  
-  // Priority 2: Day-specific saved layers (cloud)
+    } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from localStorage:', e); }
+  }
+
+  // Priority 2: Day-specific saved layers (cloud) — also the winner when cloud is newer (#10)
   if (!loaded) {
     try {
       const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
       if (cloudLayers && Object.keys(cloudLayers).length > 0) {
         daAutoLayers = JSON.parse(JSON.stringify(cloudLayers));
         localStorage.setItem(dayLayerKey, JSON.stringify(daAutoLayers));
+        // Sync local recency stamp to the cloud's so we don't re-prefer cloud forever.
+        try { const _cTs2 = (g.app1?.dailyAutoLayersTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campAutoLayers_ts_${dateKey}`, _cTs2); } catch (e) {}
         loaded = true;
-        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey);
+        console.log('[DailyAdj] ✅ Loaded daily auto layers from CLOUD for', dateKey + (_cloudIsNewer ? ' (cloud newer — #10)' : ''));
       }
     } catch (e) { console.warn('[DailyAdj] Failed to load daily auto layers from cloud:', e); }
   }
@@ -3983,13 +3998,17 @@ function saveDAAutoLayers() {
   }
   if (!daAutoLayers || typeof daAutoLayers !== 'object') return;
   const dateKey = window.currentScheduleDate;
+  const _savedAtTs = new Date().toISOString();   // ★ #10: newest-wins recency stamp (local + cloud)
   try {
     localStorage.setItem(`campAutoLayers_${dateKey}`, JSON.stringify(daAutoLayers));
+    localStorage.setItem(`campAutoLayers_ts_${dateKey}`, _savedAtTs);
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to localStorage:', e); }
   try {
     if (!masterSettings.app1) masterSettings.app1 = {};
     if (!masterSettings.app1.dailyAutoLayers) masterSettings.app1.dailyAutoLayers = {};
+    if (!masterSettings.app1.dailyAutoLayersTs) masterSettings.app1.dailyAutoLayersTs = {};
     masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
+    masterSettings.app1.dailyAutoLayersTs[dateKey] = _savedAtTs;   // ★ #10
     window.saveGlobalSettings?.('app1', masterSettings.app1);
     window.forceSyncToCloud?.();
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
