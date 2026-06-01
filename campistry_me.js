@@ -2050,7 +2050,8 @@ function _parentPortalUrl(token){
 function generateParentInvite(enrollId){
     var e=enrollments[enrollId]; if(!e)return;
     var parentEmail=e.parentEmail||e.parent1Email||'';
-    var parentName=e.parentName||'';
+    var r0=roster[e.camperName]||{};
+    var parentName=e.parentName||e.parent1Name||r0.parent1Name||'';
     if(!parentEmail&&!parentName)return;
 
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
@@ -2072,14 +2073,14 @@ function generateParentInvite(enrollId){
     familyEnrollments.forEach(function(en){
         var r=roster[en.camperName]||{};
         camperData[en.camperName]={
-            name:en.camperName,dob:en.dob||'',gender:en.gender||'',
+            name:en.camperName,dob:en.dob||r.dob||'',gender:en.gender||r.gender||'',
             division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
             session:en.session||'',
-            allergies:en.allergies||'',medications:en.medications||'',dietary:en.dietary||'',
-            doctor:en.doctor||'',doctorPhone:en.doctorPhone||'',
-            insurance:en.insurance||'',policyNum:en.policyNum||'',
-            emergencyName:en.emergencyName||'',emergencyPhone:en.emergencyPhone||'',emergencyRel:en.emergencyRel||'',
-            parent2Name:en.parent2Name||'',parent2Phone:en.parent2Phone||''
+            allergies:en.allergies||r.allergies||'',medications:en.medications||r.medications||'',dietary:en.dietary||r.dietary||'',
+            doctor:en.doctor||r.doctor||'',doctorPhone:en.doctorPhone||r.doctorPhone||'',
+            insurance:en.insurance||r.insurance||'',policyNum:en.policyNum||r.policyNum||'',
+            emergencyName:en.emergencyName||r.emergencyName||'',emergencyPhone:en.emergencyPhone||r.emergencyPhone||'',emergencyRel:en.emergencyRel||r.emergencyRel||'',
+            parent2Name:en.parent2Name||r.parent2Name||r.parent1Name||'',parent2Phone:en.parent2Phone||r.parent2Phone||r.parent1Phone||''
         };
     });
 
