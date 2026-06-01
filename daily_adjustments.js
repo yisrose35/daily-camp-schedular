@@ -4047,23 +4047,37 @@ function saveDAAutoLayers() {
   const dateKey = window.currentScheduleDate;
   console.log('[DailyAdj] loadDailySkeleton called for date:', dateKey);
   
-  // Priority 1: localStorage
+  // ★ #10 (manual twin): newest-wins between local + cloud. Local normally wins
+  //   (protects fresh same-session edits), but if the CLOUD skeleton is STRICTLY
+  //   newer (another device/scheduler saved it) prefer cloud so a stale local copy
+  //   can't shadow a teammate's update. Backward-compatible: no timestamps →
+  //   _cloudIsNewer is false → unchanged local-first.
+  let _cloudIsNewer = false;
   try {
-    const storageKey = `campManualSkeleton_${dateKey}`;
-    const stored = localStorage.getItem(storageKey);
-    if (stored) {
-      const parsed = JSON.parse(stored);
-      if (parsed && parsed.length > 0) {
-        dailyOverrideSkeleton = parsed;
-        window.dailyOverrideSkeleton = dailyOverrideSkeleton;
-        const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
-        if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
-        console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
-        return;
+    const _lTs = localStorage.getItem(`campManualSkeleton_ts_${dateKey}`) || null;
+    const _cTs = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey] || null;
+    _cloudIsNewer = !!_cTs && (!_lTs || _cTs > _lTs);
+  } catch (e) {}
+
+  // Priority 1: localStorage (unless cloud is newer — #10)
+  if (!_cloudIsNewer) {
+    try {
+      const storageKey = `campManualSkeleton_${dateKey}`;
+      const stored = localStorage.getItem(storageKey);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && parsed.length > 0) {
+          dailyOverrideSkeleton = parsed;
+          window.dailyOverrideSkeleton = dailyOverrideSkeleton;
+          const savedOrder = JSON.parse(localStorage.getItem(`campManualColumnOrder_${dateKey}`) || 'null');
+          if (Array.isArray(savedOrder) && savedOrder.length > 0) saveColumnOrder(savedOrder);
+          console.log(`[DailyAdj] ✅ Loaded ${dailyOverrideSkeleton.length} events from localStorage`);
+          return;
+        }
       }
+    } catch (e) {
+      console.warn('[DailyAdj] Failed to load from localStorage:', e);
     }
-  } catch (e) {
-    console.warn('[DailyAdj] Failed to load from localStorage:', e);
   }
 
   // Priority 2: Cloud
@@ -4074,6 +4088,8 @@ function saveDAAutoLayers() {
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+      // ★ #10: sync local recency stamp to the cloud's so we don't re-prefer cloud forever
+      try { const _cTs2 = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
       const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
       if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
         saveColumnOrder(cloudOrder);
@@ -4123,12 +4139,14 @@ function saveDailySkeleton() {
   }
   
   const dateKey = window.currentScheduleDate;
+  const _skelTs = new Date().toISOString();   // ★ #10 (manual twin): newest-wins recency stamp (local + cloud)
   console.log(`[DailyAdj] saveDailySkeleton called with ${dailyOverrideSkeleton.length} events for ${dateKey}`);
-  
+
   // Save to localStorage
   try {
     const storageKey = `campManualSkeleton_${dateKey}`;
     localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
+    localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _skelTs);
     localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(getColumnOrder()));
   } catch (e) {
     console.error('[DailyAdj] Failed to save to localStorage:', e);
@@ -4145,6 +4163,8 @@ function saveDailySkeleton() {
       masterSettings.app1.dailySkeletons = {};
     }
     masterSettings.app1.dailySkeletons[dateKey] = dailyOverrideSkeleton;
+    if (!masterSettings.app1.dailySkeletonsTs) masterSettings.app1.dailySkeletonsTs = {};
+    masterSettings.app1.dailySkeletonsTs[dateKey] = _skelTs;   // ★ #10 (manual twin)
     if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
     masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
     if (typeof window.saveGlobalSettings === 'function') {
