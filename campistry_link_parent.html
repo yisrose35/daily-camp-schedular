@@ -69,10 +69,10 @@
         <a href="#" class="lk-logo">
             <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
         </a>
-        <span class="lk-camp-name">Camp Sunshine</span>
+        <span class="lk-camp-name" id="headerCampName"></span>
     </div>
     <div class="lk-header-right">
-        <div class="lk-avatar" id="parentAvatar" onclick="nav('settings')">SM</div>
+        <div class="lk-avatar" id="parentAvatar" onclick="nav('settings')"></div>
     </div>
 </header>
 
@@ -88,7 +88,7 @@
         <button class="lk-nav-item" data-page="canteen" onclick="nav('canteen')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/></svg> Canteen</button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Communication</div>
-        <button class="lk-nav-item" data-page="messages" onclick="nav('messages')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Messages <span class="nav-count" id="navMsgCount">3</span></button>
+        <button class="lk-nav-item" data-page="messages" onclick="nav('messages')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg> Messages <span class="nav-count" id="navMsgCount" style="display:none;"></span></button>
         <div class="lk-nav-divider"></div>
         <div class="lk-nav-label">Camp Life</div>
         <button class="lk-nav-item" data-page="schedule" onclick="nav('schedule')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> Schedule</button>
@@ -123,19 +123,19 @@
     <div class="lk-hero">
         <div class="lk-hero-left">
             <p class="lk-hero-greeting" id="greeting">Good morning</p>
-            <h1 class="lk-hero-title">Welcome back, <span id="heroParentName">Sarah</span></h1>
-            <p class="lk-hero-sub" id="homeCampName">Camp Sunshine</p>
+            <h1 class="lk-hero-title">Welcome back, <span id="heroParentName"></span></h1>
+            <p class="lk-hero-sub" id="homeCampName"></p>
         </div>
     </div>
     <div class="lk-home-grid">
         <button class="lk-home-tile" onclick="nav('messages')">
-            <span class="lk-home-tile-badge" id="homeMsgBadge">3</span>
+            <span class="lk-home-tile-badge" id="homeMsgBadge" style="display:none;"></span>
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Messages</div>
-                <div class="lk-home-tile-sub" id="homeMsgSub">3 unread</div>
+                <div class="lk-home-tile-sub" id="homeMsgSub"></div>
             </div>
         </button>
         <button class="lk-home-tile" onclick="nav('canteen')">
@@ -144,7 +144,7 @@
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Canteen</div>
-                <div class="lk-home-tile-sub" id="homeCanteenSub">$47.50 balance</div>
+                <div class="lk-home-tile-sub" id="homeCanteenSub"></div>
             </div>
         </button>
         <button class="lk-home-tile" onclick="nav('photos')">
@@ -181,7 +181,7 @@
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">My Children</div>
-                <div class="lk-home-tile-sub" id="homeKidsSub">2 enrolled</div>
+                <div class="lk-home-tile-sub" id="homeKidsSub"></div>
             </div>
         </button>
     </div>
@@ -207,13 +207,7 @@
     <div class="lk-page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
     <div><h1>Payments</h1><p>Your tuition and payment history</p></div>
 </div>
-    <div class="lk-card"><div class="lk-card-head"><h2>Tuition Progress</h2><span style="font-size:.82rem;font-weight:700;color:var(--green-600);">75% Paid</span></div>
-        <div class="progress"><div class="progress-fill" style="width:75%"></div></div>
-        <div style="display:flex;justify-content:space-between;font-size:.76rem;color:var(--text-muted);margin-top:6px;"><span>$4,200 of $5,600</span><span>$1,400 remaining</span></div>
-    </div>
-    <!-- TODO: Wire to Stripe payment integration -->
     <div class="lk-card" style="text-align:center;padding:28px;">
-        <p style="font-size:.85rem;color:var(--text-muted);margin-bottom:14px;">Next: <strong style="color:var(--text-primary);">$1,400</strong> due <strong>July 1</strong></p>
         <div style="background:var(--slate-50);border:1px dashed var(--slate-300);border-radius:var(--radius-md);padding:14px;font-size:.8rem;color:var(--slate-400);line-height:1.6;">
             Online payments coming soon. To make a payment, contact your camp office directly.
         </div>
@@ -304,7 +298,7 @@
             <h2>Daily Schedule</h2>
             <div style="display:flex;align-items:center;gap:6px;">
                 <button class="lk-date-nav-btn" onclick="changeSchedDate(-1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg></button>
-                <span id="schedDateLabel" style="font-size:.82rem;font-weight:600;color:var(--slate-700);min-width:130px;text-align:center;">Monday, July 7</span>
+                <span id="schedDateLabel" style="font-size:.82rem;font-weight:600;color:var(--slate-700);min-width:130px;text-align:center;"></span>
                 <button class="lk-date-nav-btn" onclick="changeSchedDate(1)"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="9 18 15 12 9 6"/></svg></button>
             </div>
         </div>
@@ -320,63 +314,19 @@
 </div>
 
     <!-- Digital forms: fill out in the app -->
-    <div class="lk-card"><div class="lk-card-head"><h2>Complete Online</h2><span class="badge badge-warn">2 pending</span></div>
+    <div class="lk-card"><div class="lk-card-head"><h2>Complete Online</h2><span class="badge badge-warn" id="formsOnlineBadge" style="display:none;"></span></div>
         <p style="font-size:.78rem;color:var(--text-muted);margin-bottom:10px;">These forms can be filled out directly in the app.</p>
-        <div class="doc-item">
-            <div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg></div>
-            <div class="doc-info"><h4>Medical Update Form</h4><p>Eli Miller · Due June 15</p></div>
-            <button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button>
-        </div>
-        <div class="doc-item">
-            <div class="doc-icon" style="background:var(--product-50);color:var(--product-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg></div>
-            <div class="doc-info"><h4>Photo Release Consent</h4><p>Mia Miller · Due June 20</p></div>
-            <button class="btn btn-primary btn-sm" onclick="toast('Form opening...')">Complete</button>
-        </div>
+        <div id="formsOnlineList"></div>
     </div>
 
     <!-- Print & Return forms -->
     <div class="lk-card">
-        <div class="lk-card-head"><h2>Print &amp; Return</h2><span class="badge badge-warn">2 pending</span></div>
+        <div class="lk-card-head"><h2>Print &amp; Return</h2><span class="badge badge-warn" id="printReturnBadge" style="display:none;"></span></div>
         <div style="background:var(--amber-50);border:1px solid var(--amber-200);border-radius:var(--radius-md);padding:10px 14px;margin-bottom:14px;font-size:.78rem;color:var(--amber-700);display:flex;gap:8px;align-items:flex-start;">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:1px;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
             <span>Download the blank form, print it, fill it by hand, then send it back as a photo or PDF using the Upload button.</span>
         </div>
-        <div id="printReturnList">
-            <div class="doc-item" id="pr-waiver-eli">
-                <div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div>
-                <div class="doc-info">
-                    <h4>General Liability Waiver</h4>
-                    <p>Eli Miller · Due June 15 · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p>
-                </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn btn-secondary btn-sm" onclick="downloadBlankForm('waiver-eli')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>
-                    <label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload
-                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn('waiver-eli','Eli Miller','General Liability Waiver',this)">
-                    </label>
-                </div>
-            </div>
-            <div class="doc-item" id="pr-waiver-mia">
-                <div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div>
-                <div class="doc-info">
-                    <h4>General Liability Waiver</h4>
-                    <p>Mia Miller · Due June 15 · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p>
-                </div>
-                <div style="display:flex;gap:6px;">
-                    <button class="btn btn-secondary btn-sm" onclick="downloadBlankForm('waiver-mia')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button>
-                    <label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload
-                        <input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn('waiver-mia','Mia Miller','General Liability Waiver',this)">
-                    </label>
-                </div>
-            </div>
-            <div class="doc-item" id="pr-trip-eli" style="opacity:.6;">
-                <div class="doc-icon" style="background:var(--green-50);color:var(--green-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></div>
-                <div class="doc-info">
-                    <h4>Trip Permission Slip</h4>
-                    <p>Eli Miller · <span class="badge badge-ok" style="font-size:.62rem;">Submitted Jun 2</span></p>
-                </div>
-                <button class="btn btn-ghost btn-sm" onclick="toast('Re-uploading...')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>
-            </div>
-        </div>
+        <div id="printReturnList"></div>
     </div>
 
     <!-- Camp Documents: download only -->
@@ -404,7 +354,7 @@
         <div class="lk-ref-photo-grid" id="refPhotoGrid"></div>
     </div>
 
-    <div class="lk-tabs"><button class="lk-tab active">All Photos</button><button class="lk-tab" id="photoTabEli">Eli's Photos</button><button class="lk-tab" id="photoTabMia">Mia's Photos</button></div>
+    <div class="lk-tabs" id="photoTabs"><button class="lk-tab active" onclick="this.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});this.classList.add('active')">All Photos</button></div>
     <div class="lk-card"><div class="lk-card-head"><h2>This Week</h2><span style="font-size:.76rem;color:var(--text-muted);">12 new</span></div>
         <div id="photoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:8px;"></div>
     </div>
@@ -526,51 +476,16 @@
     <div class="lk-card">
         <div class="lk-card-head">
             <h2>Nurse Visit Log</h2>
-            <span class="badge badge-neutral" id="healthCamperBadge">Eli Miller · #0001</span>
+            <span class="badge badge-neutral" id="healthCamperBadge"></span>
         </div>
         <div id="nurseLog">
-            <div class="lk-health-visit">
-                <div class="lk-health-visit-dot attention"></div>
-                <div class="lk-health-visit-body">
-                    <div class="lk-health-visit-title">Mild sunburn — shoulders</div>
-                    <div class="lk-health-visit-note">Applied aloe vera and a cool compress. Child was comfortable and returned to activity. SPF 50+ recommended going forward.</div>
-                    <div class="lk-health-visit-meta">
-                        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 2:15 PM</span>
-                        <span>Nurse Rachel</span>
-                        <span class="badge badge-warn" style="font-size:.6rem;padding:2px 7px;">Attention</span>
-                    </div>
-                </div>
-            </div>
-            <div class="lk-health-visit">
-                <div class="lk-health-visit-dot routine"></div>
-                <div class="lk-health-visit-body">
-                    <div class="lk-health-visit-title">Daily medication administered</div>
-                    <div class="lk-health-visit-note">Morning medications given as per parent instructions. Child cooperative and in good spirits.</div>
-                    <div class="lk-health-visit-meta">
-                        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Today, 8:45 AM</span>
-                        <span>Nurse Rachel</span>
-                        <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
-                    </div>
-                </div>
-            </div>
-            <div class="lk-health-visit">
-                <div class="lk-health-visit-dot routine"></div>
-                <div class="lk-health-visit-body">
-                    <div class="lk-health-visit-title">Scraped knee during free play</div>
-                    <div class="lk-health-visit-note">Small scrape on left knee cleaned and bandaged. No further intervention needed.</div>
-                    <div class="lk-health-visit-meta">
-                        <span><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Yesterday, 4:20 PM</span>
-                        <span>Nurse Rachel</span>
-                        <span class="badge badge-ok" style="font-size:.6rem;padding:2px 7px;">Routine</span>
-                    </div>
-                </div>
-            </div>
+            <div class="lk-empty" style="padding:24px 0;"><h3>No nurse visits on record</h3></div>
         </div>
     </div>
 
     <!-- Health documents -->
     <div class="lk-card">
-        <div class="lk-card-head"><h2>Health Documents</h2><span class="badge badge-neutral" id="healthDocBadge">Eli Miller · #0001</span></div>
+        <div class="lk-card-head"><h2>Health Documents</h2><span class="badge badge-neutral" id="healthDocBadge"></span></div>
         <p style="font-size:.8rem;color:var(--slate-400);margin-bottom:14px;">Upload forms, allergy action plans, insurance cards, and any other documentation the nurse should have on file.</p>
 
         <!-- Upload zone -->
@@ -584,24 +499,7 @@
         </label>
 
         <!-- Existing docs -->
-        <div id="healthDocList">
-            <div class="lk-health-doc">
-                <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></div>
-                <div class="lk-health-doc-info">
-                    <div class="lk-health-doc-name">Allergy Action Plan — Tree Nuts</div>
-                    <div class="lk-health-doc-meta">Uploaded Jun 1 · PDF · Camper #0001 / Parent #0001</div>
-                </div>
-                <button class="btn btn-secondary btn-sm">View</button>
-            </div>
-            <div class="lk-health-doc">
-                <div class="lk-health-doc-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="1" y="4" width="22" height="16" rx="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg></div>
-                <div class="lk-health-doc-info">
-                    <div class="lk-health-doc-name">Insurance Card — Blue Cross</div>
-                    <div class="lk-health-doc-meta">Uploaded May 28 · Image · Camper #0001 / Parent #0001</div>
-                </div>
-                <button class="btn btn-secondary btn-sm">View</button>
-            </div>
-        </div>
+        <div id="healthDocList"></div>
     </div>
 </div>
 
@@ -612,10 +510,13 @@
     <div><h1>Settings</h1><p>Manage your account and preferences</p></div>
 </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Account</h2></div>
-        <div class="lk-field"><label>Name</label><input type="text" class="lk-input" value="Sarah Miller"></div>
-        <div class="lk-field"><label>Email</label><input type="email" class="lk-input" value="sarah.miller@email.com"></div>
-        <div class="lk-field"><label>Phone</label><input type="tel" class="lk-input" value="(555) 234-5678"></div>
-        <button class="btn btn-primary btn-sm" onclick="toast('Saved!')">Save Changes</button>
+        <div class="lk-field"><label>Name</label><input type="text" class="lk-input" id="settingsName" value="" placeholder="Your name"></div>
+        <div class="lk-field"><label>Email</label><input type="email" class="lk-input" id="settingsEmail" value="" placeholder="your@email.com"></div>
+        <div class="lk-field"><label>Phone</label><input type="tel" class="lk-input" id="settingsPhone" value="" placeholder="(555) 000-0000"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:4px;">
+            <button class="btn btn-primary btn-sm" onclick="toast('Saved!')">Save Changes</button>
+            <button class="btn btn-secondary btn-sm" onclick="parentSignOut && parentSignOut()">Sign Out</button>
+        </div>
     </div>
     <div class="lk-card"><div class="lk-card-head"><h2>Notifications</h2></div>
         <div style="display:flex;flex-direction:column;gap:12px;">
@@ -668,46 +569,12 @@
 // Campistry Link — Parent Portal v2.0 (scoped to parent's children only)
 // =============================================================================
 
-var parent = { name: 'Sarah Miller', email: 'sarah.miller@email.com' };
-
-var children = [
-    { id:'eli', name:'Eli Miller', age:10, initials:'EM', division:'Juniors', grade:'3rd Grade', bunk:'Bunk 22', counselor:'Jake R.', session:'Full Summer 2026', allergies:'Tree nuts', medications:'None', dietary:'Kosher', doctor:'Dr. Sarah Cohen', doctorPhone:'(555) 111-2222', insurance:'Blue Cross', policyNum:'BCB-88234', canteenBalance:32.50, dailyLimit:5, emergencyContacts:[{name:'David Miller',rel:'Father',phone:'(555) 234-5679'},{name:'Ruth Miller',rel:'Grandmother',phone:'(555) 987-6543'}] },
-    { id:'mia', name:'Mia Miller', age:7, initials:'MM', division:'Juniors', grade:'1st Grade', bunk:'Bunk 4', counselor:'Rachel T.', session:'Full Summer 2026', allergies:'None', medications:'None', dietary:'Kosher', doctor:'Dr. Sarah Cohen', doctorPhone:'(555) 111-2222', insurance:'Blue Cross', policyNum:'BCB-88234', canteenBalance:15.00, dailyLimit:3, emergencyContacts:[{name:'David Miller',rel:'Father',phone:'(555) 234-5679'},{name:'Ruth Miller',rel:'Grandmother',phone:'(555) 987-6543'}] }
-];
-
-var messages = [
-    {id:1,type:'announcement',from:'Camp Director',subject:'Visiting Day Reminder — July 15',preview:'Dear parents, visiting day is next Tuesday...',body:'<p>Dear parents,</p><p>Visiting day is next Tuesday, July 15th. Please arrive between 10:00-10:30 AM via the main gate.</p><p>Bring valid photo ID, sunscreen, and any care packages. Please depart by 4:00 PM.</p><p>— Rabbi Goldstein, Camp Director</p>',date:'2h ago',read:false},
-    {id:2,type:'direct',from:'Jake R. (Head Counselor)',subject:'Eli had an amazing day!',preview:'Eli scored the winning run in today\'s baseball game...',body:'<p>Hi Sarah,</p><p>Eli scored the winning run in today\'s baseball game! He was thrilled and his bunkmates were cheering. He\'s settling in really well.</p><p>— Jake R.</p>',date:'5h ago',read:false},
-    {id:3,type:'announcement',from:'Camp Office',subject:'Menu Change — Thursday',preview:'Thursday lunch: pasta instead of chicken...',body:'<p>Due to a delivery change, Thursday\'s lunch will be pasta marinara. All dietary accommodations still available.</p><p>— Kitchen Staff</p>',date:'1d ago',read:false},
-    {id:4,type:'direct',from:'Nurse Station',subject:'Mia\'s sunburn update',preview:'Mia got a mild sunburn. Applied aloe, she\'s fine...',body:'<p>Hi Sarah,</p><p>Mia got a mild sunburn on her shoulders during swim. We applied aloe and a cold compress. She\'s comfortable. Consider sending extra SPF 50+ sunscreen.</p><p>— Nurse Team</p>',date:'2d ago',read:true},
-    {id:5,type:'announcement',from:'Camp Director',subject:'Color War dates!',preview:'Color War: July 22-24. Teams announced morning of the 22nd...',body:'<p>Color War takes place July 22-24! Teams will be announced in a special breakout on the morning of the 22nd.</p><p>— Camp Director</p>',date:'3d ago',read:true}
-];
-
-var payments = [
-    {date:'Jun 15',desc:'Tuition — 2nd Installment',amt:'$1,400',status:'Paid'},{date:'Jun 1',desc:'Tuition — 1st Installment',amt:'$2,800',status:'Paid'},
-    {date:'May 15',desc:'Registration — Eli',amt:'$200',status:'Paid'},{date:'May 15',desc:'Registration — Mia',amt:'$200',status:'Paid'},
-    {date:'Jun 20',desc:'Canteen Deposit — Eli',amt:'$50',status:'Paid'},{date:'Jun 20',desc:'Canteen Deposit — Mia',amt:'$25',status:'Paid'}
-];
-
-var canteenTxByChild = {
-    eli: [
-        {name:'Ices',date:'Today 2:30 PM',amt:-1.50},{name:'Candy Bar',date:'Today 12:15 PM',amt:-2.00},
-        {name:'Chips',date:'Yesterday',amt:-1.50},{name:'Deposit',date:'Jun 20',amt:50.00},
-        {name:'Gatorade',date:'Jun 28',amt:-2.50},{name:'Pretzels',date:'Jun 27',amt:-1.00}
-    ],
-    mia: [
-        {name:'Ices',date:'Today 1:15 PM',amt:-1.50},{name:'Fruit Snacks',date:'Yesterday',amt:-1.00},
-        {name:'Lemonade',date:'Jun 29',amt:-2.00},{name:'Deposit',date:'Jun 20',amt:25.00}
-    ]
-};
-
-var schedule = [
-    {time:'8:30',event:'Lineup',loc:'Main Field',color:'#94A3B8'},{time:'9:00',event:'Baseball',loc:'Diamond 2',color:'#EF4444'},
-    {time:'10:00',event:'Swim',loc:'Pool A',color:'#3B82F6'},{time:'11:00',event:'Basketball',loc:'Court 1',color:'#F59E0B'},
-    {time:'12:00',event:'Lunch',loc:'Dining Hall',color:'#22C55E'},{time:'1:00',event:'Rest Hour',loc:'Bunk',color:'#8B5CF6'},
-    {time:'2:00',event:'Soccer',loc:'Field 3',color:'#10B981'},{time:'3:00',event:'Canteen',loc:'Canteen',color:'#E11D48'},
-    {time:'3:30',event:'Hockey',loc:'Rink',color:'#0EA5E9'},{time:'4:30',event:'Dismissal',loc:'Bus Loop',color:'#64748B'}
-];
+var parent = { name: '', email: '' };
+var children = [];
+var messages = [];
+var payments = [];
+var canteenTxByChild = {};
+var schedule = [];
 
 // NAV
 function nav(p){
@@ -724,59 +591,88 @@ function selAmt(v,b){document.querySelectorAll('.canteen-quick-btn').forEach(fun
 
 // RENDER
 function init(){
-    var h=new Date().getHours();document.getElementById('greeting').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening');document.getElementById('heroParentName').textContent=parent.name.split(' ')[0];
-    document.getElementById('parentAvatar').textContent=parent.name.split(' ').map(function(n){return n[0]}).join('');
+    var h=new Date().getHours();
+    document.getElementById('greeting').textContent=(h<12?'Good morning':h<17?'Good afternoon':'Good evening');
+    document.getElementById('heroParentName').textContent=parent.name.split(' ')[0]||'';
+    document.getElementById('parentAvatar').textContent=parent.name.split(' ').map(function(n){return n[0]||''}).join('').slice(0,2)||'?';
+
+    // Settings fields
+    var sn=document.getElementById('settingsName');if(sn)sn.value=parent.name;
+    var se=document.getElementById('settingsEmail');if(se)se.value=parent.email;
+
     var unread=messages.filter(function(m){return!m.read}).length;
-    document.getElementById('unreadBadge').textContent=unread;document.getElementById('navMsgCount').textContent=unread;
-    var bal=(children.reduce(function(s,c){return s+c.canteenBalance},0)).toFixed(2);
+    var nm=document.getElementById('navMsgCount');if(nm){nm.textContent=unread;nm.style.display=unread?'':'none';}
+    var bal=children.length?(children.reduce(function(s,c){return s+(c.canteenBalance||0)},0)).toFixed(2):null;
 
     // Home tile subtitles
     var msgSub=document.getElementById('homeMsgSub');if(msgSub)msgSub.textContent=unread?unread+' unread':'All caught up';
     var msgBadge=document.getElementById('homeMsgBadge');if(msgBadge){msgBadge.textContent=unread;msgBadge.style.display=unread?'flex':'none';}
-    var canteenSub=document.getElementById('homeCanteenSub');if(canteenSub)canteenSub.textContent='$'+bal;
-    var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length+' enrolled';
+    var canteenSub=document.getElementById('homeCanteenSub');if(canteenSub)canteenSub.textContent=bal!==null?'$'+bal:'—';
+    var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length?(children.length+' enrolled'):'—';
 
     // Home messages
-    var hm=document.getElementById('homeMessages');hm.innerHTML='';
-    messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg('+m.id+')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
+    var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg('+m.id+')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}
 
-    // Children
+    // Children list
     var cl=document.getElementById('childrenList');cl.innerHTML='';
-    children.forEach(function(c){cl.innerHTML+='<div class="lk-child-card" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">Age '+c.age+' · '+c.division+' · '+c.bunk+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});
+    if(children.length){children.forEach(function(c){cl.innerHTML+='<div class="lk-child-card" onclick="showChild(\''+c.id+'\')"><div class="lk-child-avatar">'+c.initials+'</div><div class="lk-child-info"><div class="lk-child-name">'+c.name+'</div><div class="lk-child-meta">'+[c.age?'Age '+c.age:'',c.division,c.bunk].filter(Boolean).join(' · ')+'</div></div><span class="badge badge-neutral">'+c.grade+'</span><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--slate-300)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg></div>';});}
+    else{cl.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}
 
     // Payments
-    var pt=document.getElementById('payTable');pt.innerHTML='';
-    payments.forEach(function(p){pt.innerHTML+='<tr><td>'+p.date+'</td><td>'+p.desc+'</td><td style="font-weight:700;">'+p.amt+'</td><td><span class="badge badge-ok">'+p.status+'</span></td></tr>';});
+    var pt=document.getElementById('payTable');if(pt){pt.innerHTML='';
+    if(payments.length){payments.forEach(function(p){pt.innerHTML+='<tr><td>'+p.date+'</td><td>'+p.desc+'</td><td style="font-weight:700;">'+p.amt+'</td><td><span class="badge badge-ok">'+p.status+'</span></td></tr>';});}
+    else{pt.innerHTML='<tr><td colspan="4" style="text-align:center;color:var(--text-muted);padding:20px;">No payment records</td></tr>';}}
 
-    // Canteen tabs — tx rendering is handled inside switchCanteen
-    var ct=document.getElementById('canteenTabs');ct.innerHTML='';
-    children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});
-    switchCanteen(children[0].id);
+    // Canteen tabs
+    var ct=document.getElementById('canteenTabs');if(ct){ct.innerHTML='';
+    if(children.length){children.forEach(function(c,i){ct.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchCanteen(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchCanteen(children[0].id);}
+    else{var ca=document.getElementById('canteenAmt');if(ca)ca.textContent='$0.00';var tl=document.getElementById('txList');if(tl)tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No canteen accounts yet</h3></div>';}}
+
+    // Schedule date label
+    var today=new Date(schedBaseDateMs+schedDateOffset*86400000);
+    var sl2=document.getElementById('schedDateLabel');if(sl2)sl2.textContent=schedDays[today.getDay()]+', '+schedMonths[today.getMonth()]+' '+today.getDate();
 
     // Schedule tabs
-    var st=document.getElementById('schedTabs');st.innerHTML='';
-    children.forEach(function(c,i){st.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';});
-    var sl=document.getElementById('schedList');sl.innerHTML='';
-    schedule.forEach(function(s){sl.innerHTML+='<div class="sched-item"><span class="sched-time">'+s.time+'</span><div class="sched-dot" style="background:'+s.color+';"></div><div><div class="sched-name">'+s.event+'</div><div class="sched-loc">'+s.loc+'</div></div></div>';});
+    var st=document.getElementById('schedTabs');if(st){st.innerHTML='';children.forEach(function(c,i){st.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="this.closest(\'.lk-tabs\').querySelectorAll(\'.lk-tab\').forEach(function(t){t.classList.remove(\'active\')});this.classList.add(\'active\')">'+c.name.split(' ')[0]+'</button>';});}
+    var sl=document.getElementById('schedList');if(sl){sl.innerHTML='';
+    if(schedule.length){schedule.forEach(function(s){sl.innerHTML+='<div class="sched-item"><span class="sched-time">'+s.time+'</span><div class="sched-dot" style="background:'+s.color+';"></div><div><div class="sched-name">'+s.event+'</div><div class="sched-loc">'+s.loc+'</div></div></div>';});}
+    else{sl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No schedule available yet</h3><p>Your child\'s daily schedule will appear here once camp begins.</p></div>';}}
 
     // Photos — abstract placeholder tiles
-    var pg=document.getElementById('photoGrid');pg.innerHTML='';
+    var pg=document.getElementById('photoGrid');if(pg){pg.innerHTML='';
     var photoBg=['#E0F2FE','#F0FDF4','#FEF9C3','#FAF5FF','#FFF1F2','#ECFDF5','#EFF6FF','#FDF4FF','#FFF7ED','#F0FDF4','#F8FAFC','#FFFBEB'];
     var photoIcon='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-    for(var i=0;i<12;i++){pg.innerHTML+='<div style="aspect-ratio:1;border-radius:var(--radius-md);background:'+photoBg[i%photoBg.length]+';display:flex;align-items:center;justify-content:center;border:1px solid var(--border-subtle);cursor:pointer;">'+photoIcon+'</div>';}
-    document.getElementById('photoTabEli').textContent=children[0].name.split(' ')[0]+"'s Photos";
-    if(children[1])document.getElementById('photoTabMia').textContent=children[1].name.split(' ')[0]+"'s Photos";
+    for(var i=0;i<12;i++){pg.innerHTML+='<div style="aspect-ratio:1;border-radius:var(--radius-md);background:'+photoBg[i%photoBg.length]+';display:flex;align-items:center;justify-content:center;border:1px solid var(--border-subtle);cursor:pointer;">'+photoIcon+'</div>';}}
+
+    // Photo child tabs
+    var photoTabsEl=document.getElementById('photoTabs');if(photoTabsEl){
+        var allBtn=photoTabsEl.querySelector('.lk-tab');
+        photoTabsEl.innerHTML='';if(allBtn)photoTabsEl.appendChild(allBtn);
+        children.forEach(function(c){var b=document.createElement('button');b.className='lk-tab';b.textContent=c.name.split(' ')[0]+"'s Photos";b.onclick=function(){photoTabsEl.querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});b.classList.add('active');};photoTabsEl.appendChild(b);});}
 
     // Emergency
-    var ec=document.getElementById('emergencyCards');ec.innerHTML='';
-    children.forEach(function(c){
-        var contacts='';c.emergencyContacts.forEach(function(e){contacts+='<div class="info-row"><span class="label">'+e.rel+'</span><span class="value">'+e.name+' · <a href="tel:'+e.phone+'" style="color:var(--product-600);text-decoration:none;">'+e.phone+'</a></span></div>';});
-        ec.innerHTML+='<div class="lk-card" style="border-left:4px solid '+(c.allergies!=='None'?'var(--red-500)':'var(--green-500)')+';"><div style="font-size:.95rem;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:10px;"><div style="width:32px;height:32px;border-radius:50%;background:var(--product-50);display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:var(--product-600);">'+c.initials+'</div>'+c.name+'</div><div class="info-row"><span class="label">Allergies</span><span class="value" style="color:'+(c.allergies!=='None'?'var(--red-500)':'')+';">'+c.allergies+'</span></div><div class="info-row"><span class="label">Medications</span><span class="value">'+c.medications+'</span></div><div class="info-row"><span class="label">Dietary</span><span class="value">'+c.dietary+'</span></div><div class="info-row"><span class="label">Doctor</span><span class="value">'+c.doctor+'</span></div><div class="info-row"><span class="label">Insurance</span><span class="value">'+c.insurance+' — '+c.policyNum+'</span></div><div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--slate-200);"><div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Emergency Contacts</div>'+contacts+'</div></div>';
-    });
+    var ec=document.getElementById('emergencyCards');if(ec){ec.innerHTML='';
+    if(children.length){children.forEach(function(c){
+        var contacts='';(c.emergencyContacts||[]).forEach(function(e){contacts+='<div class="info-row"><span class="label">'+e.rel+'</span><span class="value">'+e.name+' · <a href="tel:'+e.phone+'" style="color:var(--product-600);text-decoration:none;">'+e.phone+'</a></span></div>';});
+        ec.innerHTML+='<div class="lk-card" style="border-left:4px solid '+(c.allergies&&c.allergies!=='None'?'var(--red-500)':'var(--green-500)')+';"><div style="font-size:.95rem;font-weight:700;margin-bottom:10px;display:flex;align-items:center;gap:10px;"><div style="width:32px;height:32px;border-radius:50%;background:var(--product-50);display:flex;align-items:center;justify-content:center;font-size:.72rem;font-weight:700;color:var(--product-600);">'+c.initials+'</div>'+c.name+'</div><div class="info-row"><span class="label">Allergies</span><span class="value" style="color:'+(c.allergies&&c.allergies!=='None'?'var(--red-500)':'')+';">'+c.allergies+'</span></div><div class="info-row"><span class="label">Medications</span><span class="value">'+c.medications+'</span></div><div class="info-row"><span class="label">Dietary</span><span class="value">'+c.dietary+'</span></div><div class="info-row"><span class="label">Doctor</span><span class="value">'+c.doctor+'</span></div><div class="info-row"><span class="label">Insurance</span><span class="value">'+c.insurance+(c.policyNum?' — '+c.policyNum:'')+'</span></div>'+(contacts?'<div style="margin-top:10px;padding-top:10px;border-top:1px solid var(--slate-200);"><div style="font-size:.7rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Emergency Contacts</div>'+contacts+'</div>':'')+'</div>';});}
+    else{ec.innerHTML='<div class="lk-empty"><h3>No campers linked yet</h3></div>';}}
 
     // Health tabs
-    var ht=document.getElementById('healthTabs');ht.innerHTML='';
-    children.forEach(function(c,i){ht.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchHealth(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});
+    var ht=document.getElementById('healthTabs');if(ht){ht.innerHTML='';
+    if(children.length){children.forEach(function(c,i){ht.innerHTML+='<button class="lk-tab '+(i===0?'active':'')+'" onclick="switchHealth(\''+c.id+'\',this)">'+c.name.split(' ')[0]+'</button>';});switchHealth(children[0].id);}
+    else{var hb=document.getElementById('healthCamperBadge');if(hb)hb.textContent='';var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent='';}}
+
+    // Forms — online
+    var fol=document.getElementById('formsOnlineList');if(fol){fol.innerHTML='';
+    if(children.length){var docSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+    var stdForms=[{name:'Medical Update Form'},{name:'Photo Release Consent'}];
+    children.forEach(function(c){stdForms.forEach(function(f){fol.innerHTML+='<div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);">'+docSvg+'</div><div class="doc-info"><h4>'+f.name+'</h4><p>'+c.name.split(' ')[0]+'</p></div><button class="btn btn-primary btn-sm" onclick="toast(\'Coming soon!\')">Complete</button></div>';});});}
+    else{fol.innerHTML='<p style="font-size:.8rem;color:var(--text-muted);">No forms assigned yet.</p>';}}
+
+    // Forms — print & return
+    var prl=document.getElementById('printReturnList');if(prl){prl.innerHTML='';
+    if(children.length){children.forEach(function(c){var cid=c.id;prl.innerHTML+='<div class="doc-item" id="pr-waiver-'+cid+'"><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div><div class="doc-info"><h4>General Liability Waiver</h4><p>'+c.name.split(' ')[0]+' · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p></div><div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading blank form — print, fill by hand, then upload it back.\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button><label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\'waiver-'+cid+'\',\''+c.name+'\',\'General Liability Waiver\',this)"></label></div></div>';});}
+    else{prl.innerHTML='<p style="font-size:.8rem;color:var(--text-muted);">No forms assigned yet.</p>';}}
 
     // Reference photo slots
     var rg=document.getElementById('refPhotoGrid');if(rg){rg.innerHTML='';
@@ -825,9 +721,10 @@ function handleFormReturn(formId,camperName,formName,input){
 function switchHealth(id,btn){
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
     var c=children.find(function(k){return k.id===id});if(!c)return;
-    var camperNum=id==='eli'?'#0001':'#0002';
-    document.getElementById('healthCamperBadge').textContent=c.name+' · '+camperNum;
-    document.getElementById('healthDocBadge').textContent=c.name+' · '+camperNum;
+    var idx=children.indexOf(c);
+    var camperNum='#'+String(idx+1).padStart(4,'0');
+    var hcb=document.getElementById('healthCamperBadge');if(hcb)hcb.textContent=c.name+' · '+camperNum;
+    var hdb=document.getElementById('healthDocBadge');if(hdb)hdb.textContent=c.name+' · '+camperNum;
 }
 
 function handleRefPhoto(id,input){
@@ -893,7 +790,7 @@ function openMsg(id){
     var m=messages.find(function(x){return x.id===id});if(!m)return;
     m.read=true;
     var unread=messages.filter(function(x){return!x.read}).length;
-    document.getElementById('unreadBadge').textContent=unread;document.getElementById('navMsgCount').textContent=unread;if(!unread)document.getElementById('unreadBadge').style.display='none';
+    var nm2=document.getElementById('navMsgCount');if(nm2){nm2.textContent=unread;nm2.style.display=unread?'':'none';}
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
     document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;"><span>From: <strong>'+m.from+'</strong></span><span>'+m.date+'</span><span class="badge '+(m.type==='announcement'?'badge-warn':'badge-info')+'">'+(m.type==='announcement'?'Announcement':'Direct')+'</span></div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+(m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent!\')">Send Reply</button></div></div>':'');
 }
@@ -917,13 +814,13 @@ function sendComposedMsg(){
 
 // Schedule date navigation
 var schedDateOffset=0;
-var schedBaseDateMs=new Date(2026,6,7).getTime();
+var schedBaseDateMs=new Date().setHours(0,0,0,0);
 var schedDays=['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
 var schedMonths=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function changeSchedDate(delta){
     schedDateOffset+=delta;
     var d=new Date(schedBaseDateMs+schedDateOffset*86400000);
-    document.getElementById('schedDateLabel').textContent=schedDays[d.getDay()]+', '+schedMonths[d.getMonth()]+' '+d.getDate();
+    var lbl=document.getElementById('schedDateLabel');if(lbl)lbl.textContent=schedDays[d.getDay()]+', '+schedMonths[d.getMonth()]+' '+d.getDate();
 }
 
 // PICKUP & ARRIVAL
