@@ -2041,6 +2041,12 @@ function _genToken(){
     crypto.getRandomValues(arr);
     return Array.from(arr).map(function(b){return b.toString(16).padStart(2,'0')}).join('');
 }
+function _genAccessCode(){
+    // Omits confusable chars: 0/O, 1/I
+    var ch='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    var s='';for(var i=0;i<8;i++){if(i===4)s+='-';s+=ch[Math.floor(Math.random()*ch.length)];}
+    return s;
+}
 
 function _parentPortalUrl(token){
     var base=window.location.href.replace(/[^/]*$/,'');
@@ -2085,7 +2091,7 @@ function generateParentInvite(enrollId){
     });
 
     db.from('link_parent_invites')
-        .select('id,token')
+        .select('id,token,access_code')
         .eq('camp_id',campId)
         .eq('parent_email',parentEmail)
         .eq('status','active')
@@ -2093,18 +2099,19 @@ function generateParentInvite(enrollId){
         .then(function(res){
             if(res.data&&res.data.length){
                 var existing=res.data[0];
-                // Always refresh the full family snapshot so bunk changes are reflected
-                db.from('link_parent_invites')
-                    .update({parent_name:parentName,camper_names:camperNames,camper_data:camperData})
-                    .eq('id',existing.id)
-                    .then(function(){});
-                _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail);
+                // Ensure existing rows have an access code (migration 010 may not have run yet)
+                var code=existing.access_code||_genAccessCode();
+                var upd={parent_name:parentName,camper_names:camperNames,camper_data:camperData};
+                if(!existing.access_code)upd.access_code=code;
+                db.from('link_parent_invites').update(upd).eq('id',existing.id).then(function(){});
+                _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail,code);
             } else {
                 var token=_genToken();
+                var code=_genAccessCode();
                 var expires=new Date();
                 expires.setFullYear(expires.getFullYear()+1);
                 db.from('link_parent_invites').insert({
-                    camp_id:campId,token:token,
+                    camp_id:campId,token:token,access_code:code,
                     parent_name:parentName,parent_email:parentEmail,
                     camper_names:camperNames,camper_data:camperData,
                     status:'active',expires_at:expires.toISOString()
@@ -2112,18 +2119,18 @@ function generateParentInvite(enrollId){
                     if(ins.error){
                         console.error('[Me] Invite insert failed:',ins.error.message,ins.error);
                         toast('Could not save invite: '+ins.error.message+'. Run migration 008 if the table is missing.');
-                        return; // don't show a broken URL
+                        return;
                     }
-                    _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
+                    _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail,code);
                 });
             }
         });
 }
 
-function _showInviteModal(enrollId,url,parentEmail){
+function _showInviteModal(enrollId,url,parentEmail,accessCode){
     var e=enrollments[enrollId]||{};
     var firstName=(e.camperName||'').split(' ')[0]||'your child';
-    var pName=e.parentName||e.parentEmail||'Parent';
+    var pName=e.parentName||e.parent1Name||e.parentEmail||'Parent';
     var pFirst=pName.split(' ')[0];
 
     var h='<div style="max-width:500px;">';
@@ -2134,28 +2141,44 @@ function _showInviteModal(enrollId,url,parentEmail){
     h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite Ready</div>';
     h+='<div style="font-size:.8rem;color:var(--s500);">'+esc(e.camperName||'')+'\'s acceptance</div></div></div>';
 
-    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:12px;">Share this link with <strong>'+esc(pFirst)+'</strong> so they can access the Campistry Link parent portal.</p>';
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:14px;">Share <strong>either</strong> of these with <strong>'+esc(pFirst)+'</strong> — they only need one to get started.</p>';
 
-    h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;margin-bottom:14px;">';
-    h+='<span style="font-size:.75rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(url)+'</span>';
-    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;">Copy</button>';
-    h+='</div>';
+    // Access code — prominent
+    if(accessCode){
+        h+='<div style="background:#EFF6FF;border:2px solid #BFDBFE;border-radius:10px;padding:14px 16px;margin-bottom:14px;">';
+        h+='<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">';
+        h+='<span style="font-size:.72rem;font-weight:700;color:#1D4ED8;text-transform:uppercase;letter-spacing:.06em;">Access Code</span>';
+        h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+accessCode+'\').then(function(){b.textContent=\'Copied ✓\';setTimeout(function(){b.textContent=\'Copy\'},2000)})" style="font-size:.72rem;padding:3px 10px;">Copy</button>';
+        h+='</div>';
+        h+='<div style="font-size:1.5rem;font-weight:800;letter-spacing:.2em;color:#1E40AF;font-family:monospace;">'+esc(accessCode)+'</div>';
+        h+='<div style="font-size:.72rem;color:#3B82F6;margin-top:4px;">Parent goes to the portal URL and enters this code after creating an account</div>';
+        h+='</div>';
+    }
+
+    // Invite link
+    h+='<div style="margin-bottom:14px;">';
+    h+='<div style="font-size:.72rem;font-weight:700;color:var(--s500);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px;">Or — One-click Invite Link</div>';
+    h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;">';
+    h+='<span style="font-size:.72rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(url)+'</span>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;font-size:.72rem;padding:4px 10px;">Copy</button>';
+    h+='</div></div>';
 
     // Email preview
     h+='<details style="margin-bottom:14px;">';
     h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
     h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
-    h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\nClick the link below to access the Campistry Link parent portal, where you can view your child\'s schedule, messages from camp, forms, and more:\n\n<a href="'+esc(url)+'" style="color:#3B82F6;">'+esc(url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
+    h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\n';
+    if(accessCode)h+='Your access code for the Campistry Link parent portal is: <strong>'+esc(accessCode)+'</strong>\n\nOr click the link below to get started directly:\n\n';
+    h+='<a href="'+esc(url)+'" style="color:#3B82F6;">'+esc(url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
     h+='</div></details>';
 
     if(parentEmail){
-        h+='<div style="font-size:.75rem;color:var(--s400);margin-bottom:14px;">';
+        h+='<div style="font-size:.75rem;color:var(--s400);">';
         h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
         h+=esc(parentEmail)+'</div>';
     }
 
     h+='</div>';
-
     showModal('Parent Portal Invite',h);
 }
 

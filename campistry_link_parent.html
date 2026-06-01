@@ -153,17 +153,17 @@
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Photos</div>
-                <div class="lk-home-tile-sub">12 new today</div>
+                <div class="lk-home-tile-sub" id="homePhotosSub">Coming soon</div>
             </div>
         </button>
         <button class="lk-home-tile" onclick="nav('forms')">
-            <span class="lk-home-tile-badge">2</span>
+            <span class="lk-home-tile-badge" id="homeFormsBadge" style="display:none;"></span>
             <div class="lk-home-tile-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
             </div>
             <div class="lk-home-tile-body">
                 <div class="lk-home-tile-label">Forms</div>
-                <div class="lk-home-tile-sub">2 need attention</div>
+                <div class="lk-home-tile-sub" id="homeFormsSub">—</div>
             </div>
         </button>
         <button class="lk-home-tile" onclick="nav('pickup')">
@@ -638,11 +638,10 @@ function init(){
     if(schedule.length){schedule.forEach(function(s){sl.innerHTML+='<div class="sched-item"><span class="sched-time">'+s.time+'</span><div class="sched-dot" style="background:'+s.color+';"></div><div><div class="sched-name">'+s.event+'</div><div class="sched-loc">'+s.loc+'</div></div></div>';});}
     else{sl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No schedule available yet</h3><p>Your child\'s daily schedule will appear here once camp begins.</p></div>';}}
 
-    // Photos — abstract placeholder tiles
-    var pg=document.getElementById('photoGrid');if(pg){pg.innerHTML='';
-    var photoBg=['#E0F2FE','#F0FDF4','#FEF9C3','#FAF5FF','#FFF1F2','#ECFDF5','#EFF6FF','#FDF4FF','#FFF7ED','#F0FDF4','#F8FAFC','#FFFBEB'];
-    var photoIcon='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="opacity:.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
-    for(var i=0;i<12;i++){pg.innerHTML+='<div style="aspect-ratio:1;border-radius:var(--radius-md);background:'+photoBg[i%photoBg.length]+';display:flex;align-items:center;justify-content:center;border:1px solid var(--border-subtle);cursor:pointer;">'+photoIcon+'</div>';}}
+    // Photos — empty state until feature is live
+    var pg=document.getElementById('photoGrid');if(pg){
+        pg.innerHTML='<div style="text-align:center;padding:48px 20px;color:var(--slate-400);"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.25" style="margin-bottom:12px;opacity:.35;display:block;margin-left:auto;margin-right:auto;"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg><div style="font-weight:600;margin-bottom:4px;font-size:.9rem;">Photos coming soon</div><div style="font-size:.8rem;">Daily camp photos will appear here once camp begins.</div></div>';
+    }
 
     // Photo child tabs
     var photoTabsEl=document.getElementById('photoTabs');if(photoTabsEl){
@@ -673,6 +672,14 @@ function init(){
     var prl=document.getElementById('printReturnList');if(prl){prl.innerHTML='';
     if(children.length){children.forEach(function(c){var cid=c.id;prl.innerHTML+='<div class="doc-item" id="pr-waiver-'+cid+'"><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><polyline points="12 17 12 11"/><polyline points="9.5 14.5 12 17 14.5 14.5"/></svg></div><div class="doc-info"><h4>General Liability Waiver</h4><p>'+c.name.split(' ')[0]+' · <span class="badge badge-warn" style="font-size:.62rem;">Not submitted</span></p></div><div style="display:flex;gap:6px;"><button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading blank form — print, fill by hand, then upload it back.\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Download</button><label class="btn btn-primary btn-sm" style="cursor:pointer;"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg> Upload<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\'waiver-'+cid+'\',\''+c.name+'\',\'General Liability Waiver\',this)"></label></div></div>';});}
     else{prl.innerHTML='<p style="font-size:.8rem;color:var(--text-muted);">No forms assigned yet.</p>';}}
+
+    // Forms home tile badge — count all form items that aren't yet submitted
+    (function(){
+        var fc=(fol?fol.querySelectorAll('.doc-item').length:0)+(prl?prl.querySelectorAll('.doc-item').length:0);
+        var fb=document.getElementById('homeFormsBadge');var fs=document.getElementById('homeFormsSub');
+        if(fb){fb.textContent=fc;fb.style.display=fc>0?'flex':'none';}
+        if(fs){fs.textContent=fc>0?fc+' need attention':'All up to date';}
+    })();
 
     // Reference photo slots
     var rg=document.getElementById('refPhotoGrid');if(rg){rg.innerHTML='';
@@ -951,9 +958,14 @@ initPickupTabs();
 // =============================================================================
 // Parent Portal — Auth layer
 // Flow:
-//   1. Already signed in (Supabase session) → load data via get_parent_data_by_user()
-//   2. Has ?invite=TOKEN, not signed in → show Create Account screen
-//   3. No token, not signed in → show Sign In screen
+//   Invite URL (?invite=TOKEN):
+//     → validate token → show Create Account (or Sign In if already have account)
+//     → after auth: claim via token → portal loads
+//   No token, returning parent:
+//     → check session → load by user_id link
+//     → if no link: show "Enter access code" screen
+//   No token, no session:
+//     → show Sign In screen
 // =============================================================================
 (function() {
     'use strict';
@@ -964,7 +976,7 @@ initPickupTabs();
         return;
     }
     var db = supabase.createClient(cfg.url, cfg.anonKey);
-    var urlToken = new URLSearchParams(window.location.search).get('invite');
+    var urlToken = new URLSearchParams(window.location.search).get('invite') || '';
 
     console.log('[Parent] Auth init. Token in URL:', urlToken ? urlToken.slice(0,8)+'…' : 'none');
 
@@ -991,6 +1003,11 @@ initPickupTabs();
             '<p style="font-size:.82rem;color:#64748B;margin:0;">'+(msg||'Loading…')+'</p>' +
             '</div>');
     }
+    function _setMsg(msg, color) {
+        var el = document.getElementById('paMsg');
+        if (el) { el.textContent = msg; el.style.color = color || '#EF4444'; }
+    }
+    function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
 
     // ── Apply real data ───────────────────────────────────────────────────────
     function _applyData(d) {
@@ -1006,24 +1023,13 @@ initPickupTabs();
             if (c.emergencyName) ec.push({name:c.emergencyName, rel:c.emergencyRel||'Emergency', phone:c.emergencyPhone||''});
             if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
             return {
-                id:     'child_'+idx,
-                name:   name,
-                initials: initials,
-                age:    age,
-                division:   c.division||'',
-                grade:      c.grade||'',
-                bunk:       c.bunk||'',
-                session:    c.session||'',
-                counselor:  c.counselor||'',
-                allergies:  c.allergies  || 'None',
-                medications:c.medications|| 'None',
-                dietary:    c.dietary||'',
-                doctor:     c.doctor||'',
-                doctorPhone:c.doctorPhone||'',
-                insurance:  c.insurance||'',
-                policyNum:  c.policyNum||'',
-                canteenBalance: 0, dailyLimit: 5,
-                emergencyContacts: ec
+                id:'child_'+idx, name:name, initials:initials, age:age,
+                division:c.division||'', grade:c.grade||'', bunk:c.bunk||'',
+                session:c.session||'', counselor:c.counselor||'',
+                allergies:c.allergies||'None', medications:c.medications||'None',
+                dietary:c.dietary||'', doctor:c.doctor||'', doctorPhone:c.doctorPhone||'',
+                insurance:c.insurance||'', policyNum:c.policyNum||'',
+                canteenBalance:0, dailyLimit:5, emergencyContacts:ec
             };
         });
         console.log('[Parent] Children built:', realChildren.length);
@@ -1035,50 +1041,77 @@ initPickupTabs();
         _hideOverlay('parentAuthOverlay');
     }
 
-    // ── Sign-in screen ────────────────────────────────────────────────────────
+    // ── Auth screens ──────────────────────────────────────────────────────────
     function _showSignIn(prefillEmail, errorMsg) {
-        var emailVal = prefillEmail || '';
+        var ev = prefillEmail || '';
         var err = errorMsg ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#EF4444;margin-bottom:14px;">'+_esc(errorMsg)+'</div>' : '';
         _showOverlay('parentAuthOverlay',
             '<div style="width:100%;max-width:380px;">' +
-            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Parent Sign In</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Sign in to access your camp portal</p></div>' +
+            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Parent Portal</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Sign in to access your camp portal</p></div>' +
             err +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(emailVal)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
+            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')document.getElementById(\'paPass\').focus()"></div>' +
             '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignIn()"></div>' +
             '<button onclick="parentSignIn()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Sign In</button>' +
-            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;"></div>' +
-            (urlToken ? '<div style="text-align:center;margin-top:16px;padding-top:16px;border-top:1px solid #F1F5F9;"><span style="font-size:.8rem;color:#64748B;">First time? </span><button onclick="parentShowSignup()" style="background:none;border:none;color:#3B82F6;font-size:.8rem;font-weight:600;cursor:pointer;">Create an account</button></div>' : '') +
+            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
+            '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:16px;">' +
+            '<p style="font-size:.78rem;color:#94A3B8;margin:0 0 8px;">First time here? Use your camp invite link, or after signing in you can enter your access code.</p>' +
+            (urlToken ? '<button onclick="parentShowSignup()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:8px 20px;font-size:.82rem;color:#3B82F6;font-weight:600;cursor:pointer;">Create account with invite</button>' : '') +
+            '</div>' +
             '</div>');
-        setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!emailVal)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
+        setTimeout(function(){var f=document.getElementById('paEmail');if(f&&!ev)f.focus();else{var p=document.getElementById('paPass');if(p)p.focus();}},100);
     }
 
-    // ── Create account screen ─────────────────────────────────────────────────
     function _showCreateAccount(prefillEmail, inviteData) {
-        var emailVal = prefillEmail || (inviteData && inviteData.parent_email) || '';
-        var welcomeName = inviteData && inviteData.parent_name ? inviteData.parent_name.split(' ')[0] : '';
-        var welcome = welcomeName ? '<p style="font-size:.83rem;color:#64748B;margin:0;">Welcome, <strong>'+_esc(welcomeName)+'</strong>! Create a password to get started.</p>' : '<p style="font-size:.83rem;color:#64748B;margin:0;">Create an account to access your camp portal from any device.</p>';
+        var ev = prefillEmail || (inviteData && inviteData.parent_email) || '';
+        var wn = inviteData && inviteData.parent_name ? inviteData.parent_name.split(' ')[0] : '';
+        var welcome = wn ? '<p style="font-size:.83rem;color:#64748B;margin:0;">Welcome, <strong>'+_esc(wn)+'</strong>! Create a password to access your portal.</p>'
+                         : '<p style="font-size:.83rem;color:#64748B;margin:0;">Create an account to access your camp portal from any device.</p>';
         _showOverlay('parentAuthOverlay',
             '<div style="width:100%;max-width:380px;">' +
             '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 6px;">Create Your Account</h2>'+welcome+'</div>' +
-            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(emailVal)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;'+(emailVal?'background:#F8FAFC;color:#64748B;':'')+'"></div>' +
+            '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Email</label><input id="paEmail" type="email" value="'+_esc(ev)+'" placeholder="your@email.com" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;'+(ev?'background:#F8FAFC;color:#64748B;':'')+'"></div>' +
             '<div style="margin-bottom:12px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Password</label><input id="paPass" type="password" placeholder="At least 6 characters" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;"></div>' +
             '<div style="margin-bottom:18px;"><label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Confirm Password</label><input id="paPass2" type="password" placeholder="Re-enter password" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #CBD5E1;border-radius:8px;font-size:.9rem;outline:none;" onkeydown="if(event.key===\'Enter\')parentSignUp()"></div>' +
             '<button onclick="parentSignUp()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Create Account</button>' +
-            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;"></div>' +
-            '<div style="text-align:center;margin-top:12px;"><span style="font-size:.8rem;color:#64748B;">Already have an account? </span><button onclick="parentShowSignin(\''+_esc(emailVal)+'\')" style="background:none;border:none;color:#3B82F6;font-size:.8rem;font-weight:600;cursor:pointer;">Sign in</button></div>' +
+            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:10px;"></div>' +
+            '<div style="text-align:center;"><button onclick="parentShowSignin(\''+_esc(ev)+'\')" style="background:none;border:none;color:#3B82F6;font-size:.8rem;font-weight:600;cursor:pointer;">Already have an account? Sign in</button></div>' +
             '</div>');
-        setTimeout(function(){var p=document.getElementById('paPass');if(p)p.focus();},100);
+        setTimeout(function(){var p=document.getElementById(ev?'paPass':'paEmail');if(p)p.focus();},100);
         window._parentInviteData = inviteData || null;
     }
 
-    function _setMsg(msg, color) {
-        var el = document.getElementById('paMsg');
-        if (el) { el.textContent = msg; el.style.color = color || '#EF4444'; }
+    function _showLinkAccount(errorMsg) {
+        var err = errorMsg ? '<div style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;padding:10px 14px;font-size:.82rem;color:#EF4444;margin-bottom:14px;">'+_esc(errorMsg)+'</div>' : '';
+        _showOverlay('parentAuthOverlay',
+            '<div style="width:100%;max-width:380px;">' +
+            '<div style="text-align:center;margin-bottom:24px;"><img src="Link_clean.png" style="height:48px;margin-bottom:12px;display:block;margin-left:auto;margin-right:auto;"><h2 style="font-size:1.15rem;font-weight:700;color:#0F172A;margin:0 0 4px;">Enter Your Access Code</h2><p style="font-size:.83rem;color:#64748B;margin:0;">Find the 8-character code in your acceptance email from camp</p></div>' +
+            err +
+            '<div style="margin-bottom:18px;">' +
+            '<label style="font-size:.78rem;font-weight:600;color:#475569;display:block;margin-bottom:5px;">Access Code</label>' +
+            '<input id="paCode" type="text" placeholder="XXXX-XXXX" maxlength="9" autocomplete="off" style="width:100%;box-sizing:border-box;padding:12px;border:1px solid #CBD5E1;border-radius:8px;font-size:1.2rem;font-weight:700;letter-spacing:.15em;text-transform:uppercase;text-align:center;outline:none;" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,\'\')" onkeydown="if(event.key===\'Enter\')parentLinkAccount()">' +
+            '</div>' +
+            '<button onclick="parentLinkAccount()" style="width:100%;padding:11px;background:#3B82F6;color:#fff;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;margin-bottom:12px;">Link My Portal</button>' +
+            '<div id="paMsg" style="font-size:.8rem;color:#EF4444;text-align:center;min-height:18px;margin-bottom:12px;"></div>' +
+            '<div style="text-align:center;border-top:1px solid #F1F5F9;padding-top:14px;">' +
+            '<button onclick="parentSignOut()" style="background:none;border:none;color:#94A3B8;font-size:.78rem;cursor:pointer;">Sign out and use a different account</button>' +
+            '</div>' +
+            '</div>');
+        setTimeout(function(){var f=document.getElementById('paCode');if(f)f.focus();},100);
     }
 
-    function _esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;'); }
+    function _showInvalidToken(detail) {
+        _showOverlay('parentAuthOverlay',
+            '<div style="max-width:360px;text-align:center;">' +
+            '<div style="width:64px;height:64px;border-radius:50%;background:#FEF2F2;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;">' +
+            '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>' +
+            '<h2 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:#0F172A;">Link Not Valid</h2>' +
+            '<p style="font-size:.85rem;color:#64748B;line-height:1.6;margin-bottom:'+(detail?'8px':'20px')+'">This invite link has expired or been revoked. Please contact the camp for a new link.</p>' +
+            (detail ? '<p style="font-size:.75rem;color:#94A3B8;margin-bottom:20px;">'+_esc(detail)+'</p>' : '') +
+            '<button onclick="parentShowSignin()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 20px;font-size:.85rem;color:#475569;cursor:pointer;">Sign In Instead</button>' +
+            '</div>');
+    }
 
-    // ── Exposed handlers ──────────────────────────────────────────────────────
+    // ── Handlers (global) ─────────────────────────────────────────────────────
     window.parentSignIn = function() {
         var email = (document.getElementById('paEmail')||{}).value||'';
         var pass  = (document.getElementById('paPass')||{}).value||'';
@@ -1088,7 +1121,8 @@ initPickupTabs();
             if (res.error) { console.error('[Parent] Sign in error:', res.error); _setMsg(res.error.message); return; }
             console.log('[Parent] Signed in OK');
             _showLoading('Loading your portal…');
-            _loadByUser();
+            if (urlToken) { _claimAndLoad(urlToken); }
+            else { _loadByUser(); }
         });
     };
 
@@ -1101,7 +1135,14 @@ initPickupTabs();
         if (pass.length < 6) { _setMsg('Password must be at least 6 characters.'); return; }
         _setMsg('Creating account…', '#64748B');
         db.auth.signUp({email:email, password:pass}).then(function(res) {
-            if (res.error) { console.error('[Parent] Sign up error:', res.error); _setMsg(res.error.message); return; }
+            if (res.error) {
+                var m = res.error.message || '';
+                if (m.toLowerCase().indexOf('already') !== -1) {
+                    _setMsg('An account with this email already exists.');
+                    setTimeout(function(){ _showSignIn(email, 'You already have an account — sign in below.'); }, 1500);
+                } else { _setMsg(m); }
+                return;
+            }
             if (!res.data.session) {
                 _setMsg('Check your email to confirm your account, then come back and sign in.', '#0F172A');
                 setTimeout(function(){ _showSignIn(email); }, 4000);
@@ -1113,11 +1154,38 @@ initPickupTabs();
         });
     };
 
+    window.parentLinkAccount = function() {
+        var code = ((document.getElementById('paCode')||{}).value||'').trim().toUpperCase().replace(/[^A-Z0-9-]/g,'');
+        if (!code) { _setMsg('Please enter your access code.'); return; }
+        _setMsg('Linking account…', '#64748B');
+        console.log('[Parent] Linking by access code…');
+        db.rpc('claim_invite_by_code', {p_code: code}).then(function(res) {
+            console.log('[Parent] claim_invite_by_code result:', res.data, res.error);
+            if (res.error) {
+                var m = res.error.message || String(res.error);
+                if (m.indexOf('does not exist') !== -1 || m.indexOf('function') !== -1) {
+                    _setMsg('Database setup incomplete. Ask the camp admin to run migration 010 in Supabase.');
+                } else { _setMsg('Error: ' + m); }
+                return;
+            }
+            if (!res.data || !res.data.success) {
+                var em = {
+                    invalid_code: 'Invalid access code. Check the code in your acceptance email from camp.',
+                    already_claimed: 'This code is linked to a different account. Sign in with that account or contact camp.',
+                    not_authenticated: 'Session error — please sign out and try again.'
+                };
+                _setMsg(em[(res.data||{}).error] || 'Could not link your account. Please contact the camp.');
+                return;
+            }
+            _applyData(res.data);
+        });
+    };
+
     window.parentShowSignin = function(email) { _showSignIn(email); };
     window.parentShowSignup = function() {
         if (urlToken && window._parentInviteData) { _showCreateAccount('', window._parentInviteData); }
         else if (urlToken) { _validateThenShowSignup(urlToken); }
-        else { _setMsg('An invite link is required to create an account. Please use the link sent by the camp.'); }
+        else { _setMsg('Use your camp invite link to create an account, or enter your access code after signing in.'); }
     };
     window.parentSignOut = function() {
         db.auth.signOut().then(function() { window.location.reload(); });
@@ -1132,16 +1200,14 @@ initPickupTabs();
                 var msg = res.error.message || String(res.error);
                 if (msg.indexOf('does not exist') !== -1 || msg.indexOf('function') !== -1) {
                     _showSignIn('', 'Database setup incomplete. Ask the camp admin to run migration 009 in Supabase.');
-                } else if (urlToken) {
-                    _claimAndLoad(urlToken);
                 } else {
-                    _showSignIn('', 'No portal access found for this account. Please use your invite link.');
+                    _showLinkAccount('Could not load your portal: ' + msg);
                 }
                 return;
             }
             if (!res.data || !res.data.success) {
-                if (urlToken) { _claimAndLoad(urlToken); }
-                else { _showSignIn('', 'No portal access found for this account. Please use your invite link.'); }
+                // Signed in but no invite linked yet — prompt for access code
+                _showLinkAccount();
                 return;
             }
             _applyData(res.data);
@@ -1184,6 +1250,7 @@ initPickupTabs();
                         '<div style="max-width:360px;text-align:center;padding:20px;">' +
                         '<h2 style="color:#0F172A;margin-bottom:10px;">Setup Required</h2>' +
                         '<p style="font-size:.85rem;color:#64748B;line-height:1.6;">The parent invite system is not set up yet. The camp admin needs to run <strong>migrations 008 and 009</strong> in the Supabase SQL editor.</p>' +
+                        '<button onclick="parentShowSignin()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 20px;font-size:.85rem;color:#475569;cursor:pointer;margin-top:16px;">Sign In Instead</button>' +
                         '</div>');
                 } else {
                     _showInvalidToken(msg);
@@ -1191,7 +1258,7 @@ initPickupTabs();
                 return;
             }
             if (!res.data || !res.data.success) {
-                _showInvalidToken();
+                _showInvalidToken(null);
                 return;
             }
             window._parentInviteData = res.data;
@@ -1199,33 +1266,23 @@ initPickupTabs();
         });
     }
 
-    function _showInvalidToken(detail) {
-        _showOverlay('parentAuthOverlay',
-            '<div style="max-width:360px;text-align:center;">' +
-            '<div style="width:64px;height:64px;border-radius:50%;background:#FEF2F2;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;">' +
-            '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>' +
-            '<h2 style="font-size:1.1rem;font-weight:700;margin-bottom:10px;color:#0F172A;">Link Not Valid</h2>' +
-            '<p style="font-size:.85rem;color:#64748B;line-height:1.6;margin-bottom:'+(detail?'8px':'20px')+'">This invite link has expired or been revoked. Please contact the camp for a new link.</p>' +
-            (detail ? '<p style="font-size:.75rem;color:#94A3B8;margin-bottom:20px;">'+_esc(detail)+'</p>' : '') +
-            '<button onclick="parentShowSignin()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 20px;font-size:.85rem;color:#475569;cursor:pointer;">Sign In Instead</button>' +
-            '</div>');
-    }
-
     // ── Entry point ───────────────────────────────────────────────────────────
+    // Invite URL → always show auth screen (never auto-claim from existing session)
+    // No token   → check session → auto-load if linked, else sign-in
     _showLoading('Checking your session…');
-    db.auth.getSession().then(function(res) {
-        console.log('[Parent] getSession result — has session:', !!(res.data && res.data.session));
-        var session = res.data && res.data.session;
-        if (session) {
-            _showLoading('Loading your portal…');
-            if (urlToken) { _claimAndLoad(urlToken); }
-            else { _loadByUser(); }
-        } else if (urlToken) {
-            _validateThenShowSignup(urlToken);
-        } else {
-            _showSignIn();
-        }
-    });
+    if (urlToken) {
+        _validateThenShowSignup(urlToken);
+    } else {
+        db.auth.getSession().then(function(res) {
+            console.log('[Parent] getSession result — has session:', !!(res.data && res.data.session));
+            if (res.data && res.data.session) {
+                _showLoading('Loading your portal…');
+                _loadByUser();
+            } else {
+                _showSignIn();
+            }
+        });
+    }
 
 })();
 </script>
