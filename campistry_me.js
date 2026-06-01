@@ -2108,7 +2108,11 @@ function generateParentInvite(enrollId){
                     camper_names:camperNames,camper_data:camperData,
                     status:'active',expires_at:expires.toISOString()
                 }).then(function(ins){
-                    if(ins.error)console.warn('[Me] Invite insert error:',ins.error.message);
+                    if(ins.error){
+                        console.error('[Me] Invite insert failed:',ins.error.message,ins.error);
+                        toast('Could not save invite: '+ins.error.message+'. Run migration 008 if the table is missing.');
+                        return; // don't show a broken URL
+                    }
                     _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
                 });
             }
