@@ -4874,8 +4874,41 @@ async function runOptimizer() {
     } else {
         // Manual mode: original check
         if (dailyOverrideSkeleton.length === 0) { await daShowAlert("Skeleton is empty."); return; }
+
+        // ★ Day 32 (warn-then-discard, user decision 2026-06-01): a manual
+        //   re-generation rebuilds from the skeleton and therefore DISCARDS
+        //   cell-level daily adjustments (post-edits, `_postEdit:true`). Bunk
+        //   overrides, trips, and resource settings are preserved across the
+        //   wipe (see savedBunkOverrides/savedResourceOverrides below), so only
+        //   post-edits are lost — warn about exactly those, scoped to the bunks
+        //   this run will actually wipe, and let the user cancel.
+        try {
+            const _sa = window.scheduleAssignments || {};
+            const _divsW = window.divisions || {};
+            const _scopeDivsW = _generationScope ? [..._generationScope] : null;
+            const _scopeBunksW = _generationBunkScope ? [..._generationBunkScope] : null;
+            let _wipeBunks = null; // null = all bunks (full re-gen)
+            if (_scopeBunksW && _scopeBunksW.length > 0) {
+                _wipeBunks = new Set(_scopeBunksW.map(String));
+            } else if (_scopeDivsW && _scopeDivsW.length > 0 && _scopeDivsW.length < Object.keys(_divsW).length) {
+                _wipeBunks = new Set();
+                _scopeDivsW.forEach(d => ((_divsW[d] || _divsW[String(d)] || {}).bunks || []).forEach(b => _wipeBunks.add(String(b))));
+            }
+            let _adjCount = 0; const _adjBunks = new Set();
+            Object.keys(_sa).forEach(b => {
+                if (_wipeBunks && !_wipeBunks.has(String(b))) return; // out of scope → not wiped
+                (_sa[b] || []).forEach(e => { if (e && e._postEdit === true && !e.continuation) { _adjCount++; _adjBunks.add(b); } });
+            });
+            if (_adjCount > 0) {
+                const _msg = '⚠️ This day has ' + _adjCount + ' daily adjustment' + (_adjCount === 1 ? '' : 's')
+                    + ' (manual edit' + (_adjCount === 1 ? '' : 's') + ' on ' + _adjBunks.size + ' bunk' + (_adjBunks.size === 1 ? '' : 's')
+                    + ') that will be CLEARED by re-generating.\n\nBunk overrides, trips, and resource settings are kept. Continue?';
+                const _ok = await daShowConfirm(_msg, { danger: true, confirmText: 'Re-generate' });
+                if (!_ok) { console.log('[Optimizer] Re-gen cancelled by user (' + _adjCount + ' daily adjustment(s) would be cleared)'); return; }
+            }
+        } catch (_eWarn) { console.warn('[Optimizer] post-edit warn check error: ' + (_eWarn && _eWarn.message)); }
     }
-    
+
    // Only persist to manual skeleton storage paths in manual mode.
     // In auto mode the skeleton was already saved via saveCurrentDailyData above.
     if (window._daBuilderMode !== 'auto') {
