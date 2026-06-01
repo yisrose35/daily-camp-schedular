@@ -54,6 +54,20 @@
     };
 
     // =========================================================================
+    // SUPABASE HELPERS
+    // =========================================================================
+
+    /** Returns { client, campId } or null if not ready */
+    function _db() {
+        var db = window.CampistryDB;
+        if (!db) return null;
+        var client = db.getClient ? db.getClient() : null;
+        var campId = db.getCampId ? db.getCampId() : null;
+        if (!client || !campId) return null;
+        return { client: client, campId: campId };
+    }
+
+    // =========================================================================
     // PERSISTENCE
     // =========================================================================
     function loadStore() {
@@ -76,11 +90,107 @@
         try {
             _store.updatedAt = new Date().toISOString();
             localStorage.setItem(LINK_STORE, JSON.stringify(_store));
-            // Also sync to cloud if available
+            // Sync settings/templates/drafts to camp_state_kv — NOT the
+            // notification history (that lives in link_outbox now).
             if (window.saveGlobalSettings) {
-                window.saveGlobalSettings('campistryLink', _store);
+                window.saveGlobalSettings('campistryLink', {
+                    settings: _store.settings,
+                    templates: _store.templates,
+                    drafts: _store.drafts,
+                    updatedAt: _store.updatedAt
+                });
             }
         } catch(e) { console.warn('[Link] Store save error:', e); }
+    }
+
+    /**
+     * Load recent notification history from link_outbox (cloud).
+     * Called once after CampistryDB is ready. Merges into _store.notifications
+     * without duplicating records already in localStorage.
+     */
+    function loadCloudHistory(limit) {
+        var db = _db(); if (!db) return;
+        limit = limit || 100;
+        db.client
+            .from('link_outbox')
+            .select('id, type, camper_name, camper_id, parent_name, parent_email, parent_phone, subject, body, channels, status, created_at, sent_at')
+            .eq('camp_id', db.campId)
+            .order('created_at', { ascending: false })
+            .limit(limit)
+            .then(function(res) {
+                if (res.error) { console.warn('[Link] loadCloudHistory error:', res.error.message); return; }
+                var rows = res.data || [];
+                var existingIds = new Set(_store.notifications.map(function(n) { return n.id; }));
+                rows.forEach(function(row) {
+                    if (existingIds.has(row.id)) return;
+                    _store.notifications.push({
+                        id: row.id,
+                        camperName: row.camper_name,
+                        camperId: row.camper_id,
+                        parentName: row.parent_name,
+                        parentEmail: row.parent_email,
+                        parentPhone: row.parent_phone,
+                        type: row.type,
+                        subject: row.subject,
+                        body: row.body,
+                        channels: row.channels || ['app'],
+                        date: row.created_at,
+                        status: row.status,
+                        _fromCloud: true
+                    });
+                });
+                console.log('[Link] Cloud history loaded:', rows.length, 'records');
+            });
+    }
+
+    /**
+     * Insert a batch of notification records into link_outbox.
+     * Non-blocking — failures log a warning but don't break the local flow.
+     */
+    function _insertOutboxRows(records) {
+        var db = _db(); if (!db) return;
+        var rows = records.map(function(r) {
+            return {
+                camp_id:      db.campId,
+                type:         r.type || 'custom',
+                camper_name:  r.camperName || null,
+                camper_id:    r.camperId   || null,
+                parent_name:  r.parentName || null,
+                parent_email: r.parentEmail || null,
+                parent_phone: r.parentPhone || null,
+                subject:      r.subject || '',
+                body:         r.body    || '',
+                channels:     r.channels || ['app'],
+                status:       r.status  || 'queued'
+            };
+        });
+        db.client
+            .from('link_outbox')
+            .insert(rows)
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_outbox insert error:', res.error.message);
+                else console.log('[Link] link_outbox: inserted', rows.length, 'rows');
+            });
+    }
+
+    /**
+     * Insert a broadcast record into link_broadcasts.
+     */
+    function _insertBroadcastRow(b) {
+        var db = _db(); if (!db) return;
+        db.client
+            .from('link_broadcasts')
+            .insert({
+                camp_id:          db.campId,
+                subject:          b.subject || '',
+                body:             b.body    || '',
+                channels:         b.channels || ['app'],
+                recipient_filter: b.recipientFilter || null,
+                recipient_count:  b.recipientCount  || 0
+            })
+            .then(function(res) {
+                if (res.error) console.warn('[Link] link_broadcasts insert error:', res.error.message);
+            });
     }
 
     // =========================================================================
@@ -444,13 +554,15 @@
             subject: opts.subject || '',
             body: opts.body || '',
             channels: opts.channels || ['app'],
-            recipientFilter: opts.recipientFilter || {},  // { type: 'all' | 'division' | 'grade' | 'bunk' | 'family', values: [...] }
+            recipientFilter: opts.recipientFilter || {},
             recipientCount: opts.recipientCount || 0,
             date: new Date().toISOString(),
             readRate: 0,
             metadata: opts.metadata || {}
         };
         _store.broadcasts.push(b);
+        // Persist to Supabase link_broadcasts (non-blocking)
+        _insertBroadcastRow(b);
         saveStore();
         return b;
     };
@@ -757,14 +869,16 @@
     }
 
     /**
-     * Send any batch of notifications through the delivery pipeline
+     * Send any batch of notifications through the delivery pipeline.
+     * Persists to link_outbox (cloud) and localStorage mirror.
      */
     notify.sendBatch = function(notifications, channels, templateType) {
         channels = channels || ['app'];
         if (!notifications.length) {
             return { success: false, error: 'No notifications to send.', sent: 0 };
         }
-        var sent = 0;
+        var now = new Date().toISOString();
+        var records = [];
         notifications.forEach(function(n) {
             var record = {
                 id: 'notif_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4),
@@ -773,22 +887,26 @@
                 parentEmail: n.parentEmail, parentPhone: n.parentPhone,
                 type: n.templateType || templateType || 'custom',
                 subject: n.subject, body: n.body,
-                channels: channels, date: new Date().toISOString(), status: 'queued'
+                channels: channels, date: now, status: 'queued'
             };
             _store.notifications.push(record);
             _dispatchMessage(record, channels);
-            sent++;
+            records.push(record);
         });
+
+        // Persist to Supabase link_outbox (non-blocking)
+        _insertOutboxRows(records);
+
         msg.broadcast({
             subject: (templateType || 'Custom') + ' Notifications',
-            body: 'Personalized ' + (templateType || '') + ' sent to ' + sent + ' parents',
+            body: 'Personalized ' + (templateType || '') + ' sent to ' + records.length + ' parents',
             channels: channels,
             recipientFilter: { type: templateType || 'custom' },
-            recipientCount: sent,
+            recipientCount: records.length,
             metadata: { type: templateType || 'custom' }
         });
         saveStore();
-        return { success: true, sent: sent, notifications: notifications };
+        return { success: true, sent: records.length, notifications: notifications };
     };
 
     /**
@@ -966,6 +1084,24 @@
     // =========================================================================
     loadStore();
 
+    // Hydrate cloud history once CampistryDB is ready.
+    // If it's already ready, call immediately; otherwise wait for the event.
+    (function() {
+        function tryLoadCloud() {
+            if (_db()) {
+                loadCloudHistory(100);
+            } else {
+                // CampistryDB fires campistry-db-ready once campId is resolved
+                window.addEventListener('campistry-db-ready', function onDbReady() {
+                    window.removeEventListener('campistry-db-ready', onDbReady);
+                    loadCloudHistory(100);
+                }, { once: true });
+            }
+        }
+        // Small delay so CampistryDB auth detection can complete first
+        setTimeout(tryLoadCloud, 1500);
+    })();
+
     // Debug: log what we actually found
     var _roster = data.getRoster();
     var _families = data.getFamilies();
@@ -991,7 +1127,8 @@
         // Convenience
         getStore: function() { return _store; },
         refresh: function() { loadStore(); },
-        save: saveStore
+        save: saveStore,
+        loadCloudHistory: loadCloudHistory
     };
 
     console.log('[Link] Data Bridge ready. Parents:', data.getParentDirectory().length, '| Campers:', Object.keys(data.getRoster()).length);
