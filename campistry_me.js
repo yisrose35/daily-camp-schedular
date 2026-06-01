@@ -2051,7 +2051,7 @@ function generateParentInvite(enrollId){
     var e=enrollments[enrollId]; if(!e)return;
     var parentEmail=e.parentEmail||e.parent1Email||'';
     var parentName=e.parentName||'';
-    if(!parentEmail&&!parentName)return; // no parent contact on record
+    if(!parentEmail&&!parentName)return;
 
     var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
     var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
@@ -2061,34 +2061,40 @@ function generateParentInvite(enrollId){
         return;
     }
 
-    // Build camper data snapshot for the portal
-    var camperNames=[e.camperName];
+    // Build snapshot for ALL accepted/enrolled campers belonging to this parent email.
+    // This ensures siblings are always grouped together and the invite is always fresh.
+    var familyEnrollments=Object.values(enrollments).filter(function(en){
+        var em=en.parentEmail||en.parent1Email||'';
+        return em===parentEmail&&(en.status==='accepted'||en.status==='enrolled');
+    });
+    var camperNames=familyEnrollments.map(function(en){return en.camperName;});
     var camperData={};
-    camperData[e.camperName]={
-        name:e.camperName,dob:e.dob||'',gender:e.gender||'',
-        division:roster[e.camperName]?roster[e.camperName].division:'',
-        grade:roster[e.camperName]?roster[e.camperName].grade:'',
-        bunk:roster[e.camperName]?roster[e.camperName].bunk:'',
-        session:e.session||'',
-        allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',
-        doctor:e.doctor||'',doctorPhone:e.doctorPhone||'',
-        insurance:e.insurance||'',policyNum:e.policyNum||'',
-        emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||''
-    };
+    familyEnrollments.forEach(function(en){
+        var r=roster[en.camperName]||{};
+        camperData[en.camperName]={
+            name:en.camperName,dob:en.dob||'',gender:en.gender||'',
+            division:r.division||'',grade:r.grade||'',bunk:r.bunk||'',
+            session:en.session||'',
+            allergies:en.allergies||'',medications:en.medications||'',dietary:en.dietary||'',
+            doctor:en.doctor||'',doctorPhone:en.doctorPhone||'',
+            insurance:en.insurance||'',policyNum:en.policyNum||'',
+            emergencyName:en.emergencyName||'',emergencyPhone:en.emergencyPhone||'',emergencyRel:en.emergencyRel||'',
+            parent2Name:en.parent2Name||'',parent2Phone:en.parent2Phone||''
+        };
+    });
 
-    // Check if this parent already has an active invite for this camp
     db.from('link_parent_invites')
-        .select('id,token,status')
+        .select('id,token')
         .eq('camp_id',campId)
         .eq('parent_email',parentEmail)
         .eq('status','active')
         .limit(1)
         .then(function(res){
             if(res.data&&res.data.length){
-                // Reuse existing invite — update camper_data in case bunk changed
                 var existing=res.data[0];
+                // Always refresh the full family snapshot so bunk changes are reflected
                 db.from('link_parent_invites')
-                    .update({camper_names:camperNames,camper_data:camperData})
+                    .update({parent_name:parentName,camper_names:camperNames,camper_data:camperData})
                     .eq('id',existing.id)
                     .then(function(){});
                 _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail);
@@ -2099,17 +2105,11 @@ function generateParentInvite(enrollId){
                 db.from('link_parent_invites').insert({
                     camp_id:campId,token:token,
                     parent_name:parentName,parent_email:parentEmail,
-                    family_id:e.familyId||null,
-                    camper_names:camperNames,
-                    camper_data:camperData,
+                    camper_names:camperNames,camper_data:camperData,
                     status:'active',expires_at:expires.toISOString()
                 }).then(function(ins){
-                    if(ins.error){
-                        console.warn('[Me] Invite insert error:',ins.error.message);
-                        _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
-                    } else {
-                        _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
-                    }
+                    if(ins.error)console.warn('[Me] Invite insert error:',ins.error.message);
+                    _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
                 });
             }
         });

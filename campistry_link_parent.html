@@ -983,20 +983,35 @@ initPickupTabs();
     function _applyData(d) {
         parent.name  = d.parent_name  || 'Parent';
         parent.email = d.parent_email || '';
-        var names = d.camper_names || Object.keys(d.camper_data || {});
+        // camper_names is the ordered list; fall back to object keys if missing
+        var names = (d.camper_names && d.camper_names.length) ? d.camper_names : Object.keys(d.camper_data || {});
         var realChildren = names.map(function(name, idx) {
             var c = (d.camper_data && d.camper_data[name]) || {};
             var initials = name.split(' ').map(function(p){return p[0]||''}).join('').toUpperCase().slice(0,2);
             var age = c.dob ? Math.floor((Date.now()-new Date(c.dob))/(365.25*24*3600*1000)) : null;
             var ec = [];
-            if (c.emergencyName) ec.push({name:c.emergencyName,rel:c.emergencyRel||'Emergency',phone:c.emergencyPhone||''});
-            return {id:'child_'+idx,name:name,initials:initials,age:age,
-                division:c.division||'',grade:c.grade||'',bunk:c.bunk||'',
-                session:c.session||'',counselor:'',
-                allergies:c.allergies||'None',medications:c.medications||'None',
-                dietary:c.dietary||'',doctor:c.doctor||'',doctorPhone:c.doctorPhone||'',
-                insurance:c.insurance||'',policyNum:c.policyNum||'',
-                canteenBalance:0,dailyLimit:5,emergencyContacts:ec};
+            if (c.emergencyName) ec.push({name:c.emergencyName, rel:c.emergencyRel||'Emergency', phone:c.emergencyPhone||''});
+            if (c.parent2Name)   ec.push({name:c.parent2Name,   rel:'Parent',                    phone:c.parent2Phone||''});
+            return {
+                id:     'child_'+idx,
+                name:   name,
+                initials: initials,
+                age:    age,
+                division:   c.division||'',
+                grade:      c.grade||'',
+                bunk:       c.bunk||'',
+                session:    c.session||'',
+                counselor:  c.counselor||'',
+                allergies:  c.allergies  || 'None',
+                medications:c.medications|| 'None',
+                dietary:    c.dietary||'',
+                doctor:     c.doctor||'',
+                doctorPhone:c.doctorPhone||'',
+                insurance:  c.insurance||'',
+                policyNum:  c.policyNum||'',
+                canteenBalance: 0, dailyLimit: 5,
+                emergencyContacts: ec
+            };
         });
         if (realChildren.length) {
             children = realChildren;
