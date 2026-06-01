@@ -320,11 +320,13 @@ async function daTryMergeSwimElective(newEvent, divName, skeleton) {
 function daShowConfirm(message, opts) {
   opts = opts || {};
   return new Promise(function(resolve) {
-    var existing = document.getElementById('da-modal-input-overlay');
+    // ★ Day 25b fix (#5): distinct (prefixed) overlay id so a confirm no longer
+    //   removes an open input modal (daShowModal) — they used to share one id.
+    var existing = document.getElementById('da-modal-input-overlay--confirm');
     if (existing) existing.remove();
 
     var overlay = document.createElement('div');
-    overlay.id = 'da-modal-input-overlay';
+    overlay.id = 'da-modal-input-overlay--confirm';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
       '<div class="da-modal" style="max-width:420px;">' +
@@ -351,11 +353,13 @@ function daShowConfirm(message, opts) {
 
 function daShowAlert(message) {
   return new Promise(function(resolve) {
-    var existing = document.getElementById('da-modal-input-overlay');
+    // ★ Day 25b fix (#5): distinct (prefixed) overlay id so an alert no longer
+    //   removes an open input modal (daShowModal) — they used to share one id.
+    var existing = document.getElementById('da-modal-input-overlay--alert');
     if (existing) existing.remove();
 
     var overlay = document.createElement('div');
-    overlay.id = 'da-modal-input-overlay';
+    overlay.id = 'da-modal-input-overlay--alert';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
       '<div class="da-modal" style="max-width:400px;">' +
@@ -2893,7 +2897,12 @@ function addDropListeners(gridEl) {
       
       let tileData;
       try { tileData = JSON.parse(e.dataTransfer.getData('application/json')); } catch { return; }
-      
+      // ★ Day 25b fix (#4): capture the date at drop-start. This handler awaits
+      //   modals; during that await a date change (or cloud refresh) can reassign
+      //   the skeleton, and without this guard the tile would be pushed onto the
+      //   WRONG date's skeleton. Re-checked just before the push below.
+      const _dropDate = window.currentScheduleDate;
+
       const divName = cell.dataset.div;
       const earliestMin = parseInt(cell.dataset.startMin);
       const div = window.divisions[divName] || {};
@@ -3461,6 +3470,11 @@ function addDropListeners(gridEl) {
           const exEnd = parseTimeToMinutes(existing.endTime);
           if (exStart === null || exEnd === null) return true;
           const overlaps = (exStart < newEndVal) && (exEnd > newStartVal);
+          // ★ Day 25b fix (#2): record what this drop removes so it isn't lost
+          //   SILENTLY (e.g. a Swim dropped across two Electives previously erased
+          //   the second one with no trace). Displaced tiles surface in the
+          //   displaced-tiles panel so the user can see + re-add them.
+          if (overlaps) { try { addDisplacedTile(existing, 'Replaced by "' + (newEvent.event || 'new tile') + '"'); } catch (_) {} }
           return !overlaps;
         });
 
@@ -3529,6 +3543,12 @@ function addDropListeners(gridEl) {
           }
         }
 
+        // ★ Day 25b fix (#4): bail if the date changed during the modal flow so
+        //   this tile is never pushed onto a different date's skeleton.
+        if (window.currentScheduleDate !== _dropDate) {
+          try { await daShowAlert('The date changed while placing this tile, so it was not added. Please drop it again.'); } catch (_) {}
+          return;
+        }
         dailyOverrideSkeleton.push(newEvent);
         saveDailySkeleton();
         renderGrid();
@@ -4093,6 +4113,12 @@ function saveDAAutoLayers() {
 function saveDailySkeleton() {
   if (!window.AccessControl?.canEdit?.()) {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
+    // ★ Day 25b fix (#5): surface the blocked save ONCE so a read-only user
+    //   isn't silently building a skeleton that vanishes on reload.
+    if (!window._daSavePermWarned) {
+      window._daSavePermWarned = true;
+      try { daShowAlert('⚠️ You don\'t have permission to edit this schedule — your changes are NOT being saved.'); } catch (_) {}
+    }
     return;
   }
   
@@ -7091,9 +7117,9 @@ function getStyles() {
     /* ============================================ */
     /* IN-APP MODAL STYLES (v5.2)                  */
     /* ============================================ */
-    #da-modal-input-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
+    [id^="da-modal-input-overlay"] { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(15,23,42,0.5); display:flex; align-items:center; justify-content:center; z-index:100000; backdrop-filter:blur(2px); animation:daModalFadeIn 0.15s ease; }
     @keyframes daModalFadeIn { from { opacity:0; } to { opacity:1; } }
-    #da-modal-input-overlay .da-modal { animation:daModalSlideUp 0.2s ease; }
+    [id^="da-modal-input-overlay"] .da-modal { animation:daModalSlideUp 0.2s ease; }
     @keyframes daModalSlideUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
     .da-modal-desc { margin:0 0 16px; font-size:13px; color:#64748b; line-height:1.5; }
     .da-modal-field { margin-bottom:16px; }
