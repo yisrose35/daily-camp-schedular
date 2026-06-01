@@ -2022,6 +2022,131 @@ function updateEnrollStatus(id,status){
         if(session) autoPromoteWaitlist(session);
     }
     save();renderEnrollment();toast('Status updated to '+status);
+
+    // On first acceptance, generate a parent portal invite link
+    if(status==='accepted'&&prev!=='accepted'&&prev!=='enrolled'){
+        generateParentInvite(id);
+    }
+}
+
+// ─── PARENT PORTAL INVITE ────────────────────────────────────────────────────
+
+function _genToken(){
+    var arr=new Uint8Array(32);
+    crypto.getRandomValues(arr);
+    return Array.from(arr).map(function(b){return b.toString(16).padStart(2,'0')}).join('');
+}
+
+function _parentPortalUrl(token){
+    var base=window.location.href.replace(/[^/]*$/,'');
+    return base+'campistry_link_parent.html?invite='+token;
+}
+
+function generateParentInvite(enrollId){
+    var e=enrollments[enrollId]; if(!e)return;
+    var parentEmail=e.parentEmail||e.parent1Email||'';
+    var parentName=e.parentName||'';
+    if(!parentEmail&&!parentName)return; // no parent contact on record
+
+    var db=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():null;
+    var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():null;
+    if(!db||!campId){
+        console.warn('[Me] Invite: Supabase not ready, showing link only');
+        _showInviteModal(enrollId,_parentPortalUrl(_genToken()),null);
+        return;
+    }
+
+    // Build camper data snapshot for the portal
+    var camperNames=[e.camperName];
+    var camperData={};
+    camperData[e.camperName]={
+        name:e.camperName,dob:e.dob||'',gender:e.gender||'',
+        division:roster[e.camperName]?roster[e.camperName].division:'',
+        grade:roster[e.camperName]?roster[e.camperName].grade:'',
+        bunk:roster[e.camperName]?roster[e.camperName].bunk:'',
+        session:e.session||'',
+        allergies:e.allergies||'',medications:e.medications||'',dietary:e.dietary||'',
+        doctor:e.doctor||'',doctorPhone:e.doctorPhone||'',
+        insurance:e.insurance||'',policyNum:e.policyNum||'',
+        emergencyName:e.emergencyName||'',emergencyPhone:e.emergencyPhone||'',emergencyRel:e.emergencyRel||''
+    };
+
+    // Check if this parent already has an active invite for this camp
+    db.from('link_parent_invites')
+        .select('id,token,status')
+        .eq('camp_id',campId)
+        .eq('parent_email',parentEmail)
+        .eq('status','active')
+        .limit(1)
+        .then(function(res){
+            if(res.data&&res.data.length){
+                // Reuse existing invite — update camper_data in case bunk changed
+                var existing=res.data[0];
+                db.from('link_parent_invites')
+                    .update({camper_names:camperNames,camper_data:camperData})
+                    .eq('id',existing.id)
+                    .then(function(){});
+                _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail);
+            } else {
+                var token=_genToken();
+                var expires=new Date();
+                expires.setFullYear(expires.getFullYear()+1);
+                db.from('link_parent_invites').insert({
+                    camp_id:campId,token:token,
+                    parent_name:parentName,parent_email:parentEmail,
+                    family_id:e.familyId||null,
+                    camper_names:camperNames,
+                    camper_data:camperData,
+                    status:'active',expires_at:expires.toISOString()
+                }).then(function(ins){
+                    if(ins.error){
+                        console.warn('[Me] Invite insert error:',ins.error.message);
+                        _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
+                    } else {
+                        _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail);
+                    }
+                });
+            }
+        });
+}
+
+function _showInviteModal(enrollId,url,parentEmail){
+    var e=enrollments[enrollId]||{};
+    var firstName=(e.camperName||'').split(' ')[0]||'your child';
+    var pName=e.parentName||e.parentEmail||'Parent';
+    var pFirst=pName.split(' ')[0];
+
+    var h='<div style="max-width:500px;">';
+    h+='<div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">';
+    h+='<div style="width:44px;height:44px;border-radius:50%;background:#DBEAFE;display:flex;align-items:center;justify-content:center;flex-shrink:0;">';
+    h+='<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#3B82F6" stroke-width="2"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>';
+    h+='</div>';
+    h+='<div><div style="font-size:1rem;font-weight:700;color:var(--s800);">Parent Portal Invite Ready</div>';
+    h+='<div style="font-size:.8rem;color:var(--s500);">'+esc(e.camperName||'')+'\'s acceptance</div></div></div>';
+
+    h+='<p style="font-size:.85rem;color:var(--s600);margin-bottom:12px;">Share this link with <strong>'+esc(pFirst)+'</strong> so they can access the Campistry Link parent portal.</p>';
+
+    h+='<div style="background:var(--s50);border:1px solid var(--s200);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;margin-bottom:14px;">';
+    h+='<span style="font-size:.75rem;color:var(--s600);flex:1;word-break:break-all;font-family:monospace;">'+esc(url)+'</span>';
+    h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="var b=this;navigator.clipboard.writeText(\''+url.replace(/'/g,"\\'")+'\'||document.location).then(function(){b.textContent=\'Copied ✓\';toast(\'Link copied!\');setTimeout(function(){b.textContent=\'Copy\'},2500)})" style="white-space:nowrap;flex-shrink:0;">Copy</button>';
+    h+='</div>';
+
+    // Email preview
+    h+='<details style="margin-bottom:14px;">';
+    h+='<summary style="font-size:.8rem;font-weight:600;color:var(--s600);cursor:pointer;user-select:none;">Preview email message</summary>';
+    h+='<div style="margin-top:10px;background:#fff;border:1px solid var(--s200);border-radius:8px;padding:14px;font-size:.82rem;line-height:1.7;color:var(--s700);white-space:pre-wrap;">';
+    h+='Dear '+esc(pFirst)+',\n\nWe\'re excited to let you know that <strong>'+esc(firstName)+'</strong> has been accepted to camp!\n\nClick the link below to access the Campistry Link parent portal, where you can view your child\'s schedule, messages from camp, forms, and more:\n\n<a href="'+esc(url)+'" style="color:#3B82F6;">'+esc(url)+'</a>\n\nWe look forward to a wonderful summer!\n\nCamp Office';
+    h+='</div></details>';
+
+    if(parentEmail){
+        h+='<div style="font-size:.75rem;color:var(--s400);margin-bottom:14px;">';
+        h+='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-2px;margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>';
+        h+=esc(parentEmail)+'</div>';
+    }
+
+    h+='</div>';
+
+    showModal('Parent Portal Invite',h);
 }
 
 function autoPromoteWaitlist(sessionName){
@@ -4114,7 +4239,7 @@ window.CampistryMe={
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
     bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
-    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
+    viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,generateParentInvite:generateParentInvite,
     saveAppNote:saveAppNote,printApplication:printApplication,
     openFormConfig:openFormConfig,saveFormConfig:saveFormConfig,addCustomQ:addCustomQ,addPromoRow:addPromoRow,
     finSetTab:finSetTab,finAddStaff:finAddStaff,finRemoveStaff:finRemoveStaff,

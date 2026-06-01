@@ -1048,5 +1048,147 @@ init();
 initPickupTabs();
 </script>
 <script src="campistry_notes_quick.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="config.js"></script>
+<script>
+// =============================================================================
+// Parent Portal — Token-based session init
+// Runs after the page renders (init() already called with placeholder data).
+// Validates the invite token and replaces placeholder data with real data.
+// =============================================================================
+(function() {
+    'use strict';
+
+    var SESSION_KEY = 'campistry_link_parent_session';
+
+    // ── 1. Determine token ────────────────────────────────────────────────────
+    var urlToken = new URLSearchParams(window.location.search).get('invite');
+    var stored   = null;
+    try { stored = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); } catch(e) {}
+
+    // If we have a stored session and no new token in the URL, use it directly
+    if (stored && stored.parentName && !urlToken) {
+        _applySession(stored);
+        return;
+    }
+
+    // Need a token to proceed
+    if (!urlToken) {
+        // No token and no stored session — show the invalid screen
+        _showInvalidScreen('No invite token found. Please use the link sent to you by the camp.');
+        return;
+    }
+
+    // ── 2. Validate token via Supabase RPC ────────────────────────────────────
+    var cfg = window.__CAMPISTRY_SUPABASE__;
+    if (!cfg || !supabase || !supabase.createClient) {
+        console.warn('[Parent] Supabase not available — using stored session if any');
+        if (stored) { _applySession(stored); } else { _showInvalidScreen('Could not connect to camp server.'); }
+        return;
+    }
+
+    var db = supabase.createClient(cfg.url, cfg.anonKey);
+
+    db.rpc('get_parent_invite_data', { p_token: urlToken }).then(function(res) {
+        if (res.error || !res.data || !res.data.success) {
+            var msg = (res.data && res.data.error === 'invalid_or_expired')
+                ? 'This invite link has expired or been revoked. Please contact the camp for a new link.'
+                : 'Could not verify your invite link. Please try again or contact the camp.';
+            _showInvalidScreen(msg);
+            return;
+        }
+
+        var d = res.data;
+        var session = {
+            parentName:  d.parent_name  || 'Parent',
+            parentEmail: d.parent_email || '',
+            familyId:    d.family_id    || null,
+            campId:      d.camp_id      || null,
+            camperNames: d.camper_names || [],
+            camperData:  d.camper_data  || {},
+            token:       urlToken,
+            savedAt:     new Date().toISOString()
+        };
+
+        // Persist so next visit doesn't need to re-validate
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); } catch(e) {}
+
+        _applySession(session);
+    });
+
+    // ── 3. Apply session — replace placeholder data with real data ────────────
+    function _applySession(session) {
+        // Update parent header
+        parent.name  = session.parentName;
+        parent.email = session.parentEmail;
+
+        // Build children array from camper_data snapshot
+        var realChildren = [];
+        var names = session.camperNames || Object.keys(session.camperData || {});
+        names.forEach(function(name, idx) {
+            var d = (session.camperData && session.camperData[name]) || {};
+            var initials = name.split(' ').map(function(p) { return p[0]; }).join('').toUpperCase().slice(0,2);
+            var age = d.dob ? Math.floor((Date.now() - new Date(d.dob).getTime()) / (365.25*24*3600*1000)) : null;
+            var ec = [];
+            if (d.emergencyName) ec.push({ name: d.emergencyName, rel: d.emergencyRel || 'Emergency', phone: d.emergencyPhone || '' });
+            realChildren.push({
+                id:       'child_' + idx,
+                name:     name,
+                initials: initials,
+                age:      age,
+                division: d.division   || '',
+                grade:    d.grade      || '',
+                bunk:     d.bunk       || '',
+                session:  d.session    || '',
+                counselor:'',
+                allergies: d.allergies || 'None',
+                medications: d.medications || 'None',
+                dietary:   d.dietary   || '',
+                doctor:    d.doctor    || '',
+                doctorPhone: d.doctorPhone || '',
+                insurance: d.insurance || '',
+                policyNum: d.policyNum || '',
+                canteenBalance: 0,
+                dailyLimit: 5,
+                emergencyContacts: ec
+            });
+        });
+
+        if (realChildren.length) {
+            children = realChildren;
+            // Rebuild canteenTxByChild keyed by new IDs
+            var newTx = {};
+            realChildren.forEach(function(c) { newTx[c.id] = []; });
+            canteenTxByChild = newTx;
+        }
+
+        // Re-render with real data
+        init();
+
+        // Hide the invalid screen if it was shown
+        var inv = document.getElementById('parentInvalidScreen');
+        if (inv) inv.style.display = 'none';
+    }
+
+    // ── 4. Invalid / expired screen ──────────────────────────────────────────
+    function _showInvalidScreen(msg) {
+        var el = document.getElementById('parentInvalidScreen');
+        if (!el) {
+            el = document.createElement('div');
+            el.id = 'parentInvalidScreen';
+            el.style.cssText = 'position:fixed;inset:0;z-index:9998;background:#fff;display:flex;align-items:center;justify-content:center;padding:24px;';
+            document.body.appendChild(el);
+        }
+        el.innerHTML =
+            '<div style="max-width:380px;text-align:center;">' +
+            '<div style="width:64px;height:64px;border-radius:50%;background:#FEF2F2;display:flex;align-items:center;justify-content:center;margin:0 auto 18px;">' +
+            '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#EF4444" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>' +
+            '<h2 style="font-size:1.15rem;font-weight:700;margin-bottom:10px;color:#0F172A;">Link Not Valid</h2>' +
+            '<p style="font-size:.87rem;color:#64748B;line-height:1.6;">' + msg + '</p>' +
+            '</div>';
+        el.style.display = 'flex';
+    }
+})();
+</script>
 </body>
 </html>
