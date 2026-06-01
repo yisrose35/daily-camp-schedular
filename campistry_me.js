@@ -1495,8 +1495,11 @@ function renderEnrollment(){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
             }else if(e.status==='accepted'){
                 h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\')">Enroll</button>';
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
             }else if(e.status==='waitlisted'){
                 h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\')">Accept</button>';
+            }else if(e.status==='enrolled'){
+                h+='<button class="me-btn me-btn--sec me-btn--sm" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')" title="Get parent portal invite link">🔗 Invite</button>';
             }
             h+='</div></td></tr>';
         });
@@ -1767,11 +1770,13 @@ function viewApplication(id){
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='accepted'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.enrollCamper(\''+esc(id)+'\');CampistryMe.closeModal(\'appViewModal\')">Enroll Now</button>';
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='waitlisted'){
         f+='<button class="me-btn me-btn--pri" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'accepted\');CampistryMe.closeModal(\'appViewModal\')">Accept</button>';
         f+='<button class="me-btn me-btn--danger" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'declined\');CampistryMe.closeModal(\'appViewModal\')">Decline</button>';
     }else if(e.status==='enrolled'){
+        f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.generateParentInvite(\''+esc(id)+'\')">🔗 Get Invite Link</button>';
         f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.updateEnrollStatus(\''+esc(id)+'\',\'withdrawn\');CampistryMe.closeModal(\'appViewModal\')">Withdraw</button>';
     }
     f+='<button class="me-btn me-btn--sec" onclick="CampistryMe.closeModal(\'appViewModal\')">Close</button>';
