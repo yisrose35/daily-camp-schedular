@@ -2154,7 +2154,12 @@ function daPruneOrphanDivisionTiles() {
   if (dailyOverrideSkeleton.length !== before) {
     window.dailyOverrideSkeleton = dailyOverrideSkeleton;
     console.log('[DA-CLEANUP] Pruned ' + (before - dailyOverrideSkeleton.length) + ' orphan-division tile(s): ' + [...new Set(removed)].join(', '));
-    if (window.AccessControl?.canEdit?.() && typeof saveDailySkeleton === 'function') saveDailySkeleton();
+    // ★ #8 (re-audit): do NOT auto-save the prune. window.divisions and the skeleton
+    //   are hydrated by SEPARATE listeners; during a structure-change sync
+    //   window.divisions can be transiently stale, and auto-saving a prune then would
+    //   PERSIST a wrong deletion. Pruning in-memory keeps the editor + generation
+    //   clean; localStorage/cloud retain the tiles as a backstop, and the cleanup
+    //   persists naturally on the next genuine user save (when the structure is stable).
   }
 }
 
@@ -3472,6 +3477,15 @@ function addDropListeners(gridEl) {
       }
       
       if (newEvent) {
+        // ★ #4 (re-audit, hoisted): the date-change guard was originally only just
+        //   before the push — but the merge + overlap-erase below already mutate the
+        //   skeleton, so a date change DURING the modal would corrupt the NEW date's
+        //   tiles before the late guard fired. Check here, before ANY mutation, so a
+        //   mid-modal date change aborts cleanly with nothing erased/merged.
+        if (window.currentScheduleDate !== _dropDate) {
+          try { await daShowAlert('The date changed while placing this tile, so it was not added. Please drop it again.'); } catch (_) {}
+          return;
+        }
         // ★ SWIM + ELECTIVE MERGE
         const _daMergeRes = await daTryMergeSwimElective(newEvent, divName, dailyOverrideSkeleton);
         if (_daMergeRes) {
@@ -3502,7 +3516,7 @@ function addDropListeners(gridEl) {
           // ★ Day 25b fix (#2): record what this drop removes so it isn't lost
           //   SILENTLY (e.g. a Swim dropped across two Electives previously erased
           //   the second one with no trace). Displaced tiles surface in the
-          //   displaced-tiles panel so the user can see + re-add them.
+          //   displaced-tiles panel so the user can SEE what was replaced.
           if (overlaps) { try { addDisplacedTile(existing, 'Replaced by "' + (newEvent.event || 'new tile') + '"'); } catch (_) {} }
           return !overlaps;
         });
@@ -3993,7 +4007,10 @@ let tmpl = assignments[today] || assignments['Default'];
   try {
     const _lTs = localStorage.getItem(`campAutoLayers_ts_${dateKey}`) || null;
     const _cTs = (g.app1?.dailyAutoLayersTs || {})[dateKey] || null;
-    _cloudIsNewer = !!_cTs && (!_lTs || _cTs > _lTs);
+    const _cData = g.app1?.dailyAutoLayers?.[dateKey];
+    // ★ #7 (re-audit): only prefer cloud when it actually has layers — a cleared
+    //   cloud with a newer ts shouldn't shadow good local layers into a template.
+    _cloudIsNewer = !!_cTs && _cData && Object.keys(_cData).length > 0 && (!_lTs || _cTs > _lTs);
   } catch (e) {}
   if (!_cloudIsNewer) {
     try {
@@ -4085,7 +4102,11 @@ function saveDAAutoLayers() {
   try {
     const _lTs = localStorage.getItem(`campManualSkeleton_ts_${dateKey}`) || null;
     const _cTs = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey] || null;
-    _cloudIsNewer = !!_cTs && (!_lTs || _cTs > _lTs);
+    const _cData = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    // ★ #7 (re-audit): only prefer cloud when it ACTUALLY has data. A cleared-but-
+    //   timestamped cloud (another device hit "Clear All") would otherwise skip local
+    //   then fall through to a template, silently discarding good local data.
+    _cloudIsNewer = !!_cTs && Array.isArray(_cData) && _cData.length > 0 && (!_lTs || _cTs > _lTs);
   } catch (e) {}
 
   // Priority 1: localStorage (unless cloud is newer — #10)
