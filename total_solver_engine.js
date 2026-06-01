@@ -1439,7 +1439,20 @@
             if (_capSt === 'not_sharable') {
                 _capUse = getFieldUsageFromTimeIndex(_capFn, block.startTime, block.endTime, bunk);
             } else if (_capSt === 'same_division' && block.divName) {
-                _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
+                // ★ Cross-division guard (Day 33 fix): a same_division field may ONLY be
+                //   shared within ONE division. A DIFFERENT division holding it at this time
+                //   is never allowed — regardless of that division's own count being under
+                //   cap. Force a downgrade. This backstops a stale-index race in the
+                //   split-tile/batch scoring path that let two different-division bunks pick
+                //   the same field for the same sport (e.g. Majors 3 + Quints 1 both on
+                //   "Baseball Field 2" for Kickball). The commit gate runs sequentially, so
+                //   by the time the 2nd bunk commits, the 1st is already in the time index.
+                if (checkCrossDivisionTimeConflict(fName, block.divName, block.startTime, block.endTime, bunk)) {
+                    if (typeof console !== 'undefined' && console.warn) console.warn('[XDIV-GATE] ' + bunk + ' (' + block.divName + ') blocked from same_division field "' + fName + '" @' + block.startTime + '-' + block.endTime + ' — another division already holds it; downgrading.');
+                    _capUse = _capCap; // force downgrade — cross-division share not allowed on a same_division field
+                } else {
+                    _capUse = countSameDivisionUsage(fName, block.divName, block.startTime, block.endTime, bunk);
+                }
             } else {
                 // custom, all, or missing divName — use total usage as conservative check
                 _capUse = getFieldUsageFromTimeIndex(_capFn, block.startTime, block.endTime, bunk);
