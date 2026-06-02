@@ -163,6 +163,7 @@
                 log('No data in localStorage - clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
+                window._scheduleAssignmentsDate = dateKey; // keep owner stamp coherent with cleared memory
                 return false;
             }
             
@@ -173,6 +174,7 @@
                 log('No data for date:', dateKey, '- clearing window globals');
                 window.scheduleAssignments = {};
                 window.leagueAssignments = {};
+                window._scheduleAssignmentsDate = dateKey; // keep owner stamp coherent with cleared memory
                 return false;
             }
             
@@ -309,8 +311,16 @@
                 }
             }
             
+            // ★★★ CROSS-DATE STAMP: bind in-memory schedule to its owner date,
+            // atomically with the data writes above (no await in between). Without
+            // this, an async hydrate for a non-current date left the owner stamp
+            // (window._scheduleAssignmentsDate) pointing at the wrong day, so a
+            // later lazy save serialized THIS day's data under the stamped key —
+            // silently corrupting cloud. Keeping the stamp honest lets the save
+            // guards refuse the mismatch.
+            window._scheduleAssignmentsDate = dateKey;
             return hydrated;
-            
+
         } catch (e) {
             logError('Hydration error:', e);
             return false;
@@ -376,6 +386,7 @@
                         window.divisionTimes = {};
                         window.unifiedTimes = [];
                         window._localGenerationTimestamp = 0;
+                        window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with full-clear
                         const DAILY_KEY = 'campDailyData_v1';
                         const allData = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                         delete allData[dateKey];
@@ -492,6 +503,9 @@
             });
 
             window.scheduleAssignments = localAssignments;
+            // ★★★ CROSS-DATE STAMP: this merge applied dateKey's cloud data — bind
+            // the owner stamp so a concurrent nav's lazy save can't mistake it.
+            window._scheduleAssignmentsDate = dateKey;
 
             // Merge divisionTimes — add/update grades that aren't ours
             var cloudDT = cloudResult.data.divisionTimes || {};

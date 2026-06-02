@@ -594,9 +594,11 @@ function shouldHighlightBunk(bunkName) {
         let loadedAssignments = false;
         if (dateData.scheduleAssignments && Object.keys(dateData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dateData.scheduleAssignments;
+            window._scheduleAssignmentsDate = dateKey; // bind owner stamp to date-specific load (cross-date corruption guard)
             loadedAssignments = true;
         } else if (dailyData.scheduleAssignments && Object.keys(dailyData.scheduleAssignments).length > 0) {
             window.scheduleAssignments = dailyData.scheduleAssignments;
+            window._scheduleAssignmentsDate = dateKey; // bind owner stamp to date-specific load (cross-date corruption guard)
             loadedAssignments = true;
         } else if (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0) {
             // No saved data for this date — keep whatever is in memory (last resort).
@@ -6841,6 +6843,7 @@ if (softBlocks.length > 0) {
                 let data = selected.schedule_data; 
                 if (typeof data === 'string') try { data = JSON.parse(data); } catch(e) {}
                 window.scheduleAssignments = data.scheduleAssignments || data;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with loaded version (cross-date guard)
                 // Phase 4: restore segments from the version, or rebuild from assignments.
                 if (data.scheduleSegments && Object.keys(data.scheduleSegments).length > 0) {
                     window.scheduleSegments = data.scheduleSegments;
@@ -6887,6 +6890,7 @@ if (softBlocks.length > 0) {
                     if (scheduleData.divisionTimes) latestDivisionTimes = scheduleData.divisionTimes;
                 });
                 window.scheduleAssignments = mergedAssignments;
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with merged versions (cross-date guard)
                 if (Object.keys(mergedSegments).length > 0) {
                     window.scheduleSegments = mergedSegments;
                 } else {

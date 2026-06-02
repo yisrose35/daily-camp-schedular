@@ -1048,7 +1048,8 @@ all[date].updated_at = new Date().toISOString();
                 // Merge remaining data into window globals
                 window.scheduleAssignments = result.data.scheduleAssignments || {};
                 window.leagueAssignments = result.data.leagueAssignments || {};
-                
+                window._scheduleAssignmentsDate = dateKey; // owner stamp coherent with delete-reload (cross-date guard)
+
                 // Update localStorage
                 const all = window.loadAllDailyData();
                 all[dateKey] = {
