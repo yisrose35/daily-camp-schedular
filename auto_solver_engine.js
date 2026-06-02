@@ -394,7 +394,21 @@
                 return false; // misaligned occupant — cannot share this field
             }
         }
-        // 5. Combined field mutual exclusion
+        // 5. Combined field mutual exclusion.
+        //    ★ Check the SOLVER's live field index (the same `fieldIndex` used for the
+        //    capacity check above). isBlockedByCombo reads facilities.js's OWN usage
+        //    tracking, which is NOT populated during the auto solve — so it silently
+        //    passed and combo partners (e.g. Baseball Field 1 ⊃ Field 2/3/4) were
+        //    double-booked. Walk each exclusive partner's fieldIndex entries for a time
+        //    overlap (mirrors the manual solver's _comboExclusiveMap + time-index check).
+        if (window.FieldCombos?.getExclusiveFields) {
+            const _partners = window.FieldCombos.getExclusiveFields(fieldName) || [];
+            for (let _pi = 0; _pi < _partners.length; _pi++) {
+                const _pe = fieldIndex.get(normName(_partners[_pi])) || [];
+                if (_pe.some(e => e.startMin < endMin && e.endMin > startMin && e.bunk !== bunk)) return false;
+            }
+        }
+        // (belt-and-suspenders: also honor facilities.js's own combo tracking if present)
         if (window.FieldCombos?.isBlockedByCombo) {
             const combo = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, bunk);
             if (combo?.blocked) return false;
