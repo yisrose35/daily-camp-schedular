@@ -401,7 +401,14 @@
     // WINDOW GLOBALS MANAGEMENT
     // =========================================================================
 
-    function hydrateWindowGlobals(data) {
+    function hydrateWindowGlobals(data, ownerDateKey) {
+        // ★★★ CROSS-DATE CORRUPTION GUARD (stamp) ★★★
+        // Record which date the in-memory schedule belongs to. saveSchedule reads this
+        // (via getWindowGlobals → _belongsToDate) and refuses any save whose target date
+        // differs — so the dual date-change-handler race can never write one day's
+        // schedule under another day's cloud key. Only stamp when the owner date is known
+        // (degrades to inert/no-op otherwise; never blocks a legitimate save).
+        if (ownerDateKey) window._scheduleAssignmentsDate = ownerDateKey;
         if (!data) {
             log('No data to hydrate, clearing globals');
             window.scheduleAssignments = {};
@@ -497,7 +504,12 @@
             divisionTimes: window.divisionTimes || {},
             isRainyDay: window.isRainyDay || false,
             rainyDayStartTime: window.rainyDayStartTime ?? null,  // ★ FIX v1.5: Include for mid-day mode
-            rainyDayMode: window.isRainyDay || false              // ★ FIX v1.5: Backward compatibility
+            rainyDayMode: window.isRainyDay || false,             // ★ FIX v1.5: Backward compatibility
+            // ★★★ CROSS-DATE CORRUPTION GUARD: which date this snapshot belongs to.
+            // saveSchedule refuses to write it under a different date's key, then strips
+            // this marker before persisting. Snapshotted here so the check survives the
+            // async gap during which a racing handler may swap window.scheduleAssignments.
+            _belongsToDate: window._scheduleAssignmentsDate || null
         };
     }
 
@@ -703,7 +715,7 @@
             // ═══════════════════════════════════════════════════════════════
             
             log('Step 3: Hydrating window globals...');
-            hydrateWindowGlobals(result.data);
+            hydrateWindowGlobals(result.data, dateKey);
 
             // ═══════════════════════════════════════════════════════════════
             // STEP 3b: Hydrate past dates for rotation history (background)
@@ -792,7 +804,7 @@
                         })();
                         if (currentActs < expectedActs) {
                             log('[load re-apply ' + label + '] memory drift detected: ' + currentActs + ' < ' + expectedActs + ' — re-applying cloud data');
-                            hydrateWindowGlobals(stableResult);
+                            hydrateWindowGlobals(stableResult, dateKey);
                             if (window.updateTable) window.updateTable();
                         }
                     } catch (e) { logWarn('re-apply ' + label + ' failed:', e); }
@@ -939,6 +951,22 @@
    async function saveSchedule(dateKey, data, options = {}) {
         if (!dateKey) dateKey = getCurrentDateKey();
         if (!data) data = getWindowGlobals();
+
+        // ★★★ CROSS-DATE CORRUPTION GUARD (enforce) ★★★
+        // If the snapshot belongs to a different date than the save target, a date-change
+        // handler race is about to write one day's schedule under another day's key.
+        // Refuse it — this makes the dual-handler navigation race (orchestrator vs
+        // integration_hooks) structurally incapable of corrupting a day's schedule.
+        // Inert when unstamped (_belongsToDate null) so it can never block a legit save.
+        if (data && data._belongsToDate && data._belongsToDate !== dateKey) {
+            logWarn('★ BLOCKED cross-date save: in-memory schedule belongs to ' + data._belongsToDate +
+                    ' but save targets ' + dateKey + ' — refusing to prevent corruption');
+            return { success: false, skipped: 'date-mismatch', belongsTo: data._belongsToDate, target: dateKey };
+        }
+        // Strip the internal marker so it is never persisted into the cloud/local blob.
+        if (data && Object.prototype.hasOwnProperty.call(data, '_belongsToDate')) {
+            try { delete data._belongsToDate; } catch (e) { /* non-fatal */ }
+        }
 
         const bunkCount = Object.keys(data.scheduleAssignments || {}).length;
         log('SAVE SCHEDULE:', dateKey, bunkCount, 'bunks');
@@ -1412,7 +1440,7 @@
 
             if (records && records.length > 0) {
                 const merged = mergeCloudRecords(records);
-                hydrateWindowGlobals(merged);
+                hydrateWindowGlobals(merged, dateKey);
                 setLocalData(dateKey, merged);
                 log('Reloaded remaining data:', Object.keys(merged.scheduleAssignments || {}).length, 'bunks');
             } else {
@@ -1681,6 +1709,10 @@
         // Listen for generation complete - MUST be immediate + verified
         window.addEventListener('campistry-generation-complete', async (e) => {
             const dateKey = e.detail?.dateKey || getCurrentDateKey();
+            // ★★★ CROSS-DATE GUARD: a generation populates scheduleAssignments for THIS
+            // date — stamp it so the post-gen save isn't false-blocked and so any later
+            // navigation save can't write this fresh schedule under another date's key.
+            window._scheduleAssignmentsDate = dateKey;
             const bunkCount = Object.keys(window.scheduleAssignments || {}).length;
             log('Generation complete, saving immediately...', bunkCount, 'bunks');
             

@@ -2044,7 +2044,17 @@
             // ═══════════════════════════════════════════════════════════════
             if (oldDateKey && oldDateKey !== newDateKey) {
                 const currentBunks = Object.keys(window.scheduleAssignments || {}).length;
-                if (currentBunks > 0) {
+                // ★★★ CROSS-DATE CORRUPTION GUARD ★★★
+                // Only auto-save oldDateKey if the in-memory schedule STILL belongs to it.
+                // If a racing date-change handler already swapped in another date's data,
+                // saving here would write the wrong day's schedule under oldDateKey —
+                // silently corrupting it (the exact bug this guards against). Inert when
+                // the stamp is unset (degrades to prior behavior).
+                const _memDate = window._scheduleAssignmentsDate;
+                if (_memDate && _memDate !== oldDateKey) {
+                    console.warn('🔗 SKIP auto-save before date change: in-memory data belongs to ' +
+                                 _memDate + ', not ' + oldDateKey + ' — avoiding cross-date corruption');
+                } else if (currentBunks > 0) {
                     console.log('🔗 Auto-saving before date change:', currentBunks, 'bunks');
                     showNotification('Saving...', 'info');
                     try {
@@ -2069,7 +2079,11 @@
                 if (result?.success && result.data) {
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
-                    
+                    // ★★★ CROSS-DATE GUARD: in-memory schedule now belongs to newDateKey.
+                    // Keeps the date stamp coherent so the save guard never false-blocks a
+                    // later edit/save on this date, and a racing save-old can detect drift.
+                    window._scheduleAssignmentsDate = newDateKey;
+
                     // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                     if (result.data.unifiedTimes?.length > 0) {
                         window.unifiedTimes = result.data.unifiedTimes;
@@ -2556,6 +2570,8 @@
                     window.scheduleAssignments = result.data.scheduleAssignments || {};
                     window.leagueAssignments = result.data.leagueAssignments || {};
                 }
+                // ★★★ CROSS-DATE GUARD: stamp the date this reloaded data belongs to.
+                window._scheduleAssignmentsDate = dateKey;
 
                 if (window.updateTable) {
                     window.updateTable();
