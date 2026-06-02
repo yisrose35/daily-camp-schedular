@@ -237,12 +237,16 @@
             var fieldProps = props[fieldName] || _storedFieldProps[fieldName] || {};
             if (!fieldProps.sharableWith && !fieldProps.sharable && _storedFieldProps[fieldName]) fieldProps = _storedFieldProps[fieldName];
 
-            var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false;
+            var capacity = 1, sharingType = 'not_sharable', prefList = null, prefExclusive = false, allowedPairs = null;
             if (fieldProps.sharableWith) {
                 var sw = fieldProps.sharableWith;
                 if (sw.type === 'not_sharable') { capacity = parseInt(sw.capacity) || 1; sharingType = 'not_sharable'; }
                 else if (sw.type === 'all') { capacity = parseInt(sw.capacity) || 999; sharingType = 'all'; }
                 else if (sw.type === 'same_division') { capacity = parseInt(sw.capacity) || 2; sharingType = 'same_division'; }
+                // ★ cross_division ("Grade Pairs"): honor the manual builder the same as auto —
+                //   cross-grade sharing is allowed ONLY for grade pairs the user enabled
+                //   (allowedPairs); same-grade always shares; capacity caps total bunks.
+                else if (sw.type === 'cross_division') { capacity = parseInt(sw.capacity) || 999; sharingType = 'cross_division'; allowedPairs = sw.allowedPairs || {}; }
                 else if (sw.type === 'custom') { capacity = parseInt(sw.capacity) || 2; sharingType = 'custom'; }
                 else if (sw.capacity) { capacity = parseInt(sw.capacity); sharingType = 'same_division'; }
                 else { capacity = 2; sharingType = 'same_division'; }
@@ -303,7 +307,7 @@
                 }
             }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, allowedPairs: allowedPairs, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
             if (unavailableRulesCache || availableRulesCache) {
                 v12Log('[TIME-RULES] Cached ' + (unavailableRulesCache ? unavailableRulesCache.length : 0) + ' unavailable + ' + (availableRulesCache ? availableRulesCache.length : 0) + ' available rules for "' + fieldName + '"');
             }
@@ -320,11 +324,12 @@
                 var spec = storedSpecials[si2];
                 if (!spec || !spec.name || _fieldPropertyMap.has(spec.name)) continue;
                 var specSW = spec.sharableWith || {};
-                var specCap = 1, specST = 'not_sharable';
+                var specCap = 1, specST = 'not_sharable', specPairs = null;
                 if (specSW.type === 'same_division') { specCap = parseInt(specSW.capacity) || 2; specST = 'same_division'; }
+                else if (specSW.type === 'cross_division') { specCap = parseInt(specSW.capacity) || 999; specST = 'cross_division'; specPairs = specSW.allowedPairs || {}; }
                 else if (specSW.type === 'custom') { specCap = parseInt(specSW.capacity) || 2; specST = 'custom'; }
                 else if (specSW.type === 'all') { specCap = parseInt(specSW.capacity) || 999; specST = 'all'; }
-                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true });
+                _fieldPropertyMap.set(spec.name, { capacity: specCap, sharingType: specST, allowedPairs: specPairs, prefList: null, prefExclusive: false, hasProps: true, _isSpecial: true });
                 specialsAdded++;
             }
             if (specialsAdded > 0) v12Log('Added ' + specialsAdded + ' specials to _fieldPropertyMap');
@@ -479,12 +484,45 @@
         return result;
     };
 
+    // ★ Mirror auto's isCrossDivAllowed (scheduler_core_auto.js): a grade may join a
+    //   shared field only if, for EVERY grade already present, the sorted pair key
+    //   "A|B" is in allowedPairs. Same-grade always shares its own bunks. Absent/empty
+    //   pairs → only same-grade (so a cross_division field with no cross pairs behaves
+    //   exactly like same_division — no behavior change for the common/default case).
+    function isCrossDivAllowedManual(newGrade, existingGrades, allowedPairs) {
+        var pairs = allowedPairs || {};
+        if (!existingGrades || existingGrades.length === 0) return true;
+        for (var _ica = 0; _ica < existingGrades.length; _ica++) {
+            var eg = existingGrades[_ica];
+            if (!eg || eg === newGrade) continue;
+            if (!pairs[[String(newGrade), String(eg)].sort().join('|')]) return false;
+        }
+        return true;
+    }
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
         // Check the field itself
         var entries = _fieldTimeIndex.get(fieldNorm);
-        if (entries) {
+        // ★ cross_division ("Grade Pairs"): honor the manual builder like auto —
+        //   cross-grade co-occupancy is ALLOWED for the grade pairs the user enabled
+        //   (allowedPairs), capped by total capacity; only non-allowed pairs / over-cap
+        //   block. (same_division/not_sharable/etc. still block ALL cross-grade below.)
+        var _xfp = _fieldPropertyMap.get(fieldName);
+        if (_xfp && _xfp.sharingType === 'cross_division') {
+            if (entries) {
+                var _xUpper = findFirstOverlapIndex(entries, startMin, endMin);
+                var _xGrades = [], _xCount = 0;
+                for (var _xi = 0; _xi < _xUpper; _xi++) {
+                    var _xe = entries[_xi];
+                    if (_xe.bunk === excludeBunk) continue;
+                    if (_xe.endMin > startMin) { _xGrades.push(_xe.divName); _xCount++; }
+                }
+                if (_xfp.capacity && _xCount >= _xfp.capacity) return { conflictingDiv: '(capacity)', capacity: _xfp.capacity, count: _xCount, ourTime: startMin + '-' + endMin };
+                if (!isCrossDivAllowedManual(blockDivName, _xGrades, _xfp.allowedPairs)) return { conflictingDiv: '(pair-not-allowed)', grades: _xGrades, ourTime: startMin + '-' + endMin };
+            }
+            // allowed (or no overlap) → no cross-division conflict; still check combos below.
+        } else if (entries) {
             var upperBound = findFirstOverlapIndex(entries, startMin, endMin);
             for (var i = 0; i < upperBound; i++) {
                 var e = entries[i];
