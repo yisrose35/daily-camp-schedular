@@ -17512,6 +17512,20 @@
                     && !bunkList.map(String).includes(String(bunk))) return 'field access: bunk not in allowed list';
             }
 
+            // ★ EXCLUSIVE field preference — a field reserved for specific divisions
+            //   (preferences.exclusive) may NEVER host a non-listed division. The auto
+            //   builder previously ignored field preferences entirely. canPlace (in
+            //   AutoSolverEngine) gates the CSP candidate path; this validator gates the
+            //   OTHER auto write paths (FQ-reopt seniority re-pair / pull, active-pairing,
+            //   time-reloc, drop-refill, main write) — without this, the field-quality
+            //   reopt could move a non-listed division onto a premium exclusive field
+            //   (same class as the manual _fqValidSwap bug). Mirrors manual L867.
+            if (fld?.preferences?.enabled && fld.preferences.exclusive
+                && Array.isArray(fld.preferences.list) && fld.preferences.list.length > 0
+                && fld.preferences.list.indexOf(grade) === -1) {
+                return 'field preference: exclusive to other divisions';
+            }
+
             // Field-level grade-scoped time rules
             // ★ Day 22.5 fix: ALSO read DA Resources daily rules from THREE
             //   sources, because window.activityProperties may be wiped between
