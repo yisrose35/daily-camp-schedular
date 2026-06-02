@@ -3443,6 +3443,21 @@ function removeBroadcast(idx){
 // ═══════════════════════════════════════════════════════════════
 var campForms=[];
 function loadForms(){var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campForms=(s.campistryMe&&s.campistryMe.forms)||[]}
+
+// ─── Link Forms (parent-portal forms/docs managed by admin) ───────────────────
+var linkForms={digital:[],printReturn:[],documents:[]};
+function loadLinkForms(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    var lf=s.link_forms||{};
+    linkForms={digital:lf.digital||[],printReturn:lf.printReturn||[],documents:lf.documents||[]};
+}
+function saveLinkForms(){
+    var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    s.link_forms=linkForms;
+    localStorage.setItem('campGlobalSettings_v1',JSON.stringify(s));
+    if(typeof window!=='undefined'&&typeof window.saveGlobalSettings==='function')
+        window.saveGlobalSettings('link_forms',linkForms);
+}
 function saveForms(){
     var s=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
     if(!s.campistryMe)s.campistryMe={};
@@ -3456,23 +3471,48 @@ function saveForms(){
 
 function renderForms(){
     loadForms();
+    loadLinkForms();
     var c=document.getElementById('page-forms');
+    var h='<div class="sec-hd"><div><h2 class="sec-title">Forms &amp; Documents</h2></div></div>';
+    // Tabs
+    h+='<div style="display:flex;gap:0;border-bottom:2px solid var(--s100);margin-bottom:20px;">';
+    h+='<button id="fTab-camp" onclick="CampistryMe.switchFormsTab(\'camp\')" style="padding:9px 20px;background:none;border:none;border-bottom:2px solid var(--me);margin-bottom:-2px;font-weight:700;font-size:.85rem;color:var(--me);cursor:pointer;">Camp Forms</button>';
+    h+='<button id="fTab-link" onclick="CampistryMe.switchFormsTab(\'link\')" style="padding:9px 20px;background:none;border:none;border-bottom:2px solid transparent;margin-bottom:-2px;font-weight:600;font-size:.85rem;color:var(--s400);cursor:pointer;">Link Forms</button>';
+    h+='</div>';
+    h+='<div id="formsView-camp">'+_campFormsHTML()+'</div>';
+    h+='<div id="formsView-link" style="display:none;">'+_linkFormsHTML()+'</div>';
+    c.innerHTML=h;
+}
+
+function switchFormsTab(tab){
+    var camp=document.getElementById('formsView-camp');
+    var link=document.getElementById('formsView-link');
+    var tCamp=document.getElementById('fTab-camp');
+    var tLink=document.getElementById('fTab-link');
+    if(tab==='camp'){
+        camp.style.display='';link.style.display='none';
+        tCamp.style.cssText=tCamp.style.cssText.replace('transparent','var(--me)').replace('var(--s400)','var(--me)');tCamp.style.fontWeight='700';
+        tLink.style.cssText=tLink.style.cssText.replace('var(--me)','transparent');tLink.style.color='var(--s400)';tLink.style.fontWeight='600';
+    } else {
+        camp.style.display='none';link.style.display='';
+        tLink.style.cssText=tLink.style.cssText.replace('transparent','var(--me)').replace('var(--s400)','var(--me)');tLink.style.fontWeight='700';
+        tCamp.style.cssText=tCamp.style.cssText.replace('var(--me)','transparent');tCamp.style.color='var(--s400)';tCamp.style.fontWeight='600';
+    }
+}
+
+function _campFormsHTML(){
     var completedCount=0,pendingCount=0;
     campForms.forEach(function(f){
         var completed=(f.responses||[]).length;
         var total=Object.keys(roster).length;
         completedCount+=completed;pendingCount+=(total-completed);
     });
-
-    var h='<div class="sec-hd"><div><h2 class="sec-title">Forms & Documents</h2><p class="sec-desc">'+campForms.length+' form'+(campForms.length!==1?'s':'')+' · '+completedCount+' completed, '+pendingCount+' pending</p></div><div class="sec-actions"><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create Form</button></div></div>';
-
-    // Stats
+    var h='<div class="sec-actions" style="margin-bottom:14px;"><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create Form</button></div>';
     h+='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;margin-bottom:18px">';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800">'+campForms.length+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Active Forms</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--ok)">'+completedCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Completed</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--warn)">'+pendingCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Pending</div></div>';
     h+='</div>';
-
     if(campForms.length){
         campForms.forEach(function(f,fi){
             var total=Object.keys(roster).length;
@@ -3485,9 +3525,82 @@ function renderForms(){
             h+='</div>';
         });
     } else {
-        h+='<div class="me-empty"><h3>No forms created yet</h3><p>Create forms for health waivers, permission slips, emergency contacts, and more.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create First Form</button></div>';
+        h+='<div class="me-empty"><h3>No forms created yet</h3><p>Create forms for health waivers, permission slips, and more.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addForm()">+ Create First Form</button></div>';
     }
-    c.innerHTML=h;
+    return h;
+}
+
+function _linkFormsHTML(){
+    var docSvg='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+    var h='<p style="font-size:.82rem;color:var(--s400);margin-bottom:18px;">Configure the forms and documents that appear in the parent-facing Link portal.</p>';
+
+    // ── Digital Forms ──────────────────────────────────────────────
+    h+='<div class="me-card" style="margin-bottom:14px;padding:16px;">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+    h+='<div><div style="font-weight:700;font-size:.95rem;">Complete Online</div><div style="font-size:.75rem;color:var(--s400);">Forms parents fill out directly in the portal</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDigitalForm()">+ Add Form</button>';
+    h+='</div>';
+    if(linkForms.digital.length){
+        linkForms.digital.forEach(function(f,i){
+            h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
+            h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(f.name)+'</div>';
+            if(f.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(f.description)+'</div>';
+            h+='<div style="font-size:.7rem;color:var(--s500);margin-top:2px;">'+esc(f.type||'General')+'</div></div>';
+            h+=bdg(f.required?'Required':'Optional',f.required?'err':'warn');
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'digital\','+i+')">Edit</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'digital\','+i+')">Delete</button>';
+            h+='</div>';
+        });
+    } else {
+        h+='<div style="font-size:.8rem;color:var(--s400);padding:10px 0;border-top:1px solid var(--s100);">No digital forms added yet. Parents will see an empty state.</div>';
+    }
+    h+='</div>';
+
+    // ── Print & Return ─────────────────────────────────────────────
+    h+='<div class="me-card" style="margin-bottom:14px;padding:16px;">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+    h+='<div><div style="font-weight:700;font-size:.95rem;">Print &amp; Return</div><div style="font-size:.75rem;color:var(--s400);">PDFs parents download, fill by hand, and upload back</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkPrintForm()">+ Add Form</button>';
+    h+='</div>';
+    if(linkForms.printReturn.length){
+        linkForms.printReturn.forEach(function(f,i){
+            h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
+            h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(f.name)+'</div>';
+            if(f.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(f.description)+'</div>';
+            if(f.downloadUrl)h+='<div style="font-size:.7rem;color:var(--me);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px;"><a href="'+esc(f.downloadUrl)+'" target="_blank">'+esc(f.downloadUrl)+'</a></div>';
+            h+='</div>';
+            h+=bdg(f.required?'Required':'Optional',f.required?'err':'warn');
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'printReturn\','+i+')">Edit</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'printReturn\','+i+')">Delete</button>';
+            h+='</div>';
+        });
+    } else {
+        h+='<div style="font-size:.8rem;color:var(--s400);padding:10px 0;border-top:1px solid var(--s100);">No print forms added yet. Parents will see an empty state.</div>';
+    }
+    h+='</div>';
+
+    // ── Camp Documents ─────────────────────────────────────────────
+    h+='<div class="me-card" style="padding:16px;">';
+    h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">';
+    h+='<div><div style="font-weight:700;font-size:.95rem;">Camp Documents</div><div style="font-size:.75rem;color:var(--s400);">Read-only downloads (handbooks, calendars, etc.)</div></div>';
+    h+='<button class="me-btn me-btn--pri me-btn--sm" onclick="CampistryMe.addLinkDocument()">+ Add Document</button>';
+    h+='</div>';
+    if(linkForms.documents.length){
+        linkForms.documents.forEach(function(d,i){
+            h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
+            h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(d.name)+'</div>';
+            if(d.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(d.description)+'</div>';
+            if(d.downloadUrl)h+='<div style="font-size:.7rem;color:var(--me);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px;"><a href="'+esc(d.downloadUrl)+'" target="_blank">'+esc(d.downloadUrl)+'</a></div>';
+            h+='</div>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'documents\','+i+')">Edit</button>';
+            h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'documents\','+i+')">Delete</button>';
+            h+='</div>';
+        });
+    } else {
+        h+='<div style="font-size:.8rem;color:var(--s400);padding:10px 0;border-top:1px solid var(--s100);">No documents added yet. Parents will see an empty state.</div>';
+    }
+    h+='</div>';
+    return h;
 }
 
 function addForm(){
@@ -3532,6 +3645,80 @@ function viewFormResponses(idx){
         h+='</div>';
     }
     showModal('Form Responses',h);
+}
+
+// ─── Link Forms CRUD ─────────────────────────────────────────────────────────
+function addLinkDigitalForm(){
+    var h='<div class="me-modal-form">';
+    h+=ff('Form Name','lfName','','text');
+    h+=ff('Type','lfType','','select',['Medical Update','Photo Release / Media Consent','Emergency Contact Update','Permission Slip','Activity Waiver','Custom']);
+    h+=ff('Description (shown to parents)','lfDesc','','textarea');
+    h+=ff('Required?','lfReq','','select',['Yes — required','No — optional']);
+    h+='</div>';
+    showModal('Add Digital Form',h,function(){
+        var name=document.getElementById('lfName').value.trim();
+        if(!name){alert('Enter a form name');return;}
+        linkForms.digital.push({id:'lfd_'+Date.now(),name:name,type:document.getElementById('lfType').value,description:document.getElementById('lfDesc').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
+        saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Digital form added');
+    });
+}
+
+function addLinkPrintForm(){
+    var h='<div class="me-modal-form">';
+    h+=ff('Form Name','lfName','','text');
+    h+=ff('Description (shown to parents)','lfDesc','','textarea');
+    h+=ff('Download URL (Google Drive, Dropbox, etc.)','lfUrl','','text');
+    h+=ff('Required?','lfReq','','select',['Yes — required','No — optional']);
+    h+='</div>';
+    showModal('Add Print & Return Form',h,function(){
+        var name=document.getElementById('lfName').value.trim();
+        if(!name){alert('Enter a form name');return;}
+        linkForms.printReturn.push({id:'lfp_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),downloadUrl:document.getElementById('lfUrl').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
+        saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Print form added');
+    });
+}
+
+function addLinkDocument(){
+    var h='<div class="me-modal-form">';
+    h+=ff('Document Name','lfName','','text');
+    h+=ff('Description','lfDesc','','textarea');
+    h+=ff('Download URL','lfUrl','','text');
+    h+='</div>';
+    showModal('Add Camp Document',h,function(){
+        var name=document.getElementById('lfName').value.trim();
+        if(!name){alert('Enter a document name');return;}
+        linkForms.documents.push({id:'lfdoc_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),downloadUrl:document.getElementById('lfUrl').value.trim(),created:Date.now()});
+        saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Document added');
+    });
+}
+
+function editLinkItem(type,idx){
+    var item=linkForms[type][idx];if(!item)return;
+    var isDoc=type==='documents';
+    var isDigital=type==='digital';
+    var h='<div class="me-modal-form">';
+    h+=ff('Name','lfName',item.name,'text');
+    if(isDigital)h+=ff('Type','lfType',item.type,'select',['Medical Update','Photo Release / Media Consent','Emergency Contact Update','Permission Slip','Activity Waiver','Custom']);
+    h+=ff('Description','lfDesc',item.description||'','textarea');
+    if(!isDigital)h+=ff('Download URL','lfUrl',item.downloadUrl||'','text');
+    if(!isDoc)h+=ff('Required?','lfReq',item.required?'Yes — required':'No — optional','select',['Yes — required','No — optional']);
+    h+='</div>';
+    showModal('Edit Item',h,function(){
+        var name=document.getElementById('lfName').value.trim();
+        if(!name){alert('Enter a name');return;}
+        item.name=name;
+        item.description=document.getElementById('lfDesc').value.trim();
+        if(isDigital)item.type=document.getElementById('lfType').value;
+        if(!isDigital)item.downloadUrl=document.getElementById('lfUrl').value.trim();
+        if(!isDoc)item.required=document.getElementById('lfReq').value.startsWith('Yes');
+        saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Saved');
+    });
+}
+
+function deleteLinkItem(type,idx){
+    if(!confirm('Delete this item?'))return;
+    linkForms[type].splice(idx,1);
+    saveLinkForms();renderForms();switchFormsTab('link');toast('Deleted');
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4283,6 +4470,9 @@ window.CampistryMe={
     openBroadcastModal:openBroadcastModal,viewBroadcast:viewBroadcast,removeBroadcast:removeBroadcast,
     // Forms & Docs
     addForm:addForm,deleteForm:deleteForm,viewFormResponses:viewFormResponses,
+    switchFormsTab:switchFormsTab,
+    addLinkDigitalForm:addLinkDigitalForm,addLinkPrintForm:addLinkPrintForm,addLinkDocument:addLinkDocument,
+    editLinkItem:editLinkItem,deleteLinkItem:deleteLinkItem,
     // Reports
     exportRosterReport:exportRosterReport,exportFamilyReport:exportFamilyReport,
     exportEnrollmentReport:exportEnrollmentReport,exportDivisionReport:exportDivisionReport,

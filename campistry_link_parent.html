@@ -1010,8 +1010,9 @@ initPickupTabs();
     // ── Apply real data ───────────────────────────────────────────────────────
     function _applyData(d) {
         console.log('[Parent] Applying data — parent:', d.parent_name, '| campers:', d.camper_names);
-        parent.name  = d.parent_name  || 'Parent';
-        parent.email = d.parent_email || '';
+        parent.name   = d.parent_name  || 'Parent';
+        parent.email  = d.parent_email || '';
+        parent.campId = d.camp_id      || null;
         var names = (d.camper_names && d.camper_names.length) ? d.camper_names : Object.keys(d.camper_data || {});
         var realChildren = names.map(function(name, idx) {
             var c = (d.camper_data && d.camper_data[name]) || {};
@@ -1037,7 +1038,91 @@ initPickupTabs();
         }
         init();
         _hideOverlay('parentAuthOverlay');
+        // Load camp-configured forms after portal is visible
+        if (parent.campId) _loadLinkForms(parent.campId);
     }
+
+    function _loadLinkForms(campId) {
+        db.rpc('get_link_camp_forms', {p_camp_id: campId}).then(function(res) {
+            if (res.error || !res.data || !res.data.success) return; // silent — empty state already shown
+            var lf = res.data.forms || {};
+            _renderLinkForms(lf.digital||[], lf.printReturn||[], lf.documents||[]);
+        });
+    }
+
+    function _renderLinkForms(digital, printReturn, documents) {
+        var docSvgFill='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
+        var dlSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
+        var ulSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+        var emptyEl = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No forms assigned yet.</div>';
+
+        // Digital forms
+        var fol = document.getElementById('formsOnlineList');
+        if (fol) {
+            if (digital.length) {
+                var fh='';
+                digital.forEach(function(f) {
+                    children.forEach(function(c) {
+                        fh+='<div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);">'+docSvgFill+'</div>';
+                        fh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+'</p></div>';
+                        fh+='<button class="btn btn-primary btn-sm" onclick="toast(\'Coming soon!\')">Complete</button></div>';
+                    });
+                });
+                fol.innerHTML=fh;
+                // Update badge count
+                var onlineBadge=document.getElementById('formsOnlineBadge');
+                if(onlineBadge){onlineBadge.textContent=digital.length*children.length;onlineBadge.style.display=digital.length?'':'none';}
+            }
+        }
+
+        // Print & return forms
+        var prl = document.getElementById('printReturnList');
+        if (prl) {
+            if (printReturn.length) {
+                var prh='';
+                printReturn.forEach(function(f,fi) {
+                    children.forEach(function(c) {
+                        var cid=c.id+'_pr'+fi;
+                        prh+='<div class="doc-item" id="pr-'+_escHtml(cid)+'"><div class="doc-icon" style="background:var(--amber-50);color:var(--amber-600);">'+docSvgFill+'</div>';
+                        prh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+(f.required?' <span class=\'badge badge-warn\' style=\'font-size:.62rem;\'>Required</span>':'')+'</p></div>';
+                        prh+='<div style="display:flex;gap:6px;">';
+                        if(f.downloadUrl)prh+='<a class="btn btn-secondary btn-sm" href="'+_escHtml(f.downloadUrl)+'" target="_blank" download>'+dlSvg+' Download</a>';
+                        prh+='<label class="btn btn-primary btn-sm" style="cursor:pointer;">'+ulSvg+' Upload<input type="file" accept=".pdf,.jpg,.jpeg,.png" style="display:none;" onchange="handleFormReturn(\''+_escHtml(cid)+'\',\''+_escHtml(c.name)+'\',\''+_escHtml(f.name)+'\',this)"></label>';
+                        prh+='</div></div>';
+                    });
+                });
+                prl.innerHTML=prh;
+                var printBadge=document.getElementById('printReturnBadge');
+                if(printBadge){printBadge.textContent=printReturn.length*children.length;printBadge.style.display=printReturn.length?'':'none';}
+            }
+        }
+
+        // Camp documents
+        var cdl = document.getElementById('campDocsList');
+        if (cdl) {
+            if (documents.length) {
+                var dh='';
+                var docIconSvg='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>';
+                documents.forEach(function(doc) {
+                    dh+='<div class="doc-item"><div class="doc-icon" style="background:var(--slate-100);color:var(--slate-600);">'+docIconSvg+'</div>';
+                    dh+='<div class="doc-info"><h4>'+_escHtml(doc.name)+'</h4>'+(doc.description?'<p>'+_escHtml(doc.description)+'</p>':'')+'</div>';
+                    if(doc.downloadUrl)dh+='<a class="btn btn-secondary btn-sm" href="'+_escHtml(doc.downloadUrl)+'" target="_blank" download>'+dlSvg+' Download</a>';
+                    dh+='</div>';
+                });
+                cdl.innerHTML=dh;
+            }
+        }
+
+        // Recompute home forms badge
+        var fol2=document.getElementById('formsOnlineList');
+        var prl2=document.getElementById('printReturnList');
+        var fc=(fol2?fol2.querySelectorAll('.doc-item').length:0)+(prl2?prl2.querySelectorAll('.doc-item').length:0);
+        var fb=document.getElementById('homeFormsBadge');var fs=document.getElementById('homeFormsSub');
+        if(fb){fb.textContent=fc;fb.style.display=fc>0?'flex':'none';}
+        if(fs){fs.textContent=fc>0?fc+' need attention':'All up to date';}
+    }
+
+    function _escHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
     // ── Auth screens ──────────────────────────────────────────────────────────
     function _showSignIn(prefillEmail, errorMsg) {
