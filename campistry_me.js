@@ -2091,37 +2091,42 @@ function generateParentInvite(enrollId){
     });
 
     db.from('link_parent_invites')
-        .select('id,token,access_code')
+        .select('id,token')
         .eq('camp_id',campId)
         .eq('parent_email',parentEmail)
         .eq('status','active')
         .limit(1)
         .then(function(res){
+            if(res.error){console.error('[Me] Invite select failed:',res.error.message);}
             if(res.data&&res.data.length){
                 var existing=res.data[0];
-                // Ensure existing rows have an access code (migration 010 may not have run yet)
-                var code=existing.access_code||_genAccessCode();
-                // Reset user_id so the parent can always re-claim (clears stale links)
-                var upd={parent_name:parentName,camper_names:camperNames,camper_data:camperData,user_id:null};
-                if(!existing.access_code)upd.access_code=code;
-                db.from('link_parent_invites').update(upd).eq('id',existing.id).then(function(){});
-                _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail,code);
+                var code=_genAccessCode();
+                var baseUpd={parent_name:parentName,camper_names:camperNames,camper_data:camperData,user_id:null};
+                // Try update with access_code; fall back silently if migration 010 not run
+                db.from('link_parent_invites').update(Object.assign({},baseUpd,{access_code:code})).eq('id',existing.id).then(function(r){
+                    if(r.error){
+                        code=null;
+                        db.from('link_parent_invites').update(baseUpd).eq('id',existing.id).then(function(){});
+                    }
+                    _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail,code);
+                });
             } else {
                 var token=_genToken();
                 var code=_genAccessCode();
                 var expires=new Date();
                 expires.setFullYear(expires.getFullYear()+1);
-                db.from('link_parent_invites').insert({
-                    camp_id:campId,token:token,access_code:code,
-                    parent_name:parentName,parent_email:parentEmail,
-                    camper_names:camperNames,camper_data:camperData,
-                    status:'active',expires_at:expires.toISOString()
-                }).then(function(ins){
-                    if(ins.error){
-                        console.error('[Me] Invite insert failed:',ins.error.message,ins.error);
-                        toast('Could not save invite: '+ins.error.message+'. Run migration 008 if the table is missing.');
+                var baseIns={camp_id:campId,token:token,parent_name:parentName,parent_email:parentEmail,camper_names:camperNames,camper_data:camperData,status:'active',expires_at:expires.toISOString()};
+                // Try insert with access_code; fall back without it if migration 010 not run
+                db.from('link_parent_invites').insert(Object.assign({},baseIns,{access_code:code})).then(function(ins){
+                    if(ins.error&&ins.error.message&&ins.error.message.indexOf('access_code')!==-1){
+                        code=null;
+                        db.from('link_parent_invites').insert(baseIns).then(function(ins2){
+                            if(ins2.error){console.error('[Me] Invite insert failed:',ins2.error.message,ins2.error);toast('Could not save invite: '+ins2.error.message+'. Run migration 008 if the table is missing.');return;}
+                            _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail,null);
+                        });
                         return;
                     }
+                    if(ins.error){console.error('[Me] Invite insert failed:',ins.error.message,ins.error);toast('Could not save invite: '+ins.error.message+'. Run migration 008 if the table is missing.');return;}
                     _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail,code);
                 });
             }
