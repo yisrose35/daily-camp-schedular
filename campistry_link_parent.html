@@ -1220,19 +1220,18 @@ initPickupTabs();
             console.log('[Parent] claim_parent_invite result:', res.data, res.error);
             if (res.error) {
                 var msg = res.error.message || String(res.error);
-                if (msg.indexOf('does not exist') !== -1 || msg.indexOf('function') !== -1) {
-                    _setMsg('Database setup incomplete. Ask the camp admin to run migration 009 in Supabase.');
-                } else {
-                    _setMsg('Error: ' + msg);
-                }
+                var errText = (msg.indexOf('does not exist') !== -1 || msg.indexOf('function') !== -1)
+                    ? 'Database setup incomplete. Ask the camp admin to run migration 009 in Supabase.'
+                    : 'Error: ' + msg;
+                _showSignIn('', errText);
                 return;
             }
             if (!res.data || !res.data.success) {
                 var errMap = {
-                    already_claimed: 'This invite is linked to a different account. Sign in with that account or contact the camp.',
+                    already_claimed: 'This invite was already linked to a different account — the camp admin needs to re-send the invite link.',
                     invalid_or_expired: 'This invite link has expired or been revoked. Contact the camp for a new one.'
                 };
-                _setMsg(errMap[(res.data||{}).error] || 'Could not link your invite. Please contact the camp.');
+                _showSignIn('', errMap[(res.data||{}).error] || 'Could not link your invite. Please contact the camp.');
                 return;
             }
             _applyData(res.data);

@@ -2101,7 +2101,8 @@ function generateParentInvite(enrollId){
                 var existing=res.data[0];
                 // Ensure existing rows have an access code (migration 010 may not have run yet)
                 var code=existing.access_code||_genAccessCode();
-                var upd={parent_name:parentName,camper_names:camperNames,camper_data:camperData};
+                // Reset user_id so the parent can always re-claim (clears stale links)
+                var upd={parent_name:parentName,camper_names:camperNames,camper_data:camperData,user_id:null};
                 if(!existing.access_code)upd.access_code=code;
                 db.from('link_parent_invites').update(upd).eq('id',existing.id).then(function(){});
                 _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail,code);
