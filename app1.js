@@ -1090,15 +1090,14 @@
                 });
             }
 
-            // Apply manually-entered kid counts for bunks not covered by the camper roster.
-            // Roster always wins; manual counts fill in when no CSV has been imported.
+            // Apply manually-entered kid counts. A manual count always overrides
+            // the roster-derived count so the user can correct the number without
+            // re-importing a CSV. Bunks with no manual count fall back to roster.
             const bunkManualCounts = (globalData.campistryMe || {}).bunkManualCounts || {};
             Object.entries(bunkManualCounts).forEach(([bunk, count]) => {
-                if (typeof count !== 'number' || count <= 0) return;
-                if (!(bunk in bunkCounts)) {
-                    if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
-                    state.bunkMetaData[bunk].size = count;
-                }
+                if (typeof count !== 'number') return;
+                if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
+                state.bunkMetaData[bunk].size = count;
             });
 
             const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
