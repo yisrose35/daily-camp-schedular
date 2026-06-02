@@ -166,6 +166,8 @@ body.sidebar-open .sidebar{transform:translateX(0)}
 .bb-bunk-hd{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
 .bb-bunk-nm{font-size:.85rem;font-weight:600;color:var(--s800)}
 .bb-bunk-ct{font-size:.75rem;font-weight:600;color:var(--s400)}
+.bb-bunk-ct-input{width:48px;font-size:.75rem;font-weight:600;color:var(--s700);border:1px solid var(--s200);border-radius:4px;padding:1px 4px;text-align:center;background:#fff}
+.bb-bunk-ct-input:focus{outline:none;border-color:var(--me)}
 .bb-campers{display:flex;flex-direction:column;gap:3px}
 .bb-empty{text-align:center;padding:10px 0;color:var(--s300);font-size:.75rem}
 .bb-c{display:flex;align-items:center;gap:5px;padding:4px 8px;background:#fff;border:1px solid var(--s200);border-radius:6px;font-size:.75rem;cursor:grab}
