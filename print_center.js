@@ -284,6 +284,10 @@ var _cloudSyncTimeout = null;
 var _liveInterval = null;
 var _liveCursorInterval = null;
 var _liveWindow = null;
+var _livePageIndex = 0;
+var _numLivePages = 1;
+var _livePageTimer = null;
+var _LIVE_PAGE_MS = 20000; // ms between page rotations
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
@@ -1230,7 +1234,11 @@ function getStyles() {
     '.pc3-live-clock{font-size:36px;font-weight:300;color:#fbbf24;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.2);border-radius:8px;background:rgba(255,255,255,.1);color:#fff;font-size:13px;cursor:pointer;}' +
     '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
-    '.pc3-live-body{flex:1;overflow:auto;padding:16px 24px;}' +
+    '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
+    '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
+    '.pc3-live-page-inner{padding:16px 24px;}' +
+    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.55);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
+    '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:auto;}' +
     '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #374151;padding:8px 12px;text-align:left;white-space:nowrap;font-size:14px;}' +
     '.pc3-live-tbl th{background:#1f2937;color:#e5e7eb;font-weight:600;position:sticky;top:0;z-index:2;}' +
@@ -3345,6 +3353,7 @@ function runLiveStandalone() {
         '<div class="pc3-live-overlay" id="pc3-live-overlay" style="position:fixed;inset:0;">' +
         '<div class="pc3-live-header">' +
             '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
+            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:6px;"></div>' +
             '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
             '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
         '</div>' +
@@ -3478,211 +3487,298 @@ function positionLiveCursor(sectionEl) {
 }
 
 function positionAllLiveCursors() {
-    document.querySelectorAll('.pc3-live-section').forEach(function (s) { positionLiveCursor(s); });
+    var activePage = document.getElementById('lp-' + _livePageIndex);
+    var container = activePage || document;
+    container.querySelectorAll('.pc3-live-section').forEach(function (s) { positionLiveCursor(s); });
 }
 
+// —— Build HTML for a single division section (auto or manual mode) ——————————————
+function buildLiveSectionHTML(divName, bunks, nowMin) {
+    var html = '';
+    var sectionStart = Infinity, sectionEnd = -Infinity, cursorMode = isAutoMode() ? 'auto' : 'manual';
+    if (isAutoMode()) {
+        bunks.forEach(function (bunk) {
+            var slots = getPerBunkSchedule(bunk, divName);
+            slots.forEach(function (s) {
+                if (s.startMin < sectionStart) sectionStart = s.startMin;
+                if (s.endMin > sectionEnd) sectionEnd = s.endMin;
+            });
+        });
+    } else {
+        var blocks0 = buildDivisionBlocks(divName);
+        if (blocks0.length) { sectionStart = blocks0[0].startMin; sectionEnd = blocks0[blocks0.length - 1].endMin; }
+    }
+    if (sectionStart === Infinity) sectionStart = 480;
+    if (sectionEnd === -Infinity) sectionEnd = 960;
+
+    html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:20px;position:relative;">';
+    html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
+    html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
+    html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
+
+    if (isAutoMode()) {
+        var inc = _timeIncrement;
+        var lDayStart = Infinity, lDayEnd = -Infinity;
+        var lBunkActs = {};
+        bunks.forEach(function (bunk) {
+            var slots = getPerBunkSchedule(bunk, divName);
+            var acts = [];
+            for (var i = 0; i < slots.length; i++) {
+                var entry = getEntry(bunk, i);
+                if (entry && entry.continuation && acts.length > 0) { acts[acts.length - 1].endMin = slots[i].endMin; continue; }
+                acts.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
+                if (slots[i].startMin < lDayStart) lDayStart = slots[i].startMin;
+                if (slots[i].endMin > lDayEnd) lDayEnd = slots[i].endMin;
+            }
+            lBunkActs[bunk] = acts;
+        });
+        if (lDayStart === Infinity) lDayStart = 480;
+        if (lDayEnd === -Infinity) lDayEnd = 960;
+        lDayStart = Math.floor(lDayStart / inc) * inc;
+        lDayEnd = Math.ceil(lDayEnd / inc) * inc;
+
+        var lTimeCols = [];
+        for (var lt = lDayStart; lt < lDayEnd; lt += inc) {
+            lTimeCols.push({ startMin: lt, endMin: lt + inc, label: minutesToTimeLabel(lt) });
+        }
+
+        html += '<div style="overflow-x:hidden;"><table class="pc3-live-tbl" style="table-layout:fixed;width:100%;">';
+        html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
+        lTimeCols.forEach(function (tc) {
+            var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
+            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+        });
+        html += '</tr></thead><tbody>';
+
+        bunks.forEach(function (bunk) {
+            html += '<tr>';
+            html += '<th class="row-head">' + escHtml(bunk) + '</th>';
+            var acts = lBunkActs[bunk] || [];
+            var ci = 0;
+            while (ci < lTimeCols.length) {
+                var cStart = lTimeCols[ci].startMin;
+                var cEnd = lTimeCols[ci].endMin;
+                var mAct = null;
+                acts.forEach(function (a) { if (a.startMin < cEnd && a.endMin > cStart) mAct = a; });
+
+                if (mAct) {
+                    var span = 1;
+                    var nextCi = ci + 1;
+                    while (nextCi < lTimeCols.length && lTimeCols[nextCi].startMin < mAct.endMin) { span++; nextCi++; }
+                    var isCur = nowMin >= mAct.startMin && nowMin < mAct.endMin;
+                    var isPast = nowMin >= mAct.endMin;
+                    var isLeagueAct = !!(mAct.entry && (mAct.entry._h2h || mAct.entry._league || mAct.entry._isSpecialtyLeague || mAct.entry._allMatchups));
+                    var leagueInfo = (isLeagueAct || !mAct.entry) ? pcLeagueInfoAt(divName, mAct.startMin) : null;
+                    var txt;
+                    if (isLeagueAct || leagueInfo) {
+                        var lbl = (mAct.entry && (mAct.entry._gameLabel || mAct.entry._leagueName)) ||
+                                  (leagueInfo && leagueInfo.label) || 'League Game';
+                        var ms = (leagueInfo && leagueInfo.matchups) || [];
+                        txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + ms.join(', ') : '');
+                    } else {
+                        txt = mAct.entry ? formatEntry(mAct.entry) : '—';
+                        if (mAct.entry && txt && txt !== '—' && mAct.slotIdx != null) {
+                            var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
+                            if (_liveSh.length) {
+                                var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                                txt += ' vs ' + _liveNames.join(', ');
+                            }
+                        }
+                    }
+                    var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
+                    if (isCur) cls += ' cell-current';
+                    if (isPast) cls += ' cell-past';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    ci = nextCi;
+                } else {
+                    var emptyLeague = pcLeagueInfoAt(divName, cStart);
+                    var isCC = nowMin >= cStart && nowMin < cEnd;
+                    if (emptyLeague) {
+                        var lspan = 1;
+                        var lnext = ci + 1;
+                        while (lnext < lTimeCols.length) {
+                            var nAct = null;
+                            acts.forEach(function (a) { if (a.startMin < lTimeCols[lnext].endMin && a.endMin > lTimeCols[lnext].startMin) nAct = a; });
+                            if (nAct) break;
+                            var nLeague = pcLeagueInfoAt(divName, lTimeCols[lnext].startMin);
+                            if (!nLeague || nLeague.label !== emptyLeague.label) break;
+                            lspan++; lnext++;
+                        }
+                        var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
+                        var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        ci = lnext;
+                    } else {
+                        html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
+                        ci++;
+                    }
+                }
+            }
+            html += '</tr>';
+        });
+        html += '</tbody></table></div>';
+
+    } else {
+        var timeSlots = buildDivisionBlocks(divName);
+        html += '<table class="pc3-live-tbl"><thead><tr><th class="corner">Time</th>';
+        bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
+        html += '</tr></thead><tbody>';
+
+        timeSlots.forEach(function (ts) {
+            var isCurrent = nowMin >= ts.startMin && nowMin < ts.endMin;
+            var isPast = nowMin >= ts.endMin;
+            html += '<tr data-block-start="' + ts.startMin + '" data-block-end="' + ts.endMin + '">';
+            html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
+
+            if (ts.isLeague) {
+                var leagueText = ts.event;
+                if (!_currentTemplate.hideLeagueMatchups) {
+                    var matchups = buildLeagueMatchups(ts, divName);
+                    if (matchups.length) leagueText += ' | ' + matchups.join(', ');
+                }
+                var lcls = 'cell-league';
+                if (isCurrent) lcls += ' cell-current';
+                if (isPast) lcls += ' cell-past';
+                html += '<td colspan="' + bunks.length + '" class="' + lcls + '" style="text-align:center;white-space:normal;word-break:break-word;"><strong>' + escHtml(leagueText) + '</strong></td>';
+                html += '</tr>';
+                return;
+            }
+
+            bunks.forEach(function (bunk) {
+                var slotIdx = findFirstSlotForTime(ts.startMin, divName);
+                var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
+                var type = getEntryType(entry);
+                var text = entry ? formatEntry(entry) : '—';
+                if (entry && text !== '—' && slotIdx >= 0) {
+                    var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
+                    if (_sh.length) {
+                        var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
+                        text += ' vs ' + _names.join(', ');
+                    }
+                }
+                var cls = 'cell-' + type;
+                if (isCurrent) cls += ' cell-current';
+                if (isPast) cls += ' cell-past';
+                html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
+            });
+            html += '</tr>';
+        });
+        html += '</tbody></table>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+// —— Paginated live view renderer ————————————————————————————————————————————
 function renderLiveContent() {
     var body = el('pc3-live-body');
     if (!body) return;
     var nowMin = getNowMinutes();
     var divs = getDivisions();
     var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
-    var html = '';
 
+    // 1. Render all section wraps into body so we can measure their heights
+    var sectHtml = '';
     available.forEach(function (divName) {
         var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
         if (!bunks.length) return;
+        sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
+    });
+    if (!sectHtml) {
+        body.innerHTML = '<div style="color:#6b7280;padding:40px;text-align:center;font-size:18px;">No schedule data available.</div>';
+        return;
+    }
+    body.innerHTML = sectHtml;
 
-        // Compute section dayStart/dayEnd for cursor placement
-        var sectionStart = Infinity, sectionEnd = -Infinity, cursorMode = isAutoMode() ? 'auto' : 'manual';
-        if (isAutoMode()) {
-            bunks.forEach(function (bunk) {
-                var slots = getPerBunkSchedule(bunk, divName);
-                slots.forEach(function (s) {
-                    if (s.startMin < sectionStart) sectionStart = s.startMin;
-                    if (s.endMin > sectionEnd) sectionEnd = s.endMin;
-                });
-            });
+    // 2. Measure available height and each section rendered height
+    var availH = body.offsetHeight || (window.innerHeight - 80);
+    var wraps = Array.prototype.slice.call(body.querySelectorAll('.pc3-live-section-wrap'));
+
+    // 3. Greedy bin-pack: keep adding sections to the current page until they
+    //    would overflow, then start a new page. A single oversized section gets
+    //    its own page and is scaled down to fit.
+    var pages = [];
+    var cur = { nodes: [], totalH: 0 };
+    wraps.forEach(function (wrap) {
+        var h = wrap.offsetHeight + 20;
+        if (cur.nodes.length > 0 && cur.totalH + h > availH) {
+            pages.push(cur);
+            cur = { nodes: [wrap], totalH: h };
         } else {
-            var blocks0 = buildDivisionBlocks(divName);
-            if (blocks0.length) { sectionStart = blocks0[0].startMin; sectionEnd = blocks0[blocks0.length - 1].endMin; }
+            cur.nodes.push(wrap);
+            cur.totalH += h;
         }
-        if (sectionStart === Infinity) sectionStart = 480;
-        if (sectionEnd === -Infinity) sectionEnd = 960;
+    });
+    if (cur.nodes.length) pages.push(cur);
 
-        html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:24px;position:relative;">';
-        html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
-        // Cursor + time tag (positioned by JS)
-        html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
-        html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
+    _numLivePages = pages.length;
+    if (_livePageIndex >= _numLivePages) _livePageIndex = 0;
 
-        if (isAutoMode()) {
-            // ★★★ AUTO LIVE: Spreadsheet grid with current-time column highlighted ★★★
-            var inc = _timeIncrement;
-            var lDayStart = Infinity, lDayEnd = -Infinity;
-            var lBunkActs = {};
-            bunks.forEach(function (bunk) {
-                var slots = getPerBunkSchedule(bunk, divName);
-                var acts = [];
-                for (var i = 0; i < slots.length; i++) {
-                    var entry = getEntry(bunk, i);
-                    if (entry && entry.continuation && acts.length > 0) { acts[acts.length - 1].endMin = slots[i].endMin; continue; }
-                    acts.push({ startMin: slots[i].startMin, endMin: slots[i].endMin, entry: entry, slotIdx: i, type: entry ? getEntryType(entry) : 'free' });
-                    if (slots[i].startMin < lDayStart) lDayStart = slots[i].startMin;
-                    if (slots[i].endMin > lDayEnd) lDayEnd = slots[i].endMin;
-                }
-                lBunkActs[bunk] = acts;
-            });
-            if (lDayStart === Infinity) lDayStart = 480;
-            if (lDayEnd === -Infinity) lDayEnd = 960;
-            lDayStart = Math.floor(lDayStart / inc) * inc;
-            lDayEnd = Math.ceil(lDayEnd / inc) * inc;
+    // 4. Move section wrap nodes into absolutely-positioned, scale-to-fit page divs
+    pages.forEach(function (page, pi) {
+        var scale = page.totalH > availH ? availH / page.totalH : 1;
+        scale = Math.max(0.25, Math.min(1, scale));
 
-            var lTimeCols = [];
-            for (var lt = lDayStart; lt < lDayEnd; lt += inc) {
-                lTimeCols.push({ startMin: lt, endMin: lt + inc, label: minutesToTimeLabel(lt) });
-            }
+        var pageDiv = document.createElement('div');
+        pageDiv.id = 'lp-' + pi;
+        var active = pi === _livePageIndex;
+        pageDiv.style.cssText = 'position:absolute;inset:0;opacity:' + (active ? 1 : 0) + ';transition:opacity .7s ease;pointer-events:' + (active ? 'auto' : 'none') + ';overflow:hidden;';
 
-            html += '<div style="overflow-x:auto;"><table class="pc3-live-tbl" style="table-layout:fixed;">';
-            // Header
-            html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
-            lTimeCols.forEach(function (tc) {
-                var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-                html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
-            });
-            html += '</tr></thead><tbody>';
+        var inner = document.createElement('div');
+        inner.className = 'pc3-live-page-inner';
+        inner.style.cssText = 'transform:scale(' + scale.toFixed(4) + ');transform-origin:top left;width:' + (100 / scale).toFixed(2) + '%;';
 
-            // Bunk rows
-            bunks.forEach(function (bunk) {
-                html += '<tr>';
-                html += '<th class="row-head">' + escHtml(bunk) + '</th>';
-                var acts = lBunkActs[bunk] || [];
-                var ci = 0;
-                while (ci < lTimeCols.length) {
-                    var cStart = lTimeCols[ci].startMin;
-                    var cEnd = lTimeCols[ci].endMin;
-                    var mAct = null;
-                    acts.forEach(function (a) { if (a.startMin < cEnd && a.endMin > cStart) mAct = a; });
-
-                    if (mAct) {
-                        var span = 1;
-                        var nextCi = ci + 1;
-                        while (nextCi < lTimeCols.length && lTimeCols[nextCi].startMin < mAct.endMin) { span++; nextCi++; }
-                        var isCur = nowMin >= mAct.startMin && nowMin < mAct.endMin;
-                        var isPast = nowMin >= mAct.endMin;
-
-                        // \u2605 League detection: if this entry is a league or this slot is a league slot,
-                        //   show "League Name | TeamA vs TeamB ..."
-                        var isLeagueAct = !!(mAct.entry && (mAct.entry._h2h || mAct.entry._league || mAct.entry._isSpecialtyLeague || mAct.entry._allMatchups));
-                        var leagueInfo = (isLeagueAct || !mAct.entry) ? pcLeagueInfoAt(divName, mAct.startMin) : null;
-                        var txt;
-                        if (isLeagueAct || leagueInfo) {
-                            var lbl = (mAct.entry && (mAct.entry._gameLabel || mAct.entry._leagueName)) ||
-                                      (leagueInfo && leagueInfo.label) || 'League Game';
-                            var ms = (leagueInfo && leagueInfo.matchups) || [];
-                            txt = lbl + (ms.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + ms.join(', ') : '');
-                        } else {
-                            // Use full formatEntry (activity + location + change time + hybrid label) and append sharers
-                            txt = mAct.entry ? formatEntry(mAct.entry) : '\u2014';
-                            if (mAct.entry && txt && txt !== '\u2014' && mAct.slotIdx != null) {
-                                var _liveSh = pcFindFieldSharers(bunk, mAct.slotIdx, divName);
-                                if (_liveSh.length) {
-                                    var _liveNames = _liveSh.map(function (x) { return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                                    txt += ' vs ' + _liveNames.join(', ');
-                                }
-                            }
-                        }
-                        var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
-                        if (isCur) cls += ' cell-current';
-                        if (isPast) cls += ' cell-past';
-                        html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
-                        ci = nextCi;
-                    } else {
-                        // Empty slot \u2014 but it might be a league period without per-bunk entries.
-                        var emptyLeague = pcLeagueInfoAt(divName, cStart);
-                        var isCC = nowMin >= cStart && nowMin < cEnd;
-                        if (emptyLeague) {
-                            // Span this league across as many subsequent free columns as possible
-                            var lspan = 1;
-                            var lnext = ci + 1;
-                            while (lnext < lTimeCols.length) {
-                                var nAct = null;
-                                acts.forEach(function (a) { if (a.startMin < lTimeCols[lnext].endMin && a.endMin > lTimeCols[lnext].startMin) nAct = a; });
-                                if (nAct) break;
-                                var nLeague = pcLeagueInfoAt(divName, lTimeCols[lnext].startMin);
-                                if (!nLeague || nLeague.label !== emptyLeague.label) break;
-                                lspan++; lnext++;
-                            }
-                            var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
-                            var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                            html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
-                            ci = lnext;
-                        } else {
-                            html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">\u2014</td>';
-                            ci++;
-                        }
-                    }
-                }
-                html += '</tr>';
-            });
-
-            html += '</tbody></table></div>';
-
-        } else {
-            // ★★★ MANUAL LIVE: Table view (existing) ★★★
-            var timeSlots = buildDivisionBlocks(divName);
-            html += '<table class="pc3-live-tbl"><thead><tr><th class="corner">Time</th>';
-            bunks.forEach(function (b) { html += '<th>' + escHtml(b) + '</th>'; });
-            html += '</tr></thead><tbody>';
-
-            timeSlots.forEach(function (ts) {
-                var isCurrent = nowMin >= ts.startMin && nowMin < ts.endMin;
-                var isPast = nowMin >= ts.endMin;
-                html += '<tr data-block-start="' + ts.startMin + '" data-block-end="' + ts.endMin + '">';
-                html += '<th class="row-head' + (isCurrent ? ' cell-current' : '') + (isPast ? ' cell-past' : '') + '">' + ts.label + '</th>';
-
-                // \u2605 League rows span all bunk columns
-                if (ts.isLeague) {
-                    var leagueText = ts.event;
-                    if (!_currentTemplate.hideLeagueMatchups) {
-                        var matchups = buildLeagueMatchups(ts, divName);
-                        if (matchups.length) leagueText += ' | ' + matchups.join(', ');
-                    }
-                    var lcls = 'cell-league';
-                    if (isCurrent) lcls += ' cell-current';
-                    if (isPast) lcls += ' cell-past';
-                    html += '<td colspan="' + bunks.length + '" class="' + lcls + '" style="text-align:center;white-space:normal;word-break:break-word;"><strong>' + escHtml(leagueText) + '</strong></td>';
-                    html += '</tr>';
-                    return;
-                }
-
-                bunks.forEach(function (bunk) {
-                    var slotIdx = findFirstSlotForTime(ts.startMin, divName);
-                    var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
-                    var type = getEntryType(entry);
-                    var text = entry ? formatEntry(entry) : '\u2014';
-                    if (entry && text !== '\u2014' && slotIdx >= 0) {
-                        var _sh = pcFindFieldSharers(bunk, slotIdx, divName);
-                        if (_sh.length) {
-                            var _names = _sh.map(function(x){ return /^\d/.test(String(x)) ? 'Bunk ' + x : x; });
-                            text += ' vs ' + _names.join(', ');
-                        }
-                    }
-                    var cls = 'cell-' + type;
-                    if (isCurrent) cls += ' cell-current';
-                    if (isPast) cls += ' cell-past';
-                    html += '<td class="' + cls + '">' + escHtml(text) + '</td>';
-                });
-                html += '</tr>';
-            });
-            html += '</tbody></table>';
-        }
-
-        html += '</div>';
+        page.nodes.forEach(function (n) { inner.appendChild(n); });
+        pageDiv.appendChild(inner);
+        body.appendChild(pageDiv);
     });
 
-    body.innerHTML = html;
+    // 5. Update indicator, start rotation timer (only once), position cursors
+    updateLivePageIndicator();
+    if (!_livePageTimer) startLivePageTimer();
+    positionAllLiveCursors();
 }
+
+function updateLivePageIndicator() {
+    var ind = document.getElementById('pc3-live-page-ind');
+    if (!ind) return;
+    if (_numLivePages > 1) {
+        ind.style.display = 'flex';
+        var dots = '';
+        for (var i = 0; i < _numLivePages; i++) {
+            dots += '<span style="width:10px;height:10px;border-radius:50%;display:inline-block;background:' + (i === _livePageIndex ? '#fbbf24' : 'rgba(255,255,255,.3)') + ';transition:background .3s;"></span>';
+        }
+        ind.innerHTML =
+            '<button class="pc3-live-nav-btn" onclick="livePageNav(-1)">&#8249;</button>' +
+            '<div style="display:flex;gap:7px;align-items:center;">' + dots + '</div>' +
+            '<button class="pc3-live-nav-btn" onclick="livePageNav(1)">&#8250;</button>';
+    } else {
+        ind.style.display = 'none';
+    }
+}
+
+function livePageNav(dir) {
+    _livePageIndex = ((_livePageIndex + dir) % _numLivePages + _numLivePages) % _numLivePages;
+    for (var i = 0; i < _numLivePages; i++) {
+        var p = document.getElementById('lp-' + i);
+        if (!p) continue;
+        var active = i === _livePageIndex;
+        p.style.opacity = active ? '1' : '0';
+        p.style.pointerEvents = active ? 'auto' : 'none';
+    }
+    updateLivePageIndicator();
+    setTimeout(positionAllLiveCursors, 100);
+    startLivePageTimer();
+}
+
+function startLivePageTimer() {
+    if (_livePageTimer) clearInterval(_livePageTimer);
+    _livePageTimer = null;
+    if (_numLivePages < 2) return;
+    _livePageTimer = setInterval(function () { livePageNav(1); }, _LIVE_PAGE_MS);
+}
+
 
 // =========================================================================
 // PRINT & EXPORT
