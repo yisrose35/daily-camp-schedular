@@ -162,7 +162,8 @@
                     timeRules,
                     disabledSports: fieldDisabledSports,
                     qualityRank: parseInt(f.qualityRank) || null,
-                    fieldGroup: f.fieldGroup || null
+                    fieldGroup: f.fieldGroup || null,
+                    preferences: (f.preferences && f.preferences.enabled) ? f.preferences : null
                 });
             });
         });
@@ -181,6 +182,7 @@
                     allowedDivisions: field.allowedDivisions,
                     allowedPairs: field.allowedPairs,
                     gradeShareRules: field.gradeShareRules,
+                    preferences: field.preferences,
                     isIndoor: field.isIndoor,
                     accessRestrictions: field.accessRestrictions,
                     timeRules: field.timeRules,
@@ -396,6 +398,17 @@
         if (window.FieldCombos?.isBlockedByCombo) {
             const combo = window.FieldCombos.isBlockedByCombo(fieldName, startMin, endMin, bunk);
             if (combo?.blocked) return false;
+        }
+        // 6. ★ EXCLUSIVE field preference — a field can be reserved for specific
+        //    divisions (preferences.exclusive). A non-listed division may NEVER use it.
+        //    The auto builder previously ignored field preferences entirely (no refs in
+        //    auto_solver_engine.js / scheduler_core_auto.js); the manual solver enforces
+        //    this in calculatePenaltyCost (L867) + the domain filter. This brings auto to
+        //    parity. Soft (non-exclusive) preference steering is applied in scoring.
+        const _pref = candidate?.preferences;
+        if (_pref && _pref.enabled && _pref.exclusive && Array.isArray(_pref.list)
+            && _pref.list.length > 0 && _pref.list.indexOf(grade) === -1) {
+            return false;
         }
         return true;
     }
@@ -911,6 +924,16 @@
                 //   tie-break below always saw 999. No-op for ungrouped fields.
                 if (cand.qualityRank != null && cand.qualityRank > 1) {
                     score += (cand.qualityRank - 1) * 80;
+                }
+                // ★ rules.js FIELD PREFERENCES (soft, non-exclusive): steer the listed
+                //   divisions toward the field; non-listed divisions get a strong penalty
+                //   but are still allowed. Exclusive prefs are hard-gated in canPlace.
+                //   Mirrors the manual scorer (calculatePenaltyCost L1038). Was ignored in
+                //   auto (no preference refs anywhere in the auto path).
+                if (cand.preferences && cand.preferences.enabled && !cand.preferences.exclusive
+                    && Array.isArray(cand.preferences.list) && cand.preferences.list.length > 0) {
+                    var _prefIdx = cand.preferences.list.indexOf(grade);
+                    if (_prefIdx !== -1) score -= (200 - _prefIdx * 20); else score += 8000;
                 }
                 // ★ rules.js SPORT MIN-PLAYERS: softly discourage placing a bunk that's
                 //   smaller than the sport's minimum on that sport (nudge toward pairing
