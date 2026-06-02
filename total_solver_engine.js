@@ -855,13 +855,18 @@
                 var _curCount = (_minPeriod && _gpacMin) ? _gpacMin(bunk, act, _minPeriod) : getActivityCount(bunk, act);
                 var _shortage = _minFreq - _curCount;
                 if (_shortage > 0) {
-                    // ★ ESCALATING pull (manual-audit fix): mirror auto getEscalationBonus
-                    //   (rotation_engine.js L1053) — the pull DOUBLES each elapsed period-day,
-                    //   so a below-minimum bunk gets near-force-placed as the period deadline
-                    //   nears. max() with the flat floor keeps the proven baseline strength.
+                    // ★ STRONG escalating min boost (user directive: a minimum must be
+                    //   "basically a must"). Doubles each elapsed period-day (getEscalationBonus
+                    //   shape, cooldown-aware), scaled so it OVERRIDES the soft rotation/recency
+                    //   penalty (~25-28k cross-day) from day 1 (~50k×shortage) and grows from
+                    //   there → a below-min special becomes effectively required as the period
+                    //   progresses. Capped at 500k — stays below the 999999 hard-gate band, so
+                    //   access/time/sharing/availableDays/cooldown still win. Same-day / yesterday
+                    //   repeats remain blocked by the rotationPenalty>=50000 floor (L969) + the
+                    //   frequencyDays cooldown gate, so this drives SPACED placements, not dupes.
                     var _mfEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
                         ? window.SchedulerCoreUtils.getEscalationBonus(_minPeriod, _shortage, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
-                    penalty -= Math.max(_mfEsc || 0, _shortage * 8000);
+                    penalty -= Math.min(500000, Math.max((_mfEsc || 0) * 500, _shortage * 50000));
                 }
             }
             // ★ exactFrequency (manual-audit fix): acts as BOTH ceiling and floor,
@@ -886,7 +891,7 @@
                     //   doubles each elapsed period-day so the exact target is met by period end.
                     var _efEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
                         ? window.SchedulerCoreUtils.getEscalationBonus(_exactPeriod, _exShort, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
-                    penalty -= Math.max(_efEsc || 0, _exShort * 8000);                 // floor (drive toward exact)
+                    penalty -= Math.min(500000, Math.max((_efEsc || 0) * 500, _exShort * 50000)); // strong floor — exact target near-mandatory
                 }
             }
             // ★ frequencyDays (manual-audit fix): "min days between visits" cooldown
