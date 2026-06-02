@@ -833,16 +833,56 @@
                 _effectiveMax = specialRule.maxUsagePerGrade[_blockDiv];
             }
             if (_effectiveMax > 0) {
-                var hist = getActivityCount(bunk, act);
+                // ★ maxUsagePeriod (manual-audit fix): scope the cap to the configured
+                //   period when set (mirrors auto calculateLimitScore L1015-1018);
+                //   otherwise lifetime, as before. getPeriodActivityCount is the same
+                //   period-aware counter auto uses.
+                var _maxPeriod = specialRule.maxUsagePeriod;
+                var _gpac = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var hist = (_maxPeriod && _gpac) ? _gpac(bunk, act, _maxPeriod) : getActivityCount(bunk, act);
                 var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
                 if (hist + todayCount >= _effectiveMax) return 999999;
             }
             // ★ Min frequency: strong bonus when bunk is below the floor
             var _minFreq = parseInt(specialRule.minFrequency) || 0;
             if (_minFreq > 0) {
-                var _curCount = getActivityCount(bunk, act);
+                // ★ minFrequencyPeriod (manual-audit fix): scope to the configured
+                //   period when set (mirrors auto calculateLimitScore L1048-1050,
+                //   incl. the 'week'→'1week' normalization); otherwise lifetime.
+                var _minPeriod = specialRule.minFrequencyPeriod;
+                if (_minPeriod === 'week') _minPeriod = '1week';
+                var _gpacMin = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var _curCount = (_minPeriod && _gpacMin) ? _gpacMin(bunk, act, _minPeriod) : getActivityCount(bunk, act);
                 var _shortage = _minFreq - _curCount;
                 if (_shortage > 0) penalty -= (_shortage * 8000);
+            }
+            // ★ exactFrequency (manual-audit fix): acts as BOTH ceiling and floor,
+            //   period-scoped. Mirrors auto calculateLimitScore L1027-1036. Ceiling =
+            //   HARD gate (period+today count >= exactFreq → reject); below the floor
+            //   gets a strong placement bonus so the solver drives toward the exact
+            //   count. Per-grade override mirrors maxUsagePerGrade. Inert unless
+            //   exactFrequency is configured (>0) — no effect on normal configs.
+            var _exactFreq = parseInt(specialRule.exactFrequency) || 0;
+            if (_blockDiv && specialRule.exactFrequencyPerGrade && specialRule.exactFrequencyPerGrade[_blockDiv] > 0) {
+                _exactFreq = specialRule.exactFrequencyPerGrade[_blockDiv];
+            }
+            if (_exactFreq > 0) {
+                var _exactPeriod = specialRule.exactFrequencyPeriod || '1week';
+                var _gpacEx = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+                var _exactCount = _gpacEx ? _gpacEx(bunk, act, _exactPeriod) : getActivityCount(bunk, act);
+                var _exactToday = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
+                if (_exactCount + _exactToday >= _exactFreq) return 999999;            // ceiling (hard)
+                penalty -= ((_exactFreq - (_exactCount + _exactToday)) * 8000);        // floor (drive toward exact)
+            }
+            // ★ frequencyDays (manual-audit fix): "min days between visits" cooldown
+            //   (UI label, facilities.js). Mirrors auto calculateLimitScore L946-951:
+            //   hard-block if the bunk did this activity within the cooldown window.
+            //   Skip same-day (daysSince=0; intra-day handled elsewhere) and never-done
+            //   (null). Inert unless frequencyDays is configured (>0).
+            var _freqDays = parseInt(specialRule.frequencyDays) || 0;
+            if (_freqDays > 0) {
+                var _daysSince = getDaysSinceActivity(bunk, act);
+                if (typeof _daysSince === 'number' && _daysSince > 0 && _daysSince < _freqDays) return 999999;
             }
             // ★ availableDays weekday gate (manual-audit fix): a special restricted to
             //   certain weekdays must NEVER be selected on others. Mirrors auto's
