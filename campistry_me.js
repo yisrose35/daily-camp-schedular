@@ -1410,15 +1410,13 @@ function renderBB(){
             var hasRoster=ids.length>0;
             var dispCount=hasRoster?ids.length:(bunkManualCounts[bk.name]||0);
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
-            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span>';
             if(hasRoster){
-                h+='<span class="bb-bunk-ct" title="Count from imported roster">'+ids.length+'</span>';
+                h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct" title="Count from imported roster">'+ids.length+'</span></div>';
             }else{
-                h+='<input type="number" class="bb-bunk-ct-input" min="0" max="999" value="'+dispCount+'" title="Enter number of kids in this bunk" onchange="CampistryMe.setBunkCount(\''+je(bk.name)+'\',this.value)">';
+                h+='<div class="bb-bunk-hd bb-bunk-hd--click" onclick="CampistryMe.openBunkCountModal(\''+je(bk.name)+'\')" title="Click to set number of kids"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct bb-bunk-ct--editable">'+(dispCount||'—')+'</span></div>';
             }
-            h+='</div>';
             h+='<div class="bb-campers">';
-            if(!ids.length)h+='<div class="bb-empty">Drop campers here</div>';
+            if(!ids.length)h+='<div class="bb-empty">Drop campers · or click header to set count</div>';
             else ids.forEach(function(n){h+=bbC(n)});
             h+='</div></div>';
         });
@@ -1432,6 +1430,19 @@ function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain
 function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
+function openBunkCountModal(bunkName){
+    var cur=bunkManualCounts[bunkName]||0;
+    var body='<p style="margin:0 0 14px;font-size:.9rem;color:var(--s600)">How many kids are in <strong>'+esc(bunkName)+'</strong>?</p>'+
+        '<input type="number" id="bunkCtInput" min="0" max="999" value="'+cur+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">';
+    showModal('Set Bunk Size',body,function(){
+        var val=parseInt((document.getElementById('bunkCtInput')||{}).value||'0',10);
+        setBunkCount(bunkName,val);
+        closeModal('dynModal');
+        renderBB();
+        toast('Bunk size set to '+Math.max(0,val));
+    });
+    setTimeout(function(){var inp=document.getElementById('bunkCtInput');if(inp){inp.focus();inp.select();}},60);
+}
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
 // ── REGISTRATION & ENROLLMENT ─────────────────────────────────────
@@ -4140,7 +4151,7 @@ window.CampistryMe={
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,setAgeDirection:setAgeDirection,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,
+    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     saveAppNote:saveAppNote,printApplication:printApplication,
