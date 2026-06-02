@@ -1139,6 +1139,13 @@
                 if (result.data.leagueAssignments) {
                     window.leagueAssignments = result.data.leagueAssignments;
                 }
+                // ★★★ CROSS-DATE GUARD: keep the date stamp coherent with the data we just
+                // hydrated. Without this, force-loading a date other than the current one
+                // leaves window.scheduleAssignments holding dateKey's data while the stamp
+                // still names the old date — a save would then write dateKey's data under
+                // the wrong key (the stamp would falsely "match"). Stamp it to dateKey so
+                // the cross-date save guard stays accurate.
+                window._scheduleAssignmentsDate = dateKey;
                 
                 // ★★★ FIX: Properly hydrate unifiedTimes ★★★
                 if (result.data.unifiedTimes?.length > 0) {
