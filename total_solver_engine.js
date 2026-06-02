@@ -1112,6 +1112,10 @@
         if (_wantOccupancy) {
             var fcFp = _fieldPropertyMap.get(fieldName);
             var fcCap = fcFp ? fcFp.capacity : getFieldCapacity(fieldName);
+            // ★ honor per-grade sharing override so a LOOSENED grade's capacity is
+            //   actively pursued by the fill incentive (not merely permitted by the gate).
+            var _gsoF = (fcFp && fcFp.gradeShareRules && blockDivName) ? fcFp.gradeShareRules[blockDivName] : null;
+            if (_gsoF) { fcCap = parseInt(_gsoF.capacity) || (_gsoF.type === 'not_sharable' ? 1 : 2); }
             if (fcCap > 1 && occSameDivSameAct) {
                 var spotsLeft = fcCap - 1 - occSameDivCount;
                 if (occSameDivCount > 0 && spotsLeft >= 0) { var fillRatio = occSameDivCount / (fcCap - 1); penalty -= Math.round(1500 + (fillRatio * 2000)); }
