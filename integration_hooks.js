@@ -2019,6 +2019,19 @@
             const newDateKey = e.target.value;
             if (!newDateKey) { window._pendingDateTransition = null; return; }
 
+            // ★★★ TRANSITION SERIALIZATION (cross-date corruption root fix) ★★★
+            // Two date-changes must NEVER run concurrently: they share
+            // window.scheduleAssignments, so an overlapping save-old/load-new from a
+            // second navigation (e.g. a fast user clicking date C while date B is still
+            // loading) interleaves and writes one day's schedule under another day's key.
+            // Serialize: if a transition is already running, wait for it to finish before
+            // starting this one. Bounded so a stuck transition can't deadlock navigation.
+            const _txnWaitStart = Date.now();
+            while (window.__dateTxnInProgress && (Date.now() - _txnWaitStart) < 12000) {
+                await new Promise(r => setTimeout(r, 50));
+            }
+            window.__dateTxnInProgress = true;
+
             // Safety net: even if anything below throws, the transition flag
             // must eventually clear so save hooks don't stay blocked forever.
             const _txnSafety = setTimeout(() => {
@@ -2127,6 +2140,8 @@
                 if (window._pendingDateTransition && window._pendingDateTransition.to === newDateKey) {
                     window._pendingDateTransition = null;
                 }
+                // ★★★ Release the transition lock so a queued navigation can proceed.
+                window.__dateTxnInProgress = false;
             }
         });
 
