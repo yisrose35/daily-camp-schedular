@@ -3351,7 +3351,7 @@ function runLiveStandalone() {
     function refreshTitle() {
         try {
             var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            var nm = g.campName || (g.app1 ? g.app1.campName : '') || 'Camp Schedule';
+            var nm = g.camp_name || g.campName || (g.app1 ? g.app1.campName : '') || 'Camp Schedule';
             var titleEl = document.getElementById('pc3-live-title');
             if (titleEl) titleEl.textContent = nm;
             document.title = nm + ' — Live';
@@ -3678,6 +3678,12 @@ function renderLiveContent() {
     }
     body.innerHTML = sectHtml;
 
+    // Defer measure + paginate until after the browser has computed layout.
+    // A double rAF guarantees the new DOM nodes have been laid out so
+    // offsetHeight values are real (not 0) when we bin-pack into pages.
+    requestAnimationFrame(function () {
+        requestAnimationFrame(function () {
+
     // 2. Measure available height and each section rendered height
     var availH = body.offsetHeight || (window.innerHeight - 80);
     var wraps = Array.prototype.slice.call(body.querySelectorAll('.pc3-live-section-wrap'));
@@ -3725,6 +3731,9 @@ function renderLiveContent() {
     updateLivePageIndicator();
     if (!_livePageTimer) startLivePageTimer();
     positionAllLiveCursors();
+
+        }); // end inner rAF
+    }); // end outer rAF
 }
 
 function updateLivePageIndicator() {
