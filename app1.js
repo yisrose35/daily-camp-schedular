@@ -1090,6 +1090,17 @@
                 });
             }
 
+            // Apply manually-entered kid counts for bunks not covered by the camper roster.
+            // Roster always wins; manual counts fill in when no CSV has been imported.
+            const bunkManualCounts = (globalData.campistryMe || {}).bunkManualCounts || {};
+            Object.entries(bunkManualCounts).forEach(([bunk, count]) => {
+                if (typeof count !== 'number' || count <= 0) return;
+                if (!(bunk in bunkCounts)) {
+                    if (!state.bunkMetaData[bunk]) state.bunkMetaData[bunk] = {};
+                    state.bunkMetaData[bunk].size = count;
+                }
+            });
+
             const orphanedBunks = Object.keys(bunkCounts).filter(b => !state.bunks.includes(b));
             if (orphanedBunks.length > 0) {
                 console.warn('[app1] Campers assigned to bunks not found in any grade:', orphanedBunks);
