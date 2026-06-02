@@ -626,6 +626,25 @@
      * FIXED in v5.4: Permission-aware error handling (RLS violations vs network errors)
      */
    async function saveSchedule(dateKey, data, options = {}) {
+        // ★★★ CROSS-DATE CORRUPTION GUARD (lowest-level catch-all) ★★★
+        // The orchestrator stamps each in-memory snapshot with the date it belongs to
+        // (data._belongsToDate, via getWindowGlobals). If a save targets a DIFFERENT date
+        // than its data belongs to, a date-change handler race is about to write one day's
+        // schedule under another day's key — refuse it. This covers EVERY direct
+        // ScheduleDB.saveSchedule caller that bypasses the orchestrator's guarded save
+        // (visibilitychange/beforeunload fallbacks, propagation, offline-queue replays,
+        // post-edit bypass, realtime). Inert when the snapshot is unstamped — multi-date
+        // secondary saves pass their own per-date payloads (no marker), so a legitimate
+        // save can never be false-blocked. Then strip the marker so it is never persisted.
+        if (data && data._belongsToDate && dateKey && data._belongsToDate !== dateKey) {
+            console.warn('[ScheduleDB.saveSchedule] ★ BLOCKED cross-date save: snapshot belongs to ' +
+                         data._belongsToDate + ' but target is ' + dateKey + ' — refusing to prevent corruption');
+            return { data: null, error: { message: 'cross-date-mismatch' }, success: false, skipped: 'date-mismatch' };
+        }
+        if (data && Object.prototype.hasOwnProperty.call(data, '_belongsToDate')) {
+            try { delete data._belongsToDate; } catch (e) { /* non-fatal */ }
+        }
+
         // ★★★ v5.5 SECURITY: Verify write permission before cloud write ★★★
         if (window.AccessControl?.verifyBeforeWrite && !options.skipVerify) {
             const allowed = await window.AccessControl.verifyBeforeWrite('save schedule to cloud');
