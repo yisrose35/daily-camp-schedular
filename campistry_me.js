@@ -3545,7 +3545,7 @@ function _linkFormsHTML(){
             h+='<div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s100);">';
             h+='<div style="flex:1;"><div style="font-size:.88rem;font-weight:600;">'+esc(f.name)+'</div>';
             if(f.description)h+='<div style="font-size:.75rem;color:var(--s400);">'+esc(f.description)+'</div>';
-            h+='<div style="font-size:.7rem;color:var(--s500);margin-top:2px;">'+esc(f.type||'General')+'</div></div>';
+            h+='</div>';
             h+=bdg(f.required?'Required':'Optional',f.required?'err':'warn');
             h+='<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editLinkItem(\'digital\','+i+')">Edit</button>';
             h+='<button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err);" onclick="CampistryMe.deleteLinkItem(\'digital\','+i+')">Delete</button>';
@@ -3651,14 +3651,13 @@ function viewFormResponses(idx){
 function addLinkDigitalForm(){
     var h='<div class="me-modal-form">';
     h+=ff('Form Name','lfName','','text');
-    h+=ff('Type','lfType','','select',['Medical Update','Photo Release / Media Consent','Emergency Contact Update','Permission Slip','Activity Waiver','Custom']);
     h+=ff('Description (shown to parents)','lfDesc','','textarea');
     h+=ff('Required?','lfReq','','select',['Yes — required','No — optional']);
     h+='</div>';
     showModal('Add Digital Form',h,function(){
         var name=document.getElementById('lfName').value.trim();
         if(!name){alert('Enter a form name');return;}
-        linkForms.digital.push({id:'lfd_'+Date.now(),name:name,type:document.getElementById('lfType').value,description:document.getElementById('lfDesc').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
+        linkForms.digital.push({id:'lfd_'+Date.now(),name:name,description:document.getElementById('lfDesc').value.trim(),required:document.getElementById('lfReq').value.startsWith('Yes'),created:Date.now()});
         saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Digital form added');
     });
 }
@@ -3698,7 +3697,6 @@ function editLinkItem(type,idx){
     var isDigital=type==='digital';
     var h='<div class="me-modal-form">';
     h+=ff('Name','lfName',item.name,'text');
-    if(isDigital)h+=ff('Type','lfType',item.type,'select',['Medical Update','Photo Release / Media Consent','Emergency Contact Update','Permission Slip','Activity Waiver','Custom']);
     h+=ff('Description','lfDesc',item.description||'','textarea');
     if(!isDigital)h+=ff('Download URL','lfUrl',item.downloadUrl||'','text');
     if(!isDoc)h+=ff('Required?','lfReq',item.required?'Yes — required':'No — optional','select',['Yes — required','No — optional']);
@@ -3708,7 +3706,6 @@ function editLinkItem(type,idx){
         if(!name){alert('Enter a name');return;}
         item.name=name;
         item.description=document.getElementById('lfDesc').value.trim();
-        if(isDigital)item.type=document.getElementById('lfType').value;
         if(!isDigital)item.downloadUrl=document.getElementById('lfUrl').value.trim();
         if(!isDoc)item.required=document.getElementById('lfReq').value.startsWith('Yes');
         saveLinkForms();closeModal('dynModal');renderForms();switchFormsTab('link');toast('Saved');
