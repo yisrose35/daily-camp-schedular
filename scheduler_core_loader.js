@@ -256,6 +256,12 @@
                rainyDayAvailable: a.rainyDayAvailable !== false,
                 rainyDayOnly: a.rainyDayOnly === true,
                 rainyDayExclusive: a.rainyDayExclusive === true,
+                // ★ Manual-audit fix: propagate availableDays so the shared
+                //   solver gate (RotationEngine.calculateLimitScore) can enforce
+                //   the weekday restriction. Was previously dropped here, so the
+                //   manual builder placed weekday-restricted specials on disallowed
+                //   days (auto enforced it separately in its planner).
+                availableDays: Array.isArray(a.availableDays) ? a.availableDays : null,
                 fullGrade: a.fullGrade === true
             });
             props[a.name] = propEntry;
