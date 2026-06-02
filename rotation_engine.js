@@ -977,6 +977,35 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
 
+        // ★ rotationCohort: pooled cross-grade fairness (manual-audit fix).
+        //   AUTO enforces this in its planner (scheduler_core_auto.js:4261-4283);
+        //   the MANUAL builder has no planner, so it's enforced here. Gated to
+        //   non-auto so auto's planner stays the single authority (avoids any
+        //   double-enforcement with a different count source). Skip the special
+        //   for this bunk when its count exceeds the cohort minimum (i.e. wait
+        //   for the lagging bunks in the cohort to catch up). Mirrors the auto
+        //   "skip if count > cohort min" rule.
+        if (window._daBuilderMode !== 'auto') {
+            var _rc = props.rotationCohort;
+            if (_rc && _rc.enabled && Array.isArray(_rc.grades) && _rc.grades.length > 0) {
+                var _divsRC = window.divisions || {};
+                var _cohortBunks = [];
+                _rc.grades.forEach(function (_g) {
+                    var _gd = _divsRC[_g] || _divsRC[String(_g)];
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) { _cohortBunks.push(String(_b)); });
+                });
+                if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunkName)) >= 0) {
+                    var _myCohortCount = RotationEngine.getActivityCount(String(bunkName), activityName);
+                    var _cohortMin = Infinity;
+                    for (var _rci = 0; _rci < _cohortBunks.length; _rci++) {
+                        var _cc = RotationEngine.getActivityCount(_cohortBunks[_rci], activityName);
+                        if (_cc < _cohortMin) _cohortMin = _cc;
+                    }
+                    if (_myCohortCount > _cohortMin) return Infinity;
+                }
+            }
+        }
+
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
         if (divisionName && props.maxUsagePerGrade && props.maxUsagePerGrade[divisionName] > 0) {

@@ -262,6 +262,21 @@
                 //   manual builder placed weekday-restricted specials on disallowed
                 //   days (auto enforced it separately in its planner).
                 availableDays: Array.isArray(a.availableDays) ? a.availableDays : null,
+                // ★ Manual-audit fix: propagate the remaining rotation/frequency
+                //   config so the shared RotationEngine.calculateLimitScore gates
+                //   fire in the MANUAL solver (auto enforced these in its planner;
+                //   the manual builder, which has no planner, relied on these gates
+                //   but they read base defaults because the fields were never copied).
+                //   maxUsage was already copied above; these complete the set.
+                frequencyDays: a.frequencyDays || 0,
+                maxUsagePerGrade: a.maxUsagePerGrade || null,
+                maxUsagePeriod: a.maxUsagePeriod || null,
+                exactFrequency: a.exactFrequency || 0,
+                exactFrequencyPerGrade: a.exactFrequencyPerGrade || null,
+                exactFrequencyPeriod: a.exactFrequencyPeriod || null,
+                minFrequency: a.minFrequency || 0,
+                minFrequencyPeriod: a.minFrequencyPeriod || null,
+                rotationCohort: a.rotationCohort || null,
                 fullGrade: a.fullGrade === true
             });
             props[a.name] = propEntry;
