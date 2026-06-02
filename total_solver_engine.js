@@ -837,7 +837,7 @@
                 //   period when set (mirrors auto calculateLimitScore L1015-1018);
                 //   otherwise lifetime, as before. getPeriodActivityCount is the same
                 //   period-aware counter auto uses.
-                var _maxPeriod = specialRule.maxUsagePeriod;
+                var _maxPeriod = specialRule.maxUsagePeriod || 'half';   // mirror auto default ('half')
                 var _gpac = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
                 var hist = (_maxPeriod && _gpac) ? _gpac(bunk, act, _maxPeriod) : getActivityCount(bunk, act);
                 var todayCount = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
@@ -849,12 +849,20 @@
                 // ★ minFrequencyPeriod (manual-audit fix): scope to the configured
                 //   period when set (mirrors auto calculateLimitScore L1048-1050,
                 //   incl. the 'week'→'1week' normalization); otherwise lifetime.
-                var _minPeriod = specialRule.minFrequencyPeriod;
+                var _minPeriod = specialRule.minFrequencyPeriod || 'week';   // mirror auto default
                 if (_minPeriod === 'week') _minPeriod = '1week';
                 var _gpacMin = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
                 var _curCount = (_minPeriod && _gpacMin) ? _gpacMin(bunk, act, _minPeriod) : getActivityCount(bunk, act);
                 var _shortage = _minFreq - _curCount;
-                if (_shortage > 0) penalty -= (_shortage * 8000);
+                if (_shortage > 0) {
+                    // ★ ESCALATING pull (manual-audit fix): mirror auto getEscalationBonus
+                    //   (rotation_engine.js L1053) — the pull DOUBLES each elapsed period-day,
+                    //   so a below-minimum bunk gets near-force-placed as the period deadline
+                    //   nears. max() with the flat floor keeps the proven baseline strength.
+                    var _mfEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
+                        ? window.SchedulerCoreUtils.getEscalationBonus(_minPeriod, _shortage, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
+                    penalty -= Math.max(_mfEsc || 0, _shortage * 8000);
+                }
             }
             // ★ exactFrequency (manual-audit fix): acts as BOTH ceiling and floor,
             //   period-scoped. Mirrors auto calculateLimitScore L1027-1036. Ceiling =
@@ -872,7 +880,14 @@
                 var _exactCount = _gpacEx ? _gpacEx(bunk, act, _exactPeriod) : getActivityCount(bunk, act);
                 var _exactToday = getActivitiesDoneToday(bunk, slots[0] || 999).has(actNorm) ? 1 : 0;
                 if (_exactCount + _exactToday >= _exactFreq) return 999999;            // ceiling (hard)
-                penalty -= ((_exactFreq - (_exactCount + _exactToday)) * 8000);        // floor (drive toward exact)
+                var _exShort = _exactFreq - (_exactCount + _exactToday);
+                if (_exShort > 0) {
+                    // ★ ESCALATING floor (mirror auto getEscalationBonus, rotation_engine.js L1039) —
+                    //   doubles each elapsed period-day so the exact target is met by period end.
+                    var _efEsc = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getEscalationBonus)
+                        ? window.SchedulerCoreUtils.getEscalationBonus(_exactPeriod, _exShort, undefined, parseInt(specialRule.frequencyDays) || 0) : 0;
+                    penalty -= Math.max(_efEsc || 0, _exShort * 8000);                 // floor (drive toward exact)
+                }
             }
             // ★ frequencyDays (manual-audit fix): "min days between visits" cooldown
             //   (UI label, facilities.js). Mirrors auto calculateLimitScore L946-951:
