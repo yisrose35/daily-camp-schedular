@@ -2429,6 +2429,15 @@
         if (candFp && candFp.accessRestrictions && candFp.accessRestrictions.enabled && blk.divName) {
             if (!(blk.divName in candFp.accessRestrictions.divisions)) return rej('accessRestrictions: division "' + blk.divName + '" not allowed');
         }
+        // ★ Respect EXCLUSIVE field preference (mirrors the domain filter L1805 +
+        //   scorer L867). The field-quality reoptimizer pulls blocks to higher-ranked
+        //   fields by walking field-group members directly — OUTSIDE the candidate
+        //   domain — so without this guard it could move a block onto a premium field
+        //   whose exclusive preference list excludes the block's division (e.g. a
+        //   Majors-only field), silently overriding the user's preference.
+        if (candFp && candFp.prefExclusive && candFp.prefList && blk.divName && candFp.prefList.indexOf(blk.divName) === -1) {
+            return rej('exclusive field preference excludes division "' + blk.divName + '"');
+        }
         if (S.isFieldLockedByTime(candName, sM, eM, blk.divName)) return rej('time-based field lock');
 
         var candCap = candFp ? candFp.capacity : S.getFieldCapacity(candName);
