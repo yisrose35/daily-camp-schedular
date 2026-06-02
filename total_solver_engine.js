@@ -1856,7 +1856,25 @@
         var globalFullGradeMap = new Map();
         var allBunks = Object.keys(window.scheduleAssignments || {});
         for (var gbi=0;gbi<allBunks.length;gbi++) { var gb=allBunks[gbi],gbs=window.scheduleAssignments[gb]||[]; for (var gsi=0;gsi<gbs.length;gsi++) { var ge=gbs[gsi]; if (!ge||ge.continuation||ge._isTransition) continue; var ga=normName(ge._activity||ge.sport||ge.field); if (ga&&ga!=='free'&&ga!=='free play'&&ga!=='transition/buffer') { if (!globalBunkActs.has(gb)) globalBunkActs.set(gb,new Set()); globalBunkActs.get(gb).add(ga); } } }
-        var sorted = Array.from(S._slotGroups.entries()).sort(function(a,b){return a[1].length-b[1].length;});
+        // ★ FAIRNESS ROTATION (per-division coverage fix): the pure size-ascending sort
+        //   processed the LARGEST division LAST every day, so for a SCARCE same_division
+        //   shared field (one field, more divisions want it than there are slots) the
+        //   largest division was systematically locked out (e.g. one grade never getting
+        //   a popular special). Rotate the per-division processing priority by DATE so
+        //   every division gets early-pick turns across the period; SIZE stays the
+        //   secondary key (preserves the original packing heuristic within a division).
+        //   This does NOT enable cross-grade sharing — same_division stays same_division;
+        //   it only rotates WHICH division claims a scarce field first on a given day.
+        var _divOfGroup = function (entry) { var bis = entry[1]; for (var _gi = 0; _gi < bis.length; _gi++) { var _b = activityBlocks[bis[_gi]]; if (_b && (_b.divName || _b.division)) return String(_b.divName || _b.division); } return ''; };
+        var _rotDivs = (function () { var seen = {}; for (var _e of S._slotGroups) { var _d = _divOfGroup(_e); if (_d) seen[_d] = true; } return Object.keys(seen).sort(); })();
+        var _rotN = _rotDivs.length || 1;
+        var _rotSeed = (function () { var ds = window.currentScheduleDate; if (typeof ds === 'string') { var p = ds.split('-'); if (p.length === 3) { var dn = Math.floor(Date.UTC(parseInt(p[0], 10), parseInt(p[1], 10) - 1, parseInt(p[2], 10)) / 86400000); if (!isNaN(dn)) return dn; } } return 0; })();
+        var _divRank = function (d) { var i = _rotDivs.indexOf(d); return i < 0 ? 9999 : (i + _rotSeed) % _rotN; };
+        var sorted = Array.from(S._slotGroups.entries()).sort(function (a, b) {
+            var ra = _divRank(_divOfGroup(a)), rb = _divRank(_divOfGroup(b));
+            if (ra !== rb) return ra - rb;           // ★ date-rotated division priority (fairness)
+            return a[1].length - b[1].length;         // original size-ascending heuristic (secondary)
+        });
         for (var [,blockIndices] of sorted) {
             S._todayCache.clear();
             var unassigned = blockIndices.filter(function(bi){return !S._assignedBlocks.has(bi);});
