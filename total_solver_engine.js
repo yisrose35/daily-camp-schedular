@@ -796,7 +796,13 @@
                     _assignedSpecial: pick._type === 'special' ? (pick._activity || pick.field) : null,
                     _specialLocation: pick._type === 'special' ? pick.field : null
                 };
-                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: 'auto' })) {
+                // ★ FIX: pass the ACTUAL builder mode (was hardcoded 'auto'). The manual
+                //   builder runs with _daBuilderMode='manual'; isCandidateAllowed only
+                //   applies a cooldown rule when rule.mode is 'both' OR equals the call
+                //   mode (rules.js L177-178). So a user's mode:'manual' cooldown rule was
+                //   silently skipped in the manual builder. Now manual passes 'manual' →
+                //   'manual'+'both' rules enforced; auto-reached calls still pass 'auto'.
+                if (!window.SchedulingRules.isCandidateAllowed(_cdCand, _cdTemplate, { mode: (window._daBuilderMode === 'auto') ? 'auto' : 'manual' })) {
                     return 999999;
                 }
             }
