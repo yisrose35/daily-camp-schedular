@@ -307,7 +307,7 @@
                 }
             }
 
-           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, allowedPairs: allowedPairs, prefList: prefList, prefExclusive: prefExclusive, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
+           _fieldPropertyMap.set(fieldName, { capacity: capacity, sharingType: sharingType, allowedPairs: allowedPairs, prefList: prefList, prefExclusive: prefExclusive, gradeShareRules: (fieldProps.gradeShareRules && typeof fieldProps.gradeShareRules === 'object' && Object.keys(fieldProps.gradeShareRules).length > 0) ? fieldProps.gradeShareRules : null, accessRestrictions: accessRestrictionsCache, unavailableRules: unavailableRulesCache, availableRules: availableRulesCache, hasProps: true });
             if (unavailableRulesCache || availableRulesCache) {
                 v12Log('[TIME-RULES] Cached ' + (unavailableRulesCache ? unavailableRulesCache.length : 0) + ' unavailable + ' + (availableRulesCache ? availableRulesCache.length : 0) + ' available rules for "' + fieldName + '"');
             }
@@ -812,6 +812,14 @@
             var fp = _fieldPropertyMap.get(fieldName);
             var sType = fp ? fp.sharingType : getSharingType(fieldName);
             var cap = fp ? fp.capacity : getFieldCapacity(fieldName);
+            // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules): a field can TIGHTEN or
+            //   LOOSEN sharing for a specific division (e.g. base same_division/cap2 but
+            //   Minors→not_sharable, or base not_sharable but Majors→same_division/cap3).
+            //   Mirrors canBlockFit (scheduler_core_utils.js L905-911). Apply BEFORE the
+            //   capacity checks so the effective type/cap governs this division. Without
+            //   this the manual scorer used only the field base, ignoring the override.
+            var _gso = (fp && fp.gradeShareRules && blockDivName) ? fp.gradeShareRules[blockDivName] : null;
+            if (_gso) { sType = _gso.type || 'not_sharable'; cap = parseInt(_gso.capacity) || (sType === 'not_sharable' ? 1 : 2); }
             if (checkCrossDivisionTimeConflict(fieldName, blockDivName, blockStart, blockEnd, bunk)) return 999999;
             // Combined field: block if ANY combo partner is in use (same or different division)
             var _cbPartners = _comboExclusiveMap.get(fieldNorm);
@@ -2012,6 +2020,11 @@
                 }
                var fn2=c2._fieldNorm, fName=c2.field;
                 var fp=S._fieldPropertyMap.get(fName), cap=fp?fp.capacity:S.getFieldCapacity(fName), st=fp?fp.sharingType:S.getSharingType(fName);
+                // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules) — mirror the scorer gate
+                //   (calculatePenaltyCost) so the group solver's batch placement also honors
+                //   per-division tighten/loosen instead of only the field base.
+                var _gsoG = (fp && fp.gradeShareRules && b2.divName) ? fp.gradeShareRules[b2.divName] : null;
+                if (_gsoG) { st = _gsoG.type || 'not_sharable'; cap = parseInt(_gsoG.capacity) || (st === 'not_sharable' ? 1 : 2); }
                var liveUse=(b2.startTime!==undefined&&b2.endTime!==undefined)?(st==='not_sharable'?S.getFieldUsageFromTimeIndex(fn2,b2.startTime,b2.endTime,b2.bunk):S.countSameDivisionUsage(fName,b2.divName,b2.startTime,b2.endTime,b2.bunk)):0;
                 var canFit=false;
                if (st==='not_sharable') { var _nsBatchUse=0; if(b2.startTime!==undefined&&b2.endTime!==undefined){for(var _nsri=0;_nsri<results.length;_nsri++){var _nsr=results[_nsri];if(_nsr.candIdx===-1||normName(_nsr.pick.field)!==fn2)continue;var _nsrb=activityBlocks[_nsr.blockIdx];if(_nsrb.bunk===b2.bunk)continue;if(_nsrb.startTime<b2.endTime&&_nsrb.endTime>b2.startTime)_nsBatchUse++;}} canFit=(liveUse+_nsBatchUse<cap); }
@@ -2188,6 +2201,9 @@
         if (cAn&&cAn!=='free'&&cAn!=='free play') { var bs=window.scheduleAssignments?.[bunk]||[]; var ms=new Set(slots); for (var i=0;i<bs.length;i++) { if (ms.has(i)) continue; var e=bs[i]; if (!e||e.continuation||e._isTransition) continue; if (normName(e._activity||e.sport||e.field)===cAn) return false; } }
         if (S.isFieldLockedByTime(fn,sM,eM,bDiv)) return false;
         var fp=S._fieldPropertyMap.get(fn); var cap=fp?fp.capacity:S.getFieldCapacity(fn); var st=fp?fp.sharingType:S.getSharingType(fn);
+        // ★ PER-GRADE SHARING OVERRIDE (gradeShareRules) — same as the scorer/group-solver gates.
+        var _gsoV=(fp&&fp.gradeShareRules&&bDiv)?fp.gradeShareRules[bDiv]:null;
+        if (_gsoV) { st=_gsoV.type||'not_sharable'; cap=parseInt(_gsoV.capacity)||(st==='not_sharable'?1:2); }
         if (S.checkCrossDivisionTimeConflict(fn,bDiv,sM,eM,bunk)) return false;
         // Combined field: block if any combo partner is in use
         var _vpPartners = S._comboExclusiveMap.get(fnorm);
@@ -2266,6 +2282,7 @@
                 if (S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue;
                 var _dfCombo = S._comboExclusiveMap.get(c._fieldNorm); if (_dfCombo) { var _dfBlocked = false; for (var _dfi2 = 0; _dfi2 < _dfCombo.length; _dfi2++) { if (S.getFieldUsageFromTimeIndex(_dfCombo[_dfi2],sM,eM,bunk) > 0) { _dfBlocked = true; break; } } if (_dfBlocked) continue; }
                 var fp=S._fieldPropertyMap.get(c.field),cap=fp?fp.capacity:S.getFieldCapacity(c.field),st=fp?fp.sharingType:S.getSharingType(c.field);
+                var _gsoD=(fp&&fp.gradeShareRules&&bDiv)?fp.gradeShareRules[bDiv]:null; if (_gsoD) { st=_gsoD.type||'not_sharable'; cap=parseInt(_gsoD.capacity)||(st==='not_sharable'?1:2); } // ★ per-grade sharing override
                 if (st==='not_sharable') { if (S.getFieldUsageFromTimeIndex(c._fieldNorm,sM,eM,bunk)>=cap) continue; if(S.checkCrossDivisionTimeConflict(c.field,bDiv,sM,eM,bunk)) continue; } else { if (S.countSameDivisionUsage(c.field,bDiv,sM,eM,bunk)>=cap) continue; }                var td=S.getActivitiesDoneToday(bunk,slots[0]??999),cAn=normName(c.activityName); if (cAn&&cAn!=='free'&&cAn!=='free play'&&td.has(cAn)) continue;
                 if (!actProps[c.field]&&!actProps[c.activityName]&&c.type!=='special') continue;
                 if (window.unifiedTimes && window.SchedulerCoreUtils?.canBlockFit && !(S._isRainyDay && S._rainyTimeBypasses.has(c.field)) && !window.SchedulerCoreUtils.canBlockFit(blk,c.field,actProps,null,c.activityName,false)) continue;
