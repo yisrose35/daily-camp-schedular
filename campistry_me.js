@@ -996,7 +996,7 @@ function renderStructure(){
                     +'</div>'
                     +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
-                    var rCt=(bunkAsgn[b]||[]).length;
+                    var rCt=Object.values(roster).filter(function(c){return c.bunk===b}).length;
                     var mCt=bunkManualCounts[b];
                     var isOverride=(mCt!=null);
                     var dispCt=isOverride?mCt:rCt;
@@ -1624,7 +1624,7 @@ function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();render
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
 function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
 function openBunkCountModal(bunkName){
-    var rosterCt=(bunkAsgn[bunkName]||[]).length;
+    var rosterCt=Object.values(roster).filter(function(c){return c.bunk===bunkName}).length;
     var manualCt=bunkManualCounts[bunkName];
     var isOverride=(manualCt!=null);
     var inputVal=isOverride?manualCt:(rosterCt||0);
