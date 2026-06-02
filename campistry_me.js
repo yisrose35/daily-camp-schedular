@@ -936,7 +936,18 @@ function renderStructure(){
                     +'</div>'
                     +'<div class="me-card-bunks" data-grade="'+je(gn)+'" style="display:flex;flex-wrap:wrap;gap:4px;padding-left:18px">';
                 (gd.bunks||[]).forEach(function(b){
-                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="padding:3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'+esc(b)+'</span>';
+                    var rCt=(bunkAsgn[b]||[]).length;
+                    var mCt=bunkManualCounts[b];
+                    var isOverride=(mCt!=null);
+                    var dispCt=isOverride?mCt:rCt;
+                    var badgeTip=isOverride?'Manual count (click to edit)':'Roster count (click to set manual count)';
+                    var badgeStyle=isOverride
+                        ?'background:var(--me);color:#fff;'
+                        :(rCt?'background:#e2e8f0;color:#475569;':'background:#f1f5f9;color:#94a3b8;');
+                    h+='<span class="me-card-bunk" data-bunk="'+je(b)+'" draggable="true" style="display:inline-flex;align-items:center;gap:4px;padding:3px 6px 3px 8px;border-radius:6px;border:1px solid var(--s200);font-size:.7rem;font-weight:600;color:var(--s600);cursor:grab;user-select:none">'
+                        +esc(b)
+                        +'<span class="bunk-ct-pill" title="'+esc(badgeTip)+'" onclick="event.stopPropagation();CampistryMe.openBunkCountModal(\''+je(b)+'\')" style="'+badgeStyle+'min-width:18px;height:16px;border-radius:8px;font-size:.65rem;font-weight:700;padding:0 5px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;">'+dispCt+'</span>'
+                        +'</span>';
                 });
                 h+='</div></div>';
             });
@@ -1407,16 +1418,12 @@ function renderBB(){
         allB.forEach(function(bk){
             if(bk.div!==lastD){if(lastD)h+='</div>';lastD=bk.div;h+='<div class="bb-div"><span class="bb-dot" style="background:'+bk.color+'"></span>'+esc(bk.div)+'</div><div class="bb-gl">'+esc(bk.gr)+'</div><div class="bb-grid">'}
             var ids=bunkAsgn[bk.name]||[];
-            var hasRoster=ids.length>0;
-            var dispCount=hasRoster?ids.length:(bunkManualCounts[bk.name]||0);
+            var mCt=bunkManualCounts[bk.name];
+            var dispCount=(mCt!=null)?mCt:ids.length;
             h+='<div class="bb-bunk" ondragover="event.preventDefault();this.classList.add(\'dragover\')" ondragleave="this.classList.remove(\'dragover\')" ondrop="CampistryMe.bbDrop(\''+je(bk.name)+'\',event);this.classList.remove(\'dragover\')">';
-            if(hasRoster){
-                h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct" title="Count from imported roster">'+ids.length+'</span></div>';
-            }else{
-                h+='<div class="bb-bunk-hd bb-bunk-hd--click" onclick="CampistryMe.openBunkCountModal(\''+je(bk.name)+'\')" title="Click to set number of kids"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct bb-bunk-ct--editable">'+(dispCount||'—')+'</span></div>';
-            }
+            h+='<div class="bb-bunk-hd"><span class="bb-bunk-nm">'+esc(bk.name)+'</span><span class="bb-bunk-ct"'+(mCt!=null?' style="color:var(--me)" title="Manual count"':' title="Roster count"')+'>'+dispCount+'</span></div>';
             h+='<div class="bb-campers">';
-            if(!ids.length)h+='<div class="bb-empty">Drop campers · or click header to set count</div>';
+            if(!ids.length)h+='<div class="bb-empty">Drop campers here</div>';
             else ids.forEach(function(n){h+=bbC(n)});
             h+='</div></div>';
         });
@@ -1430,18 +1437,33 @@ function bbDrop(t,e){e.preventDefault();var n=e.dataTransfer.getData('text/plain
 function autoAssign(){var allB=[];Object.entries(structure).forEach(function([div,d]){Object.entries(d.grades||{}).forEach(function([gr,g]){(g.bunks||[]).forEach(function(b){allB.push({name:b,gr:gr,div:div})})})});var next={};allB.forEach(function(b){next[b.name]=[]});var campers=Object.entries(roster);campers.sort(function(a,b){return(a[1].grade||'').localeCompare(b[1].grade||'')});campers.forEach(function([n,d]){var el=allB.filter(function(b){return b.gr===d.grade});if(!el.length)el=allB.filter(function(b){return b.div===d.division});if(!el.length)el=allB;if(!el.length)return;el.sort(function(a,b){return next[a.name].length-next[b.name].length});next[el[0].name].push(n)});bunkAsgn=next;save();renderBB();toast('Auto-assigned')}
 function clearBunks(){if(!confirm('Clear all?'))return;bunkAsgn={};save();renderBB();toast('Cleared')}
 function setBunkCount(bunkName,value){var n=parseInt(value,10);if(isNaN(n)||n<0)n=0;bunkManualCounts[bunkName]=n;save()}
+function _clearBunkCount(bunkName){delete bunkManualCounts[bunkName];save();render(curPage);toast('Override cleared')}
 function openBunkCountModal(bunkName){
-    var cur=bunkManualCounts[bunkName]||0;
-    var body='<p style="margin:0 0 14px;font-size:.9rem;color:var(--s600)">How many kids are in <strong>'+esc(bunkName)+'</strong>?</p>'+
-        '<input type="number" id="bunkCtInput" min="0" max="999" value="'+cur+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">';
-    showModal('Set Bunk Size',body,function(){
+    var rosterCt=(bunkAsgn[bunkName]||[]).length;
+    var manualCt=bunkManualCounts[bunkName];
+    var isOverride=(manualCt!=null);
+    var inputVal=isOverride?manualCt:(rosterCt||0);
+    var rosterNote=rosterCt
+        ?'<p style="margin:0 0 10px;font-size:.78rem;color:var(--s500)">Imported roster: <strong>'+rosterCt+'</strong> kid'+(rosterCt!==1?'s':'')+'. Setting a number here overrides the roster count for scheduling.</p>'
+        :'<p style="margin:0 0 10px;font-size:.78rem;color:var(--s400)">No campers imported for this bunk yet.</p>';
+    var clearBtn=isOverride
+        ?'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe._clearBunkCount(\''+je(bunkName)+'\');CampistryMe.closeModal(\'dynModal\');" style="margin-right:auto">Clear override</button>'
+        :'';
+    var body=rosterNote
+        +'<input type="number" id="bunkCtInput" min="0" max="999" value="'+inputVal+'" style="width:100%;font-size:1.4rem;padding:10px 14px;border:1.5px solid var(--s200);border-radius:var(--r);text-align:center;box-sizing:border-box">';
+    showModal('Kids in '+bunkName,body,function(){
         var val=parseInt((document.getElementById('bunkCtInput')||{}).value||'0',10);
         setBunkCount(bunkName,val);
         closeModal('dynModal');
-        renderBB();
-        toast('Bunk size set to '+Math.max(0,val));
+        render(curPage);
+        toast('Set to '+Math.max(0,val)+' kids');
     });
-    setTimeout(function(){var inp=document.getElementById('bunkCtInput');if(inp){inp.focus();inp.select();}},60);
+    // Inject clear button into footer
+    setTimeout(function(){
+        var ft=document.querySelector('#dynModal [id="dynModalSave"]');
+        if(ft&&clearBtn){var tmp=document.createElement('span');tmp.innerHTML=clearBtn;ft.parentNode.insertBefore(tmp.firstElementChild,ft.parentNode.firstChild);}
+        var inp=document.getElementById('bunkCtInput');if(inp){inp.focus();inp.select();}
+    },60);
 }
 
 // ── BILLING / BROADCASTS / SOON ──────────────────────────────────
@@ -4151,7 +4173,7 @@ window.CampistryMe={
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,setAgeDirection:setAgeDirection,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
-    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,
+    bbDrop:bbDrop,autoAssign:autoAssign,clearBunks:clearBunks,setBunkCount:setBunkCount,openBunkCountModal:openBunkCountModal,_clearBunkCount:_clearBunkCount,
     addSession:addSession,deleteSession:deleteSession,editSession:editSession,toggleSessionReg:toggleSessionReg,copyRegLink:copyRegLink,addApplication:addApplication,autoPromoteWaitlist:autoPromoteWaitlist,
     viewApplication:viewApplication,updateEnrollStatus:updateEnrollStatus,enrollCamper:enrollCamper,
     saveAppNote:saveAppNote,printApplication:printApplication,
