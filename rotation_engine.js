@@ -950,6 +950,33 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
 
+        // ★ availableDays weekday gate (manual-audit fix): mirror auto's
+        //   isSpecialAvailableOnDay (scheduler_core_auto.js:382-383). A special
+        //   restricted to certain weekdays must NEVER be selected on others.
+        //   This was AUTO-ONLY (the auto planner pre-gated it); the shared
+        //   solver/rotation path never checked weekday, so the MANUAL builder
+        //   placed weekday-restricted specials on disallowed days. Hard-block on
+        //   the shared path → fixes manual + harmless for auto (which already
+        //   pre-filters by day). Matches auto: case-insensitive, accepts 3-letter
+        //   ('Wed') or full ('Wednesday') day names.
+        if (Array.isArray(props.availableDays) && props.availableDays.length > 0) {
+            var _avDate = window.currentScheduleDate;
+            if (_avDate) {
+                var _avp = String(_avDate).split('-');
+                if (_avp.length === 3) {
+                    var _avDow = new Date(parseInt(_avp[0], 10), parseInt(_avp[1], 10) - 1, parseInt(_avp[2], 10)).getDay();
+                    if (_avDow >= 0 && _avDow <= 6) {
+                        var _avAbbr = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][_avDow];
+                        var _avFull = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avDow];
+                        var _avAllowed = props.availableDays.map(function (d) { return String(d).toLowerCase(); });
+                        if (_avAllowed.indexOf(_avAbbr) < 0 && _avAllowed.indexOf(_avFull) < 0) {
+                            return Infinity;
+                        }
+                    }
+                }
+            }
+        }
+
         // ★ Per-grade cap: grade-specific override takes precedence over global
         var maxUsage = props.maxUsage || 0;
         if (divisionName && props.maxUsagePerGrade && props.maxUsagePerGrade[divisionName] > 0) {
