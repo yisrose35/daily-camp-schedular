@@ -1352,12 +1352,29 @@
         //   subtract+add produces an undercount. Use scheduleSegments first
         //   (always complete) and fall back to scheduleAssignments only if
         //   segments aren't loaded.
-        const memTodaySegs = liveDate && window.scheduleSegments &&
-            Object.keys(window.scheduleSegments).length
+        // ★ COHERENCE GUARD: only count in-memory as "today" when it actually
+        //   belongs to liveDate. window._scheduleAssignmentsDate is the
+        //   authoritative owner stamp (kept coherent by the date-nav fix), and
+        //   it tracks window.scheduleAssignments. window.scheduleSegments is a
+        //   SEPARATE global that can LAG — it isn't cleared when navigating to a
+        //   date with no schedule, so it keeps the prior date's data. We trust
+        //   segments ONLY when (a) the owner stamp says memory is today's AND
+        //   (b) scheduleAssignments actually has today's data; otherwise stale
+        //   prior-date segments would be miscounted as "today" and inflate the
+        //   viewed date's rotation counts (e.g. an empty date showed the
+        //   last-generated day's schedule). Falls back to the date-correct
+        //   localStorage blob for liveDate when memory isn't today's.
+        const _memIsToday = !!liveDate && window._scheduleAssignmentsDate === liveDate;
+        const _assignHasToday = _memIsToday && window.scheduleAssignments &&
+            Object.keys(window.scheduleAssignments).some(function (b) {
+                var a = window.scheduleAssignments[b];
+                return Array.isArray(a) && a.some(Boolean);
+            });
+        const memTodaySegs = (_assignHasToday && window.scheduleSegments &&
+            Object.keys(window.scheduleSegments).length)
             ? window.scheduleSegments : null;
         const todaySched = memTodaySegs
-            || ((liveDate && window.scheduleAssignments &&
-                Object.keys(window.scheduleAssignments).length)
+            || (_assignHasToday
                 ? window.scheduleAssignments
                 : (allDaily[liveDate]?.scheduleAssignments || {}));
         const todayCounted = !!(liveDate && countedDates[liveDate]);
