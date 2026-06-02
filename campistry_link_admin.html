@@ -880,17 +880,8 @@ function closeAdminMsgDetail() {
 
 // ─── DOCUMENTS & FOLDER MANAGER ─────────────────────────────────────────────
 var docFolders = [
-    { id:1, name:'Grade 1 Waivers',       rules:{ docType:'waiver',     grade:'1st Grade', division:'',      bunk:'' }, docs:[] },
-    { id:2, name:'Juniors Permission Slips', rules:{ docType:'permission', grade:'',          division:'Juniors', bunk:'' }, docs:[] },
-    { id:3, name:'Seniors Medical',        rules:{ docType:'medical',    grade:'',          division:'Seniors', bunk:'' }, docs:[] }
 ];
-var docSubmissions = [
-    { id:1, camper:'Mia Miller',  grade:'1st Grade', division:'Juniors', bunk:'Bunk 4', docType:'waiver',     name:'General Liability Waiver', filename:'waiver_mia_miller.pdf',  date:'Jun 3',  folderId:1 },
-    { id:2, camper:'Eli Miller',  grade:'3rd Grade', division:'Juniors', bunk:'Bunk 4', docType:'permission', name:'Trip Permission Slip',      filename:'trip_eli_miller.jpg',    date:'Jun 2',  folderId:2 },
-    { id:3, camper:'Noah Stern',  grade:'5th Grade', division:'Seniors', bunk:'Bunk 7', docType:'medical',    name:'Medical Update Form',       filename:'medical_noah_stern.pdf', date:'Jun 1',  folderId:3 },
-    { id:4, camper:'Sophie Cohen',grade:'6th Grade', division:'Seniors', bunk:'Bunk 9', docType:'waiver',     name:'General Liability Waiver',  filename:'waiver_sophie_cohen.pdf',date:'Jun 4',  folderId:null },
-    { id:5, camper:'Jake Levy',   grade:'3rd Grade', division:'Juniors', bunk:'Bunk 4', docType:'consent',    name:'Photo Release Consent',     filename:'consent_jake_levy.pdf',  date:'Jun 5',  folderId:null }
-];
+var docSubmissions = [];
 // Auto-file new submissions into matching folders on load
 docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
 
