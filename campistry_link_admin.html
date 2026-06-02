@@ -1154,9 +1154,14 @@ function boot() {
 
     window.addEventListener('campistry-cloud-hydrated', function() {
         console.log('[Link Admin] Cloud hydrated — refreshing');
-        // Reload the data bridge so it sees the freshly written localStorage
         if (window.CampistryLink) window.CampistryLink.refresh();
-        renderDash();
+        // Re-render whichever page is currently active
+        var active = document.querySelector('.lk-page.active');
+        var pageId = active ? active.id.replace('page-', '') : 'dashboard';
+        if (pageId === 'dashboard') renderDash();
+        else if (pageId === 'directory') renderDir('');
+        else if (pageId === 'campers') renderCampers('');
+        else renderDash();
     });
 
     // Photo index restore
