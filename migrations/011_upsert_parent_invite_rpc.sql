@@ -16,6 +16,8 @@
 --   • Returns { success, token, access_code, action: 'created'|'updated' }
 -- ============================================================================
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 CREATE OR REPLACE FUNCTION public.upsert_parent_invite(
     p_camp_id      uuid,
     p_token        text,
