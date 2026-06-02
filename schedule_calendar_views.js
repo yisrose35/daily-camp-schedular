@@ -664,7 +664,77 @@
     // ══════════════════════════════════════════════════════════════════════
     // MONTH VIEW
     // ══════════════════════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════════
+    // CAMP DATES — half / transition / start-end markers
+    // Reads the LIVE user-input camp dates (top-level `campDates`, the same
+    // source the rotation engine's Utils.getCampDates uses). ISO date strings
+    // (YYYY-MM-DD) compare correctly lexicographically, so no Date parsing.
+    // ══════════════════════════════════════════════════════════════════════
+    function _getCampDatesCfg() {
+        try {
+            if (window.SchedulerCoreUtils && typeof window.SchedulerCoreUtils.getCampDates === 'function') {
+                var cd = window.SchedulerCoreUtils.getCampDates();
+                if (cd && cd.startDate) return cd;
+            }
+        } catch (e) {}
+        try {
+            if (window.loadGlobalSettings) {
+                var gs = window.loadGlobalSettings() || {};
+                var cd2 = gs.campDates || window.loadGlobalSettings('campDates');
+                if (cd2 && cd2.startDate) return cd2;
+            }
+        } catch (e) {}
+        return null;
+    }
+    // Classify an ISO dateKey against the camp-dates config.
+    // Returns null if no camp dates set. Otherwise:
+    //   { inCamp, isStart, isEnd, half: 1|2|0|null, isTransition }
+    // half===0 + isTransition===true means the changeover gap between
+    // half1End and half2Start (rendered as a non-numbered transition marker).
+    function _campDateInfo(dateKey, cd) {
+        if (!cd || !cd.startDate || !dateKey) return null;
+        var start = cd.startDate, end = cd.endDate || null, h1End = cd.half1End || null, h2Start = cd.half2Start || null;
+        if (dateKey < start) return { inCamp: false };
+        if (end && dateKey > end) return { inCamp: false };
+        var info = { inCamp: true, isStart: dateKey === start, isEnd: !!(end && dateKey === end), half: null, isTransition: false };
+        if (h2Start) {
+            if (dateKey >= h2Start) info.half = 2;
+            else if (h1End && dateKey > h1End) { info.half = 0; info.isTransition = true; } // changeover gap
+            else info.half = 1;
+        } else if (h1End) {
+            info.half = (dateKey <= h1End) ? 1 : 2;
+        }
+        return info;
+    }
+    // Build the marker HTML (badge) + returns the cell CSS class suffix.
+    function _campDateMarker(info) {
+        if (!info || !info.inCamp) return { cls: '', badge: '' };
+        var cls = info.isTransition ? ' scv-cd-transition' : (info.half === 2 ? ' scv-cd-half2' : (info.half === 1 ? ' scv-cd-half1' : ''));
+        // Half is conveyed by the cell tint (cls) + legend; badges mark only
+        // the milestone days so the grid stays readable.
+        var badge = '';
+        if (info.isStart) badge = '<div class="scv-cd-badge scv-cd-badge-start">Camp Start</div>';
+        else if (info.isEnd) badge = '<div class="scv-cd-badge scv-cd-badge-end">Camp End</div>';
+        else if (info.isTransition) badge = '<div class="scv-cd-badge scv-cd-badge-transition">Transition</div>';
+        return { cls: cls, badge: badge };
+    }
+    // A one-row color legend shown above month/week views when camp dates exist.
+    function _campDatesLegendHtml(cd) {
+        if (!cd || !cd.startDate) return '';
+        var items = '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-half1"></span>1st Half</span>';
+        if (cd.half2Start) {
+            if (cd.half1End && cd.half1End < cd.half2Start) {
+                // only show a transition swatch when there is an actual gap (changeover days)
+                var _g = new Date(cd.half2Start + 'T00:00:00') - new Date(cd.half1End + 'T00:00:00');
+                if (_g > 86400000) items += '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-transition"></span>Transition</span>';
+            }
+            items += '<span class="scv-cd-leg-item"><span class="scv-cd-leg-sw scv-cd-half2"></span>2nd Half</span>';
+        }
+        return '<div class="scv-cd-legend">' + items + '</div>';
+    }
+
     function renderMonthView() {
+        var _campCd = _getCampDatesCfg();
         var daysInMonth = new Date(_viewYear, _viewMonth + 1, 0).getDate();
         var firstDow = new Date(_viewYear, _viewMonth, 1).getDay();
         var prevMonthDays = new Date(_viewYear, _viewMonth, 0).getDate();
@@ -676,7 +746,7 @@
         var headerHtml = '<div class="scv-month-header-row">';
         DAYS.forEach(function (d) { headerHtml += '<div class="scv-month-hdr">' + d + '</div>'; });
         headerHtml += '</div>';
-        wrapper.innerHTML = headerHtml;
+        wrapper.innerHTML = _campDatesLegendHtml(_campCd) + headerHtml;
 
         var grid = document.createElement('div');
         grid.className = 'scv-month-grid';
@@ -703,6 +773,10 @@
 
                 if (inMonth) {
                     var dateKey = getDateKey(_viewYear, _viewMonth, dayNum);
+                    // ★ Camp-date marker: tint the cell by half + badge milestone days.
+                    var _cdMark = _campDateMarker(_campDateInfo(dateKey, _campCd));
+                    if (_cdMark.cls) cell.className += _cdMark.cls;
+                    if (_cdMark.badge) inner += _cdMark.badge;
                     var events = getGradeEvents(dateKey);
                     var scheduled = hasSchedule(dateKey);
                     var maxShow = 3;
@@ -739,6 +813,7 @@
     // WEEK VIEW
     // ══════════════════════════════════════════════════════════════════════
     function renderWeekView() {
+        var _campCd = _getCampDatesCfg();
         var current = new Date(_viewYear, _viewMonth, _viewDay);
         var startOfWeek = new Date(current);
         startOfWeek.setDate(current.getDate() - current.getDay());
@@ -762,6 +837,7 @@
             var dateKey = getDateKey(wd.getFullYear(), wd.getMonth(), wd.getDate());
             var activeGrades = getActiveGrades(dateKey);
             var scheduled = hasSchedule(dateKey);
+            var _cdMark = _campDateMarker(_campDateInfo(dateKey, _campCd)); // camp-date half tint + milestone badge
             var dotHtml = '';
             activeGrades.slice(0, 6).forEach(function (g) {
                 dotHtml += '<span class="scv-week-hdr-dot" style="background:' + g.color + ';" title="' + escapeHtml(g.division) + '"></span>';
@@ -769,17 +845,18 @@
             var schedBadge = scheduled
                 ? '<span class="scv-week-sched-badge">\u2713</span>'
                 : '<span class="scv-week-no-sched-badge">\u2013</span>';
-            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
+            headerHtml += '<div class="scv-week-day-hdr' + (today ? ' today' : '') + _cdMark.cls + '" data-y="' + wd.getFullYear() + '" data-m="' + wd.getMonth() + '" data-d="' + wd.getDate() + '">' +
                 '<span class="scv-week-day-name">' + DAYS[wd.getDay()] + '</span>' +
                 '<div class="scv-week-day-num-row">' +
                     '<span class="scv-week-day-num' + (today ? ' today-badge' : '') + '">' + wd.getDate() + '</span>' +
                     schedBadge +
                 '</div>' +
+                _cdMark.badge +
                 (dotHtml ? '<div class="scv-week-hdr-dots">' + dotHtml + '</div>' : '') +
                 '</div>';
         });
         headerHtml += '</div>';
-        wrapper.innerHTML = headerHtml;
+        wrapper.innerHTML = _campDatesLegendHtml(_campCd) + headerHtml;
 
         var hdrEls = wrapper.querySelectorAll('.scv-week-day-hdr');
         for (var h = 0; h < hdrEls.length; h++) {
@@ -950,6 +1027,21 @@
 '.scv-month-ev{font-size:10px;line-height:15px;padding:2px 6px;border-radius:4px;margin-bottom:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:600}' +
 '.scv-month-sched{font-size:9px;color:#059669;font-weight:600;margin-top:auto;padding-top:4px;opacity:.7}' +
 '.scv-month-no-sched{font-size:9px;color:var(--slate-300,#cbd5e1);margin-top:auto;padding-top:4px}' +
+
+/* Camp-date markers: half tint (left stripe) + milestone badges + legend */
+'.scv-cd-half1{box-shadow:inset 3px 0 0 #7C3AED}' +
+'.scv-cd-half2{box-shadow:inset 3px 0 0 #2563EB}' +
+'.scv-cd-transition{box-shadow:inset 3px 0 0 #d97706;background:repeating-linear-gradient(45deg,rgba(217,119,6,.07),rgba(217,119,6,.07) 6px,transparent 6px,transparent 12px)}' +
+'.scv-cd-badge{display:inline-block;font-size:8px;font-weight:700;line-height:1.2;padding:1px 5px;border-radius:8px;margin:2px 0;letter-spacing:.3px;text-transform:uppercase}' +
+'.scv-cd-badge-start{background:rgba(5,150,105,.16);color:#047857}' +
+'.scv-cd-badge-end{background:rgba(220,38,38,.16);color:#b91c1c}' +
+'.scv-cd-badge-transition{background:rgba(217,119,6,.20);color:#b45309}' +
+'.scv-cd-legend{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:6px 10px;font-size:11px;color:var(--slate-600,#475569);background:var(--slate-50,#f8fafc);border-bottom:1px solid var(--slate-100,#f1f5f9)}' +
+'.scv-cd-leg-item{display:inline-flex;align-items:center;gap:5px;font-weight:600}' +
+'.scv-cd-leg-sw{display:inline-block;width:12px;height:12px;border-radius:3px;box-shadow:none}' +
+'.scv-cd-leg-sw.scv-cd-half1{background:#7C3AED}' +
+'.scv-cd-leg-sw.scv-cd-half2{background:#2563EB}' +
+'.scv-cd-leg-sw.scv-cd-transition{background:#d97706}' +
 
 /* Week */
 '.scv-week-wrapper{border:1px solid var(--slate-200,#e2e8f0);border-radius:10px;overflow:hidden;background:#fff}' +
