@@ -1045,7 +1045,10 @@
 
         for (const item of queue) {
             try {
-                const result = await window.ScheduleDB?.saveSchedule?.(item.dateKey, item.data);
+                // ★ allowCrossDate: a queued offline save legitimately persists THAT date's
+                //   own captured payload under THAT date, even though the user may now be
+                //   viewing a different date — exempt it from the cross-date save guard.
+                const result = await window.ScheduleDB?.saveSchedule?.(item.dateKey, item.data, { allowCrossDate: true });
                 
                 if (!result?.success) {
                     item.retries = (item.retries || 0) + 1;

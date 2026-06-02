@@ -1387,7 +1387,7 @@
 
                     unsaved.forEach((dk, index) => {
                         setTimeout(() => {
-                            window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true })
+                            window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true, allowCrossDate: true })
                                 .then(r => {
                                     if (r?.success) {
                                         window._secondarySaveLog[dk] = Date.now();

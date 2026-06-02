@@ -626,19 +626,27 @@
      * FIXED in v5.4: Permission-aware error handling (RLS violations vs network errors)
      */
    async function saveSchedule(dateKey, data, options = {}) {
-        // ★★★ CROSS-DATE CORRUPTION GUARD (lowest-level catch-all) ★★★
-        // The orchestrator stamps each in-memory snapshot with the date it belongs to
-        // (data._belongsToDate, via getWindowGlobals). If a save targets a DIFFERENT date
-        // than its data belongs to, a date-change handler race is about to write one day's
-        // schedule under another day's key — refuse it. This covers EVERY direct
-        // ScheduleDB.saveSchedule caller that bypasses the orchestrator's guarded save
-        // (visibilitychange/beforeunload fallbacks, propagation, offline-queue replays,
-        // post-edit bypass, realtime). Inert when the snapshot is unstamped — multi-date
-        // secondary saves pass their own per-date payloads (no marker), so a legitimate
-        // save can never be false-blocked. Then strip the marker so it is never persisted.
-        if (data && data._belongsToDate && dateKey && data._belongsToDate !== dateKey) {
-            console.warn('[ScheduleDB.saveSchedule] ★ BLOCKED cross-date save: snapshot belongs to ' +
-                         data._belongsToDate + ' but target is ' + dateKey + ' — refusing to prevent corruption');
+        // ★★★ CROSS-DATE CORRUPTION GUARD (authoritative, lowest-level catch-all) ★★★
+        // window._scheduleAssignmentsDate is the AUTHORITATIVE record of which date the
+        // current in-memory window.scheduleAssignments belongs to — it is set atomically
+        // whenever the schedule is (re)populated for a date (load hydration, generation).
+        // Therefore ANY save whose target dateKey differs from it is about to write one
+        // day's schedule under another day's key — the dual date-change-handler race.
+        // Refuse it. This is enforced at the single lowest choke point, so it covers EVERY
+        // caller regardless of which racing path (orchestrator, integration_hooks,
+        // visibilitychange/beforeunload, propagation, offline-queue replay, post-edit,
+        // realtime) triggered the save.
+        //
+        // Authority precedence: explicit payload stamp (data._belongsToDate, snapshotted
+        // before the async gap) wins; otherwise fall back to the live global. The ONE
+        // legitimate cross-date writer — the multi-date propagation save, which writes a
+        // date's OWN per-date payload under that date — passes { allowCrossDate: true }
+        // and is exempt. Inert until the stamp is first set, so it can never block a
+        // legitimate same-date save.
+        const _memDate = (data && data._belongsToDate) || window._scheduleAssignmentsDate || null;
+        if (!options.allowCrossDate && _memDate && dateKey && _memDate !== dateKey) {
+            console.warn('[ScheduleDB.saveSchedule] ★ BLOCKED cross-date save: in-memory schedule belongs to ' +
+                         _memDate + ' but target is ' + dateKey + ' — refusing to prevent corruption');
             return { data: null, error: { message: 'cross-date-mismatch' }, success: false, skipped: 'date-mismatch' };
         }
         if (data && Object.prototype.hasOwnProperty.call(data, '_belongsToDate')) {
