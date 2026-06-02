@@ -22491,7 +22491,34 @@
                             // (empty / own-division occupants) immediately; stash the first
                             // cross-division one as a fallback in case nothing cleaner exists.
                             var _crossDiv = occ.some(function (o) { return _occDivOf(o) !== grade; });
-                            if (_crossDiv) { if (!_xdivFallback) _xdivFallback = cand; continue; }
+                            if (_crossDiv) {
+                                // ★ SHARING GUARD: a cross-division co-location is only legal
+                                //   when the field config EXPLICITLY permits this grade pairing
+                                //   (user rule: no 2 grades share unless turned on). Without this
+                                //   the under-min recovery could pair grades on a cross_division
+                                //   field whose allowedPairs don't include them, or a custom field
+                                //   whose allowedDivisions exclude them. Default to REJECT — the
+                                //   bunk then keeps its valid (under-min) original placement, so
+                                //   there is no coverage loss, just no illegal share.
+                                var _ff = fieldByName[cand.field];
+                                var _sw = (_ff && _ff.sharableWith) || {};
+                                var _gsr = (_ff && _ff.gradeShareRules && _ff.gradeShareRules[grade]) || null;
+                                var _stype = (_gsr && _gsr.type) || _sw.type || 'not_sharable';
+                                var _occGrades = occ.map(_occDivOf);
+                                var _shareOk = false;
+                                if (_stype === 'all') {
+                                    _shareOk = true;
+                                } else if (_stype === 'cross_division') {
+                                    var _pairs = (_gsr && _gsr.allowedPairs) || _sw.allowedPairs || {};
+                                    _shareOk = isCrossDivAllowed(grade, _occGrades, _pairs);
+                                } else if (_stype === 'custom') {
+                                    var _divs = (_gsr && _gsr.divisions) || _sw.divisions || [];
+                                    _shareOk = _divs.indexOf(grade) >= 0 && _occGrades.every(function (g) { return _divs.indexOf(g) >= 0; });
+                                }
+                                if (!_shareOk) continue; // not_sharable / same_division / disallowed pair → skip
+                                if (!_xdivFallback) _xdivFallback = cand;
+                                continue;
+                            }
                             _chosen = cand;
                         }
                         if (!_chosen && _xdivFallback) _chosen = _xdivFallback;

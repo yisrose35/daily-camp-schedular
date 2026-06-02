@@ -60,6 +60,16 @@
         Object.keys(sched).forEach(function(bunk) {
             (sched[bunk] || []).forEach(function(entry) {
                 if (!entry || entry.continuation || entry._isTransition) return;
+                // ★ Don't count LEAGUE games as rotation activities. A league entry
+                //   has _activity "League: X"/"League Game" (not a valid activity)
+                //   but also carries a real `sport` (e.g. "Basketball"); the
+                //   entry.sport fallback below would otherwise count a phantom
+                //   Basketball rotation — diverging from the LOCAL rebuild
+                //   (scheduler_core_utils.rebuildHistoricalCounts reads _activity
+                //   only, no sport fallback, so it skips league entries). League
+                //   play is tracked via standings, not rotation variety. Skipping
+                //   here keeps cloud rotation_counts == local historicalCounts.
+                if (entry._h2h || entry._leagueName || entry._isSpecialtyLeague || entry._league) return;
                 var actName = entry._activity || entry.sport || '';
                 if (!actName) return;
                 if (!validActivities.has(actName) && entry.sport && validActivities.has(entry.sport)) {

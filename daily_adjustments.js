@@ -5007,13 +5007,34 @@ async function runOptimizer() {
       const client = window.CampistryDB?.getClient?.() || window.supabase;
       const campId = window.CampistryDB?.getCampId?.() || window.getCampId?.();
       if (client && campId) {
-          const { error } = await client
-              .from('daily_schedules')
-              .delete()
-              .eq('camp_id', campId)
-              .eq('date_key', dateKey);
-          if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
-          else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
+          // ★ SCOPE THE WIPE BY ROLE: the per-row model keys daily_schedules by
+          //   (camp_id,date_key,scheduler_id). An UNSCOPED delete lets a SCHEDULER's
+          //   full-regen wipe every OTHER scheduler's (and the owner's) row for the
+          //   date. Owner/admin legitimately wipe the whole camp; a scheduler must
+          //   only delete their OWN row (the post-gen save re-writes just their
+          //   filtered bunks anyway). Defaults to owner when role is unresolved
+          //   (preserves prior single-owner behavior).
+          const _role = window.AccessControl?.getCurrentRole?.() || window.CampistryDB?.getRole?.() || 'owner';
+          if (_role === 'scheduler' || _role === 'viewer') {
+              if (window.ScheduleDB?.deleteMyScheduleOnly) {
+                  await window.ScheduleDB.deleteMyScheduleOnly(dateKey);
+                  console.log('[Optimizer] ☁️ Scheduler-scoped cloud delete for', dateKey);
+              } else {
+                  const _uid = window.CampistryDB?.getUserId?.();
+                  let _q = client.from('daily_schedules').delete().eq('camp_id', campId).eq('date_key', dateKey);
+                  if (_uid) _q = _q.eq('scheduler_id', _uid);
+                  const { error } = await _q;
+                  if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
+              }
+          } else {
+              const { error } = await client
+                  .from('daily_schedules')
+                  .delete()
+                  .eq('camp_id', campId)
+                  .eq('date_key', dateKey);
+              if (error) console.warn('[Optimizer] Cloud delete error:', error.message);
+              else console.log('[Optimizer] ☁️ Cloud schedule deleted for', dateKey);
+          }
       }
     } catch (e) {
       console.warn('[Optimizer] Cloud delete failed:', e);

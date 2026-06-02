@@ -1860,6 +1860,26 @@
             }
         });
 
+        // ★ DATA-LOSS GUARD: if EVERY target slot was occupied by another
+        // activity, the write loop above skipped all of them and wrote NOTHING —
+        // but step 3 already cleared oldSlots, so the dragged block would be
+        // silently DELETED (the newSlotIndices.length===0 revert above does not
+        // cover this case). Restore the block to its original slots, re-render to
+        // snap it back, drop the undo snapshot, and abort.
+        const _wroteSomething = newSlotIndices.some(idx => assignments[idx] && assignments[idx]._postEdited);
+        if (!_wroteSomething) {
+            debugLog('PEI: all target slots occupied — reverting (no silent delete)');
+            oldSlots.forEach((idx, i) => {
+                if (i === 0) assignments[idx] = cleanEntry;
+                else assignments[idx] = { field: cleanEntry.field, sport: cleanEntry.sport, _activity: cleanEntry._activity, continuation: true };
+            });
+            window._postEditInProgress = false;
+            _peiUndoStack.pop(); // remove the snapshot we just pushed
+            if (typeof peiShowBanner === 'function') peiShowBanner('Cannot move there — those slots are occupied', 'error', true);
+            if (typeof window.updateTable === 'function') window.updateTable(); // snap the block back to its original position
+            return;
+        }
+
         // Make sure first written slot is the primary (non-continuation)
         const firstWritten = newSlotIndices.find(idx => assignments[idx] && assignments[idx]._postEdited);
         if (firstWritten !== undefined && assignments[firstWritten]) {

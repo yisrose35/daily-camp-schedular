@@ -1040,10 +1040,20 @@
         updateStatus('offline');
     }
 
+    let _draining = false;
     async function processOfflineQueue() {
+        // ★ RE-ENTRANCY GUARD: two reconnect paths (the window 'online' handler and
+        //   the realtime scheduleReconnect timer) can both call this. Without a
+        //   guard, a 2nd drain's loadOfflineQueue() below overwrites _offlineQueue
+        //   mid-loop — either re-running queued saves (duplicates) or DISCARDING
+        //   failed items the 1st drain re-queued in memory (they live only in
+        //   _offlineQueue until the loop finishes). Serialize: skip if already draining.
+        if (_draining) { log('Offline queue drain already running — skipping concurrent call'); return; }
+        _draining = true;
+        try {
         // Load from persistence first
         loadOfflineQueue();
-        
+
         if (_offlineQueue.length === 0) return;
 
         log('Processing offline queue:', _offlineQueue.length, 'items');
@@ -1099,6 +1109,9 @@
         }
         if (failCount > 0) {
             showSyncToast(`⚠️ ${failCount} change(s) failed to sync`, true);
+        }
+        } finally {
+            _draining = false;
         }
     }
 
