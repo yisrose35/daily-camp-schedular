@@ -2090,47 +2090,32 @@ function generateParentInvite(enrollId){
         };
     });
 
-    db.from('link_parent_invites')
-        .select('id,token')
-        .eq('camp_id',campId)
-        .eq('parent_email',parentEmail)
-        .eq('status','active')
-        .limit(1)
-        .then(function(res){
-            if(res.error){console.error('[Me] Invite select failed:',res.error.message);}
-            if(res.data&&res.data.length){
-                var existing=res.data[0];
-                var code=_genAccessCode();
-                var baseUpd={parent_name:parentName,camper_names:camperNames,camper_data:camperData,user_id:null};
-                // Try update with access_code; fall back silently if migration 010 not run
-                db.from('link_parent_invites').update(Object.assign({},baseUpd,{access_code:code})).eq('id',existing.id).then(function(r){
-                    if(r.error){
-                        code=null;
-                        db.from('link_parent_invites').update(baseUpd).eq('id',existing.id).then(function(){});
-                    }
-                    _showInviteModal(enrollId,_parentPortalUrl(existing.token),parentEmail,code);
-                });
-            } else {
-                var token=_genToken();
-                var code=_genAccessCode();
-                var expires=new Date();
-                expires.setFullYear(expires.getFullYear()+1);
-                var baseIns={camp_id:campId,token:token,parent_name:parentName,parent_email:parentEmail,camper_names:camperNames,camper_data:camperData,status:'active',expires_at:expires.toISOString()};
-                // Try insert with access_code; fall back without it if migration 010 not run
-                db.from('link_parent_invites').insert(Object.assign({},baseIns,{access_code:code})).then(function(ins){
-                    if(ins.error&&ins.error.message&&ins.error.message.indexOf('access_code')!==-1){
-                        code=null;
-                        db.from('link_parent_invites').insert(baseIns).then(function(ins2){
-                            if(ins2.error){console.error('[Me] Invite insert failed:',ins2.error.message,ins2.error);toast('Could not save invite: '+ins2.error.message+'. Run migration 008 if the table is missing.');return;}
-                            _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail,null);
-                        });
-                        return;
-                    }
-                    if(ins.error){console.error('[Me] Invite insert failed:',ins.error.message,ins.error);toast('Could not save invite: '+ins.error.message+'. Run migration 008 if the table is missing.');return;}
-                    _showInviteModal(enrollId,_parentPortalUrl(token),parentEmail,code);
-                });
-            }
-        });
+    var token=_genToken();
+    var expires=new Date();
+    expires.setFullYear(expires.getFullYear()+1);
+
+    db.rpc('upsert_parent_invite',{
+        p_camp_id:     campId,
+        p_token:       token,
+        p_parent_name: parentName,
+        p_parent_email:parentEmail,
+        p_camper_names:camperNames,
+        p_camper_data: camperData,
+        p_expires_at:  expires.toISOString()
+    }).then(function(res){
+        if(res.error){
+            console.error('[Me] upsert_parent_invite error:',res.error.message,res.error);
+            toast('Could not save invite: '+res.error.message+'. Run migration 011 in Supabase.');
+            return;
+        }
+        var d=res.data;
+        if(!d||!d.success){
+            console.error('[Me] upsert_parent_invite returned failure:',d);
+            toast('Could not save invite.');
+            return;
+        }
+        _showInviteModal(enrollId,_parentPortalUrl(d.token),parentEmail,d.access_code||null);
+    });
 }
 
 function _showInviteModal(enrollId,url,parentEmail,accessCode){
