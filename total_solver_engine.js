@@ -844,6 +844,45 @@
                 var _shortage = _minFreq - _curCount;
                 if (_shortage > 0) penalty -= (_shortage * 8000);
             }
+            // ★ availableDays weekday gate (manual-audit fix): a special restricted to
+            //   certain weekdays must NEVER be selected on others. Mirrors auto's
+            //   isSpecialAvailableOnDay. Enforced HERE (the shared solver scorer that the
+            //   MANUAL builder reaches) — calculateLimitScore is NOT in the manual path.
+            //   Requires availableDays propagated into props (scheduler_core_loader.js).
+            if (Array.isArray(specialRule.availableDays) && specialRule.availableDays.length > 0) {
+                var _avd = window.currentScheduleDate;
+                if (_avd) {
+                    var _avpp = String(_avd).split('-');
+                    if (_avpp.length === 3) {
+                        var _avdow = new Date(parseInt(_avpp[0], 10), parseInt(_avpp[1], 10) - 1, parseInt(_avpp[2], 10)).getDay();
+                        if (_avdow >= 0 && _avdow <= 6) {
+                            var _avab = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][_avdow];
+                            var _avfu = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'][_avdow];
+                            var _avallow = specialRule.availableDays.map(function (d) { return String(d).toLowerCase(); });
+                            if (_avallow.indexOf(_avab) < 0 && _avallow.indexOf(_avfu) < 0) return 999999;
+                        }
+                    }
+                }
+            }
+            // ★ rotationCohort gate (manual-audit fix; MANUAL-ONLY — auto's planner is
+            //   authoritative for cohort, so don't double-enforce in auto). Skip the
+            //   special for this bunk when its count exceeds the cohort minimum (wait
+            //   for the lagging cohort grades). Mirrors scheduler_core_auto.js:4261-4283.
+            if (window._daBuilderMode !== 'auto' && specialRule.rotationCohort && specialRule.rotationCohort.enabled
+                && Array.isArray(specialRule.rotationCohort.grades) && specialRule.rotationCohort.grades.length > 0) {
+                var _divsRC = window.divisions || {};
+                var _cohortBunks = [];
+                specialRule.rotationCohort.grades.forEach(function (_g) {
+                    var _gd = _divsRC[_g] || _divsRC[String(_g)];
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) { _cohortBunks.push(String(_b)); });
+                });
+                if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunk)) >= 0) {
+                    var _myCC = getActivityCount(bunk, act);
+                    var _cmin = Infinity;
+                    for (var _ci = 0; _ci < _cohortBunks.length; _ci++) { var _c = getActivityCount(_cohortBunks[_ci], act); if (_c < _cmin) _cmin = _c; }
+                    if (_myCC > _cmin) return 999999;
+                }
+            }
         }
 
         // ★ v3.7: Multi-Part gate + follow-up urgency
