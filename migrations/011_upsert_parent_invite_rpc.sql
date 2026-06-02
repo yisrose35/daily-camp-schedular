@@ -16,8 +16,6 @@
 --   • Returns { success, token, access_code, action: 'created'|'updated' }
 -- ============================================================================
 
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 CREATE OR REPLACE FUNCTION public.upsert_parent_invite(
     p_camp_id      uuid,
     p_token        text,
@@ -54,8 +52,8 @@ BEGIN
         v_code := COALESCE(
             NULLIF(existing.access_code, ''),
             upper(
-                substring(encode(gen_random_bytes(2), 'hex') from 1 for 4) || '-' ||
-                substring(encode(gen_random_bytes(2), 'hex') from 1 for 4)
+                substring(replace(gen_random_uuid()::text,'-','') from 1 for 4) || '-' ||
+                substring(replace(gen_random_uuid()::text,'-','') from 5 for 4)
             )
         );
         UPDATE link_parent_invites
