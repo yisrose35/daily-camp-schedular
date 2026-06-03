@@ -201,7 +201,7 @@ function setupSearch(){
 }
 
 // ═══ HELPERS ═════════════════════════════════════════════════════
-function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML.replace(/"/g,'&quot;')}
 function je(s){return esc(s).replace(/'/g,"\\'")}
 function age(dob){if(!dob)return'';var a=Math.floor((Date.now()-new Date(dob).getTime())/31557600000);return a>=0&&a<25?a:''}
 
