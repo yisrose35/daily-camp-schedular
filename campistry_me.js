@@ -718,10 +718,18 @@ function editCamper(n){
 function addCamper(){editingCamper=null;editCamper('')}
 function saveCamper(){
     var first=(document.getElementById('ceFirst').value||'').trim(),last=(document.getElementById('ceLast').value||'').trim();
-    if(!first){toast('First name required','error');return}
+    if(!first){toast('First name required','error');try{document.getElementById('ceFirst').focus()}catch(_){}return}
     var full=first+(last?' '+last:'');
+    // ★ #4 rename-collision guard: renaming onto a DIFFERENT existing camper would
+    // silently OVERWRITE them at roster[full] below (delete old key, then assign new).
+    // Reject instead of clobbering an existing record.
+    if(editingCamper&&editingCamper!==full&&roster[full]){toast('A camper named "'+full+'" already exists','error');return}
     var existingId=(editingCamper&&roster[editingCamper])?roster[editingCamper].camperId:null;
-    if(editingCamper&&editingCamper!==full)delete roster[editingCamper];
+    // ★ #4 cascade: roster keys are NAMES, and families[].camperIds / bunkAsgn[bunk] /
+    // payments[].camper / Campistry-Go addresses all reference campers BY NAME. On a
+    // rename we must update those refs or the camper is silently detached from their
+    // family, bunk assignment, and billing.
+    if(editingCamper&&editingCamper!==full){cascadeCamperRename(editingCamper,full);delete roster[editingCamper]}
     if(!editingCamper&&roster[full]){toast('Already exists','error');return}
     // Gather teams
     var teams={};document.querySelectorAll('.ceTeamSel').forEach(function(sel){var lg=sel.dataset.league,v=sel.value;if(lg&&v)teams[lg]=v});
@@ -749,10 +757,30 @@ function saveCamper(){
     syncAddressToGo(full,roster[full]);
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
 }
+// ★ #4 cascade helpers. Camper records are keyed by NAME in `roster`, and several
+// other stores reference campers by that same name string: families[].camperIds,
+// bunkAsgn[bunk], payments[].camper, and the Campistry-Go address book. Rename/delete
+// must keep those in sync or the camper is silently orphaned.
+function cascadeCamperRename(oldName,newName){
+    if(!oldName||!newName||oldName===newName)return;
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.map(function(c){return c===oldName?newName:c})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].map(function(c){return c===oldName?newName:c})});}catch(_){}
+    try{(payments||[]).forEach(function(p){if(p&&p.camper===oldName)p.camper=newName});}catch(_){}
+    try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[oldName]){go.addresses[newName]=go.addresses[oldName];delete go.addresses[oldName];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
+}
+function cascadeCamperDelete(name){
+    if(!name)return;
+    try{Object.values(families).forEach(function(f){if(Array.isArray(f.camperIds))f.camperIds=f.camperIds.filter(function(c){return c!==name})});}catch(_){}
+    try{Object.keys(bunkAsgn).forEach(function(b){if(Array.isArray(bunkAsgn[b]))bunkAsgn[b]=bunkAsgn[b].filter(function(c){return c!==name})});}catch(_){}
+    // payments are intentionally KEPT — silently erasing billing history when a camper
+    // is removed is worse than leaving the (now-deleted) name on the financial record.
+    try{var raw=localStorage.getItem('campistry_go_data');if(raw){var go=JSON.parse(raw);if(go&&go.addresses&&go.addresses[name]){delete go.addresses[name];localStorage.setItem('campistry_go_data',JSON.stringify(go))}}}catch(_){}
+}
 function deleteCamper(n){
     if(!n||!roster[n])return;
     if(!confirm('Delete camper "'+n+'"? This cannot be undone.'))return;
     delete roster[n];
+    cascadeCamperDelete(n);
     save();closeModal('camperViewModal');render(curPage);toast('Camper deleted');
 }
 function grOpts(div){var o=[''];if(div&&structure[div]){var ord=structure[div].gradeOrder,keys=Object.keys(structure[div].grades||{});(Array.isArray(ord)&&ord.length?ord.filter(function(g){return g in(structure[div].grades||{})}):keys.sort()).forEach(function(g){o.push(g)})}return o}
