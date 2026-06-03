@@ -88,10 +88,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 
 ## Phase 2 — Scheduling Setup (adversarial re-test) `Days 10–13`
 
-**Day 10 — Facilities + sharing rules (the core invariant)**
-- [ ] Fields CRUD + capacity (0/neg/huge) + indoor/outdoor + per-day disable; EVERY `sharableWith` type +
-      `gradeShareRules` + allowedPairs/allowedDivisions; adversarial/contradictory configs. Re-confirm
-      "no 2 grades share unless turned on" holds in both solvers + every post-pass.
+**Day 10 — Facilities + sharing rules (the core invariant)** ✅ DONE 2026-06-03 (DAW `38d3db20`, NOT on main)
+- [x] **Core invariant verified in BOTH builders.** Live config: 23 fields (21 `same_division`/cap2, Pool `cross_division`/cap20/no-pairs, Basket Road `not_sharable`). Read enforcement in all 3 engines (`canBlockFit`, manual `total_solver_engine`, `auto_solver_engine`). **Deterministically proved `cross_division`+`allowedPairs` parity** — manual `isCrossDivAllowedManual` ≡ auto pair-check on 5 scenarios incl. "empty pairs → no cross-grade." **Live-scanned the real manual schedule → 0 cross-grade / 0 over-cap / 0 diff-activity** on the 23 configured fields (the 1020 initial flags were all Lunch/Swim communal pseudo-fields, correctly excluded).
+- [x] **#V2-14 FIXED (`38d3db20`):** `canBlockFit` had no `cross_division` branch — a *filler-path* leak (scheduler_logic_fillers call it; run in both builders) that could place a non-allowed cross-grade pair on a cross_division sport field. Added the branch (guarded to cross_division; mirrors both solvers). Inert for current config (Pool is non-sport); future-proofs parity. Live-verified no regression (manual schedule restored + invariant holds).
+- [x] Capacity adversarial = SANE: UI clamps `Math.min(20|50, Math.max(2, parseInt||2))`, `not_sharable`→1 (0/neg→2, huge→max, NaN→2). Facility name: empty + duplicate rejected. `gradeShareRules` resolution IDENTICAL in both engines (override→type/cap) + v1-verified (#83/#87). Auto enforcement verified by code + the parity unit-test + v1 Day 89 (did NOT run a fresh live auto-gen — would clobber the user's manual 06-03 cloud schedule; covered by the deterministic + code evidence). Note: a bare `runSkeletonOptimizer()` call clears in-memory schedule w/o solving — always drive gens via the DA button.
 
 **Day 11 — Access + time rules + combined fields + quality groups + zones**
 - [ ] accessRestrictions (incl. enabled-but-empty), timeRules (Available/Unavailable, boundaries, overlaps),
