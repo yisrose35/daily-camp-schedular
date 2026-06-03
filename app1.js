@@ -116,6 +116,19 @@
         var cs = gs.campStructure || {};
         var divs = window.divisions || {};
 
+        // Sort structureOrder by manualColumnOrder so _csGradeOrder reflects
+        // the user's division drag order from the Me page
+        if (manualOrder && manualOrder.length > 0) {
+            structureOrder = structureOrder.slice().sort(function (a, b) {
+                var ai = manualOrder.indexOf(a);
+                var bi = manualOrder.indexOf(b);
+                if (ai >= 0 && bi >= 0) return ai - bi;
+                if (ai >= 0) return -1;
+                if (bi >= 0) return 1;
+                return 0;
+            });
+        }
+
         // Build a flat grade order from campStructure gradeOrder arrays
         // This preserves the user's drag-reorder on the Me page
         var _csGradeOrder = [];
@@ -1017,28 +1030,45 @@
             }
             
            // Rebuild divisions object honoring user-defined order:
-            //   1) gs.app1.manualColumnOrder if present (set via drag in Campistry Me)
-            //   2) Otherwise, the natural campStructure key order (also user-defined)
-            //   3) Numeric/alphabetic sort only for keys not in either source
+            //   1) manualColumnOrder (division drag order set in Campistry Me)
+            //      mapped through parentDivision so grade-level keys sort correctly
+            //   2) gradeOrder within each division (grade drag order set in Me)
+            //   3) campStructure key order as fallback
+            //   4) Numeric/alphabetic sort only for keys not in any source
             const _gs2 = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
             const _manualOrder = (_gs2.app1 && Array.isArray(_gs2.app1.manualColumnOrder)) ? _gs2.app1.manualColumnOrder : null;
             const _structureOrder = Object.keys(_gs2.campStructure || {});
             const sortedDivKeys = Object.keys(state.divisions).slice().sort((a, b) => {
+                // a and b are grade names (scheduling units); resolve to parent division
+                const aParent = (state.divisions[a]?.parentDivision) || a;
+                const bParent = (state.divisions[b]?.parentDivision) || b;
+
+                // 1. Sort parent divisions by manualColumnOrder (Me-page drag)
                 if (_manualOrder) {
-                    const ai = _manualOrder.indexOf(a);
-                    const bi = _manualOrder.indexOf(b);
-                    if (ai >= 0 && bi >= 0) return ai - bi;
-                    if (ai >= 0) return -1;
-                    if (bi >= 0) return 1;
+                    const api = _manualOrder.indexOf(aParent);
+                    const bpi = _manualOrder.indexOf(bParent);
+                    if (api >= 0 && bpi >= 0 && api !== bpi) return api - bpi;
+                    if (api >= 0) return -1;
+                    if (bpi >= 0) return 1;
                 }
+
+                // 2. Fallback: campStructure key order for parent division
                 if (_structureOrder.length > 0) {
-                    // Try matching the parentDivision in structure order
-                    const aParent = (state.divisions[a] && state.divisions[a].parentDivision) || a;
-                    const bParent = (state.divisions[b] && state.divisions[b].parentDivision) || b;
                     const ai2 = _structureOrder.indexOf(aParent);
                     const bi2 = _structureOrder.indexOf(bParent);
                     if (ai2 >= 0 && bi2 >= 0 && ai2 !== bi2) return ai2 - bi2;
                 }
+
+                // 3. Same parent division — sort grades by gradeOrder
+                if (aParent === bParent && _gs2.campStructure?.[aParent]) {
+                    const go = _gs2.campStructure[aParent].gradeOrder;
+                    if (Array.isArray(go) && go.length > 0) {
+                        const agi = go.indexOf(a);
+                        const bgi = go.indexOf(b);
+                        if (agi >= 0 && bgi >= 0 && agi !== bgi) return agi - bgi;
+                    }
+                }
+
                 const numA = parseInt(String(a).match(/(\d+)/)?.[1]) || 999;
                 const numB = parseInt(String(b).match(/(\d+)/)?.[1]) || 999;
                 if (numA !== numB) return numA - numB;
