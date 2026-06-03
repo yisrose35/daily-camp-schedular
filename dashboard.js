@@ -153,7 +153,18 @@
             
         } catch (e) {
             console.error('Auth check failed:', e);
-            window.location.href = 'index.html';
+            // ★ #V2-3 FIX (mirror flow.html v7.2): the try above also wraps
+            // determineUserRole()/loadDashboardData() (DB queries). A transient
+            // network/DB error there is NOT an auth failure — bouncing an
+            // authenticated user to the login page loses their session and a
+            // re-login won't fix a downstream data error. Only redirect when we
+            // have no evidence of a valid session; otherwise stay put (degraded
+            // dashboard the user can reload), exactly as flow.html does.
+            if (currentUser || hasLocalAuth) {
+                console.warn('🔑 [Dashboard] Error after auth check, but session/cached auth exists — staying (transient/downstream error, not a logout)');
+            } else {
+                window.location.href = 'index.html';
+            }
         }
     }
 
