@@ -468,7 +468,8 @@ function showAlert(message) {
 // COPY GRADE MODAL — Copy skeleton from one division to others
 // =================================================================
 function showCopyGradeModal(skeleton, onApply) {
-  const divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  const _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  const divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { showAlert('Need at least 2 grades to copy between.'); return; }
 
   // Find which divisions have events
@@ -2741,7 +2742,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
         <div id="daw-pop-custom-share-grades" style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
           ${(() => {
             const divs = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-            const allG = Object.keys(divs);
+            const allG = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(Object.keys(divs)) : Object.keys(divs);
             const sel = (layer.customSharing && Array.isArray(layer.customSharing.allowedGrades)) ? layer.customSharing.allowedGrades.map(String) : [];
             return allG.map(g => '<label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;padding:2px 6px;border:1px solid #e2e8f0;border-radius:4px;background:' + (sel.includes(String(g)) ? '#dbeafe' : '#fff') + ';color:#334155;"><input type="checkbox" class="daw-share-grade-cb" value="' + g + '"' + (sel.includes(String(g)) ? ' checked' : '') + ' style="width:13px;height:13px;">' + g + '</label>').join('');
           })()}

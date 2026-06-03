@@ -381,7 +381,8 @@ function daShowAlert(message) {
 // COPY GRADE MODAL — Copy skeleton from one division to others
 // =================================================================
 function daShowCopyGradeModal(skeleton, onApply) {
-  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  var _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  var divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
 
   var divsWithEvents = {};
@@ -530,7 +531,8 @@ function daShowCopyGradeModal(skeleton, onApply) {
 // Without this Copy Grade was a no-op in auto mode because the manual
 // path read from an unused dailyOverrideSkeleton.
 function daShowCopyAutoGradeModal(autoLayers, onApply) {
-  var divisions = window.availableDivisions || Object.keys(window.divisions || {});
+  var _rawDivs = window.availableDivisions || Object.keys(window.divisions || {});
+  var divisions = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivs.slice()) : _rawDivs;
   if (divisions.length < 2) { daShowAlert('Need at least 2 grades to copy between.'); return; }
 
   var divsWithLayers = {};
@@ -4206,7 +4208,8 @@ function _showGenScopePopover(anchorBtn) {
   if (existing) { existing.remove(); return; }
 
   const divisions = window.divisions || {};
-  const divNames = Object.keys(divisions);
+  const _rawDivNames = Object.keys(divisions);
+  const divNames = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(_rawDivNames.slice()) : _rawDivNames;
   if (divNames.length === 0) return;
 
   const popover = document.createElement('div');
