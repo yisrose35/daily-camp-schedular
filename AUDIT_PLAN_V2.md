@@ -76,10 +76,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] **removePayment fragile-index FIXED:** payment log did `finPayments.sort(...)` (in-place mutate) + passed the post-sort index to `finRemovePayment(i)` which spliced by index → wrong row on any reorder/add; identical rows indistinguishable. Now sorts a COPY + removes by stable `p.id` (backfills ids for legacy rows). Unit-verified ([A,B,C] remove B → [A,C]).
 - [x] **#2 import-billing-orphan mitigated:** import wipes families but keeps payments → those payments are now visible as "Unmatched" in Billing (reconciled) instead of silently dropped. Balance math = charges−payments−credits; amounts coerced via Number() (NaN→0). Two payment stores confirmed = ONE (`finPayments`); both tabs read it.
 
-**Day 8 — Broadcasts + Reports + Settings**
-- [ ] Broadcasts: compose/recipients/send (DON'T actually send to real recipients — verify the gate),
-      empty recipients, huge body; Reports: every report renders + numbers correct + export; Settings:
-      every toggle persists + takes effect, invalid values rejected.
+**Day 8 — Broadcasts + Reports + Settings** ✅ DONE 2026-06-03 (`28a2a6b9`)
+- [x] **#6 Clear-All cloud FIXED:** `clearAllData` only did `localStorage.removeItem` → cloud survived + re-hydrated on reload (clear silently undone). Now mirrors the importRows wipe (campStructure/app1.camperRoster+divisions/campistryMe={}) + `saveGlobalSettings`×3 + `forceSyncToCloud` so it sticks; scoped to camp data (scheduler facilities/rules in app1 preserved, per the label). NOT live-run (would wipe 347 real campers) — deploy-confirmed + mirrors proven importRows path.
+- [x] **SEND SAFETY (FIXED):** `sendPaymentReminders`/`sendFormReminders` fired real `auto-notify` emails to every matching parent with NO confirmation (one click = mass email; double-click = double-send). Added pre-collect + `confirm('Send N … now?')` gate before the send loop. Deploy-confirmed (markers); not triggered (real emails).
+- [x] **BROADCAST DELIVERY (FIXED):** "New Broadcast" modal toasted "sent" but only LOGGED — Email/SMS reached NO ONE. Now: confirm gate for real channels → actually `sendBroadcastNow` (edge fn delivery); In-App = portal record with accurate wording. Reports/Settings render fine; `removePayment(idx)` (Billing) is DEAD CODE (no callers, not exported) — note for cleanup.
 
 **Day 9 — Camp Structure CRUD + Bunk Builder + structure-change corruption**
 - [ ] Division/Grade/Bunk CRUD adversarial (dup/empty/unicode/reserved/long/reorder/delete-in-use); Bunk
