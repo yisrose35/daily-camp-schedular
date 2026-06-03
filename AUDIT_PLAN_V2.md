@@ -81,10 +81,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] **SEND SAFETY (FIXED):** `sendPaymentReminders`/`sendFormReminders` fired real `auto-notify` emails to every matching parent with NO confirmation (one click = mass email; double-click = double-send). Added pre-collect + `confirm('Send N … now?')` gate before the send loop. Deploy-confirmed (markers); not triggered (real emails).
 - [x] **BROADCAST DELIVERY (FIXED):** "New Broadcast" modal toasted "sent" but only LOGGED — Email/SMS reached NO ONE. Now: confirm gate for real channels → actually `sendBroadcastNow` (edge fn delivery); In-App = portal record with accurate wording. Reports/Settings render fine; `removePayment(idx)` (Billing) is DEAD CODE (no callers, not exported) — note for cleanup.
 
-**Day 9 — Camp Structure CRUD + Bunk Builder + structure-change corruption**
-- [ ] Division/Grade/Bunk CRUD adversarial (dup/empty/unicode/reserved/long/reorder/delete-in-use); Bunk
-      Builder drag/assign; **generate a schedule then mutate structure** → verify no half-migrated/orphaned
-      schedule, skeleton, or rotation-count state (the v1 Day-8 area, harder). Persistence + cross-tab.
+**Day 9 — Camp Structure CRUD + Bunk Builder + structure-change corruption** ✅ DONE 2026-06-03 (`2f8042c4`, DAW only)
+- [x] **Division collision guard FIXED (`1de2ce43`):** `saveDiv` validated empty name but NOT duplicates → creating/renaming onto an existing division name clobbered it at `structure[name]={...}` (silent loss of all its grades/bunks). Added `if(name!==editingDiv&&structure[name])` reject (parallels Day-3 camper fix).
+- [x] **#V2-13 two-builder parity FIXED (`2f8042c4`):** structure-change cascade cleaned the AUTO schedule (`_purgeOrphanedBunks`→cloud `daily_schedules` + `_propagateDivisionRename`) but NEVER the MANUAL skeletons (`app1.dailySkeletons` + local `campManualSkeleton_<date>`) → orphan grade tiles accumulated (CONFIRMED live: `division:"4"` tiles across ~30 dates from an old structure). Added `_purgeOrphanedSkeletonTiles(removedGrades)` wired into `deleteDiv`+`saveDiv`, scoped to EXACTLY the removed grade names. **Live-verified** (throwaway ZZDIV/ZZGRADE, 2 dates): removing the grade pruned only its tiles (36→35, 34→33) while pre-existing "4" orphans (3) + all 7 real grades stayed intact; persisted clean across reload.
+- [x] Auto-side cascade already solid (in-mem + cloud `daily_schedules`, retry/toast). Adversarial CRUD: empty rejected, dup now rejected, unicode/long stored + display-escaped (hardened esc), reorder preserves gradeOrder. **Residual (low):** pre-existing "4" orphans in cloud skeletons remain (harmless — pruned on manual render; retroactive sweep deferred as risky). rotation_counts orphans on bunk delete = harmless (bunk-keyed, ignored if gone).
 
 ## Phase 2 — Scheduling Setup (adversarial re-test) `Days 10–13`
 
