@@ -1677,7 +1677,13 @@ function viewApplication(id){
 
     var b='';
     function sec(title){return'<div style="font-size:.75rem;font-weight:700;color:var(--me);text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid var(--s100)">'+title+'</div>'}
-    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+    // ★★★ STORED-XSS HARDENING (mirrors printApplication): every enrollment
+    // field originates from the UNAUTHENTICATED public registration form
+    // (campistry_register.html). row() now ESCAPES the value by default; use
+    // rowRaw() only for HTML we built ourselves (links / pre-escaped spans).
+    function row(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+esc(v)+'</span></div>'}
+    function rowRaw(l,v){if(!v)return'';return'<div style="display:flex;gap:8px;padding:2px 0;font-size:.82rem"><span style="color:var(--s400);min-width:100px;flex-shrink:0">'+esc(l)+'</span><span style="color:var(--s800);font-weight:500">'+v+'</span></div>'}
+    function isSafeImageDataUrl(s){return typeof s==='string'&&/^data:image\/(png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+\/=]+$/.test(s);}
 
     b+=sec('Application');
     b+=row('Applied',e.appliedDate||'—');
@@ -1686,7 +1692,7 @@ function viewApplication(id){
     b+=row('Source',e.source);
 
     b+=sec('Camper');
-    b+=row('Name',esc(e.camperName));
+    b+=row('Name',e.camperName);
     b+=row('Date of Birth',e.dob);
     b+=row('Gender',e.gender);
     b+=row('School',e.school);
@@ -1694,10 +1700,10 @@ function viewApplication(id){
     b+=row('Teacher',e.teacher);
 
     b+=sec('Parent / Guardian');
-    b+=row('Name',esc(e.parentName)+(e.parentRelation?' ('+esc(e.parentRelation)+')':''));
-    if(e.parentPhone)b+=row('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
-    if(e.parentEmail)b+=row('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
-    if(e.parent2Name)b+=row('Parent 2',esc(e.parent2Name)+(e.parent2Phone?' — '+esc(e.parent2Phone):''));
+    b+=row('Name',e.parentName+(e.parentRelation?' ('+e.parentRelation+')':''));
+    if(e.parentPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.parentPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.parentPhone)+'</a>');
+    if(e.parentEmail)b+=rowRaw('Email','<a href="mailto:'+esc(e.parentEmail)+'" style="color:var(--me)">'+esc(e.parentEmail)+'</a>');
+    if(e.parent2Name)b+=row('Parent 2',e.parent2Name+(e.parent2Phone?' — '+e.parent2Phone:''));
 
     b+=sec('Address');
     b+=row('Street',e.street);
@@ -1707,12 +1713,12 @@ function viewApplication(id){
     if(e.street){var fullAddr=[e.street,e.city,e.state,e.zip].filter(Boolean).join(', ');b+='<a href="https://maps.google.com/?q='+encodeURIComponent(fullAddr)+'" target="_blank" style="display:inline-block;font-size:.75rem;font-weight:600;color:var(--me);margin-top:3px;text-decoration:none">Open in Maps →</a>'}
 
     b+=sec('Emergency Contact');
-    b+=row('Name',esc(e.emergencyName)+(e.emergencyRel?' ('+esc(e.emergencyRel)+')':''));
-    if(e.emergencyPhone)b+=row('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
+    b+=row('Name',e.emergencyName+(e.emergencyRel?' ('+e.emergencyRel+')':''));
+    if(e.emergencyPhone)b+=rowRaw('Phone','<a href="tel:'+esc(e.emergencyPhone)+'" style="color:var(--me);font-weight:600">'+esc(e.emergencyPhone)+'</a>');
 
     b+=sec('Medical');
-    if(e.allergies)b+=row('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
-    if(e.medications)b+=row('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
+    if(e.allergies)b+=rowRaw('Allergies','<span style="color:var(--err);font-weight:600">'+esc(e.allergies)+'</span>');
+    if(e.medications)b+=rowRaw('Medications','<span style="color:var(--err);font-weight:600">'+esc(e.medications)+'</span>');
     b+=row('Dietary',e.dietary);
     if(e.medicalNotes)b+=row('Notes',e.medicalNotes);
     if(!e.allergies&&!e.medications&&!e.dietary&&!e.medicalNotes)b+='<div style="font-size:.82rem;color:var(--ok);padding:2px 0">✓ No medical flags reported</div>';
@@ -1731,7 +1737,7 @@ function viewApplication(id){
             var idx=parseInt(key.replace('q',''));
             var label=labels[idx]||('Question '+(idx+1));
             var display=Array.isArray(val)?val.join(', '):val;
-            b+=row(label,esc(display));
+            b+=row(label,display);
         });
     }
 
@@ -1740,7 +1746,7 @@ function viewApplication(id){
     b+=row('Tuition',e.sessionTuition?fm(e.sessionTuition):'—');
     b+=row('Payment Method',e.paymentMethod||'Not selected');
     b+=row('Payment Status',e.paymentStatus||'pending');
-    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',esc(e.discount.label)+' ('+esc(e.discount.code)+')');
+    if(e.discount&&e.discount.active!==false&&e.discount.code)b+=row('Discount',(e.discount.label||'')+' ('+e.discount.code+')');
 
     // Documents
     if(e.documents&&e.documents.length){
@@ -1748,13 +1754,13 @@ function viewApplication(id){
         e.documents.forEach(function(doc){
             var sz=doc.size<1024?doc.size+'B':doc.size<1048576?Math.round(doc.size/1024)+'KB':Math.round(doc.size/1048576*10)/10+'MB';
             b+='<div style="display:flex;align-items:center;gap:6px;padding:4px 0;font-size:.8rem"><span>📄</span><strong style="color:var(--s700)">'+esc(doc.name)+'</strong><span style="color:var(--s400);font-size:.72rem">'+sz+'</span>';
-            if(doc.data)b+=' <a href="'+doc.data+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
+            if(doc.data)b+=' <a href="'+esc(doc.data)+'" download="'+esc(doc.name)+'" style="color:var(--me);font-size:.72rem;font-weight:600">Download</a>';
             b+='</div>';
         });
     }
 
-    // Signature
-    if(e.signature){
+    // Signature — only render when it's a strict image data-URL (never raw/SVG → XSS).
+    if(e.signature&&isSafeImageDataUrl(e.signature)){
         b+=sec('Signature');
         b+='<img src="'+e.signature+'" style="max-width:300px;height:80px;border:1px solid var(--s200);border-radius:var(--r);object-fit:contain;background:#fff">';
     }
@@ -1765,7 +1771,7 @@ function viewApplication(id){
         var sibApps=Object.entries(enrollments).filter(function([,x]){return x.siblingGroup===e.siblingGroup||x.siblingGroup===id});
         if(sibApps.length>1){
             sibApps.forEach(function([sid,s]){
-                if(sid!==id)b+=row('Sibling',esc(s.camperName)+' — '+s.status);
+                if(sid!==id)b+=row('Sibling',s.camperName+' — '+s.status);
             });
         }
     }
