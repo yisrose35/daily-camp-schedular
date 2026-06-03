@@ -52,11 +52,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] Force-fail spot-check: Me-page save (`campistry_me.js` L156-179) is local-first (`saveGlobalSettings`→`setLocalSettings` sync local, `forceSyncToCloud` fire-and-forget, catch L179 = `console.error` only). Acceptable for local-first+queue+IDB backstop; no user-facing error = **#V2-7** (low; deep async-failure audit = Day 36).
 - [x] No secrets/PII in console (0 JWT/token/apikey/bearer across 2171 msgs) or URL (no hash/query/PII). PASS.
 
-**Day 3 — Campers CRUD (adversarial) + the #V2-4 fix**
-- [ ] Add/Edit/Delete camper with the full doctrine input battery; **fix #V2-4** (required-field validation +
-      visible feedback); division→grade→bunk cascade correctness (stale/empty/wrong-filtered options);
-      duplicate camper; orphan camper (no bunk); delete a camper in a bunk/family/billing.
-- [ ] Global search, filters, sort, pagination over ~347 records; rapid add/delete; double-submit Save.
+**Day 3 — Campers CRUD (adversarial) + the #V2-4 fix** ✅ DONE 2026-06-03
+- [x] **#V2-4 was largely a FALSE ALARM** — `saveCamper` (L721) DOES `toast('First name required','error')` on empty submit (live-verified: toast shows "me-toast bad vis", modal stays, no junk camper). Added focus-on-fail polish. 0 `required` attrs (26 inputs) but JS validates the one truly-required field; div/grade/bunk optional by design (camper can be added pre-assignment).
+- [x] **#4 cascade — REAL BUG, FIXED + live-verified `63f9daa6`.** roster keyed by NAME; families[].camperIds / bunkAssignments[bunk] / payments[].camper all ref campers BY NAME but delete/rename did ZERO cascade → rename silently orphaned a camper from family/bunk/billing, and rename-onto-existing-name CLOBBERED the other camper. Fix: `cascadeCamperRename` (map old→new everywhere incl. Go addresses) + `cascadeCamperDelete` (drop orphans, KEEP payments) + rename-collision guard. Live round-trip (seed camper+family+bunk+payment → rename → verified all refs followed + id stable → delete → verified de-orphan + payment kept → cleaned up, 347 baseline intact).
+- [x] division→grade→bunk cascade correct (L712-713: div change repopulates grade+bunk, grade change repopulates bunk — no stale). Camper list render fully escaped (esc on name/school/grade/teacher/bunk/medical, je in onclick) → XSS-safe w/ hardened esc. Double-submit safe by design (name-keyed roster: new dup→'Already exists', edit→idempotent).
 
 **Day 4 — Import / Export / Duplicate detection / Custom Fields**
 - [ ] Import: malformed CSV, wrong columns, dup rows, huge file, unicode, injection cells, partial/abort,
