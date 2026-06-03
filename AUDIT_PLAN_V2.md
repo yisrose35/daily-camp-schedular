@@ -47,11 +47,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 
 ## Phase 1 — Camper-Management Suite (the big gap) `Days 2–9`
 
-**Day 2 — Auth/session + refresh-token + global error handling**
-- [ ] Chase **#V2-3**: does the Supabase client auto-refresh the JWT? Why does it expire to a hard re-login?
-      Token expiry mid-action, reload unauth, deep-link unauth, access-code path, sign-out, two-tab session.
-- [ ] Force-fail a cloud call on each major action → clear message, recoverable (no silent fail / raw stack).
-- [ ] No secrets/PII in console or URL.
+**Day 2 — Auth/session + refresh-token + global error handling** ✅ DONE 2026-06-03
+- [x] Chased **#V2-3**: config is CORRECT (autoRefreshToken=1, persistSession=1, refresh-token present in mem+localStorage, 1hr access token). flow.html guard already hardened (v7.2: no bounce on transient error if cached auth exists). Found+fixed the real defect → **#V2-6** dashboard.js catch-all redirect.
+- [x] Force-fail spot-check: Me-page save (`campistry_me.js` L156-179) is local-first (`saveGlobalSettings`→`setLocalSettings` sync local, `forceSyncToCloud` fire-and-forget, catch L179 = `console.error` only). Acceptable for local-first+queue+IDB backstop; no user-facing error = **#V2-7** (low; deep async-failure audit = Day 36).
+- [x] No secrets/PII in console (0 JWT/token/apikey/bearer across 2171 msgs) or URL (no hash/query/PII). PASS.
 
 **Day 3 — Campers CRUD (adversarial) + the #V2-4 fix**
 - [ ] Add/Edit/Delete camper with the full doctrine input battery; **fix #V2-4** (required-field validation +
@@ -169,6 +168,9 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - **#V2-2** (low): init `[Sync] Cloud bridge timeout` → local fallback, self-recovers.
 - **#V2-3** (med, Day 2): Supabase session expiry forces manual re-login repeatedly — refresh-token suspect.
 - **#V2-4** (low-med, Day 3): Add-Camper has no `required` fields; empty submit fails silently (no feedback).
+- **#V2-6** (med — ✅ FIXED `951927d6`): `dashboard.js` `checkAuth()` catch (L154) wrapped not just the auth check but also `determineUserRole()`+`loadDashboardData()` (DB queries) and redirected to `index.html` on ANY error → a transient network/DB failure logs out an authenticated user (re-login can't fix a data error). Fixed by mirroring flow.html's v7.2 pattern: only redirect when no `currentUser`/`hasLocalAuth`; else stay (degraded, reloadable). Config itself is correct (autoRefresh+persist+RT present); flow.html guard already hardened. flowType=`implicit` noted (PKCE recommended, but changing auth flow is high-risk → deferred, needs deliberate decision + full login/reset retest).
+- **#V2-7** (low, Day 36): Me-page primary save (`campistry_me.js` L156-179) catch = `console.error` only, no user-facing error on cloud-sync failure. Acceptable for local-first (sync local write + offline queue + IDB backstop) but a UX gap; revisit with the full async-failure audit + the #V2-1 quota intersection (if local write ALSO fails on quota, loss is silent).
+- **#V2-8** (low, Day 13): console warn `[LEAGUES] "Minors" has 4 team(s) not in any assigned division: 1,2,3,4` — league teams not mapped to a division; verify it's benign vs a placement gap during the leagues-config day.
 - **#V2-5** (CRITICAL — ✅ FIXED `946e9198`+`bd0125cb`, live-verified): stored XSS in `campistry_me.js`. (a) `viewApplication` Review modal rendered parent-submitted fields (from the UNAUTHENTICATED registration form → `enrollments`) as raw HTML → text-context script injection; fixed by escaping all values by default (`row()` escapes, `rowRaw()` only for code-built HTML, signature guarded by `isSafeImageDataUrl` allow-list, `doc.data` href escaped). (b) Residual attribute-breakout: `esc()` escaped `<>&` but NOT quotes; 8+ sites (hover-card L471, camper detail L583/584/606, review modal L1704/1705/1717/1757) put parent phone/email/doc-href into double-quoted `href="..."` → `x" onmouseover="…` injected an event handler with no `<>`; fixed by hardening `esc()` to also escape `"`→`&quot;` (all 253 esc uses are HTML-string-building w/ zero non-HTML sinks → entity decodes on render, no display regression; `je()`'s 34 callers unaffected — still sees raw `'`). Live-verified: payload renders inert (0 `<img>`/0 `on*` attrs materialize, canaries undefined), legit phone/`O'Brien & Sons <test>` render correctly.
 
 *Doctrine: assume bugs exist. Reproduce → root-cause → fix conservatively → live-verify → regression-check.*
