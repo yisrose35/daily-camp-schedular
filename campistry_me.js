@@ -2371,8 +2371,9 @@ function renderAnalytics(){
         // Manual payment log (supplementary)
         if(finPayments.length){
             h+='<div class="me-card" style="margin-top:14px"><div class="me-card-head"><h3>Payment Log</h3></div><div class="me-tw"><table class="me-t"><thead><tr><th>Date</th><th>Family/Camper</th><th>Amount</th><th>Method</th><th></th></tr></thead><tbody>';
-            finPayments.sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
-                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment('+i+')">✕</button></td></tr>';
+            finPayments.slice().sort(function(a,b){return(b.date||'').localeCompare(a.date||'')}).forEach(function(p,i){
+                if(p.id==null)p.id='pay_'+i+'_'+(p.date||'')+'_'+(p.amount||0);  // backfill a stable id for legacy rows
+                h+='<tr><td style="font-size:.75rem;color:var(--s400)">'+esc(p.date||'—')+'</td><td class="bold">'+esc(p.family)+'</td><td style="font-weight:700;color:var(--ok)">'+fm(p.amount)+'</td><td>'+esc(p.method||'—')+'</td><td style="text-align:right"><button class="me-btn me-btn--ghost me-btn--sm" style="color:var(--err)" onclick="CampistryMe.finRemovePayment(\''+je(String(p.id))+'\')">✕</button></td></tr>';
             });
             h+='</tbody></table></div></div>';
         }
@@ -2518,7 +2519,13 @@ function finAddPayment(){
     finPayments.push({id:Date.now(),family:family.trim(),amount:parseFloat(amount)||0,method:(method||'Credit Card').trim(),date:(date||'').trim(),status:'paid'});
     save();renderAnalytics();toast('Payment recorded');
 }
-function finRemovePayment(i){finPayments.splice(i,1);save();renderAnalytics();toast('Removed')}
+function finRemovePayment(id){
+    // ★ remove by stable id, not by render-index (the list is sorted before display, so an
+    //   index would target the wrong row; identical rows were also indistinguishable).
+    var idx=finPayments.findIndex(function(p){return String(p.id)===String(id)});
+    if(idx<0){toast('Payment not found','error');return}
+    finPayments.splice(idx,1);save();renderAnalytics();toast('Removed');
+}
 function finSetBudget(){
     var rev=prompt('Revenue target ($):',finBudget.revenue||'');
     var pay=prompt('Payroll budget ($):',finBudget.payroll||'');
@@ -2788,6 +2795,15 @@ function renderBilling(){
     var rate=totalCharged>0?Math.round(totalCollected/totalCharged*100):0;
     var famWithBalance=famList.filter(function(l){return l.balance>0}).length;
 
+    // ★ #5: payments not linked to any family are summed into Analytics revenue but
+    //   EXCLUDED from these family-ledger totals (buildFamilyLedgers skips unmatched),
+    //   so the Billing and Analytics tabs silently disagree. Surface the gap so the
+    //   numbers reconcile: Collected (family-matched) + Unmatched = Analytics revenue.
+    var _matchedPayIds={};
+    famList.forEach(function(l){(l.entries||[]).forEach(function(en){if(en.type==='payment'&&en.ref!=null)_matchedPayIds[String(en.ref)]=1})});
+    var _unmatchedPays=finPayments.filter(function(p){return !_matchedPayIds[String(p.id)]});
+    var _unmatchedTotal=_unmatchedPays.reduce(function(s,p){return s+(Number(p.amount)||0)},0);
+
     var cardsOnFile=famList.filter(function(l){return families[l.famKey]?.cardOnFile}).length;
     var h='<div class="sec-hd"><div><h2 class="sec-title">Billing & Payments</h2><p class="sec-desc">'+famList.length+' account'+(famList.length!==1?'s':'')+' · '+cardsOnFile+' card'+(cardsOnFile!==1?'s':'')+' on file · '+finPayments.length+' payment'+(finPayments.length!==1?'s':'')+'</p></div><div class="sec-actions"><button class="me-btn me-btn--sec" onclick="CampistryMe.addCharge()">+ Charge</button><button class="me-btn me-btn--sec" onclick="CampistryMe.issueCredit()">+ Credit</button><button class="me-btn me-btn--pri" onclick="CampistryMe.openPaymentModal()">+ Payment</button>'+(cardsOnFile>0?'<button class="me-btn me-btn--pri" style="background:var(--purple)" onclick="CampistryMe.batchCharge()">⚡ Batch Charge</button>':'')+'</div></div>';
 
@@ -2798,6 +2814,7 @@ function renderBilling(){
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--err)">'+fm(totalOutstanding)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Outstanding</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--s200)"><div style="font-size:1.25rem;font-weight:800;color:var(--s800)">'+rate+'%</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Collection Rate</div></div>';
     h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid '+(overdueCount>0?'var(--err)':'var(--s200)')+'"><div style="font-size:1.25rem;font-weight:800;color:'+(overdueCount>0?'var(--err)':'var(--s800)')+'">'+overdueCount+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Overdue</div></div>';
+    if(_unmatchedTotal>0)h+='<div style="background:#fff;border-radius:var(--r2);padding:14px 16px;border:1px solid var(--me)" title="Payments not linked to any family. Included in Analytics revenue but NOT in the family ledgers above. Collected + Unmatched = Analytics revenue."><div style="font-size:1.25rem;font-weight:800;color:var(--me)">'+fm(_unmatchedTotal)+'</div><div style="font-size:.7rem;color:var(--s400);font-weight:600;text-transform:uppercase">Unmatched ('+_unmatchedPays.length+')</div></div>';
     h+='</div>';
 
     // Filter tabs
