@@ -62,9 +62,10 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] **finImportCSV naive parse FIXED + verified `27c5fea9`:** finance CSV used `split(',')` → mangled `"Smith, Jr."` and parsed `"$1,000.00"` as 1. Now uses robust `parseCsvLine` + strips `$`/`,` before parseFloat → amount=1000. Unit-verified deployed parseCsvLine on quoted-comma/embedded-comma/escaped-quote cases.
 - [x] Export round-trip SOUND: `exportCsv` quotes every field with `"`→`""` doubling (RFC-4180), `parseCsvLine` reverses it; name split round-trips. Duplicate-detection runs clean on 347. Custom Fields helpers present (deeper type-change/delete-in-use = low risk, revisit if needed). **#2 billing-orphan-on-import** → Day 7 (payments kept on wipe; name-relink mitigates same-name re-import).
 
-**Day 5 — Families + parent contacts**
-- [ ] Family CRUD, link/unlink campers, a camper in two families, delete a family with campers, contact
-      validation (phone/email), sibling grouping; cascade to camper records; persistence + cloud.
+**Day 5 — Families + parent contacts** ✅ DONE 2026-06-03 (`8d70666c`)
+- [x] **#V2-11 (FIXED): no Delete-Family control existed** (card had only Edit; no `deleteFamily` fn). Added `deleteFamily(id)` (confirm; campers don't back-ref family so they just become unassigned — no orphan) + card Delete button + exposed in API. Live-verified create→delete round-trip (net-zero, roster intact).
+- [x] **#V2-12 (FIXED): camper could be in MULTIPLE families** (checkbox list showed all campers, no cross-family guard). `saveFamily` now enforces single-family membership (move semantics: claiming a camper removes them from other families) + the modal flags campers "(in <Other>)". Enforcement block unit-verified on deployed code (F1 ['X','Y'] → save F2 claiming X → F1=['Y']).
+- [x] Family delete doesn't orphan campers (no back-ref); camper-side rename/delete already cascades to families[].camperIds (Day-3 #4 fix). Email field type=email validates; phone unvalidated (minor). Camp currently has 0 families (optional/auto-detected from import).
 
 **Day 6 — Registration + Forms & Docs**
 - [ ] Registration flow/states, status transitions, required vs optional, partial submit, re-submit;
