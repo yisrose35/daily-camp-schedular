@@ -1,307 +1,173 @@
-# Campistry — 40-Day Deep Adversarial Audit (v2)
+# Campistry — 40-Day Deep Adversarial Audit (v2, FULL-SITE)
 
-**Mission:** Break it before summer does. v1 (the feature-verification audit) is COMPLETE and on `main`.
-v2 is an **adversarial, exhaustive** sweep: every page, panel, control, function, branch, and state —
-with the explicit goal of **finding real bugs**, not confirming happy paths. Assume something is wrong
-on every surface until proven otherwise.
+**Mission:** Break it before summer does. Assume every surface is buggy until proven otherwise.
+This is an **adversarial, find-the-bugs** sweep of the ENTIRE website — not just the scheduler.
+v1 (feature verification) is complete on `main`. v2 actively tries to break things.
 
 - **Stack:** vanilla JS, Supabase (RLS, `daily_schedules`, `rotation_counts`, `camp_state_kv`). No build step.
-- **Working branch:** `Daily-Audit-Walkthrough` (kept in lock-step with `main`; push when the user says).
-- **Surfaces:** `index.html` (auth/landing), `dashboard.html`, `campistry_me.html` (structure), `flow.html`
-  (Setup, Facilities, Zones, Rules, Leagues, Specialty Leagues, Special Activities, Auto Builder, Manual
-  Builder, Daily Adjustments, Daily Schedule View, Generate), Print Center, Calendar Views, Analytics/Report,
-  Camper Locator.
+- **Branch:** `Daily-Audit-Walkthrough` (kept in sync with `main`; push when the user says).
+- **Scheduling core was heavily audited in v1** → in v2 it gets *adversarial re-testing* (try to break the
+  happy paths v1 confirmed). **The Camper-Management suite was barely touched in v1** → it gets first-class,
+  from-scratch coverage (it's where the most undiscovered bugs live).
 
-## Audit doctrine (apply EVERY day)
-1. **Adversarial first.** For each control/function ask: what input breaks it? empty, huge, negative,
-   duplicate, unicode/emoji, whitespace, contradictory, mid-operation, rapid-repeat, out-of-order?
-2. **Watch the console.** Capture every error/warning during each test. An uncaught throw = a finding.
-3. **State integrity.** After every action, verify no cross-date / cross-division / cross-bunk bleed,
-   no silent data loss, no double-booking, no orphaned/stale state, cloud == memory == localStorage.
-4. **UI/UX.** Layout breakage, overflow/truncation, missing loading/empty/error states, misleading
-   labels, dead controls, focus traps, unreadable contrast, mobile/narrow width, double-submit.
-5. **Stress.** Large camps, rapid clicks, concurrent ops, slow/failed network, reload mid-operation.
-6. **Verdict.** Each finding: severity (critical/high/med/low), exact repro, root cause, proposed fix.
-   Fix critical/high immediately + live-verify; log med/low. Update MEMORY + this file's checkboxes.
-7. **Verify the fix, then regression-check** the surrounding surface. Conservative, additive fixes.
+## Full surface map
+- **Auth/landing:** `index.html` (sign in/up, access code, session, refresh-token).
+- **Management suite (`campistry_me.html` / `campistry_me.js`):** Campers CRUD, Families, Registration,
+  Billing, Broadcasts, Forms & Docs, Analytics & Finance, Reports, Settings, Bunk Builder, Camp Structure,
+  Custom Fields, Import/Export, Duplicate detection. (~347 records, ~360 controls — almost entirely un-audited.)
+- **Dashboard (`dashboard.html`):** camp dates, overview, nav.
+- **Flow (`flow.html`):** Setup, Facilities, Zones, Rules, Leagues, Specialty Leagues, Special Activities,
+  Auto Builder, Manual Builder, Daily Adjustments, Daily Schedule View, Generate.
+- **Output:** Print Center, Calendar Views, Analytics/Report, Camper Locator.
+- **Cloud:** supabase_schedules/sync, rotation_cloud, cloud_sync_helpers, local_cache_idb, schedule_orchestrator.
+- **Cross-cutting:** access/roles, realtime, offline, performance, error handling, responsive, accessibility, security.
 
----
-
-## Phase 0 — Recon, Harness & Baseline `Days 1–2`
-
-**Day 1 — Global recon + console-error baseline + surface inventory**
-- [ ] Load every page (index, dashboard, me, flow + every flow panel, print, calendar, analytics, locator);
-      capture ALL console errors/warnings on load and first interaction. Each one is a candidate finding.
-- [ ] Inventory every interactive control per surface (buttons, inputs, selects, toggles, drag targets,
-      modals) into a checklist the later days consume. Flag any dead/no-op control.
-- [ ] Build a reusable **integrity scanner** (coverage/holes, double-booking on real fields, cross-date
-      stamp coherence, cloud-vs-memory-vs-localStorage fingerprint) and a **console-capture hook**.
-- [ ] Baseline current generated schedules; snapshot cloud state so later destructive tests can restore.
-- Done when: every surface loads documented, console-error list captured, scanner + capture hook ready.
-
-**Day 2 — Auth, session, routing, and global error handling**
-- [ ] Auth/session: token expiry mid-session (flow→index bounce — confirm graceful, no data loss),
-      reload while unauthenticated, deep-link to flow.html without auth, access-code path, sign-out.
-- [ ] Routing/navigation between pages — back/forward, stale tab, two tabs same camp.
-- [ ] Global error handling: force a failed cloud call (offline) on each major action; verify a clear
-      user-facing message (not a silent failure or a raw stack), and recoverable state.
-- [ ] `DEBUG` flags still false; no secret/PII in console or URL params.
-- Done when: auth edge cases handled gracefully, no silent failures on the main actions.
+## Doctrine — apply to EVERY task (this is break-testing, not "load and observe")
+1. **Adversarial input on every field/control:** empty, whitespace, huge (10k chars), negative/zero, unicode/emoji,
+   HTML/script (`<img onerror>`), SQL-ish, duplicate, reserved words, leading/trailing spaces, wrong type.
+2. **Adversarial actions:** double-submit, rapid-repeat, out-of-order, cancel-mid-op, navigate-mid-save,
+   reload-mid-op, back-button, two tabs, delete-in-use, operate-while-offline.
+3. **After each action verify integrity:** no silent data loss, no orphan/ghost references, no cross-record
+   bleed, cloud == memory == localStorage, no double-booking, counts correct.
+4. **UI/UX every time:** missing validation feedback, silent failures, dead controls, overflow/truncation,
+   no loading/empty/error state, misleading labels, contrast, narrow-width/mobile, focus traps, double-fire.
+5. **Console + network every time:** any uncaught error, swallowed failure, 4xx/5xx, slow call = a finding.
+6. **Each finding:** severity (critical/high/med/low) · exact repro · root cause · proposed fix. Fix
+   critical/high immediately + live-verify + regression-check; log med/low. Update MEMORY + these checkboxes.
+7. **Be safe while breaking:** prefer throwaway records (e.g. "ZZ_TEST") and restore; snapshot before destructive tests.
 
 ---
 
-## Phase 1 — Camp Structure & Setup `Days 3–7`
+## Phase 0 — Recon `Day 1` ✅ DONE
+- [x] Console-error baseline (0 uncaught errors on index/flow/me load); harness (console capture + integrity scanner).
+- [x] Findings: **#V2-1** localStorage 7.13 MB / 143% quota → auto-save perpetually skips, offline cache stale,
+      3 overlapping caches + 36 dates + debug-trace keys (fix Day 33). **#V2-2** init cloud-bridge-timeout (low).
+      **#V2-3** session expiry → manual re-login (refresh-token? — Day 2). **#V2-4** Add-Camper: no `required`
+      fields + empty submit fails silently (no feedback) (fix in Day 3).
 
-**Day 3 — Division/Grade/Bunk CRUD adversarial (`campistry_me.js`)**
-- [ ] Create/edit/delete/reorder each level; duplicate names, empty names, whitespace-only, unicode/emoji,
-      very long names, names colliding with reserved words ("Free", "Lunch", "League Game", "Swim").
-- [ ] Delete a division/grade/bunk that is referenced by a schedule, league, access rule, or skeleton —
-      verify references handled (cleaned or blocked), no orphans, no crash.
-- [ ] Rapid create/delete; create 50+ bunks; reorder during save; double-click save.
-- Done when: every CRUD path safe under adversarial input; no orphaned references; cloud-persisted.
+## Phase 1 — Camper-Management Suite (the big gap) `Days 2–9`
 
-**Day 4 — Structure persistence + cloud round-trip + cross-tab**
-- [ ] Each structure change persists to `camp_state_kv`; reload + logout-proxy round-trip; offline edit → reconnect.
-- [ ] Two tabs editing structure — last-writer behavior, no corruption, no lost grades.
-- [ ] Malformed/partial `camp_state_kv` blob on load — does the app degrade gracefully or crash?
-- Done when: structure survives reload/offline/cross-tab without loss or corruption.
+**Day 2 — Auth/session + refresh-token + global error handling**
+- [ ] Chase **#V2-3**: does the Supabase client auto-refresh the JWT? Why does it expire to a hard re-login?
+      Token expiry mid-action, reload unauth, deep-link unauth, access-code path, sign-out, two-tab session.
+- [ ] Force-fail a cloud call on each major action → clear message, recoverable (no silent fail / raw stack).
+- [ ] No secrets/PII in console or URL.
 
-**Day 5 — Structure-change-after-schedule corruption (the v1 Day-8 area, harder)**
-- [ ] Generate a full schedule, then rename/add/remove divisions, grades, AND bunks; reload Flow.
-- [ ] Verify the existing schedule is intact OR cleanly pruned (no half-renamed bunks, no orphan tiles,
-      no stale rotation counts pointing at dead bunks, no print/analytics referencing ghosts).
-- [ ] Re-generate after structural change — scope correctness, no resurrection of removed bunks.
-- Done when: structural edits never corrupt or half-migrate an existing schedule.
+**Day 3 — Campers CRUD (adversarial) + the #V2-4 fix**
+- [ ] Add/Edit/Delete camper with the full doctrine input battery; **fix #V2-4** (required-field validation +
+      visible feedback); division→grade→bunk cascade correctness (stale/empty/wrong-filtered options);
+      duplicate camper; orphan camper (no bunk); delete a camper in a bunk/family/billing.
+- [ ] Global search, filters, sort, pagination over ~347 records; rapid add/delete; double-submit Save.
 
-**Day 6 — Builder-mode toggle + Me→Flow handoff + camp dates (dashboard)**
-- [ ] Builder mode toggle persistence + mid-generation switch + rapid toggle; both modes see the same setup.
-- [ ] Camp dates (start/half1End/half2Start/end): invalid orderings (end<start, half2<half1, overlapping),
-      empty, far-future, single-day camp; persistence + read-only for scheduler role; the **two stores**
-      (`camp_state_kv:campDates` vs the stale `app1.campDates`) — reconcile or document the live source.
-- [ ] Me→Flow handoff: every configured division/bunk/activity/league present in Flow; add config in Me
-      while Flow is open in another tab — does Flow pick it up / need reload / break?
-- Done when: mode + camp dates persist and are honored; handoff complete; invalid dates rejected sanely.
+**Day 4 — Import / Export / Duplicate detection / Custom Fields**
+- [ ] Import: malformed CSV, wrong columns, dup rows, huge file, unicode, injection cells, partial/abort,
+      re-import (idempotent?). Export round-trips (export→import == identity?). Duplicate-detection accuracy
+      (false pos/neg). Custom Fields: add/edit/delete, type changes, field used-in-data deletion.
 
-**Day 7 — Setup panel + Zones/Travel + Rules**
-- [ ] Flow "Setup (Bunks/Divisions)" panel — every control, empty camp, single bunk.
-- [ ] Zones/travel time — assign zones, extreme travel minutes, zone deletion in use, travel honored in gen.
-- [ ] Rules panel — every rule type, contradictory rules, empty, and that the solver actually reads them.
-- Done when: setup/zones/rules panels behave under adversarial config and feed the solver correctly.
+**Day 5 — Families + parent contacts**
+- [ ] Family CRUD, link/unlink campers, a camper in two families, delete a family with campers, contact
+      validation (phone/email), sibling grouping; cascade to camper records; persistence + cloud.
 
----
+**Day 6 — Registration + Forms & Docs**
+- [ ] Registration flow/states, status transitions, required vs optional, partial submit, re-submit;
+      Forms & Docs: create/assign/fill/upload, file-type/size limits, missing-file, completion tracking.
 
-## Phase 2 — Facilities & Activity Config `Days 8–12`
+**Day 7 — Billing + Analytics & Finance**
+- [ ] Billing: charges/discounts/payments, negative/zero/huge amounts, currency/rounding, refund, balance
+      math correctness, delete-in-use; Analytics&Finance numbers reconcile with underlying records.
 
-**Day 8 — Fields CRUD + capacity + indoor/outdoor + per-day disable**
-- [ ] Add/edit/delete fields; capacity 0 / negative / huge; duplicate field names; indoor/outdoor flags;
-      Daily-Adjustments per-field/per-sport disable for a day — honored in gen, reversible, per-date.
-- [ ] Delete a field referenced by a sport/special/league/skeleton — orphan handling.
-- Done when: field config robust; per-day disable scoped + honored; no orphans.
+**Day 8 — Broadcasts + Reports + Settings**
+- [ ] Broadcasts: compose/recipients/send (DON'T actually send to real recipients — verify the gate),
+      empty recipients, huge body; Reports: every report renders + numbers correct + export; Settings:
+      every toggle persists + takes effect, invalid values rejected.
 
-**Day 9 — Field sharing rules (the core invariant)**
-- [ ] Every `sharableWith.type`: not_sharable, same_division, cross_division (+ allowedPairs), custom
-      (+ allowedDivisions), all. Per-grade `gradeShareRules` overrides. Capacity interplay.
-- [ ] Adversarial: allowedPairs with self-pairs only, empty allowedPairs on cross_division, custom with
-      empty divisions, gradeShareRules contradicting sharableWith. **Confirm "no 2 grades share unless
-      turned on" holds in BOTH solvers + every post-pass (incl. the drop-refill guard shipped in v1).**
-- Done when: sharing enforced exactly per config in auto + manual, every type, with 0 illegal co-locations.
+**Day 9 — Camp Structure CRUD + Bunk Builder + structure-change corruption**
+- [ ] Division/Grade/Bunk CRUD adversarial (dup/empty/unicode/reserved/long/reorder/delete-in-use); Bunk
+      Builder drag/assign; **generate a schedule then mutate structure** → verify no half-migrated/orphaned
+      schedule, skeleton, or rotation-count state (the v1 Day-8 area, harder). Persistence + cross-tab.
 
-**Day 10 — Access restrictions + time rules + combined fields + quality groups**
-- [ ] accessRestrictions (enabled/divisions/per-bunk/usePriority/priorityList); enabled-but-empty edge.
-- [ ] timeRules Available/Unavailable windows, division-filtered, boundary minutes, overlapping windows.
-- [ ] Combined fields (fieldCombos) — mutual exclusion honored; quality groups / fieldGroup seniority.
-- Done when: access + time + combos + quality all enforced as hard constraints in both solvers.
+## Phase 2 — Scheduling Setup (adversarial re-test) `Days 10–13`
 
-**Day 11 — Special Activities config (every dimension)**
-- [ ] Every field: durations[] (multi), prepConfig (staggered/synced), multiPart (daysBetween),
-      frequency (min/exact/max), frequencyDays cooldown, availableDays, rotationCohort, maxUsage per-grade,
-      subcategory + caps, isIndoor, rainyDayOnly/Exclusive/Available, concurrency ("bunks at a time").
-- [ ] Adversarial: contradictory combos (exact freq > available slots, prep room cap 1 with synced for
-      many bunks, multiPart daysBetween > camp length), 0/negative values, name collisions.
-- Done when: every special-config dimension is enforced or sanely rejected; no silent ignores.
+**Day 10 — Facilities + sharing rules (the core invariant)**
+- [ ] Fields CRUD + capacity (0/neg/huge) + indoor/outdoor + per-day disable; EVERY `sharableWith` type +
+      `gradeShareRules` + allowedPairs/allowedDivisions; adversarial/contradictory configs. Re-confirm
+      "no 2 grades share unless turned on" holds in both solvers + every post-pass.
 
-**Day 12 — Leagues & Specialty Leagues config**
-- [ ] League CRUD, teams, team↔bunk mapping (NEVER conflate — separate concepts), chinuch, indoor-court req,
-      sports, divisions, color leagues, conferences/inter-conference (the latent specialty-league trap).
-- [ ] Adversarial: odd team counts (byes), a team with no bunks, a bunk on two teams, deleting a team mid-season.
-- Done when: league/specialty config robust; team/bunk separation never violated.
+**Day 11 — Access + time rules + combined fields + quality groups + zones**
+- [ ] accessRestrictions (incl. enabled-but-empty), timeRules (Available/Unavailable, boundaries, overlaps),
+      fieldCombos mutual-exclusion, quality/seniority, zones/travel extremes — all hard-enforced in both solvers.
 
----
+**Day 12 — Special Activities config (every dimension)**
+- [ ] durations[], prep (staggered/synced), multiPart (daysBetween), freq (min/exact/max), frequencyDays,
+      availableDays, cohort, maxUsage, subcategory+caps, isIndoor, rainy variants, concurrency. Contradictory
+      combos, 0/neg, name collisions → enforced or sanely rejected, never silently ignored.
 
-## Phase 3 — Auto Builder `Days 13–20`
+**Day 13 — Leagues + Specialty Leagues config**
+- [ ] League/team CRUD, team↔bunk mapping (NEVER conflate), chinuch, indoor-court req, color leagues,
+      conferences/inter-conference (the latent double-booking trap), odd team counts/byes, team with no bunks.
 
-**Day 13 — Layer editor (DAW grid) every operation + drag**
-- [ ] Create/edit/delete/reorder layers + blocks; drag/resize blocks; overlapping blocks; zero-length;
-      cross-division blocks; custom pinned layers ("connect to swim" adjacency); rapid edits; undo.
-- [ ] Save/load/template round-trip; per-date layers vs template fallback; corrupt layer blob on load.
-- Done when: layer editor reliable under adversarial editing; persistence exact; no data loss.
+## Phase 3 — Auto Builder (try to break the solver) `Days 14–19`
 
-**Day 14 — Grid preview accuracy + large camp**
-- [ ] `auto_schedule_grid.js` reflects layer state live (no stale render); empty/single/cross-division;
-      large camp (7+ div / 35+ bunks) — overflow, truncation, perf; reload hydration from cloud not stale local.
-- Done when: grid always matches state; large camp renders cleanly.
+**Day 14 — Layer editor + grid preview**
+- [ ] Layer/block create/edit/delete/reorder/drag/resize, overlapping/zero-length/cross-division, custom
+      pinned (connect-to-swim), save/load/template, corrupt-blob load; grid live-accuracy + large camp.
+**Day 15 — Solver under ADVERSARIAL configs**
+- [ ] Over-constrained / near-infeasible / infeasible → no crash/hang/illegal output; degrade gracefully.
+      Scan every field+time for access/conflict/capacity/sharing/time/cooldown/combo violations.
+**Day 16 — Rotation + frequency under stress** (7-day gen; fairness; every freq rule; Per-Half; counts vs cloud).
+**Day 17 — Specials/multi-period in the solver** (spanning, alignment, multiPart, prep, durations, caps).
+**Day 18 — Leagues in the solver** (placement for all bunks on a league-period day; opponents; back-to-back; specialty).
+**Day 19 — Bunk override + scope picker + cloud round-trip + warm re-gen** (authoritative override; partial wipe; lossless).
 
-**Day 15 — Solver correctness under ADVERSARIAL configs**
-- [ ] Over-constrained / near-infeasible / fully-infeasible configs — solver must not crash, infinite-loop,
-      or silently produce illegal placements; it should degrade (Free + warning) gracefully.
-- [ ] Every hard constraint re-verified on output: access, field conflict, capacity, sharing/allowedPairs,
-      time rules, cooldown, combined-field exclusion. Scan EVERY field+time for violations.
-- Done when: no crash/hang/illegal output across the adversarial config battery.
+## Phase 4 — Manual Builder (try to break it) `Days 20–24`
 
-**Day 16 — Solver: rotation, frequency, fairness under stress**
-- [ ] 7-consecutive-day generation; verify fairness, min/exact/max freq, frequencyDays, availableDays,
-      cohort pooling, Per-Half reset at the boundary, escalation bonuses don't favor one bunk.
-- [ ] rotation_counts cloud correctness across re-gen (no double-count, no reset, league games excluded — v1 fix).
-- Done when: multi-day rotation is fair + every frequency rule holds + counts are exact.
+**Day 20 — Skeleton editor** (every tile type create/drop/move/resize/delete/merge; overlap; column reorder; ids).
+**Day 21 — Save/load + per-division isolation + templates** (round-trip, isolation, template-onto-fresh-date, #10).
+**Day 22 — Manual generation** (field/access/time/sharing/combos enforced; 0 holes; partial-day; single-bunk; impossible).
+**Day 23 — Post-edit (every path incl. v1 Bug-A)** (click-edit modal scopes + typeahead + CLEAR; drag-move/resize;
+  drag-onto-occupied revert; multi-bunk; pinned; undo; base never corrupted).
+**Day 24 — Manual cloud save/load + re-gen safety + manual leagues** (lossless; no stale stacking; league slots).
 
-**Day 17 — Specials & multi-period in the solver**
-- [ ] Multi-period spanning (continuation _startMin/_endMin, capacity across spans, pinned preservation),
-      period-boundary alignment (no unfillable gaps), multiPart ordering+daysBetween, prep reservation,
-      durations best-fit, subcategory caps — all under a mixed-config stress day.
-- Done when: every special variant places correctly with no double-book, no gap, no cap breach.
+## Phase 5 — Output & Consumption `Days 25–29`
 
-**Day 18 — Leagues in the auto solver**
-- [ ] League games place for all participating bunks on a league-period day; opponents correct; back-to-back
-      away games; chinuch bye lines; specialty leagues; multiple leagues same day. **Confirm leagues actually
-      appear when the day's layer has a league period** (v1 Day-39 noted a fresh-date template had none).
-- Done when: leagues place + render + persist correctly when configured for the day.
+**Day 25 — Print Center (the v1-skipped Day 37, in depth)** — every pack/preset, auto+manual modes, all
+  bunks/divisions across paginated sheets, no truncation/clipping, league fuzzy-lookup, empty schedule, actual print + Excel.
+**Day 26 — Calendar views** — year/month/week/day nav (no stale bleed), camp-date markers, division filter, edges.
+**Day 27 — Analytics / Report** — rotation (counts==cloud), availability, Gantt; filters; empty; canonicalization; export.
+**Day 28 — Daily Adjustments** — Resources (FLAG #1), Trips (FLAG #2), rainy day + mid-day mode (the TODO area).
+**Day 29 — Camper Locator + cross-output consistency** — locator correctness; schedule/print/calendar/analytics agree.
 
-**Day 19 — Bunk override + generation scope picker + partial regen**
-- [ ] Bunk override (authoritative + exclusive) in auto; min-players pairing partner copy; scope picker
-      (select subset of divisions) — partial wipe only clears selected, others byte-identical, scope honored
-      in fallback fill. Adversarial: override onto restricted/occupied field, scope = none, scope = all.
-- Done when: overrides authoritative; partial regen never touches out-of-scope divisions.
+## Phase 6 — Cloud, Reliability & Cross-Cutting `Days 30–37`
 
-**Day 20 — Auto cloud round-trip + warm-regen + stress**
-- [ ] Generate → cloud save (all bunks, no truncation, _autoGenerated) → reload → exact hydrate (no Day-16b
-      drop). Warm re-gen (regenerate over existing) — no stacking, no stale. Large-camp timing.
-- Done when: full auto cloud round-trip is lossless incl. warm re-gen.
+**Day 30 — Cloud save/load atomicity + save guards** (cross-date stamp guards under rapid nav; cloud-unverified path).
+**Day 31 — Sync + offline + IndexedDB** (race conditions, offline-queue replay, IDB flush, stale-local-wins #10).
+**Day 32 — Realtime + multi-user + scheduler roles (NEEDS 2 ACCOUNTS)** — simultaneous edit no corruption;
+  scheduler scoped delete/clear + DELETE propagation; cross-scheduler `mergeSchedules` deleted-bunk **resurrection**
+  bug (deferred from v1 hunt) — reproduce + fix; merge stress.
+**Day 33 — localStorage quota (#V2-1 fix) + cache consolidation** (prune-on-near-quota not skip; cap dates; dedupe
+  the 3 caches; gate debug-trace keys out of prod storage). Verify offline cache stays fresh.
+**Day 34 — Access control / role enforcement** (allowedDivisions not stale; subdivision UUID + grade expansion;
+  scheduler can't see/gen/delete outside divisions; viewer read-only; canSave/canEdit on EVERY write path).
+**Day 35 — Performance & load** (profile the ~18–21s generation hot path for a safe behavior-preserving win;
+  save/load/page-load latency; large-camp memory/jank; flag >5s with cause).
+**Day 36 — Error handling + resilience** (every async path's failure mode: clear message, recoverable, no raw
+  stack/silent loss; malformed cloud/localStorage blobs on load; quota/network/permission errors).
+**Day 37 — Responsive / mobile / accessibility / browser** (narrow widths, touch, zoom; keyboard nav + focus;
+  contrast; alt text; ARIA on modals; print CSS; basic cross-browser sanity).
+
+## Phase 7 — E2E + Final Bug-Bash `Days 38–40`
+
+**Day 38 — Full adversarial E2E: Auto** (fresh session → setup → layers → generate → print → reload → verify, breaking each step).
+**Day 39 — Full adversarial E2E: Manual** (skeleton → generate → daily adjustments → print → reload → verify, breaking each step).
+**Day 40 — Final fan-out bug-bash + regression** (hit any surface not yet adversarially struck; regression-check
+  every v2 fix; confirm `main` ⇄ `Daily-Audit-Walkthrough` synced; MEMORY + this file fully updated).
 
 ---
 
-## Phase 4 — Manual Builder `Days 21–26`
+## Running findings log (update as we go)
+- **#V2-1** (med-high, Day 33): localStorage 7.13MB/143% quota → auto-save skips, offline cache stale, unbounded growth.
+- **#V2-2** (low): init `[Sync] Cloud bridge timeout` → local fallback, self-recovers.
+- **#V2-3** (med, Day 2): Supabase session expiry forces manual re-login repeatedly — refresh-token suspect.
+- **#V2-4** (low-med, Day 3): Add-Camper has no `required` fields; empty submit fails silently (no feedback).
 
-**Day 21 — Skeleton editor: every tile type + drag/resize/merge**
-- [ ] All 14 tile types create/drop/move/resize/delete; merge Swim+Elective; overlap reconciliation;
-      column reorder; unique-id integrity; rapid drag; drop during date-change; displaced-tiles panel.
-- Done when: skeleton editor reliable for every tile op; no silent overlap, no lost/dup tiles.
-
-**Day 22 — Skeleton save/load + per-division isolation + templates**
-- [ ] Save/load round-trip + cloud (`camp_state_kv`) + logout-proxy; per-division isolation (edit A ≠ touch B);
-      template load onto a fresh date (the v1 fiddle — make it work); orphan-division tile prune; #10 recency.
-- Done when: skeletons persist, isolate per division, templates load cleanly onto any date.
-
-**Day 23 — Manual generation correctness**
-- [ ] Field assignment, access, time rules, sharing, combined fields — all enforced; 0 holes on a complete
-      skeleton; partial-day skeleton; single-bunk division; impossible slot handled without crash.
-- Done when: manual gen output is constraint-clean and gap-correct.
-
-**Day 24 — Post-edit: every edit path (incl. the v1 Bug-A area)**
-- [ ] Click-edit modal (single/division/select scope + activity typeahead + CLEAR); drag-move + drag-resize
-      on the auto per-bunk grid (`.asg-wrap`) — incl. the **drag-onto-fully-occupied revert** (v1 fix);
-      multi-bunk edit; pinned/fixed blocks; undo. Verify base never corrupted, only target changes.
-- Done when: every post-edit path is surgical, reversible, and cloud-safe; drag-onto-occupied reverts.
-
-**Day 25 — Manual cloud save/load + re-generation safety**
-- [ ] Save → reload → exact; re-gen after daily adjustments doesn't stack stale; multi-division gen;
-      the expanded ~328-tile per-bunk skeleton re-save safety (v1 Day-32 flag).
-- Done when: manual save/load/re-gen are lossless and stale-free.
-
-**Day 26 — Manual leagues + edge cases**
-- [ ] League slot in a skeleton → games placed + persisted; multi-division manual gen isolation;
-      edge cases (single bunk, partial day, overlapping impossible restrictions).
-- Done when: manual league + edge cases clean.
-
----
-
-## Phase 5 — Rotation / Leagues / Specials runtime `Days 27–30`
-
-**Day 27 — Rotation engine deep + analytics cross-check**
-- [ ] Least-recent selection, escalation, cohort, Per-Half — trace the scoring on real multi-day data;
-      analytics rotation report == `rotation_counts` table (the v1 stale-segment fix) across all divisions.
-- Done when: rotation logic + report counts provably correct.
-
-**Day 28 — Rainy day + mid-day mode**
-- [ ] isIndoor fallback, rainyDayOnly/Exclusive/Available; auto-switch skeleton; mid-day rain activation
-      mid-schedule (the long-standing TODO area) — does it corrupt or cleanly restructure the remaining day?
-- Done when: rainy + mid-day modes behave correctly and reversibly.
-
-**Day 29 — Leagues runtime: standings, results, fixtures**
-- [ ] Enter game results → standings update; round-robin fairness; back-to-back away; fixture persistence
-      across reload; deleting/editing a result; chinuch/bye handling; off-campus double-headers.
-- Done when: league runtime (standings/fixtures/results) correct + persistent.
-
-**Day 30 — Specialty leagues + trips + resources (Daily Adjustments)**
-- [ ] Specialty league placement + the latent conference double-booking trap; Trips (input + future-date
-      save + honored by both builders — FLAG #2); Resources panel inside DA (FLAG #1).
-- Done when: specialty leagues, trips, and resources all correct under adversarial use.
-
----
-
-## Phase 6 — Output & Consumption `Days 31–34`
-
-**Day 31 — Print Center: every pack + preset + mode (the v1-skipped Day 37, in depth)**
-- [ ] Director's Pack, Parent Handout, Per-Bunk Sheets, Counselor Pack; every style preset; auto (per-bunk)
-      AND manual (slot) modes — all 35 bunks / 7 divisions across paginated sheets, no truncation/clipping;
-      consecutive league games (fuzzy slot lookup); empty/partial schedule; actual print + Excel export.
-- Done when: print produces correct, complete, unclipped output for every pack/mode/preset.
-
-**Day 32 — Calendar views**
-- [ ] Year/Month/Week/Day; date navigation loads correct day (no stale bleed — v1 fix); camp-date half /
-      transition / start-end markers (v1 feature); division filter; cross-month nav; today; far dates.
-- Done when: calendar navigation + markers correct across all views.
-
-**Day 33 — Analytics / Report (every view)**
-- [ ] Rotation report (counts == cloud), Availability report, Gantt; filters (division/type/bunk/search);
-      empty data; canonicalization of activity-name variants; export. Adversarial filter combos.
-- Done when: every analytics view is accurate and filter-robust.
-
-**Day 34 — Camper Locator + cross-output consistency**
-- [ ] Camper Locator search/lookup correctness; consistency between schedule view, print, calendar, analytics
-      for the same date (same activities everywhere — no view disagrees).
-- Done when: locator correct + all output surfaces agree.
-
----
-
-## Phase 7 — Cloud, Reliability & Cross-Cutting `Days 35–39`
-
-**Day 35 — Cloud save/load atomicity + the save guards**
-- [ ] Every write to `daily_schedules` atomic + correct; the cross-date `_belongsToDate`/stamp guards
-      (v1) under rapid date-nav; `cloud-unverified`-as-success path (deferred bug) — decide/fix;
-      verifiedScheduleSave dedup correctness; partial/failed save recovery.
-- Done when: no save path drops, mis-keys, or silently fails.
-
-**Day 36 — Sync orchestration + offline + IndexedDB**
-- [ ] supabase_sync race conditions, offline-queue replay (re-entrancy guard — v1), IndexedDB fallback +
-      offline→online flush completeness; localStorage quota-exceeded prune; stale-local-wins (#10) twins.
-- Done when: sync + offline + local cache are race-free and lossless.
-
-**Day 37 — Realtime + multi-user + scheduler roles (NEEDS 2 ACCOUNTS)**
-- [ ] Two sessions: simultaneous edits → no corruption; owner deletes a day while scheduler open → DELETE
-      propagates; scheduler clears only their divisions (regen-scope fix — v1 #5); cross-scheduler
-      `mergeSchedules` deleted-bunk **resurrection** bug (deferred from v1 hunt) — reproduce + fix;
-      realtime merge stress (dedup, cloud-empty clear, no 60s guard).
-- Done when: multi-user is corruption-free + the merge-resurrection bug is fixed (or precisely characterized).
-
-**Day 38 — Access control / role enforcement**
-- [ ] Scheduler `allowedDivisions` resolution (not stale), subdivision UUID + parent→child grade expansion;
-      a scheduler cannot see/generate/delete outside their divisions; viewer is read-only everywhere;
-      canSave/canEdit gates on EVERY write path (no bypass).
-- Done when: role scoping is airtight on every read and write surface.
-
-**Day 39 — Performance & load**
-- [ ] Generation time (flagged ~18–21s — profile the hot path, identify the dominant cost, see if a safe
-      win exists without changing behavior); cloud save/load latency; page-load + hydration; large-camp
-      stress (memory, jank); rapid-action responsiveness. Flag anything >5s with the cause.
-- Done when: perf characterized; any safe, behavior-preserving win applied; hot spots documented.
-
-**Day 40 — Full adversarial E2E + final bug-bash**
-- [ ] Fresh-session full Auto run + full Manual run, end to end, trying to break each step.
-- [ ] Final fan-out bug-bash across any surface not yet adversarially hit; regression-check every v2 fix.
-- [ ] Confirm `main` ⇄ `Daily-Audit-Walkthrough` in sync; MEMORY + this file fully updated.
-- Done when: both flows survive an adversarial run and no open critical/high remains.
-
----
-
-*v2 doctrine: assume bugs exist. Reproduce, root-cause, fix conservatively, live-verify, regression-check.
-Two builders, cloud as source of truth, and a relentless eye for what breaks.*
+*Doctrine: assume bugs exist. Reproduce → root-cause → fix conservatively → live-verify → regression-check.*
