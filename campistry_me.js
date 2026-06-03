@@ -1174,10 +1174,11 @@ function saveDiv(){
     //   (silent data loss — all its grades/bunks gone). Reject instead of clobbering.
     if(name!==editingDiv&&structure[name]){toast('A division named "'+name+'" already exists','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
-    // ★ Snapshot old bunks before applying changes so we can detect removals
-    var oldBunks=[];
+    // ★ Snapshot old bunks AND grades before applying changes so we can detect removals
+    var oldBunks=[];var oldGrades=[];
     var srcDiv=editingDiv||name;
     if(structure[srcDiv]&&structure[srcDiv].grades){
+        oldGrades=Object.keys(structure[srcDiv].grades);
         Object.values(structure[srcDiv].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){oldBunks.push(b)})});
     }
     var grades={};
@@ -1208,22 +1209,57 @@ function saveDiv(){
     });
     structure[name]={color:color,grades:grades,gradeOrder:gradeOrder};
     save();closeModal('divModal');render(curPage);toast(editingDiv?'Division updated':'Division created');
-    // ★ Purge orphaned bunks from saved schedules
+    // ★ Purge orphaned bunks from saved AUTO schedules
     var newBunks=[];
     Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
     var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
     if(removed.length>0)_purgeOrphanedBunks(removed);
+    // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
+    //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
+    var removedGrades=oldGrades.filter(function(g){return !(g in grades)});
+    if(removedGrades.length>0)_purgeOrphanedSkeletonTiles(removedGrades);
 }
 function deleteDiv(n){
     if(!confirm('Delete "'+n+'"?'))return;
-    // ★ Collect all bunks from this division before deleting
-    var removedBunks=[];
+    // ★ Collect all bunks AND grades from this division before deleting
+    var removedBunks=[];var removedGrades=[];
     if(structure[n]&&structure[n].grades){
+        removedGrades=Object.keys(structure[n].grades);
         Object.values(structure[n].grades).forEach(function(g){(g.bunks||[]).forEach(function(b){removedBunks.push(b)})});
     }
     delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
-    // ★ Purge orphaned bunks from saved schedules
+    // ★ Purge orphaned bunks from saved AUTO schedules + orphaned grade tiles from MANUAL skeletons
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
+    if(removedGrades.length>0)_purgeOrphanedSkeletonTiles(removedGrades);
+}
+// ★ Day 9 (manual-builder parity for the structure-change cascade): the auto schedule
+//   is cleaned by _purgeOrphanedBunks, but the saved MANUAL skeletons (app1.dailySkeletons
+//   in the cloud blob + campManualSkeleton_<date> locally) were never cleaned when a
+//   scheduling-unit (grade) was removed — so orphan tiles (e.g. division "4" from an old
+//   structure) accumulated across dates. Prune tiles referencing EXACTLY the removed grade
+//   names (scoped to explicit removals, so surviving grades' tiles are never touched).
+function _purgeOrphanedSkeletonTiles(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    var rm={};removedGrades.forEach(function(g){rm[g]=1});
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1;
+        if(!app1||!app1.dailySkeletons){return}
+        var changed=false,prunedCount=0;
+        Object.keys(app1.dailySkeletons).forEach(function(date){
+            var tiles=app1.dailySkeletons[date];
+            if(!Array.isArray(tiles))return;
+            var kept=tiles.filter(function(t){return !(t&&rm[t.division])});
+            if(kept.length!==tiles.length){prunedCount+=(tiles.length-kept.length);app1.dailySkeletons[date]=kept;changed=true}
+            // mirror to the local per-date key if present
+            try{var lk='campManualSkeleton_'+date,raw=localStorage.getItem(lk);if(raw){var lt=JSON.parse(raw);if(Array.isArray(lt)){var lkept=lt.filter(function(t){return !(t&&rm[t.division])});if(lkept.length!==lt.length)localStorage.setItem(lk,JSON.stringify(lkept))}}}catch(_){}
+        });
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Pruned',prunedCount,'orphaned manual-skeleton tile(s) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedSkeletonTiles:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
