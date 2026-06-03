@@ -2640,11 +2640,13 @@ function finImportCSV(){
             var hdr=lines[0].toLowerCase();
             var imported=0;
             for(var i=1;i<lines.length;i++){
-                var cols=lines[i].split(',').map(function(s){return s.trim().replace(/^"|"$/g,'')});
+                // ★ use the robust CSV parser (handles quoted commas + escaped quotes),
+                //   not a naive split that mangles "Smith, Jr." or amounts like "1,000".
+                var cols=parseCsvLine(lines[i]).map(function(s){return s.trim()});
                 if(!cols[0])continue;
-                // Try to auto-detect: if it has "payment" or positive amount with a name
+                // Auto-detect a positive amount in any column (strip $ and thousands commas)
                 var amount=0;
-                for(var c=0;c<cols.length;c++){var n=parseFloat(cols[c]);if(!isNaN(n)&&n>0){amount=n;break}}
+                for(var c=0;c<cols.length;c++){var n=parseFloat((cols[c]||'').replace(/[$,]/g,''));if(!isNaN(n)&&n>0){amount=n;break}}
                 if(amount>0){
                     finPayments.push({id:Date.now()+i,family:cols[0]||'Imported',amount:amount,date:cols[1]||today(),method:'Imported',status:'paid'});
                     imported++;
@@ -3915,7 +3917,20 @@ function handleCsv(file){
             var pvEl=document.getElementById('csvPV');
             if(pvEl){pvEl.style.display='block';pvEl.innerHTML='<div style="font-weight:600;margin:8px 0 4px">'+rows.length+' campers found</div><div style="font-size:.75rem;color:var(--s400)">Columns detected: '+hdr.filter(function(h){return h}).length+'</div>'}
             var btn=document.getElementById('csvBtn');
-            if(btn){btn.disabled=false;btn.onclick=function(){importRows(rows)}}
+            if(btn){btn.disabled=false;btn.onclick=function(){
+                // ★ #3 + footgun: importRows WIPES all current campers/structure/families/bunks
+                //   (and fans the wipe to cloud) — confirm first. Also, roster is keyed by NAME,
+                //   so duplicate-name rows would silently overwrite each other; de-dupe (last
+                //   wins, matching the overwrite semantics) and warn so the count is honest.
+                var byName={},dupNames=[];
+                rows.forEach(function(r){ if(byName[r.name])dupNames.push(r.name); byName[r.name]=r; });
+                var uniqueRows=Object.keys(byName).map(function(n){return byName[n]});
+                var msg='Import will REPLACE all current campers, divisions, grades, bunks, and families with this file ('+uniqueRows.length+' camper'+(uniqueRows.length===1?'':'s')+'). This cannot be undone.';
+                if(dupNames.length){var ex=dupNames.slice(0,3).join(', ');msg+='\n\n⚠ '+dupNames.length+' duplicate name'+(dupNames.length===1?'':'s')+' ('+ex+(dupNames.length>3?'…':'')+') — only the last row of each will be kept.';}
+                msg+='\n\nContinue?';
+                if(!confirm(msg))return;
+                importRows(uniqueRows);
+            }}
         }
     };
     reader.readAsText(file);
