@@ -465,7 +465,7 @@ function renderFamilies(){
     if(!e.length&&!totalSuggestions){h+='<div class="me-empty"><h3>No families yet</h3><p>Add a family to get started, or import campers and we\'ll detect families automatically.</p><button class="me-btn me-btn--pri" onclick="CampistryMe.addFamily()">+ Add Family</button></div>'}
     else e.forEach(function([id,f]){
         var sb=f.balance>0?bdg(fm(f.balance)+' due','err'):f.totalPaid>0?bdg('Paid','ok'):bdg('Pending','warn');
-        h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button></div></div>';
+        h+='<div class="fam-card"><div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:10px"><div><div style="font-size:.95rem;font-weight:600;color:var(--s800)">'+esc(f.name)+'</div><div style="font-size:.75rem;color:var(--s400)">'+(f.camperIds||[]).length+' camper'+((f.camperIds||[]).length!==1?'s':'')+'</div></div><div style="display:flex;gap:6px;align-items:center">'+sb+'<button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.editFamily(\''+je(id)+'\')">Edit</button><button class="me-btn me-btn--ghost me-btn--sm" onclick="CampistryMe.deleteFamily(\''+je(id)+'\')" style="color:var(--err)">Delete</button></div></div>';
         (f.households||[]).forEach(function(hh){
             h+='<div class="hh"><div style="font-size:.65rem;font-weight:600;color:var(--s400);text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px">'+esc(hh.label||'Primary')+(hh.billingContact?' · Billing':'')+'</div>';
             (hh.parents||[]).forEach(function(p){h+='<div style="font-size:.8rem;margin-bottom:2px"><strong>'+esc(p.name)+'</strong>'+(p.phone?' — <a href="tel:'+esc(p.phone)+'" style="color:var(--me)">'+esc(p.phone)+'</a>':'')+'</div>'});
@@ -495,9 +495,14 @@ function openFamilyForm(id){
     h+='<div class="fr">'+ff('Parent 2 Name','fmP2',hh.parents&&hh.parents[1]?hh.parents[1].name:'')+ff('Parent 2 Phone','fmP2Ph',hh.parents&&hh.parents[1]?hh.parents[1].phone:'')+'</div>';
     h+=ff('Address','fmAddr',hh.address);
     h+='<div class="fsec">Linked Campers</div><p style="font-size:.8rem;color:var(--s400)">Select campers in this family:</p><div id="fmCamperChecks" style="max-height:150px;overflow-y:auto;margin-top:6px">';
+    // ★ Day 5: flag campers already in ANOTHER family so the user doesn't double-assign
+    //   (saving will MOVE them here). Build the lookup once.
+    var _assignedElsewhere={};
+    Object.entries(families).forEach(function(pair){if(pair[0]===id)return;(pair[1].camperIds||[]).forEach(function(cn){_assignedElsewhere[cn]=pair[1].name||pair[0]})});
     Object.keys(roster).sort().forEach(function(n){
         var checked=(f.camperIds||[]).indexOf(n)>=0;
-        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(n)+'</label>';
+        var elsewhere=_assignedElsewhere[n]?' <span style="color:var(--s400);font-size:.7rem">(in '+esc(_assignedElsewhere[n])+')</span>':'';
+        h+='<label style="display:flex;align-items:center;gap:6px;padding:3px 0;font-size:.8rem;cursor:pointer"><input type="checkbox" class="fmCamperCB" value="'+esc(n)+'"'+(checked?' checked':'')+' style="accent-color:var(--me)"> '+esc(n)+elsewhere+'</label>';
     });
     h+='</div>';
     document.getElementById('fmBody').innerHTML=h;
@@ -509,11 +514,24 @@ function saveFamily(){
     if(!name){toast('Name required','error');return}
     var id=editingFam||('fam_'+Date.now());
     var camperIds=[];document.querySelectorAll('.fmCamperCB:checked').forEach(function(cb){camperIds.push(cb.value)});
+    // ★ Day 5: enforce single-family membership — assigning a camper to this family
+    //   removes them from any OTHER family (move semantics), so no camper is double-counted.
+    Object.keys(families).forEach(function(fid){if(fid===id)return;var of=families[fid];if(of&&Array.isArray(of.camperIds))of.camperIds=of.camperIds.filter(function(cn){return camperIds.indexOf(cn)<0})});
     var p1={name:(document.getElementById('fmP1').value||'').trim(),phone:(document.getElementById('fmP1Ph').value||'').trim(),email:(document.getElementById('fmP1Em').value||'').trim(),relation:'Mother'};
     var p2={name:(document.getElementById('fmP2').value||'').trim(),phone:(document.getElementById('fmP2Ph').value||'').trim(),relation:'Father'};
     var parents=[p1];if(p2.name)parents.push(p2);
     families[id]={name:name,households:[{label:(document.getElementById('fmHHLabel').value||'Primary').trim(),parents:parents,address:(document.getElementById('fmAddr').value||'').trim(),billingContact:true}],camperIds:camperIds,balance:(families[id]&&families[id].balance)||0,totalPaid:(families[id]&&families[id].totalPaid)||0,notes:(document.getElementById('fmNotes').value||'').trim()};
     save();closeModal('familyModal');render(curPage);toast(editingFam?'Family updated':'Family added');
+}
+// ★ Day 5: families had no delete control (a missing/dead-control gap). Campers do NOT
+//   back-reference a family, so deleting one just removes the household; the campers
+//   remain (simply unassigned) — no cascade needed.
+function deleteFamily(id){
+    if(!id||!families[id])return;
+    var nm=families[id].name||'this family';
+    if(!confirm('Delete "'+nm+'"? Its campers will remain in the roster but be unassigned from this family. This cannot be undone.'))return;
+    delete families[id];
+    save();closeModal('familyModal');render('families');toast('Family deleted');
 }
 
 // ── CAMPERS ──────────────────────────────────────────────────────
@@ -4175,7 +4193,7 @@ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',
 window.CampistryMe={
     nav:nav,closeModal:closeModal,
     viewCamper:viewCamper,editCamper:editCamper,addCamper:addCamper,deleteCamper:deleteCamper,
-    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},
+    addFamily:function(){openFamilyForm(null)},editFamily:function(id){openFamilyForm(id)},deleteFamily:deleteFamily,
     acceptFamilySuggestion:acceptFamilySuggestion,dismissFamilySuggestion:dismissFamilySuggestion,acceptAddToFamily:acceptAddToFamily,
     addDiv:function(){openDivForm(null)},editDiv:function(n){openDivForm(n)},deleteDiv:deleteDiv,moveDivision:moveDivision,setAgeDirection:setAgeDirection,
     openCsv:function(){openModal('csvModal')},exportCsv:exportCsv,downloadTemplate:downloadTemplate,
