@@ -9,7 +9,12 @@
 
 ## Active Mission
 
-**🟢 ACTIVE: 40-day polish plan, resuming on the consolidated v1 engine.**
+**🟢 ACTIVE: 40-Day Deep Adversarial Audit (v2) — full plan + daily tasks in `AUDIT_PLAN_V2.md`.**
+When the user says "day X", read Day X in **`AUDIT_PLAN_V2.md`** (NOT the v1 "40-Day Plan" further below).
+v2 is an adversarial, find-the-bugs sweep of every page / function / logic / action / UI / UX + stress testing.
+The **v1 feature-verification audit** (the "40-Day Plan" section further below) is **COMPLETE and shipped to `main`**.
+
+_Historical engine note (still applies):_ polish runs on the consolidated v1 engine.
 The two-engine v1+v2 architecture was retired on 2026-05-28 (commit `9cfecb35`):
 all v2 post-passes (active pairing, time-reloc, drop-refill, FQ pair-lock guard,
 pairing-reopt, pair-infeasibility filtering at the planner) were inlined into v1.
