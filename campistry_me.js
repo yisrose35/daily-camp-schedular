@@ -1169,6 +1169,10 @@ function _pickColor(el){
 function saveDiv(){
     var name=(document.getElementById('dmName').value||'').trim();
     if(!name){toast('Name required','error');return}
+    // ★ Day 9 collision guard: creating a division with an existing name, or renaming one
+    //   onto another, would OVERWRITE the existing division at structure[name] below
+    //   (silent data loss — all its grades/bunks gone). Reject instead of clobbering.
+    if(name!==editingDiv&&structure[name]){toast('A division named "'+name+'" already exists','error');return}
     var color=document.getElementById('dmColor').value||COLORS[0];
     // ★ Snapshot old bunks before applying changes so we can detect removals
     var oldBunks=[];
