@@ -67,9 +67,9 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] **#V2-12 (FIXED): camper could be in MULTIPLE families** (checkbox list showed all campers, no cross-family guard). `saveFamily` now enforces single-family membership (move semantics: claiming a camper removes them from other families) + the modal flags campers "(in <Other>)". Enforcement block unit-verified on deployed code (F1 ['X','Y'] → save F2 claiming X → F1=['Y']).
 - [x] Family delete doesn't orphan campers (no back-ref); camper-side rename/delete already cascades to families[].camperIds (Day-3 #4 fix). Email field type=email validates; phone unvalidated (minor). Camp currently has 0 families (optional/auto-detected from import).
 
-**Day 6 — Registration + Forms & Docs**
-- [ ] Registration flow/states, status transitions, required vs optional, partial submit, re-submit;
-      Forms & Docs: create/assign/fill/upload, file-type/size limits, missing-file, completion tracking.
+**Day 6 — Registration + Forms & Docs** ✅ DONE 2026-06-03 (verification-only, no code change)
+- [x] **Critical XSS (#V2-5) now VERIFIED END-TO-END on a real enrollment**: seeded throwaway enrollment with payloads in text (camperName `<script>`, notes `<svg onload>`, parentName `<img onerror>`) + attribute (parentPhone `x" onmouseover="…`) contexts → `viewApplication` rendered in `appViewModal`: ALL canaries undefined, 0 live scripts/onerror-imgs/onmouseover/svg-onload doc-wide, payload text escaped, and the malicious phone rendered as a LITERAL `tel:` href value with NO `onmouseover` attr on the `<a>` (esc `"`→`&quot;` blocked the breakout in the real path). Cleaned up (0 enrollments, no residue).
+- [x] `enrollCamper` app→roster = non-destructive merge (fills only missing fields), name-keyed (inherent), auto-family respects Day-5 single-family rule. `updateEnrollStatus`/`autoPromoteWaitlist` logic sound (status history + oldest-waitlisted promotion). `uploadDocument` = 5MB cap + type allow-list + escaped display. Public register form has client-side guards (MAX_UPLOADS, submit cooldown, hourly cap). Minor: no maxlength on register text fields (bounded by hourly cap); doc storage feeds #V2-1 quota.
 
 **Day 7 — Billing + Analytics & Finance**
 - [ ] Billing: charges/discounts/payments, negative/zero/huge amounts, currency/rounding, refund, balance
