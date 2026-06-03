@@ -3355,9 +3355,20 @@ function openBroadcastModal(){
         else if(to==='enrolled') count=Object.values(enrollments).filter(function(e){return e.status==='enrolled'}).length;
         else if(to==='staff') count=finStaff.length;
         var label=to==='division'?div:to==='enrolled'?'Enrolled':to==='staff'?'Staff':'All Families';
-        broadcasts.push({subject:subject,body:body,to:label,method:method,recipientCount:count,timestamp:Date.now(),date:new Date().toISOString().split('T')[0]});
+        var rec={subject:subject,body:body,to:label,method:method,recipientCount:count,timestamp:Date.now(),date:new Date().toISOString().split('T')[0]};
+        // ★ Email/SMS/All-Channels actually DELIVER via the edge function. Previously the
+        //   modal only LOGGED the broadcast yet toasted "sent" — so e-mail/SMS reached no one.
+        //   Now: confirm before a real send (safety gate), then deliver; In-App is a portal record.
+        var realSend=/email|sms|all channels/i.test(method);
+        if(realSend&&!confirm('Send this '+method+' broadcast to '+label+' (~'+count+' recipient'+(count!==1?'s':'')+') now? This delivers to real parents/staff immediately.'))return;
+        broadcasts.push(rec);
         save();closeModal();renderBroadcasts();
-        toast('Broadcast sent to '+count+' recipient'+(count!==1?'s':''));
+        if(realSend){
+            toast('Sending broadcast…');
+            sendBroadcastNow(rec).then(function(res){res=res||{};toast('Broadcast sent ('+(res.sent||0)+' delivered'+(res.failed?', '+res.failed+' failed':'')+')')}).catch(function(){toast('Broadcast logged, but delivery failed','error')});
+        }else{
+            toast('Broadcast posted to the parent portal ('+count+' recipient'+(count!==1?'s':'')+')');
+        }
     });
 }
 function viewBroadcast(idx){
@@ -3674,7 +3685,28 @@ function importAllData(){
 function clearAllData(){
     if(!confirm('This will DELETE ALL camp data. This cannot be undone. Are you absolutely sure?'))return;
     if(!confirm('FINAL WARNING: All campers, families, enrollment, financial data will be erased.'))return;
-    localStorage.removeItem('campGlobalSettings_v1');
+    // ★ #6: the old version only removed the LOCAL blob, so the cloud copy survived and
+    //   re-hydrated everything on the next load — the "clear" silently undid itself.
+    //   Mirror the importRows wipe AND fan it to the cloud so the reset actually sticks.
+    //   Scope = the camp data the warning promises (campers + structure + families +
+    //   enrollment + finance); the scheduler's own config (facilities/rules in app1) is
+    //   preserved, matching the label which enumerates only camper/family/financial data.
+    try{
+        var g=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+        g.campStructure={};
+        if(!g.app1)g.app1={};
+        g.app1.camperRoster={};
+        g.app1.divisions={};
+        g.campistryMe={};   // families, payments, enrollments, finance, sessions, bunkAssignments, formConfig…
+        localStorage.setItem('campGlobalSettings_v1',JSON.stringify(g));
+        if(typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campStructure',g.campStructure);
+            window.saveGlobalSettings('app1',g.app1);
+            window.saveGlobalSettings('campistryMe',g.campistryMe);
+        }
+    }catch(e){console.warn('[Me] clearAllData:',e)}
+    try{var go=JSON.parse(localStorage.getItem('campistry_go_data')||'{}');go.addresses={};localStorage.setItem('campistry_go_data',JSON.stringify(go))}catch(e){}
+    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(e){}}
     loadData();render(curPage);toast('All data cleared');
 }
 
@@ -3712,15 +3744,24 @@ async function sendAutoNotification(type,enrollmentId){
 }
 async function sendPaymentReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
-    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];var sent=0;
-    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';if(e.parentEmail){callEdgeFunction('auto-notify',{recipients:[{email:e.parentEmail,name:e.parentName||''}],type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}}).catch(function(){});sent++}}})});
-    toast(sent+' payment reminder'+(sent!==1?'s':'')+' sent');
+    var today=new Date().toISOString().split('T')[0];var sevenDays=new Date(Date.now()+7*86400000).toISOString().split('T')[0];
+    // ★ pre-collect recipients so we can CONFIRM before emailing real parents (no silent mass-send).
+    var jobs=[];
+    Object.entries(enrollments).forEach(function([eid,e]){if(e.status!=='enrolled'||!e.installments)return;e.installments.forEach(function(inst){if(inst.status!=='pending')return;if(inst.dueDate===sevenDays||inst.dueDate===today||(inst.dueDate&&inst.dueDate<today)){if(e.parentEmail){var type=inst.dueDate<today?'payment_overdue':'payment_reminder';jobs.push({email:e.parentEmail,name:e.parentName||'',type:type,data:{campName:campName,camperName:e.camperName||'',parentName:e.parentName||'',amount:fm(inst.amount||0),dueDate:inst.dueDate}})}}})});
+    if(!jobs.length){toast('No payment reminders due','error');return}
+    if(!confirm('Send '+jobs.length+' payment reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:j.type,data:j.data}).catch(function(){})});
+    toast(jobs.length+' payment reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 async function sendFormReminders(){
     var campName='';try{var ss=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');campName=ss.camp_name||ss.campName||'Camp'}catch(ex){}
-    loadForms();var sent=0;
-    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;callEdgeFunction('auto-notify',{recipients:[{email:c.parent1Email,name:c.parent1Name||''}],type:'form_reminder',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}}).catch(function(){});sent++})});
-    toast(sent+' form reminder'+(sent!==1?'s':'')+' sent');
+    loadForms();
+    var jobs=[];
+    campForms.filter(function(f){return f.required}).forEach(function(f){var completed=new Set((f.responses||[]).map(function(r){return r.camper}));Object.entries(roster).forEach(function([name,c]){if(completed.has(name))return;if(!c.parent1Email)return;jobs.push({email:c.parent1Email,name:c.parent1Name||'',data:{campName:campName,camperName:name,parentName:c.parent1Name||'',formName:f.name}})})});
+    if(!jobs.length){toast('No form reminders to send','error');return}
+    if(!confirm('Send '+jobs.length+' form reminder email'+(jobs.length!==1?'s':'')+' to parents now? This emails them immediately.'))return;
+    jobs.forEach(function(j){callEdgeFunction('auto-notify',{recipients:[{email:j.email,name:j.name}],type:'form_reminder',data:j.data}).catch(function(){})});
+    toast(jobs.length+' form reminder'+(jobs.length!==1?'s':'')+' sent');
 }
 
 // ═══════════════════════════════════════════════════════════════
