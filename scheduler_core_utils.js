@@ -934,6 +934,26 @@
             }
 
             // =================================================================
+            // ★ Day 10: cross_division ("Grade Pairs") — mirror BOTH solvers
+            //   (total_solver_engine isCrossDivAllowedManual + auto_solver_engine).
+            //   Cross-grade co-occupancy is allowed ONLY for grade pairs the user
+            //   enabled in allowedPairs (capacity already capped above). Without this,
+            //   the FILLERS (scheduler_logic_fillers call canBlockFit) could place a
+            //   non-allowed cross-grade pair the main solver would reject.
+            // =================================================================
+            if (effectiveShareType === 'cross_division' && currentCount > 0) {
+                const _pairs = (effectiveProps.sharableWith && effectiveProps.sharableWith.allowedPairs) || {};
+                for (const existingDiv of allDivisions) {
+                    if (existingDiv === myDivision) continue;
+                    const _key = [myDivision, existingDiv].sort().join('|');
+                    if (_pairs[_key] !== true) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - cross_division pair not allowed: ${_key}`);
+                        return false;
+                    }
+                }
+            }
+
+            // =================================================================
             // ★★★ v7.5: sharableWith.divisions CHECK FOR CUSTOM SHARING ★★★
             // When type="custom", only allow sharing with specified divisions
             // =================================================================
