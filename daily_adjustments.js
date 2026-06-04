@@ -141,17 +141,17 @@ function daShowModal(config) {
     overlay.innerHTML = `
       <div class="da-modal" style="max-width:${config.wide ? '560px' : '460px'};">
         <div class="da-modal-header">
-          <h3>${config.title || 'Input Required'}</h3>
+          <h3>${_escHtml(config.title || 'Input Required')}</h3>
           <button class="da-modal-close da-modal-close-x">&times;</button>
         </div>
         <div class="da-modal-body">
-          ${config.description ? '<p class="da-modal-desc">' + config.description + '</p>' : ''}
+          ${config.description ? '<p class="da-modal-desc">' + _escHtml(config.description) + '</p>' : ''}
           <div class="da-modal-fields-container"></div>
-          ${config.warning ? '<div class="da-modal-warning">' + config.warning + '</div>' : ''}
+          ${config.warning ? '<div class="da-modal-warning">' + _escHtml(config.warning) + '</div>' : ''}
         </div>
         <div class="da-modal-footer">
           <button class="da-btn da-btn-ghost da-modal-cancel-x">Cancel</button>
-          <button class="da-btn da-btn-primary da-modal-confirm-x">${config.confirmText || 'Confirm'}</button>
+          <button class="da-btn da-btn-primary da-modal-confirm-x">${_escHtml(config.confirmText || 'Confirm')}</button>
         </div>
       </div>
     `;
@@ -165,9 +165,9 @@ function daShowModal(config) {
       fieldEl.className = 'da-modal-field';
 
       if (field.type === 'text' || field.type === 'time') {
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
-          '<input type="text" class="da-input da-modal-focusable" data-field="' + field.name + '"' +
-          ' value="' + (field.default || '') + '" placeholder="' + (field.placeholder || '') + '">';
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' +
+          '<input type="text" class="da-input da-modal-focusable" data-field="' + _escHtml(field.name) + '"' +
+          ' value="' + _escHtml(field.default || '') + '" placeholder="' + _escHtml(field.placeholder || '') + '">';
         inputs[field.name] = function() { return fieldEl.querySelector('input').value.trim(); };
       }
       else if (field.type === 'select') {
@@ -175,10 +175,10 @@ function daShowModal(config) {
           var val = typeof o === 'object' ? (o.value !== undefined ? o.value : o) : o;
           var label = typeof o === 'object' ? (o.label !== undefined ? o.label : o) : o;
           var selected = val === field.default ? ' selected' : '';
-          return '<option value="' + val + '"' + selected + '>' + label + '</option>';
+          return '<option value="' + _escHtml(val) + '"' + selected + '>' + _escHtml(label) + '</option>';
         }).join('');
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
-          '<select class="da-select da-modal-focusable" data-field="' + field.name + '">' + options + '</select>';
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' +
+          '<select class="da-select da-modal-focusable" data-field="' + _escHtml(field.name) + '">' + options + '</select>';
         inputs[field.name] = function() { return fieldEl.querySelector('select').value; };
       }
       else if (field.type === 'checkbox-group') {
@@ -187,12 +187,12 @@ function daShowModal(config) {
           var val = typeof o === 'object' ? o.value : o;
           var lbl = typeof o === 'object' ? o.label : o;
           var dis = typeof o === 'object' && o.disabled;
-          var reason = dis && o.disabledReason ? ' title="' + o.disabledReason + '"' : '';
+          var reason = dis && o.disabledReason ? ' title="' + _escHtml(o.disabledReason) + '"' : '';
           var chk = (!dis && _cbDefaults.indexOf(val) !== -1) ? ' checked' : '';
           return '<label class="da-modal-cb-item' + (dis ? ' da-cb-disabled' : '') + '"' + reason +
             (dis ? ' style="opacity:0.45;pointer-events:none;"' : '') + '>' +
-            '<input type="checkbox" value="' + val + '" data-group="' + field.name + '"' + chk + (dis ? ' disabled' : '') + '>' +
-            '<span>' + lbl + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
+            '<input type="checkbox" value="' + _escHtml(val) + '" data-group="' + _escHtml(field.name) + '"' + chk + (dis ? ' disabled' : '') + '>' +
+            '<span>' + _escHtml(lbl) + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
         fieldEl.innerHTML = '<label>' + field.label + '</label>' +
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
@@ -945,7 +945,7 @@ function renderRainyDayPanel() {
      
   // Skeleton options
   const skeletonOptions = availableSkeletons.map(name => 
-    `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
+    `<option value="${_escHtml(name)}" ${name === rainySkeletonName ? 'selected' : ''}>${_escHtml(name)}</option>`
   ).join('');
   
   // Get mid-day analysis if available
@@ -1847,7 +1847,7 @@ function renderDisplacedTilesPanel() {
       <div class="da-displaced-list">
         ${displacedTiles.map(d => `
           <div class="da-displaced-item">
-            <strong>${d.event}</strong> (${d.division}) - ${d.originalStart} - ${d.originalEnd}
+            <strong>${_escHtml(d.event)}</strong> (${_escHtml(d.division)}) - ${_escHtml(d.originalStart)} - ${_escHtml(d.originalEnd)}
           </div>
         `).join('')}
       </div>
@@ -1979,13 +1979,13 @@ function renderPalette() {
     html += '<div class="da-tile-label">Floaters</div>';
     DAW_TYPES.filter(t => !t.anchor).forEach(t => {
       const dotColor = getDotColor(t.style);
-      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
     html += '<div class="da-tile-divider"></div>';
     html += '<div class="da-tile-label">Anchors</div>';
     DAW_TYPES.filter(t => t.anchor).forEach(t => {
       const dotColor = getDotColor(t.style);
-      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${t.name}</span></div>`;
+      html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
     
     paletteEl.innerHTML = html;
@@ -2550,17 +2550,17 @@ function renderEventTile(ev, top, height) {
   if (adjustedHeight < 24) {
     // Ultra compact - just name abbreviated
     const shortName = eventName.length > 12 ? eventName.substring(0, 10) + '..' : eventName;
-    content = `<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${shortName}${isNight ? ' 🌙' : ''}</span>`;
+    content = `<span style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_escHtml(shortName)}${isNight ? ' 🌙' : ''}</span>`;
   } else if (adjustedHeight < 35) {
     // Compact - name + time on one line
-    content = `<span style="font-weight:600;">${eventName}</span>${isNight ? ' 🌙' : ''} <span style="font-size:9px;opacity:0.8;">${timeStr}</span>`;
+    content = `<span style="font-weight:600;">${_escHtml(eventName)}</span>${isNight ? ' 🌙' : ''} <span style="font-size:9px;opacity:0.8;">${_escHtml(timeStr)}</span>`;
   } else {
     // Normal layout
-    content = `<strong>${eventName}</strong>`;
+    content = `<strong>${_escHtml(eventName)}</strong>`;
     if (isNight) content += ' 🌙';
     content += `<div style="font-size:10px;opacity:0.85;">${timeStr}</div>`;
     if (ev.leagueName) {
-      content += `<div style="font-size:9px;opacity:0.8;">${ev.leagueName}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">${_escHtml(ev.leagueName)}</div>`;
     }
     if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
       const _gs = window.loadGlobalSettings?.() || {};
@@ -2571,12 +2571,12 @@ function renderEventTile(ev, top, height) {
     }
     const locationDisplay = ev.location || (ev.reservedFields?.length > 0 ? ev.reservedFields.join(', ') : null);
     if (locationDisplay && ev.type !== 'elective') {
-      content += `<div style="font-size:9px;opacity:0.8;">📍 ${locationDisplay}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">📍 ${_escHtml(locationDisplay)}</div>`;
     }
     if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
       const actList = ev.electiveActivities.slice(0, 3).join(', ');
       const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
-      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${actList}${more}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">🎯 ${_escHtml(actList)}${more}</div>`;
     }
     // ★ Swim + Elective hybrid badges
     if (ev.type === 'swim_elective') {
@@ -2584,9 +2584,9 @@ function renderEventTile(ev, top, height) {
       if (_seActs.length > 0) {
         const _seList = _seActs.slice(0, 3).join(', ');
         const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
-        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
+        content += `<div style="font-size:9px;opacity:0.85;">${_escHtml(ev.swimLocation || 'Pool')} + ${_escHtml(_seList)}${_seMore}</div>`;
       } else {
-        content += `<div style="font-size:9px;opacity:0.85;">${ev.swimLocation || 'Pool'} + Elective</div>`;
+        content += `<div style="font-size:9px;opacity:0.85;">${_escHtml(ev.swimLocation || 'Pool')} + Elective</div>`;
       }
       if (ev._preChangeMin || ev._postChangeMin) {
         const _sePre = ev._preChangeMin || 0;
@@ -2596,7 +2596,7 @@ function renderEventTile(ev, top, height) {
       }
     }
     if (ev.type === 'smart' && ev.smartData) {
-      content += `<div style="font-size:9px;opacity:0.8;">F: ${ev.smartData.fallbackActivity}</div>`;
+      content += `<div style="font-size:9px;opacity:0.8;">F: ${_escHtml(ev.smartData.fallbackActivity)}</div>`;
     }
     // Split tile with swim → show change badge
     if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
@@ -2620,16 +2620,16 @@ function renderEventTile(ev, top, height) {
     let html = '';
     const stripH = adjustedHeight >= 28 ? 8 : 6;
     if (pre > 0) {
-      html += `<div title="Travel to ${zone}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
+      html += `<div title="Travel to ${_escHtml(zone)}: ${pre} min" style="position:absolute;top:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-bottom:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+pre+'m'):''}</div>`;
     }
     if (post > 0) {
-      html += `<div title="Travel from ${zone}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
+      html += `<div title="Travel from ${_escHtml(zone)}: ${post} min" style="position:absolute;bottom:0;left:0;right:0;height:${stripH}px;background:repeating-linear-gradient(45deg,#F59E0B,#F59E0B 4px,#FCD34D 4px,#FCD34D 8px);border-top:1px solid #B45309;pointer-events:none;text-align:center;font-size:0.55rem;line-height:8px;color:#78350F;font-weight:700;">${adjustedHeight>=28?('🚐 '+post+'m'):''}</div>`;
     }
     return html;
   })();
 
   return `<div class="da-event${selectedClass}${nightClass}" data-id="${ev.id}" draggable="true"
-          title="${eventName} (${timeStr})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
+          title="${_escHtml(eventName)} (${_escHtml(timeStr)})${isNight ? ' - Night Activity' : ''} - Double-click to remove"
           style="${style}top:${top}px;height:${adjustedHeight}px;font-size:${fontSize};line-height:${lineHeight};padding:${padding};">
           <div class="da-resize-handle da-resize-top"></div>
           ${content}
@@ -2810,7 +2810,7 @@ function addDragToRepositionListeners(gridEl) {
       e.dataTransfer.setData('text/event-move', eventId);
       e.dataTransfer.effectAllowed = 'move';
       
-      ghost.innerHTML = `<strong>${event.event}</strong><br><span>${event.startTime} - ${event.endTime}</span>`;
+      ghost.innerHTML = `<strong>${_escHtml(event.event)}</strong><br><span>${_escHtml(event.startTime)} - ${_escHtml(event.endTime)}</span>`;
       ghost.style.display = 'block';
       
       const img = new Image();
@@ -6703,7 +6703,7 @@ function createResourceToggleItem(type, name, isEnabled, onToggle, isOutdoor = f
   if (hasTimeRules) badges += '<span class="da-badge da-badge-time">⏰ Time Rules</span>';
   
   el.innerHTML = `
-    <span class="da-resource-name">${name}${badges}</span>
+    <span class="da-resource-name">${_escHtml(name)}${badges}</span>
     <label class="da-switch">
       <input type="checkbox" ${isEnabled ? 'checked' : ''} ${isRainyDisabled ? 'disabled' : ''}>
       <span class="da-switch-slider"></span>
@@ -6765,7 +6765,7 @@ function renderOverrideDetailPane() {
     
     paneEl.innerHTML = `
       <h4 style="margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        ${name}
+        ${_escHtml(name)}
         ${isFieldLike ? (item.rainyDayAvailable ? '<span class="da-badge da-badge-indoor">🏠 Indoor</span>' : '<span class="da-badge da-badge-outdoor">🌳 Outdoor</span>') : ''}
         ${(type === 'facility' && facility && Array.isArray(facility.usedFor))
           ? facility.usedFor.map(u => `<span class="da-badge" style="background:#eef2ff;color:#3730a3;">${u}</span>`).join('')
@@ -6902,7 +6902,7 @@ function renderOverrideDetailPane() {
     }
   } else {
     paneEl.innerHTML = `
-      <h4 style="margin:0 0 12px;">${name}</h4>
+      <h4 style="margin:0 0 12px;">${_escHtml(name)}</h4>
       <p style="color:#94a3b8;">Use the toggle in the list to enable/disable this ${type === 'league' ? 'league' : 'specialty league'} for today.</p>
     `;
   }
