@@ -14626,6 +14626,36 @@
                             if (!grade) return;
 
                             rec.placements.forEach(function (pl) {
+                                // ★ FN-13 fix: the DayPacker bin-packs specials per-bunk with NO
+                                //   cross-grade sharing/capacity awareness — packBunkDay only checks
+                                //   gap-fit, single-period containment, time-window, and per-bunk
+                                //   no-duplicate (day_packer.js). Committing its picks blindly can
+                                //   overload a same_division / capacity-limited special across grades
+                                //   (e.g. "Slush" cap-2 landing on 5 bunks across 3 divisions at the
+                                //   same ~2:55pm slot, because each bunk's largest gap starts there).
+                                //   Gate every placement on the shared special-usage ledger BEFORE
+                                //   committing; registerSpecialUsage() below (immediately after the
+                                //   push) makes the NEXT placement's check see this one, so per-special
+                                //   capacity + same_division/cross_division/custom rules are enforced
+                                //   across grades — the same sequential check→commit→register invariant
+                                //   Phase 2.5 / Phase 3 already honor via this exact gate. A rejected
+                                //   pick is simply not committed: its gap falls through to Phase 3
+                                //   sport-fill / Phase 4.9 recapture (or surfaces via the Free-block
+                                //   warning) — an honest gap, never a sharing violation. On any gate
+                                //   error we default to ALLOW so the fix can only REMOVE overloads,
+                                //   never break the happy path.
+                                var _fn13Allow = true;
+                                try {
+                                    if (typeof canUseSpecialAtTime === 'function') {
+                                        _fn13Allow = canUseSpecialAtTime(pl.name, grade, pl.startMin, pl.endMin);
+                                    }
+                                } catch (_fn13e) { _fn13Allow = true; }
+                                if (!_fn13Allow) {
+                                    log('[DayPacker] ⚠ Skipped "' + pl.name + '" for ' + bunk +
+                                        ' @ ' + pl.startMin + '-' + pl.endMin +
+                                        ' — would exceed cross-grade sharing/capacity; deferring to gated phases');
+                                    return;
+                                }
                                 bunkTimelines[bunk] = bunkTimelines[bunk] || [];
                                 bunkTimelines[bunk].push({
                                     startMin: pl.startMin, endMin: pl.endMin,
