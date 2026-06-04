@@ -990,7 +990,22 @@
                 var _cohortBunks = [];
                 specialRule.rotationCohort.grades.forEach(function (_g) {
                     var _gd = _divsRC[_g] || _divsRC[String(_g)];
-                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) { _cohortBunks.push(String(_b)); });
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) {
+                        // ★ FN-5: only pool cohort bunks that can RECEIVE this special.
+                        //   An access-restricted cohort member would keep its count at 0,
+                        //   pinning the cohort min at 0 forever and freezing every reachable
+                        //   bunk after one visit (count 1 > min 0 → skipped). Mirrors the
+                        //   auto planner's isSpecialAvailableForBunk filter
+                        //   (scheduler_core_auto.js:4266). Fallback: include the bunk if the
+                        //   helper isn't loaded, so this can only ADD correct filtering.
+                        var _elig = true;
+                        try {
+                            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                                _elig = window.isSpecialAvailableForBunk(act, _g, _b, window.globalSettings || null);
+                            }
+                        } catch (_eElig) { _elig = true; }
+                        if (_elig) _cohortBunks.push(String(_b));
+                    });
                 });
                 if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunk)) >= 0) {
                     var _myCC = getActivityCount(bunk, act);

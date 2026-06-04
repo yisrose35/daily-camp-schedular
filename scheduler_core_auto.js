@@ -415,6 +415,11 @@
         if (!Array.isArray(bunkList) || bunkList.length === 0) return true; // all bunks
         return bunkList.map(String).includes(String(bunkName));
     }
+    // ★ FN-5: expose for the MANUAL rotation-cohort eligibility filter
+    //   (rotation_engine.js) so manual cohort membership matches the auto
+    //   planner exactly — single source of truth. Read-only; safe with a null
+    //   gs (getSpecialActivitiesList falls back to the window special readers).
+    try { if (typeof window !== 'undefined') window.isSpecialAvailableForBunk = isSpecialAvailableForBunk; } catch (_eExpose) {}
 
     function getLocationForSpecial(specialName, activityProperties, gs) {
         const props = activityProperties && activityProperties[specialName];

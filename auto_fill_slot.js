@@ -240,7 +240,7 @@
             // ★ Cross-bunk capacity (incl. combo partners)
             if (!isFieldAvailable(f.name, bunk, divName, slotStart, slotEnd, actProps)) return;
             (f.activities || []).forEach(actName => {
-                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
+                candidates.push({ activity: actName, field: f.name, type: 'sport', maxUsage: f.maxUsage || 0, maxUsagePeriod: f.maxUsagePeriod || 'half', exactFrequency: f.exactFrequency || 0, exactFrequencyPeriod: f.exactFrequencyPeriod || '1week' });
             });
         });
 
@@ -256,7 +256,7 @@
                 if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
                 if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
             }
-            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
+            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, maxUsagePeriod: s.maxUsagePeriod || 'half', exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
         });
 
         return candidates;
@@ -317,12 +317,24 @@
 
             // ── HARD DISQUALIFIERS ──────────────────────────────────────────
             if (todayActs.has(act)) return null;     // already doing it today
-            if (c.maxUsage > 0 && (countsByAct[act] || 0) >= c.maxUsage) return null; // at limit
-            if (c.exactFrequency > 0 && (countsByAct[act] || 0) >= c.exactFrequency) return null; // at exact limit
+            // ★ FN-4: maxUsage / exactFrequency are PER-PERIOD caps. Compare them
+            //   against a period-windowed count, NOT the lifetime countsByAct — else
+            //   the cap silently degrades into a lifetime cap and permanently blocks
+            //   the activity later in the season (e.g. "max 2 per week" stops the
+            //   activity forever after 2 total occurrences). Mirrors the auto
+            //   planner's getPeriodCount usage (scheduler_core_auto.js:4253).
+            //   Fallback to the lifetime count if SchedulerCoreUtils is unavailable
+            //   (never break); period count <= lifetime, so this only RELAXES the
+            //   over-restriction, never adds a false block.
+            const _gpc = window.SchedulerCoreUtils && window.SchedulerCoreUtils.getPeriodActivityCount;
+            const _maxCount = _gpc ? _gpc(bunk, act, c.maxUsagePeriod || 'half', today) : (countsByAct[act] || 0);
+            if (c.maxUsage > 0 && _maxCount >= c.maxUsage) return null; // at per-period limit
+            const _exactCount = _gpc ? _gpc(bunk, act, c.exactFrequencyPeriod || '1week', today) : (countsByAct[act] || 0);
+            if (c.exactFrequency > 0 && _exactCount >= c.exactFrequency) return null; // at per-period exact limit
 
             // ── SCORING ─────────────────────────────────────────────────────
             let score = 0;
-            const count = countsByAct[act] || 0;
+            const count = countsByAct[act] || 0;   // lifetime count — correct for the fairness tiers below
 
             if (count === 0) score -= 5000;           // never done — strong bonus
             else if (count === 1) score -= 2000;
@@ -339,7 +351,7 @@
 
             // Escalating bonus for exact frequency: pull harder as period deadline nears
             if (c.exactFrequency > 0) {
-                const needed = c.exactFrequency - count;
+                const needed = c.exactFrequency - _exactCount;  // ★ FN-4: per-period count, not lifetime
                 if (needed > 0) {
                     const esc = window.SchedulerCoreUtils?.getEscalationBonus?.(c.exactFrequencyPeriod || '1week', needed);
                     score -= esc || (needed * 100);

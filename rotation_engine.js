@@ -992,7 +992,25 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                 var _cohortBunks = [];
                 _rc.grades.forEach(function (_g) {
                     var _gd = _divsRC[_g] || _divsRC[String(_g)];
-                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) { _cohortBunks.push(String(_b)); });
+                    if (_gd && Array.isArray(_gd.bunks)) _gd.bunks.forEach(function (_b) {
+                        // ★ FN-5: only pool cohort bunks that can actually RECEIVE this
+                        //   special. Without this filter, a cohort member that's
+                        //   access-restricted away from the special keeps its count
+                        //   pinned at 0, so _cohortMin stays 0 forever and every
+                        //   reachable bunk freezes after one visit (count 1 > min 0 →
+                        //   skipped). The AUTO planner filters with
+                        //   isSpecialAvailableForBunk (scheduler_core_auto.js:4266);
+                        //   reuse that exact check here for parity. Fallback: if the
+                        //   helper isn't loaded, include the bunk (prior behavior) so
+                        //   this can only ADD correct filtering, never break.
+                        var _elig = true;
+                        try {
+                            if (typeof window.isSpecialAvailableForBunk === 'function') {
+                                _elig = window.isSpecialAvailableForBunk(activityName, _g, _b, window.globalSettings || null);
+                            }
+                        } catch (_eElig) { _elig = true; }
+                        if (_elig) _cohortBunks.push(String(_b));
+                    });
                 });
                 if (_cohortBunks.length > 0 && _cohortBunks.indexOf(String(bunkName)) >= 0) {
                     var _myCohortCount = RotationEngine.getActivityCount(String(bunkName), activityName);
