@@ -253,6 +253,13 @@
                 
                 // Also update scheduleAssignments entries
                 const processedBunkSlots = new Set();
+                // ★ FN-10: per-day sequential game counter for the per-bunk copy.
+                //   Mirrors gameIndexWithinDay used by the leagueAssignments block
+                //   above. (The old code reused `processedSlots` — the OTHER set,
+                //   keyed by `time_*` — via indexOf(`${i}`) on a bare slot index,
+                //   which never matched, so every league game on the date was
+                //   numbered identically in the per-bunk copy.)
+                let bunkGameIndexWithinDay = 0;
                 
                 for (const bunk of Object.keys(assignments)) {
                     const bunkSchedule = assignments[bunk];
@@ -282,11 +289,11 @@
                         
                         if (match) {
                             const currentNum = parseInt(match[1], 10);
-                            // Recalculate based on slot position within day
-                            // Find which game index this slot corresponds to
-                            const slotGameIndex = Array.from(processedSlots).indexOf(`${i}`);
-                            const correctNum = gamesBeforeThisDate + (slotGameIndex >= 0 ? slotGameIndex : 0) + 1;
-                            
+                            // ★ FN-10: number by sequential per-day game order (slot order),
+                            //   not by indexing the time_-keyed processedSlots set with a bare
+                            //   slot index (that never matched → every game got the same number).
+                            const correctNum = gamesBeforeThisDate + bunkGameIndexWithinDay + 1;
+
                             if (currentNum !== correctNum) {
                                 // Update ALL bunks at this slot
                                 for (const b of Object.keys(assignments)) {
@@ -295,10 +302,10 @@
                                         const e = bSchedule[i];
                                         if (e._gameLabel) e._gameLabel = `Game ${correctNum}`;
                                         if (e.sport && e.sport.includes('Game')) e.sport = `Game ${correctNum}`;
-                                        
+
                                         // Update matchup strings if present
                                         if (e._allMatchups && Array.isArray(e._allMatchups)) {
-                                            e._allMatchups = e._allMatchups.map(m => 
+                                            e._allMatchups = e._allMatchups.map(m =>
                                                 m.replace(/Game\s+\d+/gi, `Game ${correctNum}`)
                                             );
                                         }
@@ -306,6 +313,7 @@
                                 }
                                 dayUpdated = true;
                             }
+                            bunkGameIndexWithinDay++;
                         }
                     }
                     

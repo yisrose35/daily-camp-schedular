@@ -603,7 +603,13 @@
         workingMatchups.sort((a, b) => b.waitScore - a.waitScore);
 
         for (const matchup of workingMatchups) {
-            const matchupKey = `${matchup.teamA}-${matchup.teamB}`;
+            // ★ FN-9: TBD forecast placeholders all carry teamA/teamB = "TBD", so a
+            //   plain "TBD-TBD" key collapses every undecided matchup into one and
+            //   reserves only a single field. Key TBD placeholders by their unique
+            //   _tbdIndex so each reserves its own field; real matchups unchanged.
+            const matchupKey = matchup._playoffTBD
+                ? `TBD-${matchup._tbdIndex != null ? matchup._tbdIndex : (matchup._playoffSport || '')}`
+                : `${matchup.teamA}-${matchup.teamB}`;
             if (assignedMatchups.has(matchupKey)) continue;
 
             let bestField = null;
@@ -831,7 +837,12 @@
                                 isInterConference: false,
                                 _playoffSport: sportsPool.length ? sportsPool[k % sportsPool.length] : fallbackSport,
                                 _playoffField: null,
-                                _playoffTBD: true
+                                _playoffTBD: true,
+                                // ★ FN-9: unique per-placeholder id so the field-assignment
+                                //   dedup doesn't collapse every "TBD-TBD" matchup into one
+                                //   (which reserved only a SINGLE field for a multi-matchup
+                                //   undecided round, starving the others).
+                                _tbdIndex: k
                             });
                         }
                         console.log('[SpecialtyLeagues] 🏆 PLAYOFF Round ' + tbdRoundNum + ' TBD: ' + tbdCount + ' placeholder matchup(s)');

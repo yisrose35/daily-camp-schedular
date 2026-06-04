@@ -290,6 +290,15 @@
 
         for (const claim of overlapping) {
             if (claim.lockType === 'exclusive') {
+                // ★ FN-7 (latent / PLAUSIBLE): the division-lock skip on the next line is
+                //   currently UNREACHABLE — it lives inside the `=== 'exclusive'` guard, so
+                //   `claim.lockType === 'division'` is always false. No code creates
+                //   'division' locks in auto today, so this has zero live effect. If/when
+                //   division locks are added, widen this guard to
+                //   `=== 'exclusive' || === 'division'` so a division lock blocks OTHER
+                //   divisions while the allowed division (claim.grade === divisionContext)
+                //   may still use the field. Documented rather than speculatively rewired,
+                //   since the change can't be verified without the (nonexistent) feature.
                 // Division locks: skip if caller IS the allowed division
                 if (claim.lockType === 'division' && claim.grade === divisionContext) continue;
                 return {

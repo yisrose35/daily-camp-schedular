@@ -126,17 +126,11 @@
         } catch (e) { return []; }
     }
 
-    // Does this day have a generated schedule?
-    // Fast check: just confirms scheduleAssignments has bunk data.
-    function hasSchedule(dateKey) {
-        var data = getScheduleDataForDate(dateKey);
-        if (!data || !data.scheduleAssignments) return false;
-        var keys = Object.keys(data.scheduleAssignments);
-        if (keys.length === 0) return false;
-        // Quick: check first bunk has an array with entries
-        var first = data.scheduleAssignments[keys[0]];
-        return Array.isArray(first) && first.length > 0;
-    }
+    // ★ FN-12: a duplicate hasSchedule() definition lived here. An identical
+    //   declaration further down (the one that also verifies EVERY bunk has real
+    //   slot data, not just the first) wins via function-declaration hoisting, so
+    //   this first copy was unreachable dead code. Removed to avoid the confusion
+    //   of two same-named definitions in one scope; the thorough copy survives.
 
     // ── Special Events Only ─────────────────────────────────────────────
     // The calendar ONLY shows truly notable/special things — NOT the
