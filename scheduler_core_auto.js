@@ -22938,16 +22938,30 @@
                 ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).forEach(function (f) {
                     if (!f || !f.name) return;
                     var sw = f.sharableWith || f.sharing || {};
-                    _cfg[String(f.name).toLowerCase().trim()] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), gsr: f.gradeShareRules || {} };
+                    _cfg[String(f.name).toLowerCase().trim()] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: f.gradeShareRules || {} };
                 });
                 ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) {
                     if (!s || !s.name) return;
                     var key = String(s.location || s.name).toLowerCase().trim();
                     if (_cfg[key]) return; // a real facility-field def takes precedence
                     var sw = s.sharableWith || {};
-                    _cfg[key] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), gsr: {} };
+                    _cfg[key] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {} };
                 });
                 var _skip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'bus': 1, 'regroup': 1, 'free play': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
+                // Time geometry: mirror auto_validator.getBunkSlotTime so this sweep sees the
+                // SAME windows the validator flags — per-bunk slot grid first (durable copy,
+                // then divisionTimes._perBunkSlots), then entry stamp, then division-level.
+                // (Reading e._startMin alone missed special/sport entries that don't carry it,
+                // leaving validator-visible staggered/cross-division on specials unfixed.)
+                var _dt = window.divisionTimes || {};
+                function _slotTime(bunk, grade, idx, e) {
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                            || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]);
+                    if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                    if (e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                    var ds = _dt[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                    return null;
+                }
                 var byLoc = {};
                 Object.keys(_sa).forEach(function (bunk) {
                     var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
@@ -22957,10 +22971,9 @@
                         if (e._pinned || e._league) return; // hard constraints — never demote
                         var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
                         if (!fl || _skip[fl] || /^game\s*\d+$/i.test(fl) || !_cfg[fl]) return;
-                        var s = e._startMin != null ? e._startMin : e.startMin;
-                        var en = e._endMin != null ? e._endMin : e.endMin;
-                        if (s == null || en == null) return;
-                        (byLoc[fl] = byLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: s, e: en, dur: en - s });
+                        var _t = _slotTime(bunk, g, idx, e);
+                        if (!_t || _t.s == null || _t.e == null) return;
+                        (byLoc[fl] = byLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
                     });
                 });
                 var demoted = 0, staggerD = 0, capD = 0;
@@ -22986,15 +22999,31 @@
                             if (o.s < u.e && o.e > u.s && (o.s !== u.s || o.e !== u.e)) { if (_demote(o, 'fn21_stagger')) staggerD++; }
                         }
                     }
-                    // PASS 2 — capacity + type on identical-window groups (post anti-stagger).
+                    // PASS 2 — capacity + sharing-type on identical-window groups (post anti-stagger).
+                    //   Greedy: keep an occupant only if it stays within capacity AND is sharing-
+                    //   compatible with the already-kept grades for this field/room's type
+                    //   (not_sharable / same_division / cross_division allowedPairs / custom divs);
+                    //   otherwise demote. Mirrors auto_validator's capacity + cross-division checks.
                     var groups = {};
                     arr.forEach(function (u) { if (!_live(u)) return; var k = u.s + '-' + u.e; (groups[k] = groups[k] || []).push(u); });
                     Object.keys(groups).forEach(function (k) {
                         var grp = groups[k].sort(function (a, b) { return (a.idx - b.idx) || String(a.bunk).localeCompare(String(b.bunk)); });
-                        var st = cfg.type, ov = cfg.gsr && cfg.gsr[grp[0].grade]; if (ov && ov.type) st = ov.type;
-                        var keep = (st === 'not_sharable') ? 1 : cfg.cap;
-                        if (st === 'same_division') { var g0 = grp[0].grade; grp.forEach(function (u, ix) { if (ix > 0 && u.grade !== g0 && _live(u)) { if (_demote(u, 'fn19_samediv_crossgrade')) capD++; } }); grp = grp.filter(_live); }
-                        if (grp.length > keep) { grp.slice(keep).forEach(function (u) { if (_live(u)) { if (_demote(u, 'fn19_capacity')) capD++; } }); }
+                        var st = cfg.type, pairs = cfg.pairs, dv = cfg.divs, ov = cfg.gsr && cfg.gsr[grp[0].grade];
+                        if (ov && ov.type) { st = ov.type; pairs = ov.allowedPairs || pairs; dv = Array.isArray(ov.divisions) ? ov.divisions : dv; }
+                        var capMax = (st === 'not_sharable') ? 1 : (cfg.cap || 1);
+                        var kept = [];
+                        grp.forEach(function (u) {
+                            if (!_live(u)) return;
+                            var ok = kept.length < capMax;
+                            if (ok && kept.length > 0) {
+                                var kg = kept.map(function (x) { return x.grade; });
+                                if (st === 'not_sharable') ok = false;
+                                else if (st === 'same_division') { if (kg.some(function (gg) { return gg !== u.grade; })) ok = false; }
+                                else if (st === 'cross_division') { if (typeof isCrossDivAllowed === 'function' && !isCrossDivAllowed(u.grade, kg, pairs)) ok = false; }
+                                else if (st === 'custom') { if (dv.length > 0) { if (dv.indexOf(u.grade) < 0 || kg.some(function (gg) { return dv.indexOf(gg) < 0; })) ok = false; } else if (kg.some(function (gg) { return gg !== u.grade; })) ok = false; }
+                            }
+                            if (ok) kept.push(u); else { if (_demote(u, 'fn1921_type_cap')) capD++; }
+                        });
                     });
                 });
                 if (demoted > 0) { log('[FN-19/21 SWEEP] demoted ' + demoted + ' (' + staggerD + ' staggered, ' + capD + ' over-cap/cross-grade) special|field placement(s) → Free'); try { warnings.push({ type: 'fn1921_demotions', count: demoted, staggered: staggerD, capacity: capD }); } catch (_w) {} }
