@@ -22916,6 +22916,92 @@
             } catch (_eFn15) { try { warn('[FN-15 FINAL SWEEP] error: ' + (_eFn15 && _eFn15.message)); } catch (_e) {} }
         })();
 
+        // ★ FN-19/21 FINAL SWEEP — enforce SPECIAL-room capacity/type + the same-window
+        //   (anti-stagger) rule on shared fields AND special-activity rooms, on the FINAL
+        //   scheduleAssignments. DEMOTE-ONLY (offender → Free), mirroring auto_validator's
+        //   capacity + staggered checks. Complements FN-15: FN-15 covers facility-field
+        //   cross-grade only, building config from gs.app1.fields and skipping _autoSpecial;
+        //   this adds (a) special-activity rooms — which live in gs.app1.specialActivities,
+        //   not .fields — so a cap-1 special (e.g. "Arts and Crafts 3", "Accessorize") given
+        //   to 2 bunks is now demoted to cap; and (b) the staggered rule — two bunks sharing
+        //   a field/room at OVERLAPPING but mismatched start/end times (e.g. Jumprope,
+        //   Trench) → the shorter/later straggler is demoted so the rest share an aligned
+        //   window. Never demotes _pinned or _league (hard constraints); clears trailing
+        //   continuation slots of any demoted multi-period block.
+        (function _fn1921FinalSweep() {
+            try {
+                var _sa = window.scheduleAssignments || {};
+                var _divs = window.divisions || {};
+                var _b2g = {}; Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+                var _gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+                var _cfg = {};
+                ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).forEach(function (f) {
+                    if (!f || !f.name) return;
+                    var sw = f.sharableWith || f.sharing || {};
+                    _cfg[String(f.name).toLowerCase().trim()] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), gsr: f.gradeShareRules || {} };
+                });
+                ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) {
+                    if (!s || !s.name) return;
+                    var key = String(s.location || s.name).toLowerCase().trim();
+                    if (_cfg[key]) return; // a real facility-field def takes precedence
+                    var sw = s.sharableWith || {};
+                    _cfg[key] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), gsr: {} };
+                });
+                var _skip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'bus': 1, 'regroup': 1, 'free play': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
+                var byLoc = {};
+                Object.keys(_sa).forEach(function (bunk) {
+                    var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _b2g[String(bunk)] || '?';
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        if (e._pinned || e._league) return; // hard constraints — never demote
+                        var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                        if (!fl || _skip[fl] || /^game\s*\d+$/i.test(fl) || !_cfg[fl]) return;
+                        var s = e._startMin != null ? e._startMin : e.startMin;
+                        var en = e._endMin != null ? e._endMin : e.endMin;
+                        if (s == null || en == null) return;
+                        (byLoc[fl] = byLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: s, e: en, dur: en - s });
+                    });
+                });
+                var demoted = 0, staggerD = 0, capD = 0;
+                function _live(u) { var c = _sa[u.bunk] && _sa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
+                function _demote(u, reason) {
+                    if (!_live(u)) return false;
+                    _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
+                    var sl = _sa[u.bunk];
+                    for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false }; } else break; }
+                    demoted++; return true;
+                }
+                Object.keys(byLoc).forEach(function (fl) {
+                    var cfg = _cfg[fl];
+                    var arr = byLoc[fl];
+                    // PASS 1 — anti-stagger: among OVERLAPPING occupants, keep the longest/earliest
+                    //   as primary; demote any overlapping occupant whose [start,end] differs.
+                    arr.sort(function (a, b) { return (b.dur - a.dur) || (a.s - b.s) || (a.idx - b.idx); });
+                    for (var i = 0; i < arr.length; i++) {
+                        var u = arr[i]; if (!_live(u)) continue;
+                        for (var j = 0; j < arr.length; j++) {
+                            if (j === i) continue;
+                            var o = arr[j]; if (o.bunk === u.bunk || !_live(o)) continue;
+                            if (o.s < u.e && o.e > u.s && (o.s !== u.s || o.e !== u.e)) { if (_demote(o, 'fn21_stagger')) staggerD++; }
+                        }
+                    }
+                    // PASS 2 — capacity + type on identical-window groups (post anti-stagger).
+                    var groups = {};
+                    arr.forEach(function (u) { if (!_live(u)) return; var k = u.s + '-' + u.e; (groups[k] = groups[k] || []).push(u); });
+                    Object.keys(groups).forEach(function (k) {
+                        var grp = groups[k].sort(function (a, b) { return (a.idx - b.idx) || String(a.bunk).localeCompare(String(b.bunk)); });
+                        var st = cfg.type, ov = cfg.gsr && cfg.gsr[grp[0].grade]; if (ov && ov.type) st = ov.type;
+                        var keep = (st === 'not_sharable') ? 1 : cfg.cap;
+                        if (st === 'same_division') { var g0 = grp[0].grade; grp.forEach(function (u, ix) { if (ix > 0 && u.grade !== g0 && _live(u)) { if (_demote(u, 'fn19_samediv_crossgrade')) capD++; } }); grp = grp.filter(_live); }
+                        if (grp.length > keep) { grp.slice(keep).forEach(function (u) { if (_live(u)) { if (_demote(u, 'fn19_capacity')) capD++; } }); }
+                    });
+                });
+                if (demoted > 0) { log('[FN-19/21 SWEEP] demoted ' + demoted + ' (' + staggerD + ' staggered, ' + capD + ' over-cap/cross-grade) special|field placement(s) → Free'); try { warnings.push({ type: 'fn1921_demotions', count: demoted, staggered: staggerD, capacity: capD }); } catch (_w) {} }
+                else { log('[FN-19/21 SWEEP] ✅ no special-capacity / staggered violations'); }
+            } catch (_eFn1921) { try { warn('[FN-19/21 SWEEP] error: ' + (_eFn1921 && _eFn1921.message)); } catch (_e) {} }
+        })();
+
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
