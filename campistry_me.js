@@ -1217,7 +1217,7 @@ function saveDiv(){
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
     var removedGrades=oldGrades.filter(function(g){return !(g in grades)});
-    if(removedGrades.length>0)_purgeOrphanedSkeletonTiles(removedGrades);
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
 }
 function deleteDiv(n){
     if(!confirm('Delete "'+n+'"?'))return;
@@ -1230,7 +1230,7 @@ function deleteDiv(n){
     delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
     // ★ Purge orphaned bunks from saved AUTO schedules + orphaned grade tiles from MANUAL skeletons
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
-    if(removedGrades.length>0)_purgeOrphanedSkeletonTiles(removedGrades);
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
 }
 // ★ Day 9 (manual-builder parity for the structure-change cascade): the auto schedule
 //   is cleaned by _purgeOrphanedBunks, but the saved MANUAL skeletons (app1.dailySkeletons
@@ -1260,6 +1260,38 @@ function _purgeOrphanedSkeletonTiles(removedGrades){
             console.log('[Me] Pruned',prunedCount,'orphaned manual-skeleton tile(s) for removed grade(s):',removedGrades);
         }
     }catch(e){console.warn('[Me] _purgeOrphanedSkeletonTiles:',e)}
+}
+// ★ Day 14 (auto-builder parity for the structure-change cascade): the AUTO layer config
+//   — app1.dailyAutoLayers (per-date, keyed by grade) + app1.gradeLayerRules (keyed by
+//   grade) — was never cleaned when a scheduling-unit (grade) was removed, so layer configs
+//   for deleted grades accumulated across dates (the auto analog of the manual skeleton
+//   orphans). Drop entries for EXACTLY the removed grade names (scoped, so surviving grades
+//   are untouched). Mirrors _purgeOrphanedSkeletonTiles.
+function _purgeOrphanedAutoLayers(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1; if(!app1)return;
+        var changed=false,prunedCount=0;
+        // dailyAutoLayers: date -> { grade -> layerConfig }
+        if(app1.dailyAutoLayers&&typeof app1.dailyAutoLayers==='object'){
+            Object.keys(app1.dailyAutoLayers).forEach(function(date){
+                var byGrade=app1.dailyAutoLayers[date];
+                if(byGrade&&typeof byGrade==='object'&&!Array.isArray(byGrade)){
+                    removedGrades.forEach(function(g){ if(g in byGrade){delete byGrade[g];changed=true;prunedCount++} });
+                }
+            });
+        }
+        // gradeLayerRules: grade -> rules
+        if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'){
+            removedGrades.forEach(function(g){ if(g in app1.gradeLayerRules){delete app1.gradeLayerRules[g];changed=true;prunedCount++} });
+        }
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Pruned',prunedCount,'orphaned auto-layer entr(ies) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedAutoLayers:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
