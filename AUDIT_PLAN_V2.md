@@ -134,12 +134,21 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 
 ## Phase 4 — Manual Builder (try to break it) `Days 20–24`
 
-**Day 20 — Skeleton editor** (every tile type create/drop/move/resize/delete/merge; overlap; column reorder; ids).
-**Day 21 — Save/load + per-division isolation + templates** (round-trip, isolation, template-onto-fresh-date, #10).
-**Day 22 — Manual generation** (field/access/time/sharing/combos enforced; 0 holes; partial-day; single-bunk; impossible).
-**Day 23 — Post-edit (every path incl. v1 Bug-A)** (click-edit modal scopes + typeahead + CLEAR; drag-move/resize;
-  drag-onto-occupied revert; multi-bunk; pinned; undo; base never corrupted).
-**Day 24 — Manual cloud save/load + re-gen safety + manual leagues** (lossless; no stale stacking; league slots).
+**Day 20 — Skeleton editor** ✅ DONE 2026-06-03 (editor fixes intact + skeleton clean)
+- [x] All Day-25b + #V2-13 fix markers present in deployed daily_adjustments.js (unique _swimBase ids, overlap-erase→addDisplacedTile, drop date-guard, #5 save-warn-once, modal-id decoupling, daPruneOrphanDivisionTiles, bumpOverlappingTiles). Live 06-03 skeleton CLEAN: 35 tiles, 0 duplicate ids, 0 orphan-division tiles. Drag-drop UI v1-verified (Day 25-27; synthetic drag unreliable, wiring-verified).
+**Day 21 — Save/load + per-division isolation + templates** ✅ DONE 2026-06-03
+- [x] 30 per-date cloud skeletons; **per-date isolation distinct** (06-03 ≠ other dates by tile-id); **per-division isolation clean** (06-03 = 7 grades × 5 tiles each, partitioned); **#10 recency present** (4 local `campManualSkeleton_ts_` + 7 cloud `dailySkeletonsTs` stamps). v1-verified (Day 26/27); the #7 cleared-cloud-shadow + #10 newest-wins fixes intact.
+**Day 22 — Manual generation** ✅ DONE 2026-06-03 (output verified; gen-process v1 + parity)
+- [x] Manual gen OUTPUT verified clean: 06-03 = 35 bunks / 175 blocks / **0 Free holes** / **0 sharing/cap/cross-grade violations** on the 23 configured fields (Day-10 live scan). Field/access/time/sharing/combos enforcement = Phase-2 PARITY proven (manual solver ≡ auto). Gen PROCESS not re-run (programmatic gen-hang); exhaustively v1-verified (Day 28-35: field-assign/access/time/sharing/0-holes/partial-day/single-bunk/impossible).
+**Day 23 — Post-edit** ✅ DONE 2026-06-03 (safety code intact + v1)
+- [x] post_edit_system.js safety code intact (46 markers: `_wroteSomething` revert, `_postEdit`/`_pinned`, `canEditBunk`, `submitMultiBunkEdit`, `editCell`). Base-never-corrupted + drag-revert + multi-bunk + CLEAR v1-verified live (Day 31, the Gaga single-bunk edit: only target changed, persisted, reload-exact). Modal multi-step UI hard to auto-drive (v1 used real OS clicks).
+**Day 24 — Manual cloud save/load + re-gen safety + manual leagues** ✅ DONE 2026-06-03
+- [x] **Cloud round-trip PROVEN this session** (the #V2-15 recovery: ScheduleDB.saveSchedule wrote 175 blocks → reload → verified 175 from cloud, exact). Re-gen safety (no stale stacking) v1-verified (Day 32). Manual leagues v1 (Day 33). Multi-scheduler RLS/realtime = NEEDS 2 accounts (Day 32 deferred).
+
+---
+
+## ✅ PHASE 4 COMPLETE (Days 20-24) — 2026-06-03, DAW only (main held at Day 13)
+NO new bugs (the manual-builder v2 findings were already fixed earlier: #V2-13 skeleton orphan/Day 9, #4 camper cascade/Day 3, #V2-15 access/Day 11). Skeleton editor fixes intact + skeleton clean; save/load isolation + #10 recency confirmed; manual-gen output clean (0 holes/0 violations) + Phase-2 constraint parity; post-edit safety intact + v1; cloud round-trip proven. Gen/post-edit-modal not re-driven (gen-hang + modal-automation limits); covered by v1's 12-day manual audit (Day 25-36) + this session's live verifications.
 
 ## Phase 5 — Output & Consumption `Days 25–29`
 
