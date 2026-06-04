@@ -748,6 +748,13 @@
         const wipeShape =
             originalBunkCount === 0 ? 'empty-bunks' :
             (utLen === 0 && activitySlotCount === 0) ? 'structural-skeleton' :
+            // ★ Audit fix (FN-14 fallout): bunks + unifiedTimes present but EVERY slot
+            //   empty/null is the auto-layer PREVIEW (or a generation that failed to
+            //   materialize). Such a payload previously slipped past the guard (utLen>0)
+            //   and could overwrite a real cloud schedule with all-nulls. Never persist a
+            //   zero-activity schedule over an existing one — clearing a day goes through
+            //   delete, not save. (options.allowEmpty still bypasses this when intended.)
+            (activitySlotCount === 0) ? 'all-empty-preview' :
             null;
         if (wipeShape && !options.allowEmpty) {
             const trace = {

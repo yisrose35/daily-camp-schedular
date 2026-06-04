@@ -16517,7 +16517,7 @@
             allGrades.forEach(grade => {
                 const periods = periodMap[grade];
                 if (!periods || periods.length === 0) return;
-                const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                 if (!pbs) return;
                 // Diagnostic: show what floor + candidate pool each period
                 // is using. Floor + candidates are derived from the layers
@@ -17948,7 +17948,7 @@
 
         // Initialize scheduleAssignments
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = (pbs && pbs[String(bunk)]) || [];
                 window.scheduleAssignments[String(bunk)] = new Array(arr.length).fill(null);
@@ -17958,7 +17958,7 @@
         // Write special blocks
         let specialWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -18157,7 +18157,7 @@
         // Write rotation event blocks (camp-wide pass-through activities)
         let rotationEventWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -18194,7 +18194,7 @@
         let pinnedWriteCount = 0, customWriteCount = 0;
         let _overlapFallbackCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -18397,7 +18397,7 @@
                 grades.forEach(grade => {
                     if (!grade || !divisions[grade]) return;
                     if (allowedSet && !allowedSet.has(String(grade))) return;
-                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                     if (!pbs) return;
                     // Clip the trip to the division's day window so partial-day
                     // trips don't try to write to slots that don't exist.
@@ -18446,7 +18446,7 @@
         // Write capacity-checked sport blocks
         let sportWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -18494,7 +18494,7 @@
         // Write anchor blocks (swim, snacks, etc.)
         let anchorWriteCount = 0;
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -18560,7 +18560,7 @@
         // Build schedulable blocks for solver
         const schedulableSlotBlocks = [];
         allGrades.forEach(grade => {
-            const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+            const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
@@ -20239,7 +20239,7 @@
                 }
 
                 allGrades.forEach(grade => {
-                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                     getBunksForGrade(grade, divisions).forEach(bunk => {
                         const slotsArr = window.scheduleAssignments?.[String(bunk)] || [];
                         const pbsArr = pbs?.[String(bunk)] || [];
@@ -20479,7 +20479,7 @@
                 log('[STEP 4.97] iterating over ' + divKeys.length + ' grades: ' + divKeys.join(','));
                 for (const grade of divKeys) {
                     if (allowedSet && !allowedSet.has(String(grade))) continue;
-                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                     if (!pbs) continue;
                     const bunks = getBunksForGrade(grade, divisions);
                     for (const bunk of bunks) {
@@ -23141,7 +23141,7 @@
                 const sa = window.scheduleAssignments || {};
                 for (const grade of Object.keys(divisions || {})) {
                     if (allowedSet && !allowedSet.has(String(grade))) continue;
-                    const pbs = window.divisionTimes?.[grade]?._perBunkSlots;
+                    const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                     if (!pbs) continue;
                     const bunks = getBunksForGrade(grade, divisions);
                     for (const bunk of bunks) {
