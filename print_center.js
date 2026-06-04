@@ -424,7 +424,7 @@ function summarizeBunkDay(scheduleAssignments, bunk) {
     var seen = {};
     (scheduleAssignments[bunk] || []).forEach(function (entry) {
         if (!entry || entry.continuation) return;
-        var act = entry.activity || (entry._activity && entry._activity.name) || '';
+        var act = entry._activity || entry.sport || entry.activity || '';
         if (!act || act === 'Free' || act === 'Transition' || act === 'Change' || act === 'Cleanup' || act === 'Lineup') return;
         if (seen[act]) return;
         seen[act] = 1;

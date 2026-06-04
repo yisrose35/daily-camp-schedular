@@ -112,7 +112,7 @@ function validateSpecialActivity(activity, activityName) {
    let sharableWith = activity.sharableWith;
     if (!sharableWith || typeof sharableWith !== 'object') { sharableWith = { type: 'not_sharable', divisions: [], capacity: 2 }; }
     else {
-        if (!['not_sharable','same_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
+        if (!['not_sharable','same_division','cross_division','custom','all'].includes(sharableWith.type)) sharableWith.type = 'not_sharable';
         if (!Array.isArray(sharableWith.divisions)) sharableWith.divisions = [];
         else if (validDivisions && validDivisions.size > 0) {
             const ol = sharableWith.divisions.length;
