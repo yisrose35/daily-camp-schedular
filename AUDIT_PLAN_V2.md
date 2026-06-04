@@ -98,14 +98,18 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 - [x] **Time rules — parity confirmed (3 engines):** manual `total_solver` (L863 Unavailable strict-overlap / L870 Available must-be-fully-inside, division-filtered) ≡ `isTimeAvailable` (L575-590) ≡ auto (division-filtered, same boundary semantics). v1 live-verified both (Day 15 auto, Day 29 manual). Boundaries inclusive for Available, half-open overlap for Unavailable.
 - [x] **Combos** both enforce mutual-exclusion (auto `isBlockedByCombo`/`getExclusiveFields` L397-404 Day-88 fix; manual `_comboExclusiveMap`+time-index) — NOT configured in live camp (0 combos) so code+v1-verified. **Quality** both build fieldGroup maps + sort by qualityRank (total_solver L357-372 + auto_solver L164); soft steering, v1-verified (Day 21/82/86); live config has Baseball Fields 1-4 ranked. **Zones/travel** NOT configured live (code + v1 travel_time.test.js).
 
-**Day 12 — Special Activities config (every dimension)**
-- [ ] durations[], prep (staggered/synced), multiPart (daysBetween), freq (min/exact/max), frequencyDays,
-      availableDays, cohort, maxUsage, subcategory+caps, isIndoor, rainy variants, concurrency. Contradictory
-      combos, 0/neg, name collisions → enforced or sanely rejected, never silently ignored.
+**Day 12 — Special Activities config (every dimension)** ✅ DONE 2026-06-03 (verification-only, no code change)
+- [x] **Config validation ROBUST:** `validateSpecialActivity` filters 0/neg/NaN durations (`.filter(d=>!isNaN(d)&&d>0)`, L230) — bad durations sanely dropped, never silently used. **Defensive dedup on load** (L366-371) heals exact-name duplicates (cloud-sync races), preferring the subcategory-tagged row (explains stray `subcategory:"Food"` artifacts). 0/neg = filtered; exact-dup = deduped. Near-dup names ("Arts & Crafts 1" vs "Arts and Crafts 1", Accessorize/Accesorize) = USER DATA, not a code bug (dedup is exact-match only) — minor data-quality note.
+- [x] **Enforcement INHERENTLY consistent across builders:** both solvers compute every special dimension (eligibility/multiPart/duration/maxUsage/freq) from the SAME shared `special_activities.js` helpers (`getSpecialConfig`/`getMultiPartConfig`/`getBunkCompletionCount`/`isBunkEligibleForSpecial`/`getSpecialDuration` — scheduler_core_auto 36×, total_solver_engine 4×) → cannot diverge. Live config = 30 specials exercising durations/prep=attached/rainy/subcategory/multiPart-present. Each dimension v1-live-verified in BOTH builders (auto Day 19/19.5, manual Day 77/80-82). No new bug.
 
-**Day 13 — Leagues + Specialty Leagues config**
-- [ ] League/team CRUD, team↔bunk mapping (NEVER conflate), chinuch, indoor-court req, color leagues,
-      conferences/inter-conference (the latent double-booking trap), odd team counts/byes, team with no bunks.
+**Day 13 — Leagues + Specialty Leagues config** ✅ DONE 2026-06-03 (DAW `18d10431`, NOT on main)
+- [x] **#V2-8 FIXED:** the load-time league warning (leagues.js L323) compared TEAM names to BUNK names → false-fired "team not in any division" for EVERY league with custom team names (and stayed silent for the genuinely-broken case). Since teams are SEPARATE from bunks (user hard rule: "Cobras"/"Red"/"1" are correct team names), inverted the check to warn only when a league has teams but NO playable bunks (no assigned division with bunks → games can't schedule). Verified on live config: old logic false-warned 3 ACTIVE leagues (Soloists/1st Grade/Duetos-Trios); new logic correctly warns the 5 inert leftover leagues (2nd/3rd/4th Grade/Senior/Color — teams but `divisions:[]`).
+- [x] **teams≠bunks CONFIRMED** in the data model (11 leagues: teams = "Cobras"/"Red"/"1-4"/named; bunks = "Minors 1"/"Soloists 1" — distinct). chinuch configured on 2 leagues (1st Grade→Minors, Duetos/Trios) w/ bunkFacilities maps — v1-verified (Day 28-29, 48-49). Conferences/inter-conference NOT configured live (code + v1 Day-20 stress). Empty leagues (League Test, Basketball League = 0 teams) + team-with-no-bunks handled (now warned). League placement both builders v1-verified (auto Day 20/45, manual Day 33, cloud Day 50).
+
+---
+
+## ✅ PHASE 2 COMPLETE (Days 10-13) — 2026-06-03, DAW only (main held at Day 8)
+3 two-builder fixes shipped: **#V2-14** (canBlockFit cross_division allowedPairs — filler parity), **#V2-15** (enabled-empty accessRestrictions — manual now matches auto's no-restriction), **#V2-8** (misleading league warning → correct unschedulable-league warning). Sharing invariant, access, time rules, combined fields, quality, special-activities config, and leagues all verified consistent across auto + manual.
 
 ## Phase 3 — Auto Builder (try to break the solver) `Days 14–19`
 
