@@ -63,8 +63,13 @@
             var m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
             if (!m) return null;
             var hh = parseInt(m[1], 10), mm = parseInt(m[2], 10);
-            if (isNaN(hh) || isNaN(mm) || mm < 0 || mm > 59) return null;
-            if (mer) { if (hh === 12) hh = mer === 'am' ? 0 : 12; else if (mer === 'pm') hh += 12; }
+            // Reject out-of-range hours, and don't double-shift an already-24h hour that
+            // also carries a redundant "pm" (e.g. "13:00pm" → 1 PM, not 25:00). This makes
+            // the superset match app1.js's original validation exactly for string inputs;
+            // for the other routed files it only changes clearly-malformed input ("25:00",
+            // "13:00pm") which never occurs from a time picker — every VALID time is unchanged.
+            if (isNaN(hh) || isNaN(mm) || hh > 23 || mm < 0 || mm > 59) return null;
+            if (mer) { if (hh === 12) hh = mer === 'am' ? 0 : 12; else if (mer === 'pm' && hh < 12) hh += 12; }
             return hh * 60 + mm;
         },
 
