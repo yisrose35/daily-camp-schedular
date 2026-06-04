@@ -33,11 +33,7 @@
     // Pure helpers
     // -------------------------------------------------------------------------
 
-    function escHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     function uid() {
         return 'mu_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);

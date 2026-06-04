@@ -64,11 +64,7 @@
         (document.head || document.documentElement).appendChild(st);
     }
 
-    function esc(s) {
-        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
-            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
-        });
-    }
+    function esc(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     function chipLabel() {
         var acts = {};

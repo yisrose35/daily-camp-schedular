@@ -633,12 +633,7 @@ function section(title, summary, builder) {
 // =========================================================================
 // HELPERS
 // =========================================================================
-function escapeHtml(str) {
-    if (str === null || str === undefined) return "";
-    const div = document.createElement("div");
-    div.textContent = String(str);
-    return div.innerHTML;
-}
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
 function makeEditable(el, save) {
     el.ondblclick = () => {

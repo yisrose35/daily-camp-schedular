@@ -53,7 +53,16 @@ before assuming.
 - [ ] Remove `audit_diagnostic.js` + `temp_diagnostic.js` (0 references, console-paste dev tools).
 - [ ] Live smoke: app still loads, schedule renders, 0 new console errors.
 
-## Phase 2 — Consolidate duplicated helpers (one at a time, check-in before risky merges)
+## Phase 2 — Consolidate duplicated helpers (one at a time)
+### ✅ Helper #1: HTML escapers → `window.CampUtils.escapeHtml` (DONE)
+- Created `campistry_utils.js` (`window.CampUtils`, canonical complete escaper `&<>"'`); loaded FIRST on flow/me/dashboard/go/index (anchored before campistry_security.js). Wiring verified: every page loading a converted file also loads the util (0 gaps).
+- **18 escaper copies** (named `esc`/`escHtml`/`escapeHtml`/`_escHtml`) replaced with a 1-line delegation: analytics, camper_locator, daily_adjustments, coverage_warning, playoff_hub, playoff_mode, print_center, app1, auto_schedule_grid, facilities, leagues, rotation_events, rules, specialty_leagues, unified_schedule_system, zones, special_activities, schedule_calendar_views.
+- **SECURITY BONUS:** ~10 of those were the incomplete `textContent`-trick / `&<>"`-partial escapers (didn't escape quotes) → the same attribute-breakout class fixed in the v2 audit. Delegating UPGRADES them to the complete `&<>"'`. Notably print_center.escHtml was `textContent`-only and used in `data-*` attributes → latent gap now closed.
+- **Deliberately NOT consolidated (landmines):** `campistry_me.esc` (its sibling `je()` depends on `esc` leaving `'` raw → must not escape quotes), `campistry_security.escapeHtml` (escapes MORE — `&<>"'/\`` OWASP-hardened; delegating would be a downgrade). False positives skipped: `auto_validator`/`post_edit_system` `function esc(e)` = Escape-KEY handlers, not escapers.
+- node --check: 19/19 OK. Live-verify pending rebuild.
+
+### Remaining helper candidates (later passes)
+
 Decision needed (Phase 2 kickoff): shared-util HOME + load order —
   (a) extend existing `SchedulerCoreUtils` (already canonical for parseTimeToMinutes), or
   (b) new `campistry_utils.js` loaded FIRST in every html.

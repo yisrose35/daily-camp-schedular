@@ -33,12 +33,7 @@ var _pendingFQGroups = [];
 // ──────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ──────────────────────────────────────────────────────────────────────────
-function escapeHtml(s) {
-    if (s === null || s === undefined) return '';
-    const d = document.createElement('div');
-    d.textContent = String(s);
-    return d.innerHTML;
-}
+function escapeHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 function loadSettings() { return (window.loadGlobalSettings && window.loadGlobalSettings()) || {}; }
 function saveKey(k, v) { window.saveGlobalSettings && window.saveGlobalSettings(k, v); }
 function uid(prefix) { return (prefix || 'r_') + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }

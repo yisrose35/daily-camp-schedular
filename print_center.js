@@ -315,7 +315,7 @@ var _activeSheet = null; // table element id of currently focused sheet
 // UTILITY HELPERS
 // =========================================================================
 function el(id) { return document.getElementById(id); }
-function escHtml(s) { if (!s) return ''; var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical; now also escapes quotes → closes attr-context gap)
 function parseTimeToMinutes(t) {
     if (t === null || t === undefined) return null;
     if (typeof t === 'number') return t;

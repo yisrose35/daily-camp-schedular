@@ -47,10 +47,7 @@
         return h + ':' + (m < 10 ? '0' : '') + m + ' ' + ap;
     }
 
-    function esc(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    function esc(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     function snapToIncrement(min, inc) {
         return Math.round(min / inc) * inc;

@@ -2600,7 +2600,7 @@ function propagateSpecialActivityRename(oldN, newN) {
     }
 }
 
-function escapeHtml(str) { if(str===null||str===undefined)return""; const d=document.createElement("div"); d.textContent=String(str); return d.innerHTML; }
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 function makeEditable(el,save) { if(!el)return; el.ondblclick=()=>{ const inp=document.createElement("input"); inp.value=el.textContent; inp.style.cssText="font-size:inherit;font-weight:inherit;border:1px solid #147D91;outline:none;border-radius:4px;padding:2px 6px;width:"+Math.max(100,el.offsetWidth+20)+"px;"; el.replaceWith(inp); inp.focus(); inp.select(); const finish=()=>{const v=inp.value.trim();if(v&&v!==el.textContent)save(v);else if(inp.parentNode)inp.replaceWith(el);}; inp.onblur=finish; inp.onkeyup=e=>{if(e.key==="Enter")finish();if(e.key==="Escape")inp.replaceWith(el);}; }; }
 function parseTimeToMinutes(str) { if(!str||typeof str!=="string")return null; let s=str.trim().toLowerCase(); let mer=null; if(s.endsWith("am")||s.endsWith("pm")){mer=s.endsWith("am")?"am":"pm";s=s.replace(/am|pm/g,"").trim();} const m=s.match(/^(\d{1,2})\s*:\s*(\d{2})$/); if(!m)return null; let hh=parseInt(m[1],10); const mm=parseInt(m[2],10); if(Number.isNaN(hh)||Number.isNaN(mm)||mm<0||mm>59)return null; if(mer){if(hh===12)hh=mer==="am"?0:12;else if(mer==="pm")hh+=12;} return hh*60+mm; }
 

@@ -54,20 +54,7 @@
         return hh + ':' + String(m).padStart(2, '0') + ' ' + ampm;
     }
 
-    function escapeHtml(str) {
-        if (!str) return '';
-        // ★ #V2-19: also escape quotes. escapeHtml output is interpolated into
-        //   double-quoted ATTRIBUTES (data-div= L470, title= L843) where a raw "
-        //   in a user-controlled division name would break out and inject an
-        //   event handler. Escaping " and ' is harmless for body-text uses
-        //   (renders identically) and getAttribute() decodes it back on read.
-        return String(str)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical; #V2-19 quote-escaping preserved)
 
     // ── Division Helpers ────────────────────────────────────────────────
     function getDivisions() { return window.divisions || {}; }

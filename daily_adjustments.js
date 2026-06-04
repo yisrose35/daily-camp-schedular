@@ -90,11 +90,7 @@ let resourceOverridesContainer = null;
 let activeSubTab = 'skeleton';
 let selectedOverrideId = null;
 
-function _escHtml(s) {
-  return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
+function _escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
 // Event listener tracking for cleanup
 let _keyHandler = null;

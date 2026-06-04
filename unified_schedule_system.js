@@ -3650,10 +3650,7 @@ if (bypassStatus.highlight) {
     // UTILITY: ESCAPE HTML
     // =========================================================================
     
-    function escapeHtml(str) {
-        if (!str) return '';
-        return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
+    function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     // =========================================================================
     // BYPASS SAVE - CROSS-DIVISION DIRECT UPDATE

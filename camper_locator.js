@@ -82,11 +82,7 @@
     //   into the suggestions list, time-error message, and result card (stored XSS;
     //   reflected the moment a shareable ?q= URL is added — the same risk the
     //   already-hardened "not found" branch calls out). Escapes & < > " '.
-    function escapeHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    function escapeHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     function buildAllMatchupsHtml(leagueData) {
         if (!leagueData?.matchups?.length) return '';

@@ -1135,10 +1135,7 @@ function getSchedulerHook() {
 // INIT
 // =================================================================
 
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
 function removeSubtab() {
     const tab = document.querySelector('.da-subtab[data-tab="rotation-events"]');

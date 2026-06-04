@@ -47,14 +47,7 @@
     //   with NO escaping — a name like <img src=x onerror=...> or " onfocus=... "
     //   executed on render (stored XSS; names are user-controlled, cross-user in
     //   multi-scheduler). Escape both angle brackets AND quotes (attribute-safe).
-    function escapeHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#39;');
-    }
+    function escapeHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     function getCampTimes() {
         const gs = window.loadGlobalSettings?.() || {};

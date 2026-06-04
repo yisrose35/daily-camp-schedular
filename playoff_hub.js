@@ -23,11 +23,7 @@
     var _kind = 'regular';
     var _editStyleAfterRounds = false;  // when true, show Step 1 even though rounds exist
 
-    function escHtml(s) {
-        return String(s == null ? '' : s)
-            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-    }
+    function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical)
 
     // -------------------------------------------------------------------------
     // Persistence
