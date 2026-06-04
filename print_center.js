@@ -2239,10 +2239,13 @@ function renderManualBunksTop(divName, bunks, blocks) {
         html += pcRowNum(rowR);
         html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(eb.label) + '">' + eb.label + '</th>';
         if (eb.isLeague) {
-            var leagueText = eb.event;
+            // ★ #V2-17: escape the league event + matchup names (user-controlled) before
+            //   injecting; keep the intentional <br>. The sibling paths (renderManualTimeTop
+            //   L2320, live views L3654/3618/3598) already escape — this was the lone raw render.
+            var leagueText = escHtml(eb.event);
             if (!_currentTemplate.hideLeagueMatchups) {
                 var matchups = buildLeagueMatchups(eb, divName);
-                if (matchups.length) leagueText += '<br>' + matchups.join(', ');
+                if (matchups.length) leagueText += '<br>' + escHtml(matchups.join(', '));
             }
             html += '<td class="cell-league" data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(eb.event) + '" colspan="' + bunks.length + '" style="text-align:center;"><strong>' + leagueText + '</strong></td>';
         } else {
@@ -4223,13 +4226,26 @@ function buildExcelRows(item) {
     return rows;
 }
 
+// ★ #V2-18: neutralize CSV / spreadsheet formula injection. A cell whose value
+//   begins with = + - @ (or a leading tab / CR) is interpreted as a FORMULA by
+//   Excel / Google Sheets — even when the field is double-quoted, because the
+//   app strips the quotes during CSV import and then sees the leading trigger.
+//   A malicious activity / league / bunk name like =HYPERLINK("http://evil",...)
+//   or =cmd|... would then execute on open. Prefix a single quote so the cell is
+//   shown as literal text. (The XLSX path is unaffected — aoa_to_sheet writes
+//   string-typed cells, which Excel never evaluates as formulas.)
+function csvSafeCell(v) {
+    var s = String(v == null ? '' : v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s;
+    return s;
+}
 function buildCSV(sel) {
     var lines = [];
     sel.forEach(function (item, idx) {
         if (idx > 0) lines.push(''); // blank separator between items
         var rows = buildExcelRows(item);
         rows.forEach(function (row) {
-            lines.push(row.map(function (c) { return '"' + String(c || '').replace(/"/g, '""') + '"'; }).join(','));
+            lines.push(row.map(function (c) { return '"' + csvSafeCell(c).replace(/"/g, '""') + '"'; }).join(','));
         });
     });
     return lines.join('\n');
