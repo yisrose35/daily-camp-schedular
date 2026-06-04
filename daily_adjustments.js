@@ -329,8 +329,10 @@ function daShowConfirm(message, opts) {
     overlay.id = 'da-modal-input-overlay--confirm';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
-      '<div class="da-modal" style="max-width:420px;">' +
+      '<div class="da-modal" role="dialog" aria-modal="true" aria-label="Confirmation" style="max-width:420px;">' +
         '<div class="da-modal-body" style="padding:24px;">' +
+          // NOTE: message may contain INTENTIONAL HTML (<strong>/<br>) from callers, so it
+          // is rendered raw; callers MUST escape any user-data they interpolate (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
         '<div class="da-modal-footer">' +
@@ -362,8 +364,10 @@ function daShowAlert(message) {
     overlay.id = 'da-modal-input-overlay--alert';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML =
-      '<div class="da-modal" style="max-width:400px;">' +
+      '<div class="da-modal" role="dialog" aria-modal="true" aria-label="Alert" style="max-width:400px;">' +
         '<div class="da-modal-body" style="padding:24px;">' +
+          // NOTE: message may contain INTENTIONAL HTML (<strong>/<br>); rendered raw — callers
+          // MUST escape any interpolated user-data (see #V2-26).
           '<p style="margin:0;font-size:14px;color:#334155;line-height:1.6;">' + message + '</p>' +
         '</div>' +
         '<div class="da-modal-footer">' +
@@ -1933,7 +1937,7 @@ const TILE_DESCRIPTIONS = {
 
 function showTileInfo(tile) {
   const desc = TILE_DESCRIPTIONS[tile.type] || tile.description || 'No description available.';
-  daShowAlert('<strong>' + tile.name.toUpperCase() + '</strong><br><br>' + desc);
+  daShowAlert('<strong>' + _escHtml(tile.name.toUpperCase()) + '</strong><br><br>' + _escHtml(desc));
 }
 
 function mapEventNameForOptimizer(name) {
@@ -2964,16 +2968,16 @@ function addDropListeners(gridEl) {
         const outsideDefaultHours = (timeMin < GUARD_START || timeMin > GUARD_END);
         const coveredByDivision = (divStartMin !== null && divEndMin !== null && timeMin >= divStartMin && timeMin <= divEndMin);
         if (outsideDefaultHours && !coveredByDivision) {
-          const ok = await daShowConfirm('⚠️ <strong>Unusual Time Warning</strong><br><br>"' + timeStr + '" is outside normal camp hours (8:00 AM – 8:00 PM).<br><br>Is this tile correct?');
+          const ok = await daShowConfirm('⚠️ <strong>Unusual Time Warning</strong><br><br>"' + _escHtml(timeStr) + '" is outside normal camp hours (8:00 AM – 8:00 PM).<br><br>Is this tile correct?');
           if (!ok) return { valid: false, minutes: null, isNight: false };
         }
         if (divStartMin !== null && timeMin < divStartMin) {
-          await daShowAlert(timeStr + " is before this division's start time of " + div.startTime + ".");
+          await daShowAlert(_escHtml(timeStr) + " is before this division's start time of " + _escHtml(div.startTime) + ".");
           return { valid: false, minutes: null, isNight: false };
         }
         if (divEndMin !== null && (isStartTime ? timeMin >= divEndMin : timeMin > divEndMin)) {
           if (allowNightActivity) return { valid: true, minutes: timeMin, isNight: true };
-          const isNight = await daShowConfirm('⏰ "' + timeStr + '" is after this division\'s end time (' + div.endTime + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Re-enter' });
+          const isNight = await daShowConfirm('⏰ "' + _escHtml(timeStr) + '" is after this division\'s end time (' + _escHtml(div.endTime) + ').<br><br>Is this a <strong>Night Activity / Late Night</strong> event?', { confirmText: 'Yes, Night Activity', cancelText: 'Re-enter' });
           if (isNight) return { valid: true, minutes: timeMin, isNight: true };
           else return { valid: false, minutes: null, isNight: false };
         }
@@ -3342,7 +3346,7 @@ function addDropListeners(gridEl) {
           return l && l.enabled !== false && Array.isArray(l.divisions) && l.divisions.includes(String(divName));
         });
         if (gradeLeagues.length === 0) {
-          await daShowAlert('No leagues are assigned to ' + divName + '. Add this grade to a league in League Setup before dropping a league tile here.');
+          await daShowAlert('No leagues are assigned to ' + _escHtml(divName) + '. Add this grade to a league in League Setup before dropping a league tile here.');
           return;
         }
         let _autoLeagueName = null;
@@ -3553,7 +3557,7 @@ function addDropListeners(gridEl) {
           const _cdResult = window.SchedulingRules.checkCandidateDetailed(_cdCandidate, _cdTemplate, { mode: 'manual' });
           if (!_cdResult.allowed) {
             const _cdMsg = _cdResult.violated.map(r => '• ' + window.SchedulingRules.describeRule(r)).join('\n');
-            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _cdMsg.replace(/\n/g, '<br>') + '<br><br>Place anyway?');
+            const _cdOk = await daShowConfirm('This placement may violate the following cooldown rule(s):<br><br>' + _escHtml(_cdMsg).replace(/\n/g, '<br>') + '<br><br>Place anyway?');
             if (!_cdOk) return;
           }
         }
@@ -3580,7 +3584,7 @@ function addDropListeners(gridEl) {
             if (!_pcResult.valid && _pcResult.reason) {
               const _pcNote = _pcConcurrent > 0
                 ? '<br>(Includes ' + _pcConcurrent + ' players from other divisions at the same time)' : '';
-              const _pcOk = await daShowConfirm('Player count warning for "' + newEvent.event + '":<br>' + _pcResult.reason + _pcNote + '<br><br>Place anyway?');
+              const _pcOk = await daShowConfirm('Player count warning for "' + _escHtml(newEvent.event) + '":<br>' + _escHtml(_pcResult.reason) + _escHtml(_pcNote) + '<br><br>Place anyway?');
               if (!_pcOk) return;
             }
           }
@@ -4553,7 +4557,7 @@ function renderToolbar() {
     if (isAutoMode) {
       // ★ Auto mode: load auto layer template
       if (autoTemplates[name]) {
-        const ok = await daShowConfirm('Load auto template "' + name + '"?');
+        const ok = await daShowConfirm('Load auto template "' + _escHtml(name) + '"?');
         if (ok) {
           daAutoLayers = JSON.parse(JSON.stringify(autoTemplates[name]));
           saveDAAutoLayers();
@@ -4564,7 +4568,7 @@ function renderToolbar() {
     } else {
       // Manual mode: load skeleton template
       if (savedSkeletons[name]) {
-        const ok = await daShowConfirm('Load template "' + name + '"?');
+        const ok = await daShowConfirm('Load template "' + _escHtml(name) + '"?');
         if (ok) {
           dailyOverrideSkeleton = JSON.parse(JSON.stringify(savedSkeletons[name]));
           window._autoGeneratedSchedule = false;
@@ -4868,7 +4872,7 @@ async function runOptimizer() {
             }
         } catch (e) {
             console.error('[AutoScheduler] CRASH:', e.message, '\nStack:', e.stack);
-            await daShowAlert("Auto scheduler error: " + e.message);
+            await daShowAlert("Auto scheduler error: " + _escHtml(e.message));
         }
         return; // ← hard return — never reaches runSkeletonOptimizer
     } else {
