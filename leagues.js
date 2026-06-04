@@ -320,12 +320,15 @@
                     }
                 });
                 
-                if (validBunks.size > 0) {
-                    const orphanedTeams = validated.teams.filter(t => !validBunks.has(t));
-                    if (orphanedTeams.length > 0) {
-                        console.warn(`[LEAGUES] "${leagueName}" has ${orphanedTeams.length} team(s) not in any assigned division: ${orphanedTeams.join(', ')}`);
-                        // Don't auto-remove — just warn. Teams may be custom names, not bunk names.
-                    }
+                // ★ #V2-8 fix: teams are SEPARATE entities from bunks (custom names like
+                //   "Cobras" / "Red" / "1" are EXPECTED and correct), so comparing team names
+                //   to bunk names false-fired a "team not in any division" warning for EVERY
+                //   normally-configured league — and stayed silent for the genuinely-broken
+                //   case. The real problem is a league that has teams but NO playable bunks
+                //   (no assigned division, or its divisions have no bunks): those games can't
+                //   be scheduled. Warn on THAT, not on custom team names.
+                if ((validated.teams || []).length > 0 && validBunks.size === 0) {
+                    console.warn(`[LEAGUES] "${leagueName}" has ${validated.teams.length} team(s) but no playable bunks (no assigned division with bunks) — its games won't be scheduled.`);
                 }
             } catch (e) {
                 // Non-critical validation, don't block load
