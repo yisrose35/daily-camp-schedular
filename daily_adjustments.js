@@ -139,7 +139,7 @@ function daShowModal(config) {
     overlay.id = 'da-modal-input-overlay';
     overlay.className = 'da-modal-overlay';
     overlay.innerHTML = `
-      <div class="da-modal" style="max-width:${config.wide ? '560px' : '460px'};">
+      <div class="da-modal" role="dialog" aria-modal="true" aria-label="${_escHtml(config.title || 'Dialog')}" style="max-width:${config.wide ? '560px' : '460px'};">
         <div class="da-modal-header">
           <h3>${_escHtml(config.title || 'Input Required')}</h3>
           <button class="da-modal-close da-modal-close-x">&times;</button>
