@@ -270,10 +270,14 @@
             //   re-traversing fieldProps on every candidate evaluation.
             var accessRestrictionsCache = null;
             if (fieldProps.accessRestrictions && fieldProps.accessRestrictions.enabled === true) {
-                accessRestrictionsCache = {
-                    enabled: true,
-                    divisions: fieldProps.accessRestrictions.divisions || {}
-                };
+                var _arDivs = fieldProps.accessRestrictions.divisions || {};
+                // ★ Day 11 parity (#V2-15): enabled with EMPTY divisions = misconfig (toggle on,
+                //   no grades picked) → treat as NO restriction, matching auto_solver_engine
+                //   (L134-140). Otherwise the hard-constraint check below returns 999999 for
+                //   EVERY grade, making the field unusable in MANUAL only (auto leaves it open).
+                if (Object.keys(_arDivs).length > 0) {
+                    accessRestrictionsCache = { enabled: true, divisions: _arDivs };
+                }
             }
 
             // ★ Cache timeRules (split by type) so the hard constraint can fire

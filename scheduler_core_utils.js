@@ -732,22 +732,28 @@
         // =================================================================
         if (effectiveProps.accessRestrictions?.enabled) {
             const divisionRules = effectiveProps.accessRestrictions.divisions || {};
-            // ★ Dual-key lookup: divisions may be keyed by string ("3") or
-            //   the original grade type (3). Matches the auto solver's
-            //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
-            const _divNameStr = String(block.divName);
-            if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
-                if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
-                return false;
-            }
-            const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
-            if (Array.isArray(divRule) && divRule.length > 0) {
-                const bunkStr = String(block.bunk);
-                const bunkNum = parseInt(block.bunk);
-                const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
-                if (!inList) {
-                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
+            // ★ Day 11 parity (#V2-15): enabled with EMPTY divisions = misconfig (toggle on,
+            //   no grades picked) → treat as NO restriction, matching auto_solver_engine and
+            //   total_solver_engine. Otherwise the division-not-in-{} check below blocks EVERY
+            //   grade and makes the field unusable in manual only (auto leaves it open).
+            if (Object.keys(divisionRules).length > 0) {
+                // ★ Dual-key lookup: divisions may be keyed by string ("3") or
+                //   the original grade type (3). Matches the auto solver's
+                //   commitWriteIfLegal check at scheduler_core_auto.js:1426-1428.
+                const _divNameStr = String(block.divName);
+                if (!(_divNameStr in divisionRules) && !(block.divName in divisionRules)) {
+                    if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: division ${block.divName} not in allowed list`);
                     return false;
+                }
+                const divRule = divisionRules[_divNameStr] || divisionRules[block.divName];
+                if (Array.isArray(divRule) && divRule.length > 0) {
+                    const bunkStr = String(block.bunk);
+                    const bunkNum = parseInt(block.bunk);
+                    const inList = divRule.some(b => String(b) === bunkStr || parseInt(b) === bunkNum);
+                    if (!inList) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - accessRestrictions: bunk not in allowed list`);
+                        return false;
+                    }
                 }
             }
         }
