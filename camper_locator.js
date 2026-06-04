@@ -76,12 +76,24 @@
         return null;
     }
 
+    // ★ #V2-23: HTML-escape user-controlled strings (camper / bunk / activity /
+    //   field / team / league / division names + the typed search query) before
+    //   innerHTML interpolation. The locator had NO escaper and rendered these raw
+    //   into the suggestions list, time-error message, and result card (stored XSS;
+    //   reflected the moment a shareable ?q= URL is added — the same risk the
+    //   already-hardened "not found" branch calls out). Escapes & < > " '.
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     function buildAllMatchupsHtml(leagueData) {
         if (!leagueData?.matchups?.length) return '';
         return `<div style="margin-top:8px;">` +
             leagueData.matchups.map(m => {
                 const norm = normalizeMatchup(m);
-                return `<div style="padding:3px 0;">${norm.teamA} vs ${norm.teamB}${norm.sport || norm.field ? ' - ' : ''}${norm.sport ? '<strong>' + norm.sport.charAt(0).toUpperCase() + norm.sport.slice(1) + '</strong>' : ''}${norm.field ? ' (' + norm.field + ')' : ''}</div>`;
+                return `<div style="padding:3px 0;">${escapeHtml(norm.teamA)} vs ${escapeHtml(norm.teamB)}${norm.sport || norm.field ? ' - ' : ''}${norm.sport ? '<strong>' + escapeHtml(norm.sport.charAt(0).toUpperCase() + norm.sport.slice(1)) + '</strong>' : ''}${norm.field ? ' (' + escapeHtml(norm.field) + ')' : ''}</div>`;
             }).join('') + `</div>`;
     }
 
@@ -352,7 +364,7 @@
         }
 
         box.innerHTML = matches.slice(0, 15).map(name =>
-            `<div class="suggestion-item" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee;">${name} <span style="color:#888; font-size:0.85rem;">(${camperRoster[name].bunk})</span></div>`
+            `<div class="suggestion-item" style="padding:10px 12px; cursor:pointer; border-bottom:1px solid #eee;">${escapeHtml(name)} <span style="color:#888; font-size:0.85rem;">(${escapeHtml(camperRoster[name].bunk)})</span></div>`
         ).join("");
 
         box.style.display = 'block';
@@ -458,7 +470,7 @@
             targetTimeMin = parseTypedTime(timeValue);
             if (targetTimeMin < 0) {
                 resultContainer.style.display = 'block';
-                resultContainer.innerHTML = `<h3 style="color:red; margin:0;">⚠️ Couldn't understand "${timeValue}"</h3><p>Try a format like <strong>10:30 AM</strong> or <strong>2:15 PM</strong>.</p>`;
+                resultContainer.innerHTML = `<h3 style="color:red; margin:0;">⚠️ Couldn't understand "${escapeHtml(timeValue)}"</h3><p>Try a format like <strong>10:30 AM</strong> or <strong>2:15 PM</strong>.</p>`;
                 return;
             }
             timeLabel = minutesToTimeLabel(targetTimeMin);
@@ -533,7 +545,7 @@
         let detailsHtml = "";
 
         const timeContext = slotTimeLabel ?
-            `<div style="font-size:0.8rem; color:#0284c7; margin-top:2px;">${slotTimeLabel}</div>` : '';
+            `<div style="font-size:0.8rem; color:#0284c7; margin-top:2px;">${escapeHtml(slotTimeLabel)}</div>` : '';
 
         if (!assignment) {
             // Check: is the target time even within schedule hours?
@@ -550,7 +562,7 @@
                 const scheduleStart = minutesToTimeLabel(divSlots[0].startMin);
                 const scheduleEnd = minutesToTimeLabel(divSlots[divSlots.length - 1].endMin);
                 locationHtml = `<span style="color:#999;">Outside Schedule Hours</span>`;
-                detailsHtml = `${division}'s schedule runs from <strong>${scheduleStart}</strong> to <strong>${scheduleEnd}</strong>. The selected time is outside those hours.`;
+                detailsHtml = `${escapeHtml(division)}'s schedule runs from <strong>${escapeHtml(scheduleStart)}</strong> to <strong>${escapeHtml(scheduleEnd)}</strong>. The selected time is outside those hours.`;
             } else {
                 // Check if this is a LEAGUE slot
                 const divSlotInfo = divSlots[slotIdx];
@@ -627,22 +639,22 @@
 
                     if (!team) {
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        detailsHtml = `<strong>${bunk}</strong> is playing leagues at this time.<br>
-                                       <strong>${camperName}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
+                        detailsHtml = `<strong>${escapeHtml(bunk)}</strong> is playing leagues at this time.<br>
+                                       <strong>${escapeHtml(camperName)}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
                         if (leagueData?.gameLabel) {
-                            detailsHtml = `<strong>${leagueData.gameLabel}</strong> — ${bunk} is playing leagues at this time.<br>
-                                           <strong>${camperName}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
+                            detailsHtml = `<strong>${escapeHtml(leagueData.gameLabel)}</strong> — ${escapeHtml(bunk)} is playing leagues at this time.<br>
+                                           <strong>${escapeHtml(camperName)}</strong> has no team assigned yet — assign a team in <strong>Campistry Me</strong> to see their exact field and matchup.`;
                         }
                     } else {
                         console.log(`[CamperLocator] League lookup — team: "${team}", leagueData:`, leagueData);
                         const match = findTeamMatchup(leagueData, team);
 
                         if (match) {
-                            locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field} - ${match.sport || leagueData?.sport || 'League'}</span>`;
-                            detailsHtml = `Team ${team}`;
+                            locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${escapeHtml(match.field)} - ${escapeHtml(match.sport || leagueData?.sport || 'League')}</span>`;
+                            detailsHtml = `Team ${escapeHtml(team)}`;
                         } else {
                             locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                            detailsHtml = `<strong>${leagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.${buildAllMatchupsHtml(leagueData)}`;
+                            detailsHtml = `<strong>${escapeHtml(leagueData?.gameLabel || 'League Game')}</strong> — Team <strong>${escapeHtml(team)}</strong> not found in matchups.${buildAllMatchupsHtml(leagueData)}`;
                         }
                     }
                 } else if (divSlots.length === 0) {
@@ -650,10 +662,10 @@
                     detailsHtml = "No schedule has been generated yet for this division. Generate a schedule first.";
                 } else if (slotIdx < 0) {
                     locationHtml = `<span style="color:#999;">Outside Schedule Hours</span>`;
-                    detailsHtml = `The selected time (${minutesToTimeLabel(targetTimeMin)}) is outside ${division}'s scheduled hours.`;
+                    detailsHtml = `The selected time (${minutesToTimeLabel(targetTimeMin)}) is outside ${escapeHtml(division)}'s scheduled hours.`;
                 } else {
                     locationHtml = `<span style="color:#999;">No Activity Assigned</span>`;
-                    detailsHtml = `${bunk} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
+                    detailsHtml = `${escapeHtml(bunk)} does not have an activity assigned at this time slot. This may be a gap in the schedule.`;
                 }
             }
         } else {
@@ -665,7 +677,7 @@
 
                 if (!team) {
                     locationHtml = `<span style="color:#d97706;">Playing Leagues (Team Unknown)</span>`;
-                    detailsHtml = `We know ${bunk} is playing leagues, but <strong>${camperName}</strong> has no team assigned.<br>
+                    detailsHtml = `We know ${escapeHtml(bunk)} is playing leagues, but <strong>${escapeHtml(camperName)}</strong> has no team assigned.<br>
                                    Assign a team in <strong>Campistry Me</strong> to see the exact field.`;
                 } else {
                     const leagueData = division
@@ -684,11 +696,11 @@
                     const match = findTeamMatchup(effectiveLeagueData, team);
 
                     if (match) {
-                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${match.field} - ${match.sport || effectiveLeagueData?.sport || 'League'}</span>`;
-                        detailsHtml = `Team ${team}`;
+                        locationHtml = `<span style="color:#059669; font-weight:bold; font-size:1.4rem;">${escapeHtml(match.field)} - ${escapeHtml(match.sport || effectiveLeagueData?.sport || 'League')}</span>`;
+                        detailsHtml = `Team ${escapeHtml(team)}`;
                     } else {
                         locationHtml = `<span style="color:#d97706; font-weight:bold; font-size:1.4rem;">Leagues</span>`;
-                        detailsHtml = `<strong>${effectiveLeagueData?.gameLabel || 'League Game'}</strong> — Team <strong>${team}</strong> not found in matchups.${buildAllMatchupsHtml(effectiveLeagueData)}`;
+                        detailsHtml = `<strong>${escapeHtml(effectiveLeagueData?.gameLabel || 'League Game')}</strong> — Team <strong>${escapeHtml(team)}</strong> not found in matchups.${buildAllMatchupsHtml(effectiveLeagueData)}`;
                     }
                 }
             } else {
@@ -696,16 +708,16 @@
                 const activityName = assignment.sport || assignment._activity || "Activity";
                 const fieldName = (typeof assignment.field === 'object') ? assignment.field.name : assignment.field;
 
-                locationHtml = `<span style="color:#0284c7; font-weight:bold; font-size:1.4rem;">${fieldName}</span>`;
-                detailsHtml = `Activity: <strong>${activityName}</strong>`;
+                locationHtml = `<span style="color:#0284c7; font-weight:bold; font-size:1.4rem;">${escapeHtml(fieldName)}</span>`;
+                detailsHtml = `Activity: <strong>${escapeHtml(activityName)}</strong>`;
             }
         }
 
         resultContainer.innerHTML = `
             <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
                 <div>
-                    <h2 style="margin:0; color:#333;">${camperName}</h2>
-                    <p style="margin:0; color:#666;">${camper.division}${division !== camper.division ? ' &bull; ' + division : ''} &bull; ${camper.bunk}</p>
+                    <h2 style="margin:0; color:#333;">${escapeHtml(camperName)}</h2>
+                    <p style="margin:0; color:#666;">${escapeHtml(camper.division)}${division !== camper.division ? ' &bull; ' + escapeHtml(division) : ''} &bull; ${escapeHtml(camper.bunk)}</p>
                 </div>
                 <div style="margin-left:auto; text-align:right;">
                     <div style="font-size:0.9rem; color:#888; text-transform:uppercase; letter-spacing:1px; font-weight:bold;">${timeLabel}</div>
