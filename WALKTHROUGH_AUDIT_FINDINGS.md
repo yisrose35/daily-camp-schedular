@@ -135,3 +135,27 @@ Generated a clean 06-22 auto day (35 bunks, 336 real blocks, 12.3s, 1st-gen), th
 - **Data-hygiene reminder (config, not code):** duplicate/misspelled special names ("Neranitas"/"Nernitas", "Art Shoppes"/"Art Shoppees", "Accesorize"/"Accessorize") cause both rotation double-counting and the Art Shoppes validator artifact. User should dedupe in Special Activities.
 
 **Net:** Real sports-field rules ARE kept (0 real field conflicts; FN-18 proved the 750 were noise). **One genuine remaining rule violation: FN-19 special cap-1 over-assignment (offered to fix next).** Print Center + Camper Locator both verified working end-to-end (Locator wrong-activity bug fixed). DAW HEAD `3713226b`; main still `caf6e501`.
+
+---
+
+# ✅ FULL 7-DAY AUTO WEEK (2026-06-22 → 06-28) — 2026-06-04, post FN-18/20 deploy
+
+Generated and verified 7 consecutive days in auto mode, **reloading the page before each day** (the reliable workaround for FN-17 — a real user generates one day per visit; back-to-back automated gens were the only thing that churned). Each day's rules checked via the now-trustworthy validator (FN-18) + per-bunk rotation captured to localStorage across reloads.
+
+**Per-day rule results (validator):**
+| Date | blocks | gen time | crossDivision (real-field) | capacity (special) | staggered | sameDayRepeat |
+|------|-------|----------|----------------------------|--------------------|-----------|---------------|
+| 06-22 | 340 | 16.3s | **0** | 2 | 2 | 0 |
+| 06-23 | 334 | 10.4s | **0** | 3 | 0 | 0 |
+| 06-24 | 343 | 10.6s | **0** | 2 | 0 | 0 |
+| 06-25 | 332 | 10.2s | **0** | **0** | 0 | 0 |
+| 06-26 | 329 | 23.8s | **0** | 2 | 0 | 0 |
+| 06-27 | 336 | 10.1s | **0** | 2 | 0 | 0 |
+| 06-28 | 344 | (cloud) | **0** | 1 | 2 | 0 |
+
+- **Skeptic #1 (rules kept perfectly) → MET for real facilities.** crossDivision = **0 every day**, sameDayRepeat = **0 every day**. The only rule misses are **special-activity capacity** (FN-19 family: Neranitas/Art Shoppes/Accessorize/Arts&Crafts2, 0–3/day — and Art Shoppes/Accessorize are partly the dup-name artifact) and **occasional staggeredSharing** (Jumprope/Big Shot on 2 of 7 days — bunks sharing a special's room with slightly offset start/end; intermittent, minor → noted as FN-21).
+- **Skeptic #2 (rotation) → EXCELLENT across the full week** (35 bunks): avg consecutive-day overlap Jaccard **0.040**, **0 identical consecutive-day pairs**, **3.80 new activities/bunk/day**, **44 distinct activities** used, **only 1/35 bunks** repeated one activity all 7 days (Soloists 3 → "Drama", almost certainly a configured elective/specialty, not a rotation fault).
+- **Generation reliability → 7/7 succeeded**, all 10–24s, with reload-per-day. **FN-17 confirmed = in-session churn only** (06-24, which hung the earlier back-to-back driver, ran in 10.6s on a fresh load). One day (06-28) hit a date-settle race that wrote the gen onto today's date (06-04) — a fast-automation timing artifact, not a user-path bug (a human waits for the date to load); verified by loading 06-28 from cloud.
+- **Restore:** all 8 test artifacts (06-04 + 06-22..06-28) deleted from cloud + local; 06-03 intact (35/175); manual mode. Pre-existing prior-session dates (06-02/05/07, 07-08/15) left untouched.
+
+**FN-21 (new, minor):** staggeredSharing on a shared special (Jumprope/Big Shot) — two bunks assigned the same special-activity room with mismatched start/end times (2 of 7 days). Low severity; same family as FN-19 (special-room sharing). Bundle with the FN-19 special-capacity fix.
