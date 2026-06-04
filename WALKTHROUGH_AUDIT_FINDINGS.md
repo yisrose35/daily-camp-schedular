@@ -159,3 +159,18 @@ Generated and verified 7 consecutive days in auto mode, **reloading the page bef
 - **Restore:** all 8 test artifacts (06-04 + 06-22..06-28) deleted from cloud + local; 06-03 intact (35/175); manual mode. Pre-existing prior-session dates (06-02/05/07, 07-08/15) left untouched.
 
 **FN-21 (new, minor):** staggeredSharing on a shared special (Jumprope/Big Shot) — two bunks assigned the same special-activity room with mismatched start/end times (2 of 7 days). Low severity; same family as FN-19 (special-room sharing). Bundle with the FN-19 special-capacity fix.
+
+---
+
+# ✅ FN-19 + FN-21 FIXED + LIVE-VERIFIED (2026-06-04) — special-room capacity + anti-stagger sweep
+
+User confirmed both as real ("2 major issues which the validator caught"). Added a demote-only final sweep `_fn1921FinalSweep` in scheduler_core_auto.js right after the FN-15 sweep (commits `5ea0f094` + `344e8651`):
+- Builds sharing config from **both** gs.app1.fields AND gs.app1.specialActivities (FN-15 only read fields, so special rooms — "Arts and Crafts 3", "Accessorize", "Neranitas" — were never in scope).
+- Reads slot times from the **per-bunk slot geometry** (`window._perBunkSlots` / `divisionTimes[grade]._perBunkSlots`), matching auto_validator.getBunkSlotTime — reading the entry's `_startMin` alone missed special/sport entries that don't carry it (first attempt fixed capacity but left staggered/cross-div on specials).
+- **PASS 1 (anti-stagger):** among overlapping occupants of a field/room, keep the longest/earliest; demote any whose [start,end] differs → Free.
+- **PASS 2 (capacity + type):** greedy keep-compatible on identical-window groups — keep an occupant only if within capacity AND sharing-compatible (not_sharable / same_division / cross_division allowedPairs / custom divisions); else demote.
+- Never demotes `_pinned` / `_league`; clears trailing continuation slots; fully try/catch-guarded (runs after the schedule is built → can't break generation; worst case is a few extra Free blocks the coverage warning already surfaces).
+
+**Live-verified on 3 fresh gens (06-22/23/24), settled state:** `validateSchedule()` → **totalErrors = 0** each (crossDivision 0, capacity 0, staggeredSharing 0, sameDayRepeat 0, fieldReuse 0); sweep demoted 2/2/5 respectively to get there. (Note: my test harness fires two gens per day — date-change auto-gen + explicit click — so validating *immediately* can catch a transient mid-regen snapshot with residual violations; the **settled** schedule, i.e. what a user sees/saves, is clean. A minor real-world note: changing date then clicking Generate triggers a redundant second generation.)
+
+**Status:** FN-18 (validator noise), FN-20 (locator wrong activity), FN-19 (special capacity), FN-21 (staggered sharing) ALL fixed + live-verified. DAW HEAD `344e8651`; main still `caf6e501`. Camp restored (06-03 intact 35/175, all test dates purged).
