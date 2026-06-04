@@ -33,3 +33,12 @@
 - Fresh **week** of manual generations (you click Generate for upcoming dates) → confirm rotation variety + rules across multiple days.
 - Live **leagues / specialty leagues / zones** once configured in a real day.
 - Full **Print Center pack** render (triggers OS print dialog).
+
+---
+
+# AUTO-mode walkthrough (2026-06-04)
+- **Auto-layer config is ORPHANED:** `dailyAutoLayers` + `gradeLayerRules` are keyed to OLD grades ("1st Grade"–"6th Grade"); the current grades (Minors/Majors/Trios…) have **no auto config**. A new camp using auto must build layers first. (For the test I applied the "General Day" template to the current grades.)
+- **Auto generation WORKS:** the real Generate button runs the solver, resolves the layer **preview** (125 "Main activity"/Change/Cleanup placeholders → 0) into a complete schedule (**269 real blocks, 35 bunks, no hang**). League games WERE placed (unlike the manual test day).
+- **🔴 CANDIDATE FN-A1 — auto special capacity/sharing overload:** the *solved* auto output overloaded **"Slush"** (`same_division`, cap 2) with **5 bunks across 3 divisions** (Soloists+Quints+Majors), +4 similar, all at the 2:55pm slot that matches a generic **"custom" layer** rule. The proper checker `canAssignSpecialToGrade` (scheduler_core_auto.js:4545) is CORRECT (it rejects cross-division `same_division` + enforces capacity via `globalSpecialUsage`), so a placement path (likely the generic "custom"/special layer-fill, or per-grade passes not sharing `globalSpecialUsage`) appears to **bypass** it. **CONFOUND:** triggered by my hastily-injected *generic* layer config (a real camp configures specific activities per layer); manual mode (explicit skeleton) showed **0** special violations. **TO CONFIRM vs REFUTE:** trace the custom-layer / generic-special layer-fill path for `canAssignSpecialToGrade` + `registerSpecialAssignment` calls, and retest with a proper auto-layer config.
+- Intra-day rotation clean (0 repeats). Shared infra (field/sport rule engine, rotation engine, outputs, locator) = same as manual (already verified); prior v2 audit (#84–90) verified the auto solver with *proper* configs.
+- Cleaned up: builderMode → manual, injected layers removed, 06-08 deleted (local+cloud), 06-03 intact.
