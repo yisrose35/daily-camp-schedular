@@ -480,29 +480,37 @@
         const bunkAssignments = window.scheduleAssignments?.[bunk];
         const divSlots = window.divisionTimes?.[division] || [];
 
-        if (bunkAssignments && divSlots.length > 0) {
-            // PRIMARY: Scan divisionTimes for the slot whose time range contains targetTimeMin
-            for (let i = 0; i < divSlots.length; i++) {
-                const ds = divSlots[i];
-                if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
+        if (bunkAssignments) {
+            // PRIMARY: match by each assignment entry's OWN per-bunk time geometry.
+            // This is authoritative: scheduleAssignments[bunk] is indexed by per-bunk
+            // slot geometry, which can be MISALIGNED with the division-level divisionTimes
+            // index (per-bunk swim staggering, different slot counts/boundaries). Indexing
+            // bunkAssignments by a divisionTimes-derived slot index therefore pairs the
+            // right time window with the WRONG activity (e.g. showed "lunch" for a slot
+            // actually holding "Big Shot"). Matching each entry's own _startMin/_endMin
+            // avoids the misalignment entirely.
+            for (let i = 0; i < bunkAssignments.length; i++) {
+                const a = bunkAssignments[i];
+                if (!a || a.continuation) continue;
+                const aStart = a._startMin ?? a._blockStart;
+                const aEnd = a._endMin;
+                if (aStart != null && aEnd != null && aStart <= targetTimeMin && targetTimeMin < aEnd) {
+                    assignment = a;
                     slotIdx = i;
-                    assignment = bunkAssignments[i] || null;
-                    slotTimeLabel = getDivisionSlotLabel(division, i);
+                    slotTimeLabel = `${minutesToTimeLabel(aStart)} - ${minutesToTimeLabel(aEnd)}`;
                     break;
                 }
             }
 
-            // SECONDARY: If no divisionTimes match, scan assignment metadata
-            if (slotIdx < 0) {
-                for (let i = 0; i < bunkAssignments.length; i++) {
-                    const a = bunkAssignments[i];
-                    if (!a || a.continuation) continue;
-                    const aStart = a._startMin ?? a._blockStart;
-                    const aEnd = a._endMin;
-                    if (aStart != null && aEnd != null && aStart <= targetTimeMin && targetTimeMin < aEnd) {
-                        assignment = a;
+            // SECONDARY: entries lacked time metadata — fall back to the division-level
+            // slot index (legacy behaviour; only correct when per-bunk geometry == division).
+            if (slotIdx < 0 && divSlots.length > 0) {
+                for (let i = 0; i < divSlots.length; i++) {
+                    const ds = divSlots[i];
+                    if (ds.startMin <= targetTimeMin && targetTimeMin < ds.endMin) {
                         slotIdx = i;
-                        slotTimeLabel = `${minutesToTimeLabel(aStart)} - ${minutesToTimeLabel(aEnd)}`;
+                        assignment = bunkAssignments[i] || null;
+                        slotTimeLabel = getDivisionSlotLabel(division, i);
                         break;
                     }
                 }
