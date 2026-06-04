@@ -113,9 +113,9 @@ v1 (feature verification) is complete on `main`. v2 actively tries to break thin
 
 ## Phase 3 — Auto Builder (try to break the solver) `Days 14–19`
 
-**Day 14 — Layer editor + grid preview**
-- [ ] Layer/block create/edit/delete/reorder/drag/resize, overlapping/zero-length/cross-division, custom
-      pinned (connect-to-swim), save/load/template, corrupt-blob load; grid live-accuracy + large camp.
+**Day 14 — Layer editor + grid preview** ✅ DONE 2026-06-03 (DAW `53b7d82d`, NOT on main)
+- [x] **#V2-16 FIXED (auto-builder parity for the structure-change cascade):** the auto layer config — `app1.dailyAutoLayers` (per-date, keyed by grade) + `app1.gradeLayerRules` (keyed by grade) — was NEVER cleaned when a grade was removed (the auto analog of the Day-9 #V2-13 manual-skeleton gap). CONFIRMED live: the ENTIRE auto config is orphaned (keyed by old grades "1st Grade"–"6th Grade"/"1"–"6", none of the current 7 Trios–Soloists). Added `_purgeOrphanedAutoLayers(removedGrades)` wired into `saveDiv`+`deleteDiv` (mirrors `_purgeOrphanedSkeletonTiles`, scoped to exact removed grades). Deterministically verified: removing ZZGRADE pruned only its entries (3) across 2 dates + gradeLayerRules; real grades + pre-existing orphans untouched.
+- [x] Layer editor (create/edit/delete/reorder/drag/resize, custom pinned connect-to-swim) + grid preview + save/load/template + #10 recency = HEAVILY v1-verified (v1 Phase 3 Days 9-12, Day 22 #10). Drag-drop UI not re-automated in v2 (same constraint as the manual skeleton Day 25 — synthetic drag unreliable + live-gen clobber risk). Existing all-orphaned auto config = user data from a past structure change (auto solver iterates CURRENT grades + ignores orphan-grade configs); my fix prevents future accumulation. autoLayerTemplates=9 present.
 **Day 15 — Solver under ADVERSARIAL configs**
 - [ ] Over-constrained / near-infeasible / infeasible → no crash/hang/illegal output; degrade gracefully.
       Scan every field+time for access/conflict/capacity/sharing/time/cooldown/combo violations.
