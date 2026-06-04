@@ -1652,7 +1652,9 @@ all[date].updated_at = new Date().toISOString();
                         divisions: unifiedState.divisions || {},
                         bunks: unifiedState.bunks || []
                     }));
-                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", unifiedJSON);
+                    // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE = cross-tab beacon only (value never
+                    //   read; campGlobalSettings_v1 written above triggers the same listener).
+                    safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
                 }
                 
                 if (backup.rotationHistory) {
@@ -1786,7 +1788,8 @@ all[date].updated_at = new Date().toISOString();
             
             if (snap[UNIFIED_CACHE_KEY]) {
                 safeLocalStorageSet(LEGACY_GLOBAL_SETTINGS_KEY, snap[UNIFIED_CACHE_KEY]);
-                safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", snap[UNIFIED_CACHE_KEY]);
+                // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE = cross-tab beacon only (value never read).
+                safeLocalStorageSet("CAMPISTRY_LOCAL_CACHE", String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
                 
                 // Update memory cache via setCloudState
                 if (typeof window.setCloudState === 'function') {

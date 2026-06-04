@@ -548,7 +548,14 @@
             try {
                 const json = JSON.stringify(lite);
                 localStorage.setItem(CONFIG.LOCAL_STORAGE_KEY, json);
-                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', json);
+                // ★ #V2-1 tail: CAMPISTRY_LOCAL_CACHE is a write-only CROSS-TAB BEACON — its
+                //   VALUE is never read anywhere (the app1 'storage' listener reacts to the
+                //   KEY changing, then re-reads campGlobalSettings_v1 / IDB). Writing the full
+                //   ~839KB config here was an EXACT duplicate of the line above, doubling the
+                //   config's localStorage footprint (~1.6MB) and pushing it toward quota.
+                //   Write a tiny unique beacon instead — the storage event still fires (and
+                //   the campGlobalSettings_v1 write above already triggers the same listener).
+                localStorage.setItem('CAMPISTRY_LOCAL_CACHE', String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
                 try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
                 try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
