@@ -1879,6 +1879,7 @@
 
         let fixed = 0;
         for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
             let placed = false;
             // Walk every field that has at least one occupant with EXACTLY the same time window
             // (user requirement: shared bunks must have identical start AND end — no partial overlap)
@@ -1939,6 +1940,7 @@
 
             let iterImproved = 0;
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 if (tryDirectFill(fb, candidates, fieldIndex)) { iterImproved++; continue; }
                 if (trySwapFill(fb, candidates, fieldIndex))   { iterImproved++; }
             }
@@ -2251,6 +2253,7 @@
             let passImproved = 0;
 
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 // Build what FB's bunk already has today
                 const sa = window.scheduleAssignments || {};
                 const fbDone = new Set();
@@ -2498,6 +2501,7 @@
             let passImproved = 0;
 
             for (const fb of freeBlocks) {
+                if (window.__autoGenDeadline && Date.now() > window.__autoGenDeadline) break; // ★ FN-17: hard wall-clock deadline — bail this repair loop so one generation can't run unbounded (best-so-far is kept; guarded so it's a no-op outside generation)
                 const sa = window.scheduleAssignments || {};
 
                 // Build what FB's bunk has already done today

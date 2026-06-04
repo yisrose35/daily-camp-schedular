@@ -481,6 +481,13 @@
         }
 
         const startTime = Date.now();
+        // ★ FN-17: hard wall-clock ceiling for this generation. The iteration loop
+        //   (15s) and Phase 3 have their own budgets, but the engine's graph-repair
+        //   passes (LNS / ejection-chain / BFS-augmenting) could run unbounded on a
+        //   hard seed — the cause of the rare multi-minute "hang". Those loops now
+        //   bail when Date.now() exceeds this deadline (best-so-far is kept). Cleared
+        //   right before dispatch so it never affects non-generation repair calls.
+        window.__autoGenDeadline = startTime + 75000; // 75s ceiling
         const warnings = [];
 
         // =====================================================================
@@ -22909,6 +22916,7 @@
             } catch (_eFn15) { try { warn('[FN-15 FINAL SWEEP] error: ' + (_eFn15 && _eFn15.message)); } catch (_e) {} }
         })();
 
+        window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
         // ─── Impossibility Report ─────────────────────────────────────────────
