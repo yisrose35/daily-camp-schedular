@@ -176,7 +176,21 @@ function save(){
         if(typeof window.refreshStarterBanner==='function'){
             try{window.refreshStarterBanner(rosterCount)}catch(ex){}
         }
-    }catch(e){console.error('[Me] Save:',e)}
+    }catch(e){
+        console.error('[Me] Save:',e);
+        // ★ #V2-7: surface the failure instead of swallowing it. A throw out of the
+        //   save means even the LOCAL write failed (saveGlobalSettings is local-first:
+        //   IDB has no quota + localStorage gets a stripped snapshot, so it normally
+        //   absorbs transient cloud errors silently). A throw therefore means the
+        //   user's edit may NOT be stored anywhere — they must be told, not left
+        //   believing it saved (the silent-loss UX gap; #V2-1 quota intersection).
+        try {
+            var _msg = 'Save failed — your changes may not be stored. Check available storage and try again.';
+            if (typeof toast === 'function') toast(_msg, 'error');
+            else if (window.daShowAlert) window.daShowAlert(_msg);
+            else if (typeof alert === 'function') alert(_msg);
+        } catch(_) { /* last-resort: never let the error handler itself throw */ }
+    }
 }
 
 // ═══ SIDEBAR ═════════════════════════════════════════════════════
