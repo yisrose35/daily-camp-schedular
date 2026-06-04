@@ -1267,6 +1267,20 @@
                 const _sportLower = String(sport).toLowerCase().trim();
                 const _fieldLower = String(fieldName).toLowerCase().trim();
                 const _saAll = window.scheduleAssignments || {};
+                // ★ FN-15: resolve this field's effective sharing rule once (mirrors
+                //   isFieldAvailableByTime: per-grade override > field.sharableWith >
+                //   default 'same_division'). Used below to reject cross-grade
+                //   co-occupancy on a same_division/not_sharable field even when both
+                //   bunks do the same activity at the same time.
+                let _fn15Type = 'same_division', _fn15Pairs = {}, _fn15Divs = [];
+                try {
+                    const _gsF = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : {};
+                    const _fldF = (_gsF.app1?.fields || []).find(f => f && f.name === fieldName);
+                    const _swF = _fldF && (_fldF.sharableWith || _fldF.sharing);
+                    const _goF = _fldF && _fldF.gradeShareRules && _fldF.gradeShareRules[grade];
+                    if (_goF && _goF.type) { _fn15Type = _goF.type; _fn15Pairs = _goF.allowedPairs || {}; _fn15Divs = _goF.divisions || []; }
+                    else if (_swF && _swF.type) { _fn15Type = _swF.type; _fn15Pairs = _swF.allowedPairs || {}; _fn15Divs = _swF.divisions || []; }
+                } catch (_eF) {}
                 // ★ Defense layer: cross-grade AND cross-activity overlap check.
                 //   A physical facility (Soccer Field, Arts Room) can host at most
                 //   one activity at a time. Period. Even if the field is set to
@@ -1294,15 +1308,48 @@
                         if (!_w || _w.continuation) continue;
                         const _wField = String(_w.field || '').toLowerCase().trim();
                         if (_wField !== _fieldLower) continue;
-                        const _ws = _w._startMin, _we = _w._endMin;
+                        let _ws = _w._startMin, _we = _w._endMin;
+                        if (_ws == null || _we == null) {
+                            // ★ FN-15: a real-activity occupant whose times weren't stamped
+                            //   yet was invisible here (null-time blind spot), letting
+                            //   cross-grade/cross-activity field collisions slip through.
+                            //   Resolve from the durable per-bunk grid (same index space as
+                            //   scheduleAssignments). Free/empty slots stay skipped.
+                            const _wA = String(_w._activity || _w.sport || '').toLowerCase().trim();
+                            if (_wA && _wA !== 'free') {
+                                const _slN = window._perBunkSlots?.[_otherGrade]?.[String(_otherBunk)]?.[_oi];
+                                if (_slN) { _ws = _slN.startMin; _we = _slN.endMin; }
+                            }
+                        }
                         if (_ws == null || _we == null) continue;
                         // Overlap? (half-open)
                         if (_ws < eMin && _we > sMin) {
                             const _wAct = String(_w._activity || _w.sport || '').toLowerCase().trim();
                             const sameActivity = (_wAct === _sportLower);
                             const sameWindow = (_ws === sMin && _we === eMin);
-                            // True sharing: same activity AT THE SAME TIME — OK
-                            if (sameActivity && sameWindow) continue;
+                            // True sharing: same activity AT THE SAME TIME.
+                            // ★ FN-15: this is a LEGAL share only for same-grade bunks, or
+                            //   cross-grade under cross_division(allowedPairs)/custom(allowed
+                            //   divisions)/all. On a same_division or not_sharable field,
+                            //   cross-grade co-occupancy is illegal even when same activity +
+                            //   same window. Mirrors isFieldAvailableByTime / canBlockFit (#73).
+                            if (sameActivity && sameWindow) {
+                                if (_otherGrade && _otherGrade !== grade) {
+                                    if (_fn15Type === 'same_division' || _fn15Type === 'not_sharable') {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — cross-grade share on ' + _fn15Type + ' field with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                    if (_fn15Type === 'cross_division' && _fn15Pairs[[grade, _otherGrade].sort().join('|')] !== true) {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — cross_division pair not allowed with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                    if (_fn15Type === 'custom' && _fn15Divs.length > 0 && (!_fn15Divs.includes(grade) || !_fn15Divs.includes(_otherGrade))) {
+                                        log('writeGuard BLOCKED: ' + bunk + ' (' + grade + ') ' + sport + ' @ ' + fieldName + ' — custom-share grade not allowed with ' + _otherBunk + ' [' + _otherGrade + ']');
+                                        return false;
+                                    }
+                                }
+                                continue;
+                            }
                             // Anything else = REJECT
                             const _xg = _otherGrade && _otherGrade !== grade ? ' [cross-grade ' + _otherGrade + ']' : '';
                             const _why = !sameActivity
