@@ -1291,7 +1291,25 @@
             // (Previously missing! The handler returned true without saving.)
             // ═══════════════════════════════════════════════════════════════
             try {
-                localStorage.setItem('campDailyData_v1', JSON.stringify(data));
+                // ★ #V2-1: PROACTIVE date cap. Previously campDailyData_v1 grew UNBOUNDED
+                //   (every date ever) and only pruned REACTIVELY to 3 dates once a
+                //   QuotaExceededError fired — by which point localStorage was already at
+                //   ~143% and auto-save had been silently skipping. Cap a COPY to the most
+                //   recent ~45 dates (>6 weeks — covers the rotation month-window) so it
+                //   stays bounded; the in-memory `data` and the cloud-bound payload keep
+                //   every date (cloud is per-date, so dropping old dates from the LOCAL
+                //   mirror is lossless).
+                let _lsWrite = data;
+                try {
+                    const _DRE = /^\d{4}-\d{2}-\d{2}$/;
+                    const _dk = Object.keys(data).filter(k => _DRE.test(k));
+                    if (_dk.length > 45) {
+                        _dk.sort();
+                        _lsWrite = Object.assign({}, data);
+                        _dk.slice(0, _dk.length - 45).forEach(k => { delete _lsWrite[k]; });
+                    }
+                } catch (_) { _lsWrite = data; }
+                localStorage.setItem('campDailyData_v1', JSON.stringify(_lsWrite));
             } catch (e) {
                 if (e.name === 'QuotaExceededError') {
                     const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
