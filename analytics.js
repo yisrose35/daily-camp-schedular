@@ -40,6 +40,22 @@
         return `${h}${m > 0 ? ':' + (m < 10 ? '0' + m : m) : ''}${ap}`;
     }
 
+    // ★ #V2-20: HTML-escape user-controlled strings before innerHTML interpolation.
+    //   analytics.js renders bunk / activity / division / field names and the
+    //   activity-filter text into many template-literal innerHTML blocks and into
+    //   double-quoted attributes (data-bunk=, data-act=, title=, <option value=>)
+    //   with NO escaping — a name like <img src=x onerror=...> or " onfocus=... "
+    //   executed on render (stored XSS; names are user-controlled, cross-user in
+    //   multi-scheduler). Escape both angle brackets AND quotes (attribute-safe).
+    function escapeHtml(s) {
+        return String(s == null ? '' : s)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
     function getCampTimes() {
         const gs = window.loadGlobalSettings?.() || {};
         const app1 = gs.app1 || window.app1 || {};
@@ -331,7 +347,7 @@
             ? dates.map(d => `<option value="${d}" ${d === selectedDate ? 'selected' : ''}>${formatDateDisplay(d)}</option>`).join('')
             : `<option value="${selectedDate}">${formatDateDisplay(selectedDate)}</option>`;
 
-        const divOptions = availableDivisions.map(d => `<option value="${d}">${d}</option>`).join('');
+        const divOptions = availableDivisions.map(d => `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`).join('');
 
         wrapper.innerHTML = `
             <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
@@ -534,7 +550,7 @@
             html += `<div style="position:absolute;top:0;bottom:0;left:${l}%;width:${w}%;background:${c.bg};
                                  display:flex;align-items:center;justify-content:center;
                                  border-right:1px solid rgba(148,163,184,0.35);overflow:hidden;">
-                         <span style="font-size:0.63rem;font-weight:700;color:${c.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 5px;">${p.name}</span>
+                         <span style="font-size:0.63rem;font-weight:700;color:${c.text};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding:0 5px;">${escapeHtml(p.name)}</span>
                      </div>`;
         });
         html += '</div>';
@@ -647,8 +663,8 @@
                 <div class="gantt-label" data-row="${rk}" style="width:168px;min-width:168px;padding:0 14px;display:flex;align-items:center;
                             font-size:0.8rem;font-weight:500;color:#374151;letter-spacing:0.01em;
                             border-right:1px solid #e9ecef;background:${rowBg};flex-shrink:0;overflow:hidden;
-                            position:sticky;left:0;z-index:4;cursor:pointer;" title="${leftLabel}">
-                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${leftLabel}</span>
+                            position:sticky;left:0;z-index:4;cursor:pointer;" title="${escapeHtml(leftLabel)}">
+                    <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(leftLabel)}</span>
                 </div>
                 <div class="gantt-track" data-row="${rk}" style="flex:1;position:relative;background:#f8fafc;overflow:hidden;">
                     ${trackHtml}
@@ -798,11 +814,11 @@
                     <div style="display:flex;gap:20px;flex-wrap:wrap;">
                         <div style="flex:1;min-width:130px;">
                             <div style="font-size:0.69rem;font-weight:700;color:#16a34a;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Free (${free.length})</div>
-                            ${free.length ? free.map(f => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${f}</div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                            ${free.length ? free.map(f => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${escapeHtml(f)}</div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
                         </div>
                         <div style="flex:1;min-width:130px;">
                             <div style="font-size:0.69rem;font-weight:700;color:#dc2626;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:5px;">Taken (${taken.length})</div>
-                            ${taken.length ? taken.map(t => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${t.name} <span style="color:#94a3b8;font-size:0.72rem;">— ${t.by}</span></div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
+                            ${taken.length ? taken.map(t => `<div style="font-size:0.78rem;color:#374151;padding:2px 0;border-bottom:1px solid #f1f5f9;">${escapeHtml(t.name)} <span style="color:#94a3b8;font-size:0.72rem;">— ${escapeHtml(t.by)}</span></div>`).join('') : '<div style="font-size:0.78rem;color:#94a3b8;">None</div>'}
                         </div>
                     </div>
                 </div>`;
@@ -814,7 +830,7 @@
                         <span style="font-size:0.83rem;font-weight:700;color:#1e293b;">Snapshot at ${timeLabel}</span>${closeBtn}
                     </div>
                     <div style="display:flex;flex-wrap:wrap;gap:5px;">
-                        ${active.length ? active.map(a => `<span style="padding:3px 9px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1e40af;">${a.bunk} — ${a.activity}${a.field ? ' @ ' + a.field : ''}</span>`).join('') : '<span style="font-size:0.78rem;color:#94a3b8;">All bunks free at this time</span>'}
+                        ${active.length ? active.map(a => `<span style="padding:3px 9px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.75rem;color:#1e40af;">${escapeHtml(a.bunk)} — ${escapeHtml(a.activity)}${a.field ? ' @ ' + escapeHtml(a.field) : ''}</span>`).join('') : '<span style="font-size:0.78rem;color:#94a3b8;">All bunks free at this time</span>'}
                     </div>
                 </div>`;
         }
@@ -861,7 +877,7 @@
         if (!windows.length) { cont.innerHTML = `<div style="padding:8px 0;color:#94a3b8;font-size:0.82rem;text-align:center;">No fields have a free ${dur}-minute window.</div>`; return; }
         cont.innerHTML = windows.map(w => `
             <div style="padding:7px 12px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:5px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;background:#fff;">
-                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${w.field}</span>
+                <span style="font-size:0.8rem;font-weight:700;color:#1e293b;min-width:110px;">${escapeHtml(w.field)}</span>
                 <div style="display:flex;flex-wrap:wrap;gap:5px;">
                     ${w.gaps.map(g => `<span style="padding:2px 8px;background:#dcfce7;border:1px solid #86efac;border-radius:999px;font-size:0.72rem;color:#15803d;font-weight:600;">${minutesToTimeLabel(g.start)} – ${minutesToTimeLabel(g.end)} (${g.end - g.start}m)</span>`).join('')}
                 </div>
@@ -871,7 +887,7 @@
     function buildLegendItem(color, label) {
         return `<span style="display:inline-flex;align-items:center;gap:7px;">
                     <span style="width:14px;height:14px;background:${color};border-radius:3px;flex-shrink:0;box-shadow:inset 0 1px 0 rgba(255,255,255,0.2);"></span>
-                    <span style="font-size:0.78rem;font-weight:500;color:#374151;">${label}</span>
+                    <span style="font-size:0.78rem;font-weight:500;color:#374151;">${escapeHtml(label)}</span>
                 </span>`;
     }
 
@@ -903,7 +919,7 @@
         if (!resources.length) {
             area.innerHTML = `
                 <div style="padding:40px;text-align:center;color:#94a3b8;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:6px;">
-                    <div style="font-size:0.9rem;font-weight:600;color:#64748b;">No fields match "${activityFilter}"</div>
+                    <div style="font-size:0.9rem;font-weight:600;color:#64748b;">No fields match "${escapeHtml(activityFilter)}"</div>
                     <div style="font-size:0.8rem;margin-top:4px;">Try a different activity name.</div>
                 </div>`;
             return;
@@ -932,7 +948,7 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${escapeHtml(activityFilter)}</span>`
             : '<span style="font-size:0.73rem;color:#94a3b8;">Hover or click timeline for details</span>';
         const freeNowBtn = showNow
             ? `<button id="gantt-free-now-btn" style="padding:4px 12px;background:#16a34a;color:#fff;border:none;border-radius:4px;font-size:0.74rem;font-weight:600;cursor:pointer;white-space:nowrap;">What's free now?</button>`
@@ -1030,7 +1046,7 @@
             anyBunk = true;
 
             rows += `<div style="display:flex;border-bottom:1px solid #f1f5f9;">
-                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;position:sticky;left:0;z-index:4;">${divName}</div>
+                <div style="width:168px;min-width:168px;padding:5px 14px;font-size:0.67rem;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.08em;border-right:1px solid #e9ecef;background:#fafafa;display:flex;align-items:center;position:sticky;left:0;z-index:4;">${escapeHtml(divName)}</div>
                 <div style="flex:1;background:#fafafa;"></div>
             </div>`;
 
@@ -1056,7 +1072,7 @@
                </span>`
             : '';
         const filterBadge = activityFilter
-            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${activityFilter}</span>`
+            ? `<span style="padding:2px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;font-size:0.73rem;color:#1d4ed8;font-weight:600;">Filtered: ${escapeHtml(activityFilter)}</span>`
             : '<span style="font-size:0.73rem;color:#94a3b8;">Click a bunk label to focus it</span>';
 
         const keyBar = `
@@ -1151,7 +1167,7 @@
         `;
 
         const divSelect = document.getElementById('rotation-div-select');
-        availableDivisions.forEach(d => { divSelect.innerHTML += `<option value="${d}">${d}</option>`; });
+        availableDivisions.forEach(d => { divSelect.innerHTML += `<option value="${escapeHtml(d)}">${escapeHtml(d)}</option>`; });
         divSelect.onchange = () => { populateRotationBunkFilter(divSelect.value); renderRotationTable(divSelect.value); };
         document.getElementById('rotation-type-filter').onchange = () => renderRotationTable(divSelect.value);
         document.getElementById('rotation-bunk-filter').onchange = () => renderRotationTable(divSelect.value);
@@ -1177,7 +1193,7 @@
         if (!sel) return;
         sel.innerHTML = '<option value="">All Bunks</option>';
         if (!divName) return;
-        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${b}">${b}</option>`; });
+        (divisionsDat[divName]?.bunks || []).forEach(b => { sel.innerHTML += `<option value="${escapeHtml(b)}">${escapeHtml(b)}</option>`; });
     }
 
     function renderRotationTable(divName, forceRefresh) {
@@ -1532,7 +1548,10 @@
                 let daysSince = '';
                 if (lastDate) {
                     const diff = Math.floor((new Date() - new Date(lastDate)) / 86400000);
-                    daysSince = diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff}d ago`;
+                    // ★ #V2-21: a future-dated last-done (e.g. a schedule built for a
+                    //   future date) yields a negative diff → guard so it reads "upcoming"
+                    //   instead of a nonsensical "-4d ago".
+                    daysSince = diff < 0 ? 'upcoming' : diff === 0 ? 'Today' : diff === 1 ? 'Yesterday' : `${diff}d ago`;
                 }
                 let rowBg = bunkBg, totalStyle = 'font-weight:600;';
                 if (act.max > 0 && total >= act.max) { rowBg = '#fee2e2'; totalStyle += 'color:#b91c1c;'; }
@@ -1552,12 +1571,12 @@
 
                 html += `
                     <tr style="background:${rowBg};">
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">${isFirstRow ? bunk : ''}</td>
-                        <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${act.name}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;position:sticky;left:0;background:${rowBg};font-weight:${isFirstRow ? '600' : '400'};color:#111827;">${isFirstRow ? escapeHtml(bunk) : ''}</td>
+                        <td style="padding:8px 10px;border:1px solid #e5e7eb;color:#374151;">${escapeHtml(act.name)}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;">${typeLabel}</td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;color:#6b7280;">${hist}</td>
                         <td style="padding:4px 6px;border:1px solid #e5e7eb;text-align:center;">
-                            <input type="number" class="rotation-adj-input" data-bunk="${bunk}" data-act="${act.name}" value="${offset}"
+                            <input type="number" class="rotation-adj-input" data-bunk="${escapeHtml(bunk)}" data-act="${escapeHtml(act.name)}" value="${offset}"
                                 style="width:45px;text-align:center;padding:4px;border:1px solid #d1d5db;border-radius:999px;font-size:0.8rem;" />
                         </td>
                         <td style="padding:8px 10px;border:1px solid #e5e7eb;text-align:center;${totalStyle}">${total}</td>
@@ -1606,7 +1625,7 @@
         html += neverDone.length > 0
             ? `<div style="margin-bottom:10px;padding:10px 12px;background:#fef3c7;border:1px solid #f59e0b;border-radius:999px;">
                 <strong style="color:#92400e;">Never Done (${neverDone.length}):</strong>
-                <span style="font-size:0.85em;color:#78350f;margin-left:6px;">${neverDone.slice(0, 8).map(n => `${n.bunk} → ${n.activity}`).join(', ')}${neverDone.length > 8 ? '…' : ''}</span>
+                <span style="font-size:0.85em;color:#78350f;margin-left:6px;">${neverDone.slice(0, 8).map(n => `${escapeHtml(n.bunk)} → ${escapeHtml(n.activity)}`).join(', ')}${neverDone.length > 8 ? '…' : ''}</span>
                </div>`
             : `<div style="margin-bottom:10px;padding:10px 12px;background:#d1fae5;border:1px solid #10b981;border-radius:999px;">
                 <strong style="color:#047857;">All bunks have done all activities at least once.</strong>
@@ -1615,7 +1634,7 @@
         if (atLimit.length > 0) {
             html += `<div style="padding:10px 12px;background:#fee2e2;border:1px solid #ef4444;border-radius:999px;">
                 <strong style="color:#b91c1c;">At Limit (${atLimit.length}):</strong>
-                <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">${atLimit.map(a => `${a.bunk} → ${a.activity}`).join(', ')}</span>
+                <span style="font-size:0.85em;color:#7f1d1d;margin-left:6px;">${atLimit.map(a => `${escapeHtml(a.bunk)} → ${escapeHtml(a.activity)}`).join(', ')}</span>
              </div>`;
         }
 
