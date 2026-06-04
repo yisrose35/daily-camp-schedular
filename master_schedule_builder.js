@@ -4839,11 +4839,7 @@ function parseTimeToMinutes(str) {
   return h * 60 + (m || 0);
 }
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return `${h}:${m.toString().padStart(2, '0')}${ap}`;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 window.initMasterScheduler = init;
 

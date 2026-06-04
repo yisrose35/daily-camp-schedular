@@ -74,11 +74,7 @@ function getBunkGrade(bunkName) {
     return found ? found.grade : null;
 }
 
-function minutesToTime(min) {
-    let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-    h = h % 12 || 12;
-    return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 // Format YYYY-MM-DD → MM/DD/YYYY for display
 function formatDate(dateKey) {
@@ -100,25 +96,7 @@ function parseDateInput(str) {
     return null;
 }
 
-function parseTimeToMinutes(str) {
-    if (typeof str === 'number') return str;
-    if (!str) return null;
-    let s = str.toLowerCase().trim();
-    let mer = null;
-    if (s.includes('am')) mer = 'am';
-    else if (s.includes('pm')) mer = 'pm';
-    s = s.replace(/am|pm/g, '').trim();
-    const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-    if (!m) return null;
-    let hh = parseInt(m[1], 10);
-    const mm = parseInt(m[2], 10);
-    if (isNaN(hh) || isNaN(mm) || mm < 0 || mm > 59) return null;
-    if (mer) {
-        if (hh === 12) hh = mer === 'am' ? 0 : 12;
-        else if (mer === 'pm') hh += 12;
-    }
-    return hh * 60 + mm;
-}
+function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
 function isDateInRange(dateKey, start, end) {
     return dateKey >= start && dateKey <= end;

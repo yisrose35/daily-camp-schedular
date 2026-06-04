@@ -4276,11 +4276,7 @@ function parseTimeToMinutes(str) {
   return hh * 60 + mm;
 }
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 function uid() {
   return 'id_' + Math.random().toString(36).slice(2, 9);

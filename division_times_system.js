@@ -85,14 +85,7 @@
      * Convert minutes to time label
      * 540 → "9:00 AM", 810 → "1:30 PM"
      */
-    function minutesToTimeLabel(mins) {
-        if (mins === null || mins === undefined) return '';
-        let h = Math.floor(mins / 60);
-        let m = mins % 60;
-        const ampm = h >= 12 ? 'PM' : 'AM';
-        h = h % 12 || 12;
-        return `${h}:${m.toString().padStart(2, '0')} ${ampm}`;
-    }
+    function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
 
     /**
      * Convert minutes to Date object (for compatibility)

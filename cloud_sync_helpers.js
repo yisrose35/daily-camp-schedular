@@ -21,32 +21,7 @@
     // Ensures complete field structure before save
     // =========================================================================
     
-    function parseTimeToMinutes(timeStr) {
-        if (!timeStr || typeof timeStr !== 'string') return null;
-        
-        let s = timeStr.trim().toLowerCase();
-        let mer = null;
-        
-        if (s.includes("am") || s.includes("pm")) {
-            mer = s.includes("am") ? "am" : "pm";
-            s = s.replace(/am|pm/g, "").trim();
-        }
-        
-        const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!m) return null;
-        
-        let hh = parseInt(m[1], 10);
-        const mm = parseInt(m[2], 10);
-        
-        if (Number.isNaN(hh) || Number.isNaN(mm) || mm < 0 || mm > 59) return null;
-        
-        if (mer) {
-            if (hh === 12) hh = mer === "am" ? 0 : 12;
-            else if (mer === "pm") hh += 12;
-        }
-        
-        return hh * 60 + mm;
-    }
+    function parseTimeToMinutes(timeStr) { return window.CampUtils.parseTimeToMinutes(timeStr); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
     
     /**
      * Normalize a single field to ensure complete structure

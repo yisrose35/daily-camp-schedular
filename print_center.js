@@ -316,24 +316,8 @@ var _activeSheet = null; // table element id of currently focused sheet
 // =========================================================================
 function el(id) { return document.getElementById(id); }
 function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical; now also escapes quotes → closes attr-context gap)
-function parseTimeToMinutes(t) {
-    if (t === null || t === undefined) return null;
-    if (typeof t === 'number') return t;
-    if (t instanceof Date) return t.getHours() * 60 + t.getMinutes();
-    var s = String(t).trim();
-    var m = s.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-    if (!m) return null;
-    var h = parseInt(m[1]), mm = parseInt(m[2]);
-    if (m[3]) { var ap = m[3].toUpperCase(); if (ap === 'PM' && h < 12) h += 12; if (ap === 'AM' && h === 12) h = 0; }
-    return h * 60 + mm;
-}
-function minutesToTimeLabel(mins) {
-    if (mins === null || mins === undefined) return '';
-    var h24 = Math.floor(mins / 60), m = mins % 60;
-    var ap = h24 >= 12 ? 'PM' : 'AM';
-    var h12 = h24 % 12 || 12;
-    return h12 + ':' + String(m).padStart(2, '0') + ' ' + ap;
-}
+function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; handles num/Date/am-pm, harness-proven)
+function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
 function naturalSort(a, b) {
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
 }

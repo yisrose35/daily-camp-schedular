@@ -90,25 +90,7 @@
         return result ?? defaultVal;
     }
     
-    function parseTimeToMinutes(str) {
-        if (!str || typeof str !== "string") return null;
-        let s = str.trim().toLowerCase();
-        let meridiem = null;
-        if (s.endsWith("am") || s.endsWith("pm")) {
-            meridiem = s.endsWith("am") ? "am" : "pm";
-            s = s.replace(/am|pm/gi, "").trim();
-        }
-        const match = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-        if (!match) return null;
-        let hours = parseInt(match[1], 10);
-        const minutes = parseInt(match[2], 10);
-        if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null;
-        if (meridiem) {
-            if (hours === 12) hours = meridiem === "am" ? 0 : 12;
-            else if (meridiem === "pm" && hours < 12) hours += 12;
-        }
-        return hours * 60 + minutes;
-    }
+    function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(str); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
     
     function compareBunks(a, b) {
         return String(a ?? "").localeCompare(String(b ?? ""), undefined, { numeric: true, sensitivity: "base" });

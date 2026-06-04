@@ -353,14 +353,7 @@
         return hh * 60 + mm;
     }
 
-    function minutesToTimeLabel(min) {
-        if (min === null || min === undefined || isNaN(min)) return '';
-        const h24 = Math.floor(min / 60);
-        const m = String(min % 60).padStart(2, "0");
-        const ap = h24 >= 12 ? "PM" : "AM";
-        const h12 = h24 % 12 || 12;
-        return `${h12}:${m} ${ap}`;
-    }
+    function minutesToTimeLabel(min) { return window.CampUtils.minutesToTimeLabel(min); }  // → campistry_utils.js (canonical; identical for valid input, null/NaN→'')
 
     function findSlotIndexForTime(targetMin) {
         const times = window.unifiedTimes || [];

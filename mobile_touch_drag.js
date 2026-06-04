@@ -953,31 +953,9 @@ function findSkeletonEvent(tileId, module) {
 // =================================================================
 // UTILITY: Time parsing (matches both MS and DA)
 // =================================================================
-function parseTimeToMinutes(t) {
-  if (!t || typeof t !== 'string') return null;
-  let s = t.toLowerCase().trim();
-  let mer = null;
-  if (s.includes('am') || s.includes('pm')) {
-    mer = s.includes('am') ? 'am' : 'pm';
-    s = s.replace(/am|pm/g, '').trim();
-  }
-  const m = s.match(/^(\d{1,2})\s*:\s*(\d{2})$/);
-  if (!m) return null;
-  let hh = parseInt(m[1], 10);
-  const mm = parseInt(m[2], 10);
-  if (isNaN(hh) || isNaN(mm)) return null;
-  if (mer) {
-    if (hh === 12) hh = mer === 'am' ? 0 : 12;
-    else if (mer === 'pm') hh += 12;
-  }
-  return hh * 60 + mm;
-}
+function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; equivalence harness-proven)
 
-function minutesToTime(min) {
-  let h = Math.floor(min / 60), m = min % 60, ap = h >= 12 ? 'pm' : 'am';
-  h = h % 12 || 12;
-  return h + ':' + m.toString().padStart(2, '0') + ap;
-}
+function minutesToTime(min) { return window.CampUtils.minutesToTime(min); }  // → campistry_utils.js (canonical; byte-identical)
 
 // =================================================================
 // UTILITY: Extract tile data from element
