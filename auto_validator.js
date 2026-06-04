@@ -33,13 +33,23 @@
         'free', 'no field', 'lunch', 'snacks', 'dismissal',
         'swim', 'pool', 'custom', 'transition', 'buffer',
         'canteen', 'mincha', 'davening', 'lineup', 'bus',
-        'regroup', 'free play'
+        'regroup', 'free play',
+        // Transition / cleanup / generic non-facility labels. These are NOT real
+        // contended facilities (a whole grade "changes" or "cleans up" together,
+        // and "main activity" is the generic label for a custom pinned block with
+        // no assigned room). Without these, an unmapped label defaults to
+        // {not_sharable, cap 1} (see checkCrossDivision) and every co-occupancy is
+        // falsely reported as a cross-division/capacity conflict.
+        'change', 'cleanup', 'main activity'
     ]);
 
     const SKIP_ACTIVITIES = new Set([
         'free', 'lunch', 'snacks', 'dismissal', 'swim', 'pool',
         'canteen', 'gameroom', 'game room', 'transition', 'buffer',
-        'mincha', 'davening', 'lineup', 'bus', 'regroup', 'free play'
+        'mincha', 'davening', 'lineup', 'bus', 'regroup', 'free play',
+        // Transition/cleanup labels repeat every day by design (e.g. change before
+        // and after swim) — not real same-day activity repetitions.
+        'change', 'cleanup', 'main activity'
     ]);
 
     const isLeagueField = (fn) => /^game\s*\d+$/i.test(fn);
