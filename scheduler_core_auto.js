@@ -19816,14 +19816,22 @@
             const refilled = window.AutoSolverEngine.fallbackSweep(solverConfig);
             if (refilled > 0) log('[4.5] Re-filled ' + refilled + ' demoted slots');
 
-            // ★ v11.0: Apply full repair suite after re-fill for maximum recovery
-            if (refilled > 0) {
+            // ★ v11.0: Apply full repair suite after re-fill for maximum recovery.
+            // ★ FN-17: LNS / ejection-chain / BFS-augmenting are the heaviest post-solve
+            //   graph algorithms and can blow up on hard instances — the cause of the
+            //   multi-minute "hang" some seeds showed. Skip them once the whole
+            //   generation has burned its time budget; the best schedule so far stands
+            //   (any demoted slot just stays Free, surfaced by the Free-block warning).
+            var FN17_POST_SOLVE_BUDGET_MS = 45000; // total-gen budget for OPTIONAL repair
+            if (refilled > 0 && (Date.now() - startTime) < FN17_POST_SOLVE_BUDGET_MS) {
                 const r45lns = window.AutoSolverEngine.lnsRepair?.(solverConfig) || 0;
                 if (r45lns > 0) log('[4.5] LNS recovered ' + r45lns + ' more');
                 const r45ej = window.AutoSolverEngine.ejectionChainRepair?.(solverConfig) || 0;
                 if (r45ej > 0) log('[4.5] Ejection chains recovered ' + r45ej + ' more');
                 const r45bfs = window.AutoSolverEngine.bfsAugmentingRepair?.(solverConfig) || 0;
                 if (r45bfs > 0) log('[4.5] BFS augmenting recovered ' + r45bfs + ' more');
+            } else if (refilled > 0) {
+                log('[4.5] ⏱ FN-17 budget exceeded (' + Math.round((Date.now() - startTime) / 1000) + 's) — skipping heavy LNS/ejection/BFS repair; best-so-far stands');
             }
 
             // Final validation after all repair attempts
@@ -22823,6 +22831,83 @@
             }
             try { console.log('[FREE-ABSORB] absorbed=' + _absorbed); } catch (_e) {}
         } catch (_eAbs) { try { warn('[FreeAbsorb] ' + (_eAbs && _eAbs.message)); } catch (_e2) {} }
+
+        // ★ FN-15 FINAL SWEEP — guarantee no cross-grade share on a not_sharable /
+        //   same_division field (and no over-capacity / disallowed cross_division /
+        //   custom pairing) survives ANY earlier phase or repair/refill pass. Runs
+        //   on the FINAL scheduleAssignments right before dispatch/save; DEMOTE-ONLY
+        //   (offending slot → Free) with no re-fill afterward, so it can never
+        //   re-create a violation. This closes the residual that slipped past STEP
+        //   4.5's sweep when a later refill/perfection pass re-introduced it.
+        (function _fn15FinalFieldSweep() {
+            try {
+                var _sa = window.scheduleAssignments || {};
+                var _divs = window.divisions || {};
+                var _b2g = {}; Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+                var _gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+                var _fields = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
+                var _fcfg = {};
+                _fields.forEach(function (f) {
+                    if (!f || !f.name) return;
+                    var sw = f.sharableWith || f.sharing || {};
+                    _fcfg[String(f.name).toLowerCase().trim()] = {
+                        type: sw.type || 'not_sharable',
+                        cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2),
+                        pairs: sw.allowedPairs || {},
+                        divs: Array.isArray(sw.divisions) ? sw.divisions : [],
+                        gsr: f.gradeShareRules || {}
+                    };
+                });
+                var byField = {};
+                Object.keys(_sa).forEach(function (bunk) {
+                    var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _b2g[String(bunk)] || '?';
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                        if (!fl || fl === 'free' || !_fcfg[fl]) return;
+                        if (e._pinned || e._league || e._autoSpecial || e._isRotationEvent) return; // never demote protected
+                        var s = e._startMin != null ? e._startMin : e.startMin;
+                        var en = e._endMin != null ? e._endMin : e.endMin;
+                        if (s == null || en == null) return;
+                        (byField[fl] = byField[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: s, e: en });
+                    });
+                });
+                var demoted = 0;
+                Object.keys(byField).forEach(function (fl) {
+                    var arr = byField[fl].sort(function (a, b) { return (a.s - b.s) || (a.idx - b.idx); });
+                    var cfg = _fcfg[fl];
+                    for (var i = 0; i < arr.length; i++) {
+                        var u = arr[i];
+                        var cur = _sa[u.bunk] && _sa[u.bunk][u.idx];
+                        if (!cur || cur.field === 'Free') continue; // already freed this pass
+                        var st = cfg.type, pairs = cfg.pairs, dv = cfg.divs;
+                        var ov = cfg.gsr && (cfg.gsr[u.grade] || cfg.gsr[String(u.grade)]);
+                        if (ov && ov.type) { st = ov.type; pairs = ov.allowedPairs || pairs; dv = Array.isArray(ov.divisions) ? ov.divisions : dv; }
+                        var others = arr.filter(function (o, j) {
+                            return j !== i && o.bunk !== u.bunk && o.s < u.e && o.e > u.s
+                                && _sa[o.bunk] && _sa[o.bunk][o.idx] && _sa[o.bunk][o.idx].field !== 'Free';
+                        });
+                        if (others.length === 0) continue;
+                        var bad = false;
+                        if (st === 'not_sharable') bad = true;
+                        else if (st === 'same_division') { if (others.some(function (o) { return o.grade !== u.grade; })) bad = true; }
+                        else if (st === 'cross_division') { if (typeof isCrossDivAllowed === 'function' && !isCrossDivAllowed(u.grade, others.map(function (o) { return o.grade; }), pairs)) bad = true; }
+                        else if (st === 'custom') {
+                            if (dv.length > 0) { if (others.some(function (o) { return o.grade !== u.grade && dv.indexOf(o.grade) < 0; }) || dv.indexOf(u.grade) < 0) bad = true; }
+                            else if (others.some(function (o) { return o.grade !== u.grade; })) bad = true;
+                        }
+                        if (!bad) { var d = {}; d[u.bunk] = 1; others.forEach(function (o) { d[o.bunk] = 1; }); if (Object.keys(d).length > cfg.cap) bad = true; }
+                        if (bad) {
+                            _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: 'fn15_final_sweep', continuation: false };
+                            demoted++;
+                        }
+                    }
+                });
+                if (demoted > 0) { log('[FN-15 FINAL SWEEP] demoted ' + demoted + ' cross-grade/over-cap field placement(s) → Free'); try { warnings.push({ type: 'fn15_final_demotions', count: demoted }); } catch (_ew) {} }
+                else { log('[FN-15 FINAL SWEEP] ✅ no cross-grade field violations'); }
+            } catch (_eFn15) { try { warn('[FN-15 FINAL SWEEP] error: ' + (_eFn15 && _eFn15.message)); } catch (_e) {} }
+        })();
 
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
 
