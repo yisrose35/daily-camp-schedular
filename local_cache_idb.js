@@ -71,6 +71,14 @@
                     // they can upgrade. The next read will re-open.
                     try { _db.close(); } catch (_) {}
                     _db = null;
+                    // ★ #V2-24: also clear the cached open-promise. Without this,
+                    //   the next _open() short-circuits on `if (_opening) return _opening`
+                    //   and hands back the stale promise that resolved to the CLOSED db,
+                    //   so every later read/write throws InvalidStateError and never
+                    //   recovers — defeating the "next read will re-open" intent.
+                    //   (Latent: DB_VERSION is frozen at 1 today, so onversionchange
+                    //   doesn't fire yet; this future-proofs a version bump.)
+                    _opening = null;
                 };
                 resolve(_db);
             };
