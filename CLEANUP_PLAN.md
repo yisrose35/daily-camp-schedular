@@ -59,7 +59,12 @@ before assuming.
 - **18 escaper copies** (named `esc`/`escHtml`/`escapeHtml`/`_escHtml`) replaced with a 1-line delegation: analytics, camper_locator, daily_adjustments, coverage_warning, playoff_hub, playoff_mode, print_center, app1, auto_schedule_grid, facilities, leagues, rotation_events, rules, specialty_leagues, unified_schedule_system, zones, special_activities, schedule_calendar_views.
 - **SECURITY BONUS:** ~10 of those were the incomplete `textContent`-trick / `&<>"`-partial escapers (didn't escape quotes) → the same attribute-breakout class fixed in the v2 audit. Delegating UPGRADES them to the complete `&<>"'`. Notably print_center.escHtml was `textContent`-only and used in `data-*` attributes → latent gap now closed.
 - **Deliberately NOT consolidated (landmines):** `campistry_me.esc` (its sibling `je()` depends on `esc` leaving `'` raw → must not escape quotes), `campistry_security.escapeHtml` (escapes MORE — `&<>"'/\`` OWASP-hardened; delegating would be a downgrade). False positives skipped: `auto_validator`/`post_edit_system` `function esc(e)` = Escape-KEY handlers, not escapers.
-- node --check: 19/19 OK. Live-verify pending rebuild.
+- node --check: 19/19 OK. **LIVE-VERIFIED on rebuilt preview (`10bdca04`):** CampUtils loaded; escapeHtml complete (`A<b>"x'&/` → `A&lt;b&gt;&quot;x&#39;&amp;/`); delegated escaper neutralizes body+attribute XSS; **49 DA tiles rendered via the delegated `_escHtml` with 0 runtime errors**; schedule data intact (06-03+06-04 = 175 blocks each, no loss); all 5 outputs present; all escaper modules loaded clean. Result: ~80 lines of duplicated logic removed + a security upgrade (the incomplete escapers now complete).
+
+### Remaining helper candidates (NEXT pass — RISKIER, touch scheduling logic → careful)
+- **`parseTimeToMinutes` (17 files):** DIVERGED (string-only vs string+number+Date). A canonical exists in `SchedulerCoreUtils` (analytics already delegate-with-fallback). Consolidating needs a SUPERSET canonical (handle string/number/Date/am-pm) + per-call-site migration + live re-verify of BOTH builders, because this parses every schedule time — a regression here corrupts scheduling. Do as its own focused pass.
+- **Time formatters `minutesToTimeLabel`/`minutesToTime` (7 each):** SchedulerCoreUtils canonical; many already delegate-with-fallback. Lower risk; pairs naturally with the parseTimeToMinutes pass.
+- **NOT targets (confirmed):** `uid` (per-subsystem prefix), `timesOverlap` (different signatures), and the per-module `log`/`init`/`render`/`loadData`/etc. (coincidental same-names).
 
 ### Remaining helper candidates (later passes)
 
