@@ -1105,7 +1105,7 @@ function _renderGradeRowHTML(gn,bunks){
     return '<div class="fg dm-grade-row" style="background:var(--s50);padding:8px 10px;border-radius:var(--r);border:1px solid var(--s200);margin-bottom:6px;cursor:grab">'
         +'<div class="fr" style="align-items:center;gap:6px">'
             +'<span class="me-grip" title="Drag to reorder grade" style="cursor:grab;color:var(--s400);font-size:1rem;line-height:1;padding:0 4px;user-select:none">⋮⋮</span>'
-            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
+            +'<div class="fg" style="flex:1;margin:0"><label class="fl">Grade Name</label><input class="fi dmGradeN" data-orig="'+esc(gn||'')+'" value="'+esc(gn||'')+'" placeholder="e.g. 1st Grade"></div>'
             +'<button type="button" class="me-btn me-btn--ghost me-btn--sm dm-grade-remove" title="Remove grade" style="color:var(--danger,#dc2626)">×</button>'
         +'</div>'
         +_renderBunkChipsHTML(bunks)
@@ -1215,6 +1215,22 @@ function saveDiv(){
         //   analytics paths to lose schedule data for the renamed division.
         _propagateDivisionRename(editingDiv, name);
     }
+    // ★ FN-1: detect grade RENAMES (a row's data-orig differs from its new name) and
+    //   PROPAGATE the old grade's setup to the new name — manual skeleton tiles, auto
+    //   layers, schedule/divisionTimes keys (grades ARE the scheduling unit), and roster
+    //   campers — instead of letting the old name fall through to removedGrades below,
+    //   which silently DESTROYED that grade's skeleton/layers/times and stranded campers.
+    var gradeRenameMap={};
+    document.querySelectorAll('#dmGrades .dm-grade-row .dmGradeN').forEach(function(el){
+        var orig=(el.dataset.orig||'').trim(), cur=(el.value||'').trim();
+        if(orig&&cur&&orig!==cur&&oldGrades.indexOf(orig)!==-1&&(cur in grades))gradeRenameMap[orig]=cur;
+    });
+    Object.keys(gradeRenameMap).forEach(function(oldG){
+        var newG=gradeRenameMap[oldG];
+        _propagateDivisionRename(oldG,newG);      // scheduling-unit keys / slot _division / cloud
+        _propagateGradeRenameTiles(oldG,newG);    // manual skeleton tiles + auto-layer config
+        Object.values(roster).forEach(function(c){if(c&&c.grade===oldG)c.grade=newG});
+    });
     var gradeOrder=[];
     rows.forEach(function(row){
         var gn=row.querySelector('.dmGradeN');
@@ -1230,7 +1246,7 @@ function saveDiv(){
     if(removed.length>0)_purgeOrphanedBunks(removed);
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
-    var removedGrades=oldGrades.filter(function(g){return !(g in grades)});
+    var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
     if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
 }
 function deleteDiv(n){
@@ -1306,6 +1322,43 @@ function _purgeOrphanedAutoLayers(removedGrades){
             console.log('[Me] Pruned',prunedCount,'orphaned auto-layer entr(ies) for removed grade(s):',removedGrades);
         }
     }catch(e){console.warn('[Me] _purgeOrphanedAutoLayers:',e)}
+}
+// ★ FN-1: Propagate a GRADE rename to the saved manual skeletons + auto-layer config.
+//   Mirrors _purgeOrphanedSkeletonTiles / _purgeOrphanedAutoLayers but RENAMES (oldG→newG)
+//   instead of deleting, so a grade rename keeps its skeleton tiles, dailyAutoLayers entry,
+//   and gradeLayerRules entry. (Schedule/divisionTimes/slot keys are handled by
+//   _propagateDivisionRename since grades are the scheduling unit; campers by the saveDiv loop.)
+function _propagateGradeRenameTiles(oldG, newG){
+    if(!oldG||!newG||oldG===newG)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var app1=gs&&gs.app1; if(!app1)return;
+        var changed=false;
+        // manual skeleton tiles: tile.division === oldG → newG (cloud blob + local per-date mirror)
+        if(app1.dailySkeletons&&typeof app1.dailySkeletons==='object'){
+            Object.keys(app1.dailySkeletons).forEach(function(date){
+                var tiles=app1.dailySkeletons[date]; if(!Array.isArray(tiles))return;
+                tiles.forEach(function(t){if(t&&t.division===oldG){t.division=newG;changed=true}});
+                try{var lk='campManualSkeleton_'+date,raw=localStorage.getItem(lk);if(raw){var lt=JSON.parse(raw);if(Array.isArray(lt)){var lc=false;lt.forEach(function(t){if(t&&t.division===oldG){t.division=newG;lc=true}});if(lc)localStorage.setItem(lk,JSON.stringify(lt))}}}catch(_){}
+            });
+        }
+        // auto layers: dailyAutoLayers[date][oldG] → [newG]
+        if(app1.dailyAutoLayers&&typeof app1.dailyAutoLayers==='object'){
+            Object.keys(app1.dailyAutoLayers).forEach(function(date){
+                var bg=app1.dailyAutoLayers[date];
+                if(bg&&typeof bg==='object'&&!Array.isArray(bg)&&(oldG in bg)&&!(newG in bg)){bg[newG]=bg[oldG];delete bg[oldG];changed=true}
+            });
+        }
+        // gradeLayerRules[oldG] → [newG]
+        if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'&&(oldG in app1.gradeLayerRules)&&!(newG in app1.gradeLayerRules)){
+            app1.gradeLayerRules[newG]=app1.gradeLayerRules[oldG];delete app1.gradeLayerRules[oldG];changed=true;
+        }
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('app1',app1);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] Propagated grade rename in skeletons/auto-layers:',oldG,'→',newG);
+        }
+    }catch(e){console.warn('[Me] _propagateGradeRenameTiles:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
