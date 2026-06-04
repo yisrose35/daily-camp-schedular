@@ -594,9 +594,40 @@
             }
         });
         
+        // ★★★ #V2-25: STRUCTURE-AWARE PRUNE — kill the cross-scheduler deleted-bunk
+        // RESURRECTION bug. The per-bunk merge above re-introduces any bunk present in
+        // ANY scheduler's row. So when the owner deletes a bunk from the camp structure,
+        // a stale OTHER-scheduler row (saved before the deletion) RESURRECTS it on every
+        // load — it pollutes scheduleAssignments, re-persists on the next save, and skews
+        // field-conflict counts. Drop any merged bunk no longer in the FULL camp structure.
+        //   • Source = app1.divisions (CONFIG-level, shared by all users, NOT the
+        //     scope-filtered window.divisions) so we never over-prune a scoped scheduler's
+        //     real-but-out-of-scope bunks.
+        //   • GUARDED: if the structure isn't definitively loaded (empty), skip entirely —
+        //     never wipe a legitimately-loaded schedule during an early/racing load.
+        // (Full live reproduction needs 2 accounts; the prune itself is single-account-safe
+        //  and is a no-op when no bunk is orphaned.)
+        try {
+            // Only when MERGING ≥2 scheduler rows — resurrection requires a 2nd (stale)
+            // row; a single row is fully replaced by its own upsert so it can't resurrect.
+            // This makes single-user loads a guaranteed no-op (zero over-prune risk).
+            const _gs = (records.length > 1 && window.loadGlobalSettings) ? window.loadGlobalSettings() : null;
+            const _divs = (_gs && _gs.app1 && _gs.app1.divisions) || null;
+            if (_divs && Object.keys(_divs).length > 0) {
+                const _valid = new Set();
+                Object.values(_divs).forEach(d => { if (d && Array.isArray(d.bunks)) d.bunks.forEach(b => _valid.add(String(b))); });
+                if (_valid.size > 0) {
+                    let _pruned = 0;
+                    Object.keys(mergedAssignments).forEach(b => { if (!_valid.has(String(b))) { delete mergedAssignments[b]; _pruned++; } });
+                    Object.keys(mergedSegments).forEach(b => { if (!_valid.has(String(b))) { delete mergedSegments[b]; } });
+                    if (_pruned > 0) log('★ #V2-25 pruned', _pruned, 'resurrected/orphan bunk(s) not in camp structure');
+                }
+            }
+        } catch (e) { /* non-fatal: never let the prune break a load */ }
+
         // ★★★ FIX: Deserialize unifiedTimes if needed ★★★
         const deserializedTimes = deserializeUnifiedTimes(mergedUnifiedTimes);
-        
+
         log('Merge complete:', {
             bunks: Object.keys(mergedAssignments).length,
             unifiedTimes: deserializedTimes.length,
