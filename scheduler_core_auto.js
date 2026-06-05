@@ -17882,7 +17882,10 @@
                         const otherGrade = Object.entries(divisions).find(([g, d]) =>
                             (d.bunks || []).map(String).includes(String(otherBunk))
                         )?.[0];
-                        const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                        // ★ FN-14 (completeness): durable per-bunk grid so the field-overlap index
+                        //   isn't blinded on a 2nd+ gen (divisionTimes._perBunkSlots clobber) → would
+                        //   make a busy field look free to the alternative-field finder.
+                        const otherPbs = otherGrade ? ((window._perBunkSlots?.[otherGrade]?.[String(otherBunk)]) || window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
                         // ★ Day 15: include continuation slots in the overlap index.
                         //   Multi-period blocks store the full span only on the head
                         //   when _startMin/_endMin are set there; if the head's bucket
@@ -18125,7 +18128,12 @@
             }
             var syncedDone = {};
             allGrades.forEach(function(grade) {
-                var pbs = window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots;
+                // ★ FN-14 (completeness): prefer the durable per-bunk grid (window._perBunkSlots,
+                //   reset+populated fresh each run at ~L16360) — window.divisionTimes._perBunkSlots
+                //   gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which
+                //   would make this synchronized-prep pass read undefined and silently skip placement.
+                //   Same fix the 12 main-grid materialization reads use; strict-superset fallback.
+                var pbs = (window._perBunkSlots && window._perBunkSlots[grade]) || (window.divisionTimes && window.divisionTimes[grade] && window.divisionTimes[grade]._perBunkSlots);
                 if (!pbs) return;
                 var gradeBunks = getBunksForGrade(grade, divisions);
                 // Synchronized: find common slot for all grade bunks
@@ -18312,7 +18320,10 @@
                                     const otherGrade = Object.entries(divisions).find(([g, d]) =>
                                         (d.bunks || []).map(String).includes(String(otherBunk))
                                     )?.[0];
-                                    const otherPbs = otherGrade ? (window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
+                                    // ★ FN-14 (completeness): durable per-bunk grid so the court-busy
+                                    //   check isn't blinded on a 2nd+ gen → would let a taken court
+                                    //   look free and get double-booked.
+                                    const otherPbs = otherGrade ? ((window._perBunkSlots?.[otherGrade]?.[String(otherBunk)]) || window.divisionTimes?.[otherGrade]?._perBunkSlots?.[String(otherBunk)] || []) : [];
                                     for (let oi = 0; oi < otherSlots.length; oi++) {
                                         const oe = otherSlots[oi];
                                         if (!oe || oe.continuation) continue;
@@ -18819,7 +18830,10 @@
                 }
 
                 // Write to scheduleAssignments for each bunk (triggers league row detection in grid)
-                const pbs = window.divisionTimes?.[lb.divName]?._perBunkSlots;
+                // ★ FN-14 (completeness): prefer the durable per-bunk grid so league games still
+                //   materialize on a 2nd+ in-session gen (divisionTimes._perBunkSlots is clobbered
+                //   mid-run by the patched loadCurrentDailyData; window._perBunkSlots survives).
+                const pbs = window._perBunkSlots?.[lb.divName] || window.divisionTimes?.[lb.divName]?._perBunkSlots;
                 if (!pbs) return;
                 Object.entries(pbs).forEach(([bk, bs]) => {
                     const fi = bs.findIndex(s => s.startMin === lb.startMin);
@@ -18867,7 +18881,9 @@
             Object.entries(window.leagueAssignments || {}).forEach(([gn, gs]) => {
                 Object.entries(gs).forEach(([startMinStr, asgn]) => {
                     if (!asgn || !asgn.matchups || asgn.matchups.length === 0) return;
-                    const pbs = window.divisionTimes?.[gn]?._perBunkSlots;
+                    // ★ FN-14 (completeness): durable per-bunk grid (see above) — league fallback
+                    //   writeback must also survive the 2nd+-gen divisionTimes clobber.
+                    const pbs = window._perBunkSlots?.[gn] || window.divisionTimes?.[gn]?._perBunkSlots;
                     if (!pbs) return;
                     Object.entries(pbs).forEach(([bk, bs]) => {
                         const fi = bs.findIndex(s => s.startMin === parseInt(startMinStr));
