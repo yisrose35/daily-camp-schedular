@@ -22847,7 +22847,7 @@
         //   (so no sharing/capacity conflict is possible), respecting access + time rules
         //   + no same-day repeat. Runs BEFORE the FN-15/19/21 sweeps so any imperfect fill
         //   is caught and demoted back to Free (bounded downside). DEMOTE-safe, additive.
-        (function _freeFillSweepFN22() {
+        function _freeFillSweepFN22() {
             try {
                 var _sa = window.scheduleAssignments || {};
                 var _divs = window.divisions || {};
@@ -22901,7 +22901,7 @@
                 if (_filled > 0) log('[FN-22 FREE-FILL] filled ' + _filled + ' Free slot(s) with sports on empty fields');
                 else log('[FN-22 FREE-FILL] no fillable Free slots');
             } catch (_eFF) { try { warn('[FN-22 FREE-FILL] error: ' + (_eFF && _eFF.message)); } catch (_x) {} }
-        })();
+        }
 
         // ★ FN-15 FINAL SWEEP — guarantee no cross-grade share on a not_sharable /
         //   same_division field (and no over-capacity / disallowed cross_division /
@@ -23094,6 +23094,12 @@
                 else { log('[FN-19/21 SWEEP] ✅ no special-capacity / staggered violations'); }
             } catch (_eFn1921) { try { warn('[FN-19/21 SWEEP] error: ' + (_eFn1921 && _eFn1921.message)); } catch (_e) {} }
         })();
+
+        // ★ FN-22: now fill any remaining Free slots — both solver-left (special-room
+        //   contention) AND slots the FN-15/19/21 sweeps just demoted — with a sport on a
+        //   completely-empty field. Runs LAST: empty-field fills are conflict-free by
+        //   construction, so they need no further sweep validation.
+        try { _freeFillSweepFN22(); } catch (_eff2) {}
 
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
