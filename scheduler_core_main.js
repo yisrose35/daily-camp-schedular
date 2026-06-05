@@ -3623,7 +3623,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // The STEP 7.6 free-fill below then refills everything freed here.
         // =========================================================================
         try {
-            if (typeof window.validateAutoSchedule === 'function') {
+            // STEP 7.56 DISABLED: calling validateAutoSchedule() inline reads pre-settle slot
+            // geometry (the per-bunk grid is finalized ~100ms AFTER generation by the slot-resize),
+            // so it both misses real violations and risks demoting on false positives. The
+            // authoritative pass is the post-settle capacity-repair gate in daily_adjustments.js,
+            // which runs after the geometry finalizes. Keeping the block gated-off (not deleted)
+            // to minimise churn in this hot generation path.
+            if (false) {
                 const _sa77 = window.scheduleAssignments || {};
                 const _d77 = window.divisions || {};
                 const _b2g77 = {}; Object.keys(_d77).forEach(g => ((_d77[g] && _d77[g].bunks) || []).forEach(b => { _b2g77[String(b)] = g; }));
