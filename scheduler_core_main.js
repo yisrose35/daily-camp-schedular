@@ -3473,6 +3473,126 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.55: Room-capacity / sharing demote sweep (manual analog of auto FN-19/21)
+        // The manual special-placement path counts capacity per the special's OWN
+        // sharing config. When two specials map to ONE physical room with different
+        // caps (e.g. "Arts & Crafts 3" not_sharable cap-1 + "Arts and Crafts 3"
+        // same_division cap-2 both at room "Arts and Crafts 3"), it can place 2 bunks
+        // via the laxer twin — which the auto validator (location-keyed, most-
+        // restrictive) then flags as a capacity violation. This DEMOTE-ONLY sweep
+        // resolves each room EXACTLY as auto_validator.buildFieldSharingMap does
+        // (facility-field precedence, then the FIRST special per location wins) and
+        // demotes any occupant beyond the room's capacity / sharing rule → Free (STEP
+        // 7.6 below then re-fills). _league / _postEdit / _pinned are user-locked: they
+        // COUNT toward capacity but are never demoted. Runs on the FINAL schedule.
+        // =========================================================================
+        try {
+            var _rsa = window.scheduleAssignments || {};
+            var _rdivs = window.divisions || {};
+            var _rb2g = {}; Object.keys(_rdivs).forEach(function (g) { ((_rdivs[g] && _rdivs[g].bunks) || []).forEach(function (b) { _rb2g[String(b)] = g; }); });
+            var _rgs = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+            // Build room config the SAME way auto_validator.buildFieldSharingMap does so
+            // the generator and validator agree: facility-field precedence, then the first
+            // special per location wins; orphan custom→same_division, all→same_division.
+            var _rcfg = {};
+            function _rnorm(sw) {
+                var ty = (sw && sw.type) || 'not_sharable';
+                var dv = (sw && Array.isArray(sw.divisions)) ? sw.divisions : [];
+                if (ty === 'custom' && dv.length === 0) ty = 'same_division';
+                if (ty === 'all') ty = 'same_division';
+                return { type: ty, cap: parseInt(sw && sw.capacity) || (ty === 'not_sharable' ? 1 : 2), pairs: (sw && sw.allowedPairs) || {}, divs: dv };
+            }
+            ((_rgs.app1 && _rgs.app1.fields) || _rgs.fields || []).forEach(function (f) {
+                if (!f || !f.name) return;
+                _rcfg[String(f.name).toLowerCase().trim()] = _rnorm(f.sharableWith || {});
+            });
+            ((_rgs.app1 && _rgs.app1.specialActivities) || _rgs.specialActivities || []).forEach(function (s) {
+                if (!s || !s.name) return;
+                var key = String(s.location || s.name).toLowerCase().trim();
+                if (_rcfg[key]) return; // field precedence + first-special-per-location wins (matches validator)
+                _rcfg[key] = _rnorm(s.sharableWith || {});
+            });
+            var _rskip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
+            var _rdt = window.divisionTimes || {};
+            function _rtime(bunk, grade, idx, e) {
+                var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_rdt[grade] && _rdt[grade]._perBunkSlots && _rdt[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                var ds = _rdt[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                return null;
+            }
+            function _rCrossOk(grade, others, pairs) {
+                if (!pairs) return false;
+                for (var i = 0; i < others.length; i++) {
+                    if (grade === others[i]) continue;
+                    var ok = (pairs[grade] && pairs[grade][others[i]]) || (pairs[others[i]] && pairs[others[i]][grade]);
+                    if (!ok) return false;
+                }
+                return true;
+            }
+            var _rbyLoc = {};
+            Object.keys(_rsa).forEach(function (bunk) {
+                var slots = _rsa[bunk]; if (!Array.isArray(slots)) return;
+                var g = _rb2g[String(bunk)] || '?';
+                slots.forEach(function (e, idx) {
+                    if (!e || e.continuation) return;
+                    var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                    if (!fl || _rskip[fl] || /^game\s*\d+$/i.test(fl) || !_rcfg[fl]) return;
+                    var t = _rtime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    var prot = !!(e._league || e._postEdit || e._pinned);
+                    (_rbyLoc[fl] = _rbyLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: t.s, e: t.e, dur: t.e - t.s, prot: prot });
+                });
+            });
+            var _rdemoted = 0, _rstag = 0, _rcap = 0;
+            function _rlive(u) { var c = _rsa[u.bunk] && _rsa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
+            function _rdemote(u) {
+                if (!_rlive(u) || u.prot) return false; // never demote user-locked (league/post-edit/pinned)
+                _rsa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, _demotedReason: 'manual_room_cap', continuation: false };
+                var sl = _rsa[u.bunk];
+                for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false }; } else break; }
+                _rdemoted++; return true;
+            }
+            Object.keys(_rbyLoc).forEach(function (fl) {
+                var cfg = _rcfg[fl]; var arr = _rbyLoc[fl];
+                // PASS 1 — anti-stagger: among OVERLAPPING occupants keep the protected/
+                //   longest/earliest as primary; demote any non-protected overlapper whose
+                //   [start,end] differs (so the rest share one aligned window).
+                arr.sort(function (a, b) { return (b.prot - a.prot) || (b.dur - a.dur) || (a.s - b.s) || (a.idx - b.idx); });
+                for (var i = 0; i < arr.length; i++) {
+                    var u = arr[i]; if (!_rlive(u)) continue;
+                    for (var j = 0; j < arr.length; j++) {
+                        if (j === i) continue;
+                        var o = arr[j]; if (o.bunk === u.bunk || !_rlive(o)) continue;
+                        if (o.s < u.e && o.e > u.s && (o.s !== u.s || o.e !== u.e)) { if (_rdemote(o)) _rstag++; }
+                    }
+                }
+                // PASS 2 — capacity + sharing-type on identical-window groups.
+                var groups = {};
+                arr.forEach(function (u) { if (!_rlive(u)) return; var key = u.s + '-' + u.e; (groups[key] = groups[key] || []).push(u); });
+                Object.keys(groups).forEach(function (key) {
+                    var grp = groups[key].sort(function (a, b) { return (b.prot - a.prot) || (a.idx - b.idx) || String(a.bunk).localeCompare(String(b.bunk)); });
+                    var st = cfg.type, pairs = cfg.pairs, dv = cfg.divs;
+                    var capMax = (st === 'not_sharable') ? 1 : (cfg.cap || 1);
+                    var kept = [];
+                    grp.forEach(function (u) {
+                        if (!_rlive(u)) return;
+                        var ok = kept.length < capMax;
+                        if (ok && kept.length > 0) {
+                            var kg = kept.map(function (x) { return x.grade; });
+                            if (st === 'not_sharable') ok = false;
+                            else if (st === 'same_division') { if (kg.some(function (gg) { return gg !== u.grade; })) ok = false; }
+                            else if (st === 'cross_division') { if (!_rCrossOk(u.grade, kg, pairs)) ok = false; }
+                            else if (st === 'custom') { if (dv.length > 0) { if (dv.indexOf(u.grade) < 0 || kg.some(function (gg) { return dv.indexOf(gg) < 0; })) ok = false; } else if (kg.some(function (gg) { return gg !== u.grade; })) ok = false; }
+                        }
+                        if (ok || u.prot) kept.push(u); else { if (_rdemote(u)) _rcap++; }
+                    });
+                });
+            });
+            if (_rdemoted > 0) console.log('[STEP 7.55] room-capacity sweep: demoted ' + _rdemoted + ' (' + _rstag + ' staggered, ' + _rcap + ' over-cap/cross-grade) placement(s) → Free');
+            else console.log('[STEP 7.55] room-capacity sweep: ✅ no room-capacity/staggered violations');
+        } catch (_e755) { console.warn('[STEP 7.55] room-capacity sweep failed:', _e755); }
+
+        // =========================================================================
         // STEP 7.6: Empty-field free-fill (manual analog of auto FN-22)
         // STEP 7.5 (autoFillSlotSilent) skips any slot carrying _fixed / _pinned /
         // _bunkOverride — but a Free *skeleton* slot legitimately carries those flags
