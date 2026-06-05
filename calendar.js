@@ -219,10 +219,35 @@
             };
         }
         all[date].leagueDayCounters = all[date].leagueDayCounters || {};
+        // ★ FUTURE-DATE RESOURCE PERSISTENCE: fill per-date resource overrides saved
+        // via the reliable app1 path (mirrors skeleton/trips). The daily_schedules sync
+        // SKIPS dates with no generated schedule, so a maintenance / field-unavailable
+        // note set today for a FUTURE date never synced through the schedule path. Here
+        // we fill ONLY-WHEN-MISSING so a real schedule's resources are never overwritten.
+        try {
+            var _rgs = window.loadGlobalSettings && window.loadGlobalSettings();
+            var _rbd = _rgs && _rgs.app1 && _rgs.app1.dailyResourcesByDate && _rgs.app1.dailyResourcesByDate[date];
+            if (_rbd && typeof _rbd === 'object') {
+                var _hasContent = function (v) {
+                    if (v === undefined || v === null) return false;
+                    if (Array.isArray(v)) return v.length > 0;
+                    if (typeof v === 'object') return Object.keys(v).some(function (k) {
+                        var vv = v[k];
+                        if (Array.isArray(vv)) return vv.length > 0;
+                        if (vv && typeof vv === 'object') return Object.keys(vv).length > 0;
+                        return vv !== undefined && vv !== null && vv !== false;
+                    });
+                    return !!v;
+                };
+                Object.keys(_rbd).forEach(function (rk) {
+                    if (!_hasContent(all[date][rk])) all[date][rk] = _rbd[rk];
+                });
+            }
+        } catch (_eRes) { /* ignore — non-fatal enrichment */ }
         window.currentDailyData = all[date];
         return window.currentDailyData;
     };
-    
+
     window.loadPreviousDailyData = function() {
         try {
             const [Y, M, D] = window.currentScheduleDate.split('-').map(Number);
@@ -265,6 +290,25 @@ all[date].updated_at = new Date().toISOString();
                 console.warn("⚠️ Bridge not found, falling back to local save");
                 safeLocalStorageSet(DAILY_DATA_KEY, JSON.stringify(all));
             }
+
+            // ★ FUTURE-DATE RESOURCE PERSISTENCE: mirror per-date RESOURCE overrides
+            // (field/activity unavailable for scheduled maintenance, disabled sports,
+            // disabled specialty leagues) into app1.dailyResourcesByDate and sync via the
+            // reliable 'app1' path — the same route the per-date skeleton/trips use. The
+            // daily_schedules sync above SKIPS dates with no generated schedule, so a
+            // note set today for a FUTURE date would be lost on a fresh session/device.
+            // This path round-trips through camp_state_kv so it's ready on the day.
+            try {
+                var _RES_KEYS = ['overrides', 'dailyDisabledSportsByField', 'dailyFieldAvailability', 'disabledSpecialtyLeagues'];
+                if (_RES_KEYS.indexOf(key) > -1 && typeof window.loadGlobalSettings === 'function' && typeof window.saveGlobalSettings === 'function') {
+                    var _sgs = window.loadGlobalSettings() || {};
+                    if (!_sgs.app1) _sgs.app1 = {};
+                    if (!_sgs.app1.dailyResourcesByDate) _sgs.app1.dailyResourcesByDate = {};
+                    if (!_sgs.app1.dailyResourcesByDate[date]) _sgs.app1.dailyResourcesByDate[date] = {};
+                    _sgs.app1.dailyResourcesByDate[date][key] = value;
+                    window.saveGlobalSettings('app1', _sgs.app1);
+                }
+            } catch (_eResSave) { /* ignore — daily_schedules path above is the fallback */ }
         } catch (e) {
             console.error("Failed to save daily data:", e);
         }
