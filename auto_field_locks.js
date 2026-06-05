@@ -289,17 +289,15 @@
         const overlapping = getOverlappingClaims(fieldName, startMin, endMin, null);
 
         for (const claim of overlapping) {
-            if (claim.lockType === 'exclusive') {
-                // ★ FN-7 (latent / PLAUSIBLE): the division-lock skip on the next line is
-                //   currently UNREACHABLE — it lives inside the `=== 'exclusive'` guard, so
-                //   `claim.lockType === 'division'` is always false. No code creates
-                //   'division' locks in auto today, so this has zero live effect. If/when
-                //   division locks are added, widen this guard to
-                //   `=== 'exclusive' || === 'division'` so a division lock blocks OTHER
-                //   divisions while the allowed division (claim.grade === divisionContext)
-                //   may still use the field. Documented rather than speculatively rewired,
-                //   since the change can't be verified without the (nonexistent) feature.
-                // Division locks: skip if caller IS the allowed division
+            if (claim.lockType === 'exclusive' || claim.lockType === 'division') {
+                // ★ FN-7 FIXED: an `exclusive` lock blocks EVERY division; a `division`
+                //   lock blocks only OTHER divisions — the allowed division (the one that
+                //   placed the lock, claim.grade === divisionContext) may still use the
+                //   field. Previously the division-skip below sat inside an
+                //   `=== 'exclusive'` guard, so it was unreachable and a future division
+                //   lock would have wrongly blocked its own division too. No code creates
+                //   'division' locks today, so this is inert now but correct for when the
+                //   feature is added.
                 if (claim.lockType === 'division' && claim.grade === divisionContext) continue;
                 return {
                     lockedBy: claim.lockedBy,
