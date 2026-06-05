@@ -1773,10 +1773,29 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         console.log('[STEP 1] Building division-specific time slots...');
         
        if (window.DivisionTimesSystem) {
-            if (window._autoDivisionTimesBuilt) {
+            // ★ MODE ISOLATION (double-lunch fix): _autoDivisionTimesBuilt is an
+            //   AUTO-pipeline flag — when the auto solver pre-builds per-bunk
+            //   divisionTimes it sets this so the shared runSkeletonOptimizer won't
+            //   rebuild over it. But this is also the MANUAL gen path. If that flag is
+            //   still set (leaked from a prior AUTO generation earlier in the session),
+            //   STEP 1 SKIPPED the rebuild and the manual schedule kept AUTO per-bunk
+            //   geometry — slot windows like 700-730 that cross the pinned 12:00 lunch —
+            //   while the manual solver placed entries at skeleton times (lunch 720-750).
+            //   Index-aligned but time-mismatched → the grid drew lunch in the wrong
+            //   columns (looked like a DOUBLE LUNCH). Auto and manual geometry must not
+            //   contaminate each other: in MANUAL mode we ALWAYS rebuild div-level
+            //   geometry from THIS day's skeleton. buildFromSkeleton is idempotent for a
+            //   manual skeleton, so forcing it is safe; only the genuine auto pipeline
+            //   (manual mode false) keeps its pre-built per-bunk grid.
+            var _miManualMode = (((window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual') === 'manual');
+            if (window._autoDivisionTimesBuilt && !_miManualMode) {
                 console.log('[STEP 1] Skipping rebuild — auto pipeline already built divisionTimes');
                 window._autoDivisionTimesBuilt = false;
             } else {
+                if (window._autoDivisionTimesBuilt) {
+                    window._autoDivisionTimesBuilt = false;
+                    console.log('[STEP 1] Manual mode — forcing div-level rebuild from skeleton (clears any leaked auto per-bunk geometry)');
+                }
                 window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
                 console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
             }
