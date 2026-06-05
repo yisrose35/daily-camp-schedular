@@ -4702,6 +4702,22 @@ async function runOptimizer() {
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
     // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
     if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
+    // ★ FN-17 date-settle guard — refuse to generate when the date picker shows a
+    //   different date than the one currently loaded (window.currentScheduleDate).
+    //   That mismatch means a date change is still in-flight (its async load hasn't
+    //   finished); generating now would run against — and SAVE onto — the stale loaded
+    //   date (the cross-date stamp desync). Re-trigger the picker's load and ask the
+    //   user to retry once it settles. Applies to both auto and manual (pre-branch).
+    try {
+        const _fn17Picker = document.getElementById('calendar-date-picker');
+        const _fn17Pv = _fn17Picker && _fn17Picker.value;
+        if (_fn17Pv && window.currentScheduleDate && _fn17Pv !== window.currentScheduleDate) {
+            console.warn('[Optimizer] FN-17 date-settle guard: picker=' + _fn17Pv + ' but loaded=' + window.currentScheduleDate + ' — aborting to avoid a cross-date write.');
+            try { if (_fn17Picker) _fn17Picker.dispatchEvent(new Event('change', { bubbles: true })); } catch (_e) {}
+            await daShowAlert('The schedule for ' + _fn17Pv + ' is still loading. Please wait a moment, then click Generate again.');
+            return;
+        }
+    } catch (_eFn17) { /* non-fatal — proceed */ }
     _daOptimizerRunning = true;
     try {
 
