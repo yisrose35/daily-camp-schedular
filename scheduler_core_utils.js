@@ -515,28 +515,58 @@
     // ★★★ NEW: GET FIELD CAPACITY (SINGLE SOURCE OF TRUTH) ★★★
     // =================================================================
    Utils.getFieldCapacity = function(fieldName, activityProperties) {
-        const props = activityProperties?.[fieldName];
-        if (!props) return 1;
-        
-        // ★★★ v7.6: v3.0 sharing model ★★★
-        if (props.sharableWith) {
-            if (props.sharableWith.type === 'all') return parseInt(props.sharableWith.capacity) || 999;
-            if (props.sharableWith.type === 'same_division') {
-                return parseInt(props.sharableWith.capacity) || 2;
+        // Resolve a single props object → its configured capacity.
+        function _capFromProps(props) {
+            if (!props) return null;
+            // ★★★ v7.6: v3.0 sharing model ★★★
+            if (props.sharableWith) {
+                if (props.sharableWith.type === 'all') return parseInt(props.sharableWith.capacity) || 999;
+                if (props.sharableWith.type === 'same_division') return parseInt(props.sharableWith.capacity) || 2;
+                if (props.sharableWith.type === 'not_sharable') return 1;
+                if (props.sharableWith.type === 'custom') return parseInt(props.sharableWith.capacity) || 2;
+                if (props.sharableWith.capacity) return parseInt(props.sharableWith.capacity);
             }
-            if (props.sharableWith.type === 'not_sharable') return 1;
-            if (props.sharableWith.type === 'custom') {
-                return parseInt(props.sharableWith.capacity) || 2;
-            }
-            if (props.sharableWith.capacity) {
-                return parseInt(props.sharableWith.capacity);
-            }
+            // Legacy sharable check
+            if (props.sharable) return 2;
+            return 1; // Default: not sharable
         }
-        
-        // Legacy sharable check
-        if (props.sharable) return 2;
-        
-        return 1; // Default: not sharable
+
+        let cap = _capFromProps(activityProperties?.[fieldName]);
+        if (cap == null) cap = 1;
+
+        // ★★★ SHARED-ROOM MOST-RESTRICTIVE FIX (manual cap-bug, 2026-06-04) ★★★
+        // activityProperties is keyed by activity/special NAME, so it only sees ONE
+        // definition for a given location. But two specials can map to the SAME physical
+        // room with DIFFERENT caps — e.g. "Arts & Crafts 3" (not_sharable, cap 1) and
+        // "Arts and Crafts 3" (same_division, cap 2) both at room "Arts and Crafts 3".
+        // The generator would read the laxer twin (cap 2) and overbook, while the
+        // validator (location-keyed) flags cap 1. A physical room can only honor its
+        // MOST RESTRICTIVE constraint, so when NO real facility-field owns this location
+        // (field precedence preserved → a permissive field reused by a special is not
+        // over-restricted), fold in the minimum cap across every special sharing it.
+        try {
+            const target = String(fieldName || '').toLowerCase().trim();
+            if (target) {
+                const gs = (typeof window !== 'undefined' && window.loadGlobalSettings)
+                    ? window.loadGlobalSettings() : ((typeof window !== 'undefined' && window.globalSettings) || {});
+                const fields = (gs.app1 && gs.app1.fields) || gs.fields || [];
+                const hasField = fields.some(f => f && f.name && String(f.name).toLowerCase().trim() === target);
+                if (!hasField) {
+                    const specials = (gs.app1 && gs.app1.specialActivities) || gs.specialActivities || [];
+                    for (let i = 0; i < specials.length; i++) {
+                        const s = specials[i];
+                        if (!s) continue;
+                        const loc = String(s.location || s.name || '').toLowerCase().trim();
+                        const nm = String(s.name || '').toLowerCase().trim();
+                        if (loc !== target && nm !== target) continue;
+                        const c = _capFromProps(s);
+                        if (c != null && c < cap) cap = c;
+                    }
+                }
+            }
+        } catch (_e) { /* fall back to the base capacity */ }
+
+        return cap;
     };
 
     // =================================================================

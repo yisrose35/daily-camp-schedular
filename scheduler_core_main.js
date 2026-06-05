@@ -3473,6 +3473,95 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.6: Empty-field free-fill (manual analog of auto FN-22)
+        // STEP 7.5 (autoFillSlotSilent) skips any slot carrying _fixed / _pinned /
+        // _bunkOverride — but a Free *skeleton* slot legitimately carries those flags
+        // (they describe the slot's fixed time / bunk-override origin, NOT "keep empty"),
+        // so those Free slots were never filled. This pass detects Free by the slot's
+        // ACTIVITY (not its flags) and fills it with a bunk-accessible sport on a
+        // COMPLETELY EMPTY field — conflict-free by construction (empty field = no
+        // capacity / sharing / stagger risk), respecting access + no same-day repeat.
+        // =========================================================================
+        try {
+            const _gs76 = window.loadGlobalSettings ? window.loadGlobalSettings() : (window.globalSettings || {});
+            const _fields76 = (_gs76.app1 && _gs76.app1.fields) || _gs76.fields || [];
+            const _divs76 = window.divisions || {};
+            const _b2g76 = {};
+            Object.keys(_divs76).forEach(g => ((_divs76[g] && _divs76[g].bunks) || []).forEach(b => { _b2g76[String(b)] = g; }));
+            const _allowed76 = (function () {
+                if (!allowedDivisions || allowedDivisions.length === 0) return null;
+                const s = new Set();
+                allowedDivisions.forEach(d => (divisions[d]?.bunks || divisions[String(d)]?.bunks || []).forEach(b => s.add(String(b))));
+                return s;
+            })();
+            const _dt76 = window.divisionTimes || {};
+            const _stime76 = (bunk, grade, idx, e) => {
+                const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_dt76[grade] && _dt76[grade]._perBunkSlots && _dt76[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                const ds = _dt76[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                return null;
+            };
+            const _skip76 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
+            const _specialRooms76 = {};
+            ((_gs76.app1 && _gs76.app1.specialActivities) || []).forEach(s => { if (s && s.location) _specialRooms76[String(s.location).toLowerCase().trim()] = 1; });
+            const _sportFields76 = _fields76.filter(f => f && f.name && f.available !== false
+                && !_specialRooms76[String(f.name).toLowerCase().trim()]
+                && Array.isArray(f.activities) && f.activities.length
+                && !(f.timeRules && f.timeRules.enabled));
+            const _access76 = (f, grade) => {
+                const ar = f.accessRestrictions;
+                if (!ar || !ar.enabled) return true;
+                const dvs = ar.divisions || {};
+                if (Object.keys(dvs).length === 0) return true;
+                return !!dvs[grade];
+            };
+            // occupancy index + per-bunk today's activities (from the FINAL schedule)
+            const _occ76 = {}, _done76 = {};
+            const _sa76 = window.scheduleAssignments || {};
+            Object.keys(_sa76).forEach(b => {
+                const g = _b2g76[String(b)] || '?'; _done76[b] = {};
+                (_sa76[b] || []).forEach((e, idx) => {
+                    if (!e || e.continuation) return;
+                    const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') _done76[b][String(a).toLowerCase()] = 1;
+                    const fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                    if (!fl || _skip76[fl]) return;
+                    const t = _stime76(b, g, idx, e); if (!t) return;
+                    (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
+                });
+            });
+            const _fieldFree76 = (fl, s, e) => { const arr = _occ76[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            let _filled76 = 0;
+            Object.keys(_sa76).forEach(b => {
+                if (_allowed76 && !_allowed76.has(String(b))) return;
+                const g = _b2g76[String(b)] || '?'; const arr = _sa76[b] || [];
+                arr.forEach((e, idx) => {
+                    if (!e || e.continuation || e._isTransition || e._league || e._h2h) return;
+                    const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
+                    // Free detected by ACTIVITY, regardless of _fixed/_pinned/_bunkOverride flags.
+                    if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
+                    const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    for (let fi = 0; fi < _sportFields76.length; fi++) {
+                        const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
+                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g)) continue;
+                        let act = null;
+                        for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()]) { act = c; break; } }
+                        if (!act) continue;
+                        _sa76[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _fixed: true, _freeFilled: true, continuation: false };
+                        (_occ76[fl] = _occ76[fl] || []).push({ s: t.s, e: t.e });
+                        _done76[b][String(act).toLowerCase()] = 1; _filled76++;
+                        break;
+                    }
+                });
+            });
+            if (_filled76 > 0) console.log(`[STEP 7.6] Empty-field free-fill: filled ${_filled76} Free slot(s) with sports on empty fields`);
+            else console.log('[STEP 7.6] Empty-field free-fill: no fillable Free slots');
+        } catch (_e76) {
+            console.warn('[STEP 7.6] Empty-field free-fill failed:', _e76);
+        }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 
