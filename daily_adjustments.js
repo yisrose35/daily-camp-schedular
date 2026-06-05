@@ -5202,6 +5202,22 @@ function loadDailyTrips(dateKey) {
     }
   } catch (e) { /* ignore */ }
 
+  // ★ Source 3 (FUTURE-DATE FIX): app1.dailyTripsByDate — the reliable global-settings
+  // path (mirrors the per-date skeleton). The daily_schedules sync SKIPS dates with no
+  // generated schedule, so future-date trips never reached the cloud via Source 2. This
+  // path round-trips through camp_state_kv and survives a fresh session. AUTHORITATIVE
+  // when the date key is present: an explicit empty array (trip removed) returns [] so a
+  // stale local/cloud copy can't resurrect a deleted trip.
+  try {
+    const _gs = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+    const _tbd = _gs.app1 && _gs.app1.dailyTripsByDate;
+    if (_tbd && Object.prototype.hasOwnProperty.call(_tbd, dateKey)) {
+      const _a1 = Array.isArray(_tbd[dateKey]) ? _tbd[dateKey] : [];
+      try { localStorage.setItem('campDailyTrips_' + dateKey, JSON.stringify(_a1)); } catch (e) { /* ignore */ }
+      return _a1;
+    }
+  } catch (e) { /* ignore */ }
+
   // Merge: use whichever has more trips (handles partial sync)
   let result = [];
   if (fromLS && fromCloud) {
@@ -5255,6 +5271,29 @@ function saveDailyTrips(dateKey, trips) {
   } catch (e) {
     console.error('[saveDailyTrips] Cloud sync error:', e);
   }
+
+  // 3. ★ FUTURE-DATE PERSISTENCE FIX: also mirror the trip into
+  //    app1.dailyTripsByDate and sync via the global-settings ('app1') path — the
+  //    SAME reliable route the per-date skeleton (saveDailySkeleton) uses. The
+  //    daily_schedules sync above SKIPS dates with no generated schedule (STEP 5
+  //    filter), and ScheduleDB.saveSchedule blocks empty-schedule rows — so a trip
+  //    set TODAY for a FUTURE date never reached the cloud and vanished on a fresh
+  //    session. This path round-trips through camp_state_kv (like leagues/skeletons)
+  //    so a pre-camp trip is on the system when the day comes, from any device.
+  try {
+    if (typeof masterSettings !== 'undefined' && masterSettings) {
+      if (!masterSettings.app1) masterSettings.app1 = {};
+      if (!masterSettings.app1.dailyTripsByDate) masterSettings.app1.dailyTripsByDate = {};
+      if (Array.isArray(trips) && trips.length > 0) {
+        masterSettings.app1.dailyTripsByDate[dateKey] = trips;
+      } else {
+        delete masterSettings.app1.dailyTripsByDate[dateKey];
+      }
+      if (typeof window.saveGlobalSettings === 'function') {
+        window.saveGlobalSettings('app1', masterSettings.app1);
+      }
+    }
+  } catch (e) { /* ignore — daily_schedules path above is the fallback */ }
 }
 
 // Expose globally for other modules
