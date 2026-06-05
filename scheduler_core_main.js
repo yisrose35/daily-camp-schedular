@@ -3553,7 +3553,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             function _rlive(u) { var c = _rsa[u.bunk] && _rsa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
             function _rdemote(u) {
                 if (!_rlive(u) || u.prot) return false; // never demote user-locked (league/post-edit/pinned)
-                _rsa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, _demotedReason: 'manual_room_cap', continuation: false };
+                // Preserve the slot's start/end so the STEP 7.6 free-fill below can resolve
+                // its time and refill it (without these the slot reads as time-null and is skipped).
+                _rsa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: u.s, _endMin: u.e, _fixed: true, _constraintDemoted: true, _demotedReason: 'manual_room_cap', continuation: false };
                 var sl = _rsa[u.bunk];
                 for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false }; } else break; }
                 _rdemoted++; return true;
