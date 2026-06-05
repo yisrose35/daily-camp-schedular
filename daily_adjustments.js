@@ -7898,6 +7898,10 @@ function init() {
   };
   window.addEventListener('campistry-generation-complete', _runCapacityRepairGate);
   document.addEventListener('campistry-schedule-generated', _runCapacityRepairGate);
+  // Also fire on save (the manual path reliably dispatches this; same coverage as the
+  // iron gate). The gate only re-saves when it changed something, so the re-save →
+  // schedule-saved → re-run cycle self-terminates (the second run finds 0 to fix).
+  window.addEventListener('campistry-schedule-saved', _runCapacityRepairGate);
 }
     
 function cleanup() {
