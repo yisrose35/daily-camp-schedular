@@ -974,7 +974,15 @@
             }
             const partNumber = priorCount + 1;
             if (partNumber > total) return null; // already capped, write site should refuse
-            return { partNumber: partNumber, totalParts: total };
+            // ★ FN-11: surface this part's own name/location (both optional). Lets the write
+            //   site label the slot with the real part name and place it in the part-specific
+            //   room, instead of the generic "<base> N/M" at the base location.
+            const _part = (Array.isArray(mp.parts) && mp.parts[partNumber - 1]) ? mp.parts[partNumber - 1] : null;
+            return {
+                partNumber: partNumber, totalParts: total,
+                partName: (_part && typeof _part.name === 'string' && _part.name.trim()) ? _part.name.trim() : null,
+                partLocation: (_part && typeof _part.location === 'string' && _part.location.trim()) ? _part.location.trim() : null
+            };
         }
         // Lifetime visit count for rotation-cohort enforcement.
         // Counts every prior day in allDailyData where this bunk had this
@@ -18033,7 +18041,16 @@
                         if (!_spanIdxs.length) return;
                         idx = _spanIdxs[0];
                     }
-                    const fn = block._specialLocation || block._assignedSpecial;
+                    const _fnBase = block._specialLocation || block._assignedSpecial;
+                    // ★ Day 19.5 / FN-11: resolve multiPart part info FIRST so this part's
+                    //   own room (partLocation) and name (partName) flow through validation,
+                    //   the F2 capacity check, the write, AND the locks — keeping everything
+                    //   consistent. When a part has no location/name it falls back to the base
+                    //   room and the generic "<base> N/M" label. _activity stays the base
+                    //   special name for cross-day matching/analytics.
+                    const _mpInfo = getMultiPartInfo(bunk, block._assignedSpecial);
+                    const fn = (_mpInfo && _mpInfo.partLocation) ? _mpInfo.partLocation : _fnBase;
+                    const _mpLabel = _mpInfo ? (_mpInfo.partName || (block._assignedSpecial + ' ' + _mpInfo.partNumber + '/' + _mpInfo.totalParts)) : null;
                     const _why = _validateWritePlacement(fn, block._assignedSpecial, grade, bunk, block.startMin, block.endMin);
                     if (_why) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _why });
@@ -18050,12 +18067,6 @@
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write F2: ' + _f2Why });
                         return;
                     }
-                    // ★ Day 19.5: stamp multiPart info + pre-computed display
-                    // label so render code can show "Baking 1/3" via the
-                    // window.getActivityDisplayName(slot) helper. _activity
-                    // stays unchanged for cross-day matching/analytics.
-                    const _mpInfo = getMultiPartInfo(bunk, block._assignedSpecial);
-                    const _mpLabel = _mpInfo ? (block._assignedSpecial + ' ' + _mpInfo.partNumber + '/' + _mpInfo.totalParts) : null;
                     const _writeIdxs = _spanIdxs || [idx];
                     _writeIdxs.forEach((wIdx, wPos) => {
                         const _slot = arr[wIdx];
