@@ -223,3 +223,42 @@ The 8 residual items from the walkthrough, each driven to a fix or a definitive 
 **Restore after all tests:** manual mode; test dates 06-22/23/24 deleted from cloud + local; only legit future dates 07-08 / 07-15 remain in cloud; **06-03 intact (35 bunks / 175 blocks)**; injected `campAutoLayers_2026-06-22` removed.
 
 **Net:** 5 code fixes (FN-7, #136-adjacent, FN-17, F2, FN-11) + 3 verifications (#137 quota, leagues live, multi-user to ceiling). DAW HEAD `3eadfd76` → (docs commit next); main still `caf6e501`; live config + 06-03 untouched.
+
+---
+
+# ✅ MANUAL-MODE CAPACITY-EXCEED + LEFTOVER FREE — FIXED + PROVEN (2026-06-05)
+
+User report: *"Capacity Exceeded: Arts and Crafts 3 has 2 Quints bunks at 2:15 PM (capacity: 1) … this is manual mode. figure out how there can be a capacity exceeding and fix. figure out why there is a free and fix it."*
+
+## Root cause (capacity) — duplicate / misspelled specials share one physical room with conflicting caps
+The camp has **duplicate special-activity definitions that point at the SAME physical location with DIFFERENT sharing rules**:
+- `Arts & Crafts 3` (ampersand) → **not_sharable, cap 1**, location "Arts and Crafts 3"
+- `Arts and Crafts 3` (the word "and") → **same_division, cap 2**, location "Arts and Crafts 3"
+- Same pattern for **Accesorize/Accessorize** (Accesorize=same_division cap2 + Accessorize=not_sharable cap1, both at room "Accessorize"), and the rest of the misspelled set (Neranitas/Nernitas, Art Shoppes/Art Shoppees, Arts & Crafts 2/Arts and Crafts 2, …).
+
+The MANUAL generator places a special using **that special's own** `sharableWith`, so it happily puts **2 same-division bunks** in the room via the cap-2 twin. But `auto_validator` resolves capacity by **physical location** (its sharing map is location-keyed, first-writer-wins, and **defaults any field it can't resolve to not_sharable cap-1**) → it flags 2 bunks in that room as "capacity: 1". Generator and validator **disagree**, so the manual schedule ships with validator-flagged capacity violations. The auto solver never showed this because it already runs a final room-capacity sweep (`_fn1921FinalSweep`); **the manual solver had no equivalent.**
+
+## Root cause (free)
+`STEP 7.5` (manual free-fill, `autoFillSlotSilent`) **skips any slot flagged `_fixed`/`_pinned`/`_bunkOverride`** — but a Free *skeleton* slot legitimately carries those flags, so it was never filled (the original lone Free). And demoting an over-capacity bunk creates a new Free that needs refilling.
+
+## The fix (all on `scheduler_core_main.js` + `scheduler_core_utils.js`, manual path; auto already had its own)
+1. **`getFieldCapacity` (utils, shared)** — when no real facility-field owns a location, fold in the **most-restrictive** cap across every special sharing that location (live-checked: Arts and Crafts 3 / Arts and Crafts 2 → cap 1; Arts and Crafts 1 stays cap 2 since its twin uses a different location string; normal fields unchanged). `68d84bb9`
+2. **STEP 7.55 room-capacity demote sweep (NEW)** — mirrors the auto `_fn1921FinalSweep`: resolves each room **exactly as `auto_validator.buildFieldSharingMap` does** (field precedence → first special per location → **unknown room defaults to not_sharable cap-1**), then demotes any occupant beyond the room's capacity / sharing rule (anti-stagger pass + capacity/sharing-type pass). `_league`/`_postEdit`/`_pinned` are user-locked → counted toward capacity but never demoted. `821e4831` + `18aca11f`
+3. **STEP 7.6 empty-field free-fill (NEW)** — refills every Free (including swept ones) with a bunk-accessible sport on a **completely-empty** field (conflict-free), detecting Free by the slot's *activity* (not its flags, so flagged-but-Free skeleton slots are filled). `68d84bb9`
+4. **Preserve `_startMin`/`_endMin` on demoted slots** so STEP 7.6 can resolve their time and refill them (without it the demoted slot read time-null and stayed Free). `f4660a86`
+
+## Live proof — run on the user's ACTUAL reported 06-04 schedule (restored from a pre-fix backup)
+`validateAutoSchedule` (the validator that produced the user's "capacity: 1" message):
+
+| | crossDivision | capacity | staggeredSharing | sameDayRepeat | **errors** | **frees** |
+|---|---|---|---|---|---|---|
+| **Before** | 1 | **2** | 2 | 0 | **5** | **1** |
+| **After** (STEP 7.55 + 7.6) | 0 | **0** | 0 | 0 | **0** | **0** |
+
+Sweep demoted 5 (the cap/cross-grade/staggered offenders incl. the Arts-and-Crafts-3 and Accesorize twin overbooks); free-fill refilled all 6 resulting Free slots. Only a **benign pre-existing `fieldReuse` WARNING** remains (one bunk using a field for two *different* sports at different times — not a conflict). Also independently verified by standalone sweeps against the live config (AC3 → cap 0; Accesorize → cap 0) and by a real manual Generate-button regen earlier (AC3 fixed, frees 0).
+
+## ⚠️ Real root cause is config hygiene — user action recommended
+The CODE now keeps the schedule validator-clean, **but it does so by bumping the 2nd bunk off the over-booked special onto a fallback sport.** The user should **dedupe the duplicate/misspelled special names in Special Activities** (keep ONE spelling each): **Arts & Crafts 2 / Arts and Crafts 2 · Arts & Crafts 3 / Arts and Crafts 3 · Accessorize / Accesorize · Neranitas / Nernitas · Art Shoppes / Art Shoppees · Minute to Win it / Minute To Win It** — then both bunks keep their *intended* special at cap-2 and nobody is bumped. (⚠️ NOT a dup: "Skits" legitimately shares the "Beis Medrash" room — dedupe needs human judgment, so it belongs in the UI.)
+
+## Deploy + state
+4 commits on **DAW** (HEAD `f4660a86`); **main untouched at `caf6e501`**. Server-confirmed deployed. **06-03 never touched this session (all work on 06-04) → intact.** The cleaned 06-04 (0 errors / 0 frees) is in memory + localStorage; the cloud save + final 06-03 re-read could not be confirmed in-session because the browser tab's Supabase calls began hanging at the end (transient renderer/network degradation — pure-JS still ran). **Recommended: the user opens 06-04 in manual mode and clicks Generate once** to apply the deployed fix with full rotation bookkeeping (and ideally dedupe the specials first).
