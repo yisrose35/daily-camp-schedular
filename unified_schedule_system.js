@@ -630,7 +630,27 @@ function shouldHighlightBunk(bunkName) {
         //   and the new date's grid rendered whatever was left over.
         const cloudLoaded = window._divisionTimesFromCloud === true;
         const _reattachAll = () => {
-            if (!dateData._perBunkSlotsData || !window.divisionTimes) return;
+            if (!window.divisionTimes) return;
+            // ★ MODE ISOLATION (double-lunch fix): per-bunk geometry (_isPerBunk/_perBunkSlots)
+            //   is an AUTO-mode construct (each bunk gets its own rotation grid). The MANUAL
+            //   flat-table renders from the div-level slot array (divisionTimes[div]); if auto
+            //   per-bunk slots drive it — leaked from an auto generation, or a saved
+            //   _perBunkSlotsData restored here — the grid mis-maps activities onto the
+            //   fine-grained per-bunk slots (whose windows cross the pinned Lunch boundary) and
+            //   draws lunch in the wrong columns (looked like a DOUBLE LUNCH). Auto and manual
+            //   display geometry must not contaminate each other: in MANUAL mode, strip any
+            //   per-bunk geometry and never reattach it, so the render uses div-level slots.
+            var _miMode = (window.getCampBuilderMode && window.getCampBuilderMode()) || window._daBuilderMode || 'manual';
+            if (_miMode === 'manual') {
+                Object.keys(window.divisionTimes).forEach(function (grade) {
+                    if (window.divisionTimes[grade]) {
+                        delete window.divisionTimes[grade]._perBunkSlots;
+                        delete window.divisionTimes[grade]._isPerBunk;
+                    }
+                });
+                return;
+            }
+            if (!dateData._perBunkSlotsData) return;
             // First, clear any stale _perBunkSlots from grades NOT in this date's data
             Object.keys(window.divisionTimes).forEach(grade => {
                 if (!dateData._perBunkSlotsData[grade]) {
