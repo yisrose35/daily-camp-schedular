@@ -17962,6 +17962,47 @@
             });
         });
 
+        // ★ F2: cross-bunk capacity/sharing backstop for the special WRITE phase.
+        //   _validateWritePlacement covers access/time/preference but NOT how many
+        //   bunks share a special's room. Phase 2.5 decides placement; if it ever hands
+        //   the same cap-1 (or over-cap) room to a 2nd bunk at the same time, this guard
+        //   refuses the overbooking write so the room isn't double-claimed — the bunk's
+        //   slot stays Free and the FN-22 free-fill gives it a sport. Preventive, earlier
+        //   defense-in-depth alongside the FN-19/21 final demote sweep. Counts occupants
+        //   from the partially-built scheduleAssignments (first-written keeps the room).
+        function _specialRoomOverbooked(roomName, specialName, grade, bunk, startMin, endMin) {
+            try {
+                if (!roomName || startMin == null || endMin == null) return null;
+                var _gs2 = getGlobalSettings();
+                var _key = String(roomName).toLowerCase().trim();
+                var cfg = null;
+                var _ff = (_gs2.app1 && _gs2.app1.fields || []).find(function (f) { return f && String(f.name).toLowerCase().trim() === _key; });
+                if (_ff) { var sw = _ff.sharableWith || {}; cfg = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2) }; }
+                else {
+                    var _sp = (_gs2.app1 && _gs2.app1.specialActivities || []).find(function (s) { return s && String(s.location || s.name).toLowerCase().trim() === _key; });
+                    if (_sp) { var sw2 = _sp.sharableWith || {}; cfg = { type: sw2.type || 'not_sharable', cap: parseInt(sw2.capacity) || (sw2.type === 'not_sharable' ? 1 : 2) }; }
+                }
+                if (!cfg) return null; // not a configured room — don't gate
+                var _b2g = {}; var _dv = window.divisions || {}; Object.keys(_dv).forEach(function (g) { ((_dv[g] && _dv[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+                var occ = [];
+                var _sa = window.scheduleAssignments || {};
+                Object.keys(_sa).forEach(function (b) {
+                    if (String(b) === bunk) return;
+                    (_sa[b] || []).forEach(function (e) {
+                        if (!e || e.continuation) return;
+                        if (String(e.field || '').toLowerCase().trim() !== _key) return;
+                        var s = e._startMin, en = e._endMin;
+                        if (s == null || en == null) return;
+                        if (s < endMin && en > startMin) occ.push({ grade: _b2g[String(b)] || '?' });
+                    });
+                });
+                if (occ.length + 1 > cfg.cap) return 'room over capacity (' + (occ.length + 1) + ' > ' + cfg.cap + ')';
+                if (cfg.type === 'not_sharable' && occ.length > 0) return 'not_sharable room already in use';
+                if (cfg.type === 'same_division' && occ.some(function (o) { return o.grade !== grade; })) return 'same_division room used by another grade';
+                return null;
+            } catch (_e) { return null; }
+        }
+
         // Write special blocks
         let specialWriteCount = 0;
         allGrades.forEach(grade => {
@@ -18001,6 +18042,12 @@
                     const _rulesWhy = _runRulesCheck(fn, block._assignedSpecial, true, grade, bunk, block.startMin, block.endMin, block.type);
                     if (_rulesWhy) {
                         _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write: ' + _rulesWhy });
+                        return;
+                    }
+                    // ★ F2: refuse a write that would overbook the special's room.
+                    const _f2Why = _specialRoomOverbooked(fn, block._assignedSpecial, grade, String(bunk), block.startMin, block.endMin);
+                    if (_f2Why) {
+                        _stepRulesBlocked.push({ bunk, grade, idx, fieldName: fn, activity: block._assignedSpecial, reason: 'special-write F2: ' + _f2Why });
                         return;
                     }
                     // ★ Day 19.5: stamp multiPart info + pre-computed display
