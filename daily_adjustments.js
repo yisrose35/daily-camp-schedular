@@ -7861,7 +7861,7 @@ function init() {
         };
         let repaired = 0;
         for (let pass = 0; pass < 8; pass++) {
-          let v; try { v = window.validateAutoSchedule(); } catch (_e) { break; }
+          let v; try { v = window.validateAutoSchedule({ silent: true }); } catch (_e) { break; }
           const errs = (v && (v.errors || v.violations)) || [];
           if (!errs.length) break;
           let did = false;

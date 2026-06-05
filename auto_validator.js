@@ -492,7 +492,13 @@
     // MAIN VALIDATION FUNCTION
     // =====================================================================
 
-    function validateAutoSchedule() {
+    function validateAutoSchedule(opts) {
+        // ★ opts.silent = true → run the validation LOGIC and return the result
+        //   WITHOUT showing the modal. Used by automated post-gen consumers (the
+        //   capacity-repair gate) that only need the data. The user-facing
+        //   validation BUTTON (window.validateSchedule) calls with no opts, so it
+        //   still pops the modal as before.
+        const _silent = !!(opts && opts.silent);
         console.log('🛡️ Running AUTO MODE schedule validation v1.0...');
 
         const assignments = window.scheduleAssignments || {};
@@ -543,8 +549,8 @@
         console.log('  Field reuse warnings:', summary.fieldReuse);
         console.log('  TOTAL errors:', allErrors.length);
 
-        // Show modal
-        showAutoValidatorModal(allErrors, allWarnings, summary);
+        // Show modal (skipped for silent/automated callers)
+        if (!_silent) showAutoValidatorModal(allErrors, allWarnings, summary);
 
         return { errors: allErrors, warnings: allWarnings, summary };
     }

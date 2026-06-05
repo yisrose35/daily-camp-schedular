@@ -3655,7 +3655,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 let _repaired77 = 0;
                 for (let _pass = 0; _pass < 8; _pass++) {
                     let v77 = null;
-                    try { v77 = window.validateAutoSchedule(); } catch (_ev) { break; }
+                    try { v77 = window.validateAutoSchedule({ silent: true }); } catch (_ev) { break; }
                     const errs = (v77 && (v77.errors || v77.violations)) || [];
                     if (!errs.length) break;
                     let didDemote = false;
