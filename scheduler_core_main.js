@@ -3612,6 +3612,68 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         } catch (_e755) { console.warn('[STEP 7.55] room-capacity sweep failed:', _e755); }
 
         // =========================================================================
+        // STEP 7.56: Validator-backed repair — the authoritative pass.
+        // STEP 7.55 re-derives slot geometry to find violations, which can disagree
+        // with the validator (different time source / not-yet-finalized per-bunk grid),
+        // so it occasionally misses a staggered/cross-grade share the validator later
+        // flags. This pass instead consumes auto_validator's OWN output: loop calling
+        // validateAutoSchedule(), and for every error it reports, demote one offending
+        // (non-user-locked) placement to Free, until the validator returns 0 errors.
+        // Because it demotes exactly what the validator flags, the two cannot disagree.
+        // The STEP 7.6 free-fill below then refills everything freed here.
+        // =========================================================================
+        try {
+            if (typeof window.validateAutoSchedule === 'function') {
+                const _sa77 = window.scheduleAssignments || {};
+                const _d77 = window.divisions || {};
+                const _b2g77 = {}; Object.keys(_d77).forEach(g => ((_d77[g] && _d77[g].bunks) || []).forEach(b => { _b2g77[String(b)] = g; }));
+                const _isProt77 = (e) => !!(e && (e._league || e._postEdit)); // user-locked: never auto-demote
+                const _findSlot77 = (bunk, fieldName, grade) => {
+                    const arr = _sa77[bunk] || []; const fl = String(fieldName || '').toLowerCase().trim();
+                    for (let i = 0; i < arr.length; i++) {
+                        const e = arr[i];
+                        if (e && !e.continuation && e.field !== 'Free' && !_isProt77(e)
+                            && String(e.field || e._specialLocation || '').toLowerCase().trim() === fl) return i;
+                    }
+                    return -1;
+                };
+                const _demote77 = (bunk, idx, reason) => {
+                    const e = _sa77[bunk] && _sa77[bunk][idx];
+                    if (!e || e.field === 'Free' || _isProt77(e)) return false;
+                    const sm = e._startMin, em = e._endMin;
+                    _sa77[bunk][idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: sm, _endMin: em, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
+                    const sl = _sa77[bunk];
+                    for (let k = idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', _activity: 'Free', _fixed: true, continuation: false }; } else break; }
+                    return true;
+                };
+                let _repaired77 = 0;
+                for (let _pass = 0; _pass < 8; _pass++) {
+                    let v77 = null;
+                    try { v77 = window.validateAutoSchedule(); } catch (_ev) { break; }
+                    const errs = (v77 && (v77.errors || v77.violations)) || [];
+                    if (!errs.length) break;
+                    let didDemote = false;
+                    for (let ei = 0; ei < errs.length; ei++) {
+                        const er = errs[ei]; if (!er || !er.field) continue;
+                        // Offender bunks: structured er.bunks (cross_division/staggered) else
+                        // all bunks of er.grade on er.field (capacity).
+                        let offBunks = [];
+                        if (Array.isArray(er.bunks) && er.bunks.length) offBunks = er.bunks.map(x => x && x.bunk).filter(Boolean);
+                        else Object.keys(_sa77).forEach(b => { if (er.grade && _b2g77[String(b)] !== er.grade) return; if (_findSlot77(b, er.field) >= 0) offBunks.push(b); });
+                        // Demote ONE demotable offender (prefer the later one); the loop re-checks.
+                        for (let oi = offBunks.length - 1; oi >= 0; oi--) {
+                            const si = _findSlot77(offBunks[oi], er.field);
+                            if (si >= 0 && _demote77(offBunks[oi], si, 'vrepair_' + er.type)) { _repaired77++; didDemote = true; break; }
+                        }
+                    }
+                    if (!didDemote) break; // every remaining offender is user-locked — stop (can't fix without overriding a pin)
+                }
+                if (_repaired77 > 0) console.log('[STEP 7.56] validator-backed repair demoted ' + _repaired77 + ' placement(s) → Free');
+                else console.log('[STEP 7.56] validator-backed repair: ✅ validator already clean');
+            }
+        } catch (_e77) { console.warn('[STEP 7.56] validator-backed repair failed:', _e77); }
+
+        // =========================================================================
         // STEP 7.6: Empty-field free-fill (manual analog of auto FN-22)
         // STEP 7.5 (autoFillSlotSilent) skips any slot carrying _fixed / _pinned /
         // _bunkOverride — but a Free *skeleton* slot legitimately carries those flags
