@@ -2631,6 +2631,15 @@ Utils.getValidActivityNames = function() {
         const valid = new Set();
         fields.forEach(f => (f.activities || []).forEach(a => valid.add(a)));
         specials.forEach(s => { if (s.name) valid.add(s.name); });
+        // ★ Also include the camp's configured sports (master list + sport metadata).
+        //   A field's `activities` list only covers sports that have a dedicated field;
+        //   a recognized sport without one (e.g. "Soccer") was therefore excluded, so a
+        //   manual daily-adjustment to it placed the activity on the schedule but the
+        //   rotation count silently ignored it. Including configured sports keeps the
+        //   schedule and rotation counts consistent for any real activity the camp set
+        //   up; unrecognized names (typos) stay excluded, as intended.
+        (g.app1?.allSports || []).forEach(s => { if (s) valid.add(s); });
+        Object.keys(g.app1?.sportMetaData || {}).forEach(s => { if (s) valid.add(s); });
         return valid;
     };
     Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
