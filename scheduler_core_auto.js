@@ -22839,6 +22839,70 @@
             try { console.log('[FREE-ABSORB] absorbed=' + _absorbed); } catch (_e) {}
         } catch (_eAbs) { try { warn('[FreeAbsorb] ' + (_eAbs && _eAbs.message)); } catch (_e2) {} }
 
+        // ★ FREE-FILL PASS (FN-22) — convert otherwise-Free slots into real activities.
+        //   Root cause of most Frees: a "special" layer slot whose special couldn't be
+        //   placed because its (often cap-1) room was already taken by another bunk, with
+        //   no fallback → the slot stays Free. This pass fills each such Free slot with a
+        //   bunk-accessible SPORT on a field that is COMPLETELY UNOCCUPIED at that time
+        //   (so no sharing/capacity conflict is possible), respecting access + time rules
+        //   + no same-day repeat. Runs BEFORE the FN-15/19/21 sweeps so any imperfect fill
+        //   is caught and demoted back to Free (bounded downside). DEMOTE-safe, additive.
+        (function _freeFillSweepFN22() {
+            try {
+                var _sa = window.scheduleAssignments || {};
+                var _divs = window.divisions || {};
+                var _b2g = {}; Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+                var _gs2 = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+                var _fields2 = (_gs2.app1 && _gs2.app1.fields) || _gs2.fields || [];
+                var _dt2 = window.divisionTimes || {};
+                function _stime(bunk, grade, idx, e) {
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_dt2[grade] && _dt2[grade]._perBunkSlots && _dt2[grade]._perBunkSlots[bunk]);
+                    if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                    if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                    var ds = _dt2[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                    return null;
+                }
+                var _skip2 = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1 };
+                var _specialRooms = {}; ((_gs2.app1 && _gs2.app1.specialActivities) || []).forEach(function (s) { if (s && s.location) _specialRooms[String(s.location).toLowerCase().trim()] = 1; });
+                // sport fields only (exclude special rooms + time-restricted fields, for safety)
+                var _sportFields = _fields2.filter(function (f) { return f && f.name && f.available !== false && !_specialRooms[String(f.name).toLowerCase().trim()] && Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled); });
+                // occupancy index + per-bunk today's activities
+                var _occ = {}, _done = {};
+                Object.keys(_sa).forEach(function (b) {
+                    var g = _b2g[b] || '?'; _done[b] = {};
+                    (_sa[b] || []).forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        var a = e._activity || e.sport; if (a && a !== 'Free') _done[b][String(a).toLowerCase()] = 1;
+                        var fl = String(e.field || e._specialLocation || '').toLowerCase().trim(); if (!fl || fl === 'free') return;
+                        var t = _stime(b, g, idx, e); if (!t) return;
+                        (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e });
+                    });
+                });
+                function _fieldFree(fl, s, e) { var arr = _occ[fl] || []; for (var i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; }
+                function _access(f, grade) { var ar = f.accessRestrictions; if (!ar || !ar.enabled) return true; var dvs = ar.divisions || {}; if (Object.keys(dvs).length === 0) return true; return !!dvs[grade]; }
+                var _filled = 0;
+                Object.keys(_sa).forEach(function (b) {
+                    var g = _b2g[b] || '?'; var arr = _sa[b] || [];
+                    arr.forEach(function (e, idx) {
+                        if (!e || e.continuation || e._pinned || e._league) return;
+                        var a = e._activity || e.sport; if (a && a !== 'Free') return;
+                        var t = _stime(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        for (var fi = 0; fi < _sportFields.length; fi++) {
+                            var f = _sportFields[fi]; var fl = String(f.name).toLowerCase().trim();
+                            if (_skip2[fl] || !_fieldFree(fl, t.s, t.e) || !_access(f, g)) continue;
+                            var act = null; for (var ai = 0; ai < f.activities.length; ai++) { var c = f.activities[ai]; if (c && !_done[b][String(c).toLowerCase()]) { act = c; break; } }
+                            if (!act) continue;
+                            _sa[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _autoMode: true, _freeFilled: true, continuation: false };
+                            (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e }); _done[b][String(act).toLowerCase()] = 1; _filled++;
+                            break;
+                        }
+                    });
+                });
+                if (_filled > 0) log('[FN-22 FREE-FILL] filled ' + _filled + ' Free slot(s) with sports on empty fields');
+                else log('[FN-22 FREE-FILL] no fillable Free slots');
+            } catch (_eFF) { try { warn('[FN-22 FREE-FILL] error: ' + (_eFF && _eFF.message)); } catch (_x) {} }
+        })();
+
         // ★ FN-15 FINAL SWEEP — guarantee no cross-grade share on a not_sharable /
         //   same_division field (and no over-capacity / disallowed cross_division /
         //   custom pairing) survives ANY earlier phase or repair/refill pass. Runs
