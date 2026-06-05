@@ -3537,7 +3537,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 slots.forEach(function (e, idx) {
                     if (!e || e.continuation) return;
                     var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
-                    if (!fl || _rskip[fl] || /^game\s*\d+$/i.test(fl) || !_rcfg[fl]) return;
+                    // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
+                    // field it can't resolve to {not_sharable, cap 1} and flags it — most often
+                    // a misspelled/duplicate special whose NAME (written into .field) differs
+                    // from its location key (e.g. "Accesorize" name vs "Accessorize" location).
+                    // Skipping those let the exact bug we are fixing slip through, so we include
+                    // them and default to cap-1 below, matching the validator.
+                    if (!fl || _rskip[fl] || /^game\s*\d+$/i.test(fl)) return;
                     var t = _rtime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     var prot = !!(e._league || e._postEdit || e._pinned);
                     (_rbyLoc[fl] = _rbyLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: t.s, e: t.e, dur: t.e - t.s, prot: prot });
@@ -3553,7 +3559,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 _rdemoted++; return true;
             }
             Object.keys(_rbyLoc).forEach(function (fl) {
-                var cfg = _rcfg[fl]; var arr = _rbyLoc[fl];
+                // Unknown room → not_sharable cap-1, exactly as auto_validator defaults it.
+                var cfg = _rcfg[fl] || { type: 'not_sharable', cap: 1, pairs: {}, divs: [] };
+                var arr = _rbyLoc[fl];
                 // PASS 1 — anti-stagger: among OVERLAPPING occupants keep the protected/
                 //   longest/earliest as primary; demote any non-protected overlapper whose
                 //   [start,end] differs (so the rest share one aligned window).
