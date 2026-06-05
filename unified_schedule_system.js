@@ -2754,6 +2754,28 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             return;
         }
 
+        // ★ MODE ISOLATION (double-lunch fix — render rebuild): the manual flat-table draws
+        //   from the div-level slot array (divisionTimes[div]). A divisionTimes hydrated from a
+        //   save — or left over from auto mode — can carry AUTO per-bunk geometry (fine-grained
+        //   slot windows that cross the pinned 12:00 lunch), which mis-maps activities onto the
+        //   wrong columns (the "double lunch"); or it can be absent entirely on a cold load.
+        //   Rebuild clean div-level geometry from THIS day's manual skeleton so the manual grid
+        //   is always driven by its own skeleton, never by auto geometry. buildFromSkeleton is
+        //   idempotent for a manual skeleton, and this is gated to manual mode (the auto branch
+        //   returned above), so auto rendering is untouched.
+        try {
+            if (skeleton && skeleton.length && window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton) {
+                var _miRebuilt = window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions);
+                if (_miRebuilt && Object.keys(_miRebuilt).length) {
+                    Object.keys(_miRebuilt).forEach(function (g) {
+                        if (_miRebuilt[g]) { delete _miRebuilt[g]._isPerBunk; delete _miRebuilt[g]._perBunkSlots; }
+                    });
+                    divisionTimes = _miRebuilt;
+                    window.divisionTimes = _miRebuilt;
+                }
+            }
+        } catch (_eMIR) { /* non-fatal — fall back to the existing divisionTimes */ }
+
         // Toolbar with increment picker
         container.appendChild(_renderIncrementPicker());
 
