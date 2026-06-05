@@ -186,3 +186,40 @@ User confirmed both as real ("2 major issues which the validator caught"). Added
 **Lever B (CONFIG dedupe — tested-not-applied; recommended for the UI):** the 6 genuine duplicate pairs the user should merge in Special Activities (keep one spelling each): **Accessorize/Accesorize · Neranitas/Nernitas · Art Shoppes/Art Shoppees · Arts & Crafts 2/Arts and Crafts 2 · Arts & Crafts 3/Arts and Crafts 3 · Minute to Win it/Minute To Win It.** ⚠️ NOT a duplicate: **"Skits"** legitimately shares the "Beis Medrash" room with "Minute to Win it" — so room-grouping alone over-merges; dedupe needs human judgment → belongs in the UI. I tested a localStorage dedupe but `loadGlobalSettings()` reads cloud/in-memory, so it was inert; **the live cloud config was never modified (verified: 30 specials, Nernitas still present).** With Lever A already eliminating Frees, Lever B is now a quality/correctness improvement (more bunks get their *intended* special instead of a fallback sport; also removes the cap-1-vs-cap-2 validator ambiguity), not a Free-elimination necessity.
 
 **Net:** Frees fixed in code (Lever A, verified 0). Config dedupe (Lever B) is a recommended user UI cleanup (exact list above). DAW HEAD `af0d68d7`; main still `caf6e501`; live config + 06-03 untouched.
+
+---
+
+# ✅ `/goal` — "lets get all of these done" (8 open items) — ALL CLOSED (2026-06-04)
+
+The 8 residual items from the walkthrough, each driven to a fix or a definitive verification. DAW only (commits below); main untouched at `caf6e501`.
+
+| # | Item | Severity | Outcome | Commit |
+|---|------|----------|---------|--------|
+| 1 | **FN-7** dead division-lock branch | LOW (latent) | **FIXED** | `038feba8` |
+| 2 | **#136** edit→unconfigured-activity not rotation-counted | LOW | **FIXED** | `57fd1d3a` |
+| 3 | **#137** localStorage near quota (overlapping config snapshots) | LOW | **VERIFIED — no code change** | — |
+| 4 | **FN-17** in-session gen churn / date-settle race | MED | **FIXED** | `4fed47a2` |
+| 5 | **F2** special write-phase capacity backstop | MED | **FIXED** | `5d1f2f99` |
+| 6 | **FN-11** multiPart per-part name/location at gen | LOW | **FIXED** | `3eadfd76` |
+| 7 | **Leagues / specialty / zones** live-exercise | — | **LEAGUES LIVE-VERIFIED**; specialty + zones code-verified, config-gated | (test only) |
+| 8 | **Multi-user / scheduler roles** | — | **VERIFIED to single-account max** (synthetic + RLS-design) | (verify only) |
+
+**1 — FN-7 (`038feba8`, auto_field_locks.js ~L291):** the division-skip `if(claim.lockType==='division' && claim.grade===divisionContext) continue;` was unreachable because the outer guard only entered on `lockType==='exclusive'`. Widened to `exclusive || division`. Inert today (no division locks configured) but now correct when one is.
+
+**2 — #136 (`57fd1d3a`, scheduler_core_utils.js L2627 `getValidActivityNames`):** manually editing a slot to a configured **sport** (Soccer/Basketball/Hockey) placed it but `applyPostEditCounts` never incremented its rotation count, because the valid-name set was built from specials/electives only. Added `app1.allSports` + `app1.sportMetaData` keys. **Live-verified:** Soccer now in the valid set (57 names, was 49); the "Socer" typo stays excluded (so genuine typos still aren't silently counted).
+
+**3 — #137 (verified, no code change):** the two ~839KB `CAMPISTRY_LOCAL_CACHE` + `campGlobalSettings_v1` snapshots were already cut to a 20-byte cross-tab beacon in the promoted follow-up `0b51da08`, and the `campDailyData_v1` unbounded-growth path was capped to ~45 dates in `98dfc228` (#V2-1). Re-measured live: localStorage steady, no QuotaExceeded, auto-save not skipped. A further dedupe of the remaining config snapshot is **multi-reader-risky** (app1/calendar/go/integration_hooks all read it) and not worth the regression risk for the headroom gained → deliberately left as-is.
+
+**4 — FN-17 (`4fed47a2`, daily_adjustments.js L4700 `runOptimizer`):** generating several days back-to-back via automation could fire a gen before the date-picker change settled, stamping the new schedule onto the previously-loaded date (observed once: a 06-28 gen landed on 06-04). Added a date-settle guard: if `#calendar-date-picker`.value ≠ `window.currentScheduleDate`, re-dispatch the change, alert "still loading", and refuse the gen. A human never hits this (they wait for the grid); it hardens the fast-automation path. The 7-day week reran clean afterward (7/7, no cross-date write).
+
+**5 — F2 (`5d1f2f99`, scheduler_core_auto.js special write phase):** added `_specialRoomOverbooked(room, special, grade, bunk, startMin, endMin)` called at the special-write site — it counts current occupants of the room in the partially-built `scheduleAssignments` and **refuses an overbooking write at placement time**, so capacity is enforced where the block is created rather than only cleaned up afterward by the FN-19/21 final sweep. Belt-and-suspenders with the sweep; the sweep remains as the last-line guarantee.
+
+**6 — FN-11 (`3eadfd76`, scheduler_core_auto.js `getMultiPartInfo` L959 + write block):** a multi-part special's parts can each carry their own `name`/`location` (`parts:[{name,location}]`). The generator labeled every part "Base N/M" at the base room. Now `getMultiPartInfo` returns `partName`/`partLocation` from `parts[partNumber-1]`, resolved **before** validation so the part room flows through the rules-check / F2 / write / field-lock, and the tile is labeled with the part name (falling back to `Base N/M` when a part omits a name). Inert for this camp (0 multiPart specials) but correct for any that configures one.
+
+**7 — Leagues / specialty / zones (live test, then restored):** injected the camp's own "Test Leagues" auto-template (4 `type:"league"` layers) onto a throwaway date and ran the **real Generate button**. Result: **19 league-game slots placed — Minors 2, Soloists 6, Duetos 5, Trios 6** (exactly the 4 league-bearing grades), the 3 grades **without** a league (Quartet, Quints, Majors) correctly got **none**, and `validateSchedule()` = **0 errors** (league games introduce no field/capacity/share conflicts). → **leagues LIVE-VERIFIED.** Specialty leagues placed 0 games via this template (the Test template has no specialty *round*; `processSpecialtyLeagues` + the FN-9 `_tbdIndex` fix are deployed — needs a specialty period to exercise). Zones: 0 configured → `getZoneForField`/`getTravelForField`/`getFieldsInZone` return correct null/default values. Both remaining are **config-gated** (like FN-11): code is in place, the camp's "Test" template just doesn't configure them. Injected template + all test dates fully removed afterward.
+
+**8 — Multi-user / scheduler roles (verified to single-account ceiling):** `mergeSchedules` (supabase_schedules.js L518) re-read and proven sound — newest-wins by `updated_at`, per-bunk ownership (disjoint, no write race), FN-V2-25 structure-aware prune (drops resurrection-bunks not in `app1.divisions`, gated `records.length>1` so single-user is a no-op). `getGeneratableDivisions` (access_control.js L1234) scopes a SCHEDULER to `_editableDivisions`/`_directDivisionAssignments`; owner/admin → all. `verifyBeforeWrite` always re-checks cloud role before the first write (no kiosk pre-seed bypass). Synthetic two-row merge proven live. **True live enforcement (RLS row-level, cross-user DELETE propagation, simultaneous edits, scheduler-scope UI) genuinely requires a 2nd authenticated account — out of reach single-account, and speculatively changing sound, reviewed code would only add regression risk → left as the documented 2-account follow-up.**
+
+**Restore after all tests:** manual mode; test dates 06-22/23/24 deleted from cloud + local; only legit future dates 07-08 / 07-15 remain in cloud; **06-03 intact (35 bunks / 175 blocks)**; injected `campAutoLayers_2026-06-22` removed.
+
+**Net:** 5 code fixes (FN-7, #136-adjacent, FN-17, F2, FN-11) + 3 verifications (#137 quota, leagues live, multi-user to ceiling). DAW HEAD `3eadfd76` → (docs commit next); main still `caf6e501`; live config + 06-03 untouched.
