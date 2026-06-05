@@ -7821,6 +7821,83 @@ function init() {
   window.addEventListener('campistry-generation-complete', _runIronGate);
   document.addEventListener('campistry-schedule-generated', _runIronGate);
   window.addEventListener('campistry-schedule-saved', _runIronGate);
+
+  // =========================================================================
+  // CAPACITY/SHARING REPAIR GATE — post-settle, validator-driven.
+  // The in-generation sweep (scheduler_core_main STEP 7.55) runs BEFORE the
+  // async post-gen slot-resize (fixAllBunkSlotCounts, ~100ms after this event)
+  // finalizes per-bunk times — so a staggered / cross-grade / capacity share
+  // can appear only AFTER generation, which no in-gen pass can catch. This gate
+  // runs on the same post-gen events as the iron gate but DEFERRED past that
+  // resize, then loops validateAutoSchedule() and demotes exactly the offenders
+  // it reports (never a league/post-edit lock) until the validator is clean,
+  // refills freed slots with an empty-field sport, re-renders, and re-saves.
+  // Modeled on _runIronGate. Only re-saves when it changed something, so the
+  // re-save → event → re-run cycle self-terminates (second run finds 0 to fix).
+  // =========================================================================
+  let _capGateBusy = false;
+  const _runCapacityRepairGate = function _capacityRepairGate() {
+    setTimeout(function () {
+      if (_capGateBusy) return;
+      if (typeof window.validateAutoSchedule !== 'function') return;
+      _capGateBusy = true;
+      try {
+        const sa = window.scheduleAssignments || {};
+        const divs = window.divisions || {};
+        const b2g = {}; Object.keys(divs).forEach(g => ((divs[g] && divs[g].bunks) || []).forEach(b => { b2g[String(b)] = g; }));
+        const isProt = e => !!(e && (e._league || e._postEdit));
+        const findSlot = (bunk, fieldName) => {
+          const arr = sa[bunk] || []; const fl = String(fieldName || '').toLowerCase().trim();
+          for (let i = 0; i < arr.length; i++) { const e = arr[i]; if (e && !e.continuation && e.field !== 'Free' && !isProt(e) && String(e.field || e._specialLocation || '').toLowerCase().trim() === fl) return i; }
+          return -1;
+        };
+        const demote = (bunk, idx) => {
+          const e = sa[bunk] && sa[bunk][idx]; if (!e || e.field === 'Free' || isProt(e)) return false;
+          const sm = e._startMin, em = e._endMin;
+          sa[bunk][idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: sm, _endMin: em, _fixed: true, _constraintDemoted: true, _source: 'capacity-repair-gate', continuation: false };
+          const sl = sa[bunk]; for (let k = idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', _activity: 'Free', _fixed: true, continuation: false }; } else break; }
+          return true;
+        };
+        let repaired = 0;
+        for (let pass = 0; pass < 8; pass++) {
+          let v; try { v = window.validateAutoSchedule(); } catch (_e) { break; }
+          const errs = (v && (v.errors || v.violations)) || [];
+          if (!errs.length) break;
+          let did = false;
+          for (const er of errs) {
+            if (!er || !er.field) continue;
+            let offBunks = [];
+            if (Array.isArray(er.bunks) && er.bunks.length) offBunks = er.bunks.map(x => x && x.bunk).filter(Boolean);
+            else Object.keys(sa).forEach(b => { if (er.grade && b2g[String(b)] !== er.grade) return; if (findSlot(b, er.field) >= 0) offBunks.push(b); });
+            for (let oi = offBunks.length - 1; oi >= 0; oi--) { const si = findSlot(offBunks[oi], er.field); if (si >= 0 && demote(offBunks[oi], si)) { repaired++; did = true; break; } }
+          }
+          if (!did) break;
+        }
+        let filled = 0;
+        if (repaired > 0) {
+          // refill freed slots with a bunk-accessible sport on a completely-empty field
+          try {
+            const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
+            const fields = (gs.app1 && gs.app1.fields) || [];
+            const specialRooms = {}; ((gs.app1 && gs.app1.specialActivities) || []).forEach(s => { if (s && s.location) specialRooms[String(s.location).toLowerCase().trim()] = 1; });
+            const sportFields = fields.filter(f => f && f.name && f.available !== false && !specialRooms[String(f.name).toLowerCase().trim()] && Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled));
+            const occ = {}, done = {};
+            Object.keys(sa).forEach(b => { done[b] = {}; (sa[b] || []).forEach(e => { if (!e || e.continuation) return; const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') done[b][String(a).toLowerCase()] = 1; const fl = String(e.field || e._specialLocation || '').toLowerCase().trim(); if (!fl || fl === 'free') return; if (e._startMin == null) return; (occ[fl] = occ[fl] || []).push({ s: e._startMin, e: e._endMin }); }); });
+            const fieldFree = (fl, s, en) => { const a = occ[fl] || []; for (let i = 0; i < a.length; i++) if (a[i].s < en && a[i].e > s) return false; return true; };
+            const access = (f, g) => { const ar = f.accessRestrictions; if (!ar || !ar.enabled) return true; const d = ar.divisions || {}; if (!Object.keys(d).length) return true; return !!d[g]; };
+            Object.keys(sa).forEach(b => { const g = b2g[String(b)] || '?'; (sa[b] || []).forEach((e, i) => { if (!e || e.continuation || !e._constraintDemoted) return; const s = e._startMin, en = e._endMin; if (s == null) return; for (let fi = 0; fi < sportFields.length; fi++) { const f = sportFields[fi]; const fl = String(f.name).toLowerCase().trim(); if (!fieldFree(fl, s, en) || !access(f, g)) continue; let act = null; for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !done[b][String(c).toLowerCase()]) { act = c; break; } } if (!act) continue; sa[b][i] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, continuation: false }; (occ[fl] = occ[fl] || []).push({ s: s, e: en }); done[b][String(act).toLowerCase()] = 1; filled++; break; } }); });
+          } catch (_eff) {}
+          console.warn('[CAPACITY REPAIR GATE] demoted ' + repaired + ' validator-flagged placement(s) → Free, refilled ' + filled);
+          try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
+          const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+          try { if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk); else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} }); } catch (_e) {}
+        }
+      } catch (e) { console.warn('[CAPACITY REPAIR GATE] error: ' + e.message); }
+      finally { _capGateBusy = false; }
+    }, 320); // run AFTER the ~100ms post-gen slot-resize fixes finalize per-bunk times
+  };
+  window.addEventListener('campistry-generation-complete', _runCapacityRepairGate);
+  document.addEventListener('campistry-schedule-generated', _runCapacityRepairGate);
 }
     
 function cleanup() {
