@@ -3514,16 +3514,20 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             });
             var _rskip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
             var _rdt = window.divisionTimes || {};
-            // Mirror auto_validator.getBunkSlotTime EXACTLY: divisionTimes[grade]._perBunkSlots
-            // [bunk][idx] → divisionTimes[grade][idx]. Deliberately do NOT fall back to the entry's
-            // own _startMin — the validator never reads it, so using it made the sweep disagree with
-            // the validator whenever per-bunk geometry was absent (a slot could look non-overlapping
-            // to the sweep but overlapping to the validator, and vice-versa).
-            function _rtime(bunk, grade, idx) {
-                var dt = _rdt[grade];
-                var pbs = dt && dt._perBunkSlots && dt._perBunkSlots[bunk];
+            // Resolve a slot's window. Per-bunk geometry first (window durable copy, then
+            // divisionTimes._perBunkSlots — what auto_validator reads), THEN the entry's own
+            // _startMin. The entry fallback is essential DURING generation: at sweep time the
+            // per-bunk grid (divisionTimes._perBunkSlots) is often not finalized yet, but the entry
+            // already carries its real placement time, which is exactly what the grid settles to —
+            // so the validator (post-settle) and the sweep (mid-gen) agree. Without it the sweep
+            // falls to coarse division-level period times and misses real overlaps (e.g. a
+            // cross-grade staggered share that the validator then flags). Division-level last.
+            function _rtime(bunk, grade, idx, e) {
+                var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_rdt[grade] && _rdt[grade]._perBunkSlots && _rdt[grade]._perBunkSlots[bunk]);
                 if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
-                if (dt && dt[idx] && dt[idx].startMin != null) return { s: dt[idx].startMin, e: dt[idx].endMin };
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                var ds = _rdt[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
                 return null;
             }
             function _rCrossOk(grade, others, pairs) {
@@ -3630,14 +3634,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 return s;
             })();
             const _dt76 = window.divisionTimes || {};
-            // Same time resolution as auto_validator.getBunkSlotTime (see _rtime above): the
-            // free-fill's field-occupancy view must match the validator's so a fill it considers
-            // conflict-free is conflict-free to the validator too. (No entry-_startMin fallback.)
-            const _stime76 = (bunk, grade, idx) => {
-                const dt = _dt76[grade];
-                const pbs = dt && dt._perBunkSlots && dt._perBunkSlots[bunk];
+            // Same per-bunk → entry → division resolution as _rtime above (see note there): the
+            // entry fallback keeps the free-fill's occupancy view correct during generation, before
+            // divisionTimes._perBunkSlots is finalized.
+            const _stime76 = (bunk, grade, idx, e) => {
+                const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_dt76[grade] && _dt76[grade]._perBunkSlots && _dt76[grade]._perBunkSlots[bunk]);
                 if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
-                if (dt && dt[idx] && dt[idx].startMin != null) return { s: dt[idx].startMin, e: dt[idx].endMin };
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                const ds = _dt76[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
                 return null;
             };
             const _skip76 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
