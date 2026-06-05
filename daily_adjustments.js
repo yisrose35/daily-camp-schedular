@@ -7836,6 +7836,7 @@ function init() {
   // re-save → event → re-run cycle self-terminates (second run finds 0 to fix).
   // =========================================================================
   let _capGateBusy = false;
+  window.__capGateRuns = window.__capGateRuns || []; // observability: presence proves the gate loaded; each run records {repaired,filled}
   const _runCapacityRepairGate = function _capacityRepairGate() {
     setTimeout(function () {
       if (_capGateBusy) return;
@@ -7892,6 +7893,7 @@ function init() {
           const dk = window.currentScheduleDate || new Date().toISOString().split('T')[0];
           try { if (window.verifiedScheduleSave) window.verifiedScheduleSave(dk); else if (window.ScheduleDB?.saveSchedule) window.ScheduleDB.saveSchedule(dk, { scheduleAssignments: sa, leagueAssignments: window.leagueAssignments || {} }); } catch (_e) {}
         }
+        try { window.__capGateRuns.push({ repaired: repaired, filled: filled }); } catch (_m) {}
       } catch (e) { console.warn('[CAPACITY REPAIR GATE] error: ' + e.message); }
       finally { _capGateBusy = false; }
     }, 320); // run AFTER the ~100ms post-gen slot-resize fixes finalize per-bunk times
