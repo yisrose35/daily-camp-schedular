@@ -6351,6 +6351,14 @@
                 const fieldSlots = availFields.map(f => ({ ...f }));
                 const _bmdSW = window.getBunkMetaData ? window.getBunkMetaData() : (window.bunkMetaData || {});
                 const _szSW = (bb) => (_bmdSW[bb] && typeof _bmdSW[bb].size === 'number') ? _bmdSW[bb].size : 0;
+                const _normSW = (n) => (n || '').toLowerCase().trim();
+                const _comboSW = (function() {
+                    const o = { c2s: {}, s2c: {} };
+                    const _gsfc = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+                    const _fc = (_gsfc.app1 && _gsfc.app1.fieldCombos) || _gsfc.fieldCombos || {};
+                    Object.values(_fc).forEach(c => { if (c && c.combinedField && Array.isArray(c.subFields)) { const cN = _normSW(c.combinedField); o.c2s[cN] = c.subFields.map(_normSW); c.subFields.forEach(s => { o.s2c[_normSW(s)] = cN; }); } });
+                    return o;
+                })();
 
                 for (const { bunk } of scoredBunks) {
                     const sl = shoppingLists[bunk];
@@ -6389,6 +6397,20 @@
                                     }
                                     if (_occP > 0 && (_occP + _szSW(bunk)) > _spMaxP * 1.2) continue;
                                 }
+                            }
+
+                            // ★ Combined fields — skip this field if its combo partner (the
+                            //   combined field, or any of its sub-fields) is already claimed at
+                            //   this slot. Using a combined field occupies its sub-fields' space
+                            //   and vice-versa. isFieldAvailable has a combo guard but the
+                            //   claim state on this planner path isn't always reflected there
+                            //   (same class as the maxPlayers gap), so enforce it here too.
+                            {
+                                const _nf = _normSW(fs.name);
+                                const _partners = [];
+                                const _subs = _comboSW.c2s[_nf]; if (_subs) for (const _s of _subs) _partners.push(_s);
+                                const _cmb = _comboSW.s2c[_nf]; if (_cmb) _partners.push(_cmb);
+                                if (_partners.length > 0 && plannerFieldClaims.some(pc => _partners.indexOf(_normSW(pc.field)) !== -1 && pc.startMin < win.end && pc.endMin > win.start)) continue;
                             }
 
                             if (!claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name)) continue;
