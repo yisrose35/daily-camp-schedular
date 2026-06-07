@@ -2329,6 +2329,42 @@ function renderManualTimeTop(divName, bunks, blocks) {
 }
 
 // ── Bunk View ──
+// ★ Zone travel-buffer display (render-only): split a per-bunk schedule row
+//   whose activity is on a zoned field into [travel-pre][activity (shrunk)]
+//   [travel-post], so the printed sheet shows the travel time around a far-zone
+//   field. Reads the field's zone transition via getTransitionRules; makes NO
+//   change to the generated schedule. Complete no-op when no zone with a
+//   transition applies → identical output for every non-zoned schedule.
+function _pcExpandZoneBuffers(schedule, bunk, dn) {
+    var SCU = window.SchedulerCoreUtils;
+    if (!SCU || typeof SCU.getTransitionRules !== 'function') return schedule;
+    function fmt(m) {
+        if (SCU.fmtTime) return SCU.fmtTime(m);
+        var h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'PM' : 'AM', h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+        return h12 + ':' + (mm < 10 ? '0' + mm : mm) + ' ' + ap;
+    }
+    var out = [];
+    schedule.forEach(function (slot) {
+        var slotIdx = findFirstSlotForTime(slot.startMin, dn);
+        var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
+        var fld = (entry && !entry.continuation)
+            ? (typeof entry.field === 'string' ? entry.field : (entry.field && entry.field.name) || entry._activity || '')
+            : '';
+        var trans = fld ? SCU.getTransitionRules(fld, window.activityProperties) : null;
+        var pre = (trans && trans.preMin > 0) ? trans.preMin : 0;
+        var post = (trans && trans.postMin > 0) ? trans.postMin : 0;
+        if (entry && !entry.continuation && (pre > 0 || post > 0) && (slot.endMin - slot.startMin) > (pre + post + 4)) {
+            var effS = slot.startMin + pre, effE = slot.endMin - post;
+            if (pre > 0) out.push({ startMin: slot.startMin, endMin: effS, label: fmt(slot.startMin) + ' - ' + fmt(effS), _travelBuffer: true });
+            out.push({ startMin: effS, endMin: effE, label: fmt(effS) + ' - ' + fmt(effE), event: slot.event, isLeague: slot.isLeague, _lookupStart: slot.startMin });
+            if (post > 0) out.push({ startMin: effE, endMin: slot.endMin, label: fmt(effE) + ' - ' + fmt(slot.endMin), _travelBuffer: true });
+        } else {
+            out.push(slot);
+        }
+    });
+    return out;
+}
+
 function renderBunkSheet(bunk) {
     var t = _currentTemplate;
     var divs = getDivisions(), dn = null;
@@ -2339,6 +2375,8 @@ function renderBunkSheet(bunk) {
         // Build from division blocks
         var blocks = dn ? buildDivisionBlocks(dn) : [];
         schedule = blocks.map(function (b) { return { startMin: b.startMin, endMin: b.endMin, label: b.label, event: b.event, isLeague: b.isLeague }; });
+        // ★ Zone travel-buffer: split zoned activity rows into travel + activity + travel
+        schedule = _pcExpandZoneBuffers(schedule, bunk, dn);
     }
 
     var html = '<div class="pc3-sheet"><div class="pc3-sheet-head"><span class="pc3-sheet-title">' + escHtml(bunk) + '</span>';
@@ -2360,7 +2398,17 @@ function renderBunkSheet(bunk) {
 
     schedule.forEach(function (slot, idx) {
         var rowR = 1 + idx;
-        var slotIdx = isAutoMode() ? idx : findFirstSlotForTime(slot.startMin, dn);
+        // ★ Zone travel-buffer synthetic row — render directly (no entry lookup)
+        if (slot._travelBuffer) {
+            html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
+            html += pcRowNum(rowR);
+            html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#b45309;font-style:italic;background:repeating-linear-gradient(45deg,#FEF3C7,#FEF3C7 6px,#FDE68A 6px,#FDE68A 12px);">🚶 Travel</td>';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
+            html += '</tr>';
+            return;
+        }
+        var slotIdx = isAutoMode() ? idx : findFirstSlotForTime(slot._lookupStart != null ? slot._lookupStart : slot.startMin, dn);
         var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
         var type = getEntryType(entry);
         var act = '', loc = '';
