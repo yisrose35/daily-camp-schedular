@@ -959,8 +959,11 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   special). Gate here → fixes manual; harmless for auto (its planner
         //   already pre-filters with the identical rule). Counting by the base
         //   activity name matches the writer, which keeps _activity as the base.
+        //   Gated to non-auto (like rotationCohort below): AUTO's planner is the
+        //   single authority and uses its own allDailyData count source, so we
+        //   never want to double-enforce here with getActivityCount's source.
         var _mp = props.multiPart;
-        if (_mp && _mp.enabled) {
+        if (window._daBuilderMode !== 'auto' && _mp && _mp.enabled) {
             var _mpTotal = parseInt(_mp.totalParts) || 0;
             var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')
                 ? (RotationEngine.getActivityCount(bunkName, activityName) || 0) : 0;
