@@ -613,7 +613,7 @@ function init(){
     var kidsSub=document.getElementById('homeKidsSub');if(kidsSub)kidsSub.textContent=children.length?(children.length+' enrolled'):'—';
 
     // Home messages
-    var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg('+m.id+')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}
+    var hm=document.getElementById('homeMessages');if(hm){hm.innerHTML='';messages.slice(0,3).forEach(function(m){hm.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="nav(\'messages\');setTimeout(function(){openMsg(\''+m.id+'\')},50)"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div></div><span class="msg-time">'+m.date+'</span></div>';});}
 
     // Children list
     var cl=document.getElementById('childrenList');cl.innerHTML='';
@@ -694,9 +694,11 @@ function switchCanteen(id,btn){
     var c=children.find(function(k){return k.id===id});
     if(!c)return;
     document.getElementById('canteenAmt').textContent='$'+c.canteenBalance.toFixed(2);
+    // Sync limit display with real Snacks value
+    var lv=document.getElementById('limVal');if(lv)lv.textContent='$'+(c.dailyLimit||5).toFixed(2);
     var tl=document.getElementById('txList');tl.innerHTML='';
     var txs=canteenTxByChild[id]||[];
-    if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3></div>';return;}
+    if(!txs.length){tl.innerHTML='<div class="lk-empty" style="padding:24px 0;"><h3>No transactions yet</h3><p style="font-size:.8rem;color:var(--text-muted);">Purchases at the canteen will appear here.</p></div>';return;}
     txs.forEach(function(t){var d=t.amt<0;tl.innerHTML+='<div class="lk-tx-item"><div class="lk-tx-left"><div class="lk-tx-icon '+(d?'debit':'credit')+'">'+(d?txSvgDebit:txSvgCredit)+'</div><div><div class="lk-tx-name">'+t.name+'</div><div class="lk-tx-date">'+t.date+'</div></div></div><div class="lk-tx-amt '+(d?'debit':'credit')+'">'+(d?'−$'+Math.abs(t.amt).toFixed(2):'+$'+t.amt.toFixed(2))+'</div></div>';});
 }
 
@@ -781,7 +783,7 @@ function showChild(id){
 }
 
 // MESSAGES
-function renderMsgs(){fMsg('all');}
+function renderMsgs(){ _loadMessages(); fMsg('all'); }
 function fMsg(f,btn){
     if(btn){btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){t.classList.remove('active')});btn.classList.add('active');}
     var list=messages;
@@ -789,15 +791,24 @@ function fMsg(f,btn){
     if(f==='announcements')list=messages.filter(function(m){return m.type==='announcement'});
     var c=document.getElementById('msgList');c.innerHTML='';
     if(!list.length){c.innerHTML='<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';return;}
-    list.forEach(function(m){c.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg('+m.id+')"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
+    list.forEach(function(m){c.innerHTML+='<div class="msg-item '+(m.read?'':'unread')+'" onclick="openMsg(\''+m.id+'\')"><div class="msg-dot"></div><div class="msg-body"><div class="msg-subj">'+m.subject+'</div><div class="msg-preview">'+m.preview+'</div><div class="msg-from">'+m.from+'</div></div><span class="msg-time">'+m.date+'</span></div>';});
 }
 function openMsg(id){
-    var m=messages.find(function(x){return x.id===id});if(!m)return;
-    m.read=true;
+    var m=messages.find(function(x){return String(x.id)===String(id)});if(!m)return;
+    if(!m.read){
+        m.read=true;
+        if(m._storeId){
+            var store=_readLinkStore();
+            var sm=(store.messages||[]).find(function(x){return x.id===m._storeId});
+            if(sm){sm.read=true;_writeLinkStore(store);}
+        }
+    }
     var unread=messages.filter(function(x){return!x.read}).length;
     var nm2=document.getElementById('navMsgCount');if(nm2){nm2.textContent=unread;nm2.style.display=unread?'':'none';}
     document.getElementById('msgListView').style.display='none';document.getElementById('msgDetailView').style.display='block';
-    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;"><span>From: <strong>'+m.from+'</strong></span><span>'+m.date+'</span><span class="badge '+(m.type==='announcement'?'badge-warn':'badge-info')+'">'+(m.type==='announcement'?'Announcement':'Direct')+'</span></div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+(m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent!\')">Send Reply</button></div></div>':'');
+    var typeBadge=m.type==='announcement'?'<span class="badge badge-warn">Announcement</span>':'<span class="badge badge-info">Direct</span>';
+    var replyHtml=m.type==='direct'?'<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);"><textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea><div style="margin-top:8px;text-align:right;"><button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent!\')">Send Reply</button></div></div>':'';
+    document.getElementById('msgDetail').innerHTML='<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);"><div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">'+m.subject+'</div><div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;">From: <strong>'+m.from+'</strong> &nbsp;'+m.date+' &nbsp;'+typeBadge+'</div></div><div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">'+m.body+'</div>'+replyHtml;
 }
 function closeMsgDetail(){document.getElementById('msgListView').style.display='';document.getElementById('msgDetailView').style.display='none';renderMsgs();}
 function toggleCompose(show){
@@ -810,10 +821,16 @@ function sendComposedMsg(){
     var body=document.getElementById('composeBody').value.trim();
     if(!subj||!body){toast('Please fill in subject and message.');return;}
     var now=new Date();
-    var timeStr=(now.getHours()%12||12)+':'+(now.getMinutes()<10?'0':'')+now.getMinutes()+(now.getHours()<12?' AM':' PM');
-    messages.unshift({id:Date.now(),type:'direct',from:'You → '+to,subject:subj,preview:body.slice(0,60)+'...',body:'<p>'+body.replace(/\n/g,'</p><p>')+'</p>',date:'Just now',read:true});
+    var msgId='msg_'+now.getTime()+'_'+Math.random().toString(36).slice(2,5);
+    var msg={id:msgId,direction:'in',from:parent.name||'Parent',to:to||'Camp Office',toType:'individual',
+        subject:subj,body:body,channels:['app'],date:now.toISOString(),read:false,replied:false,threadId:null,
+        metadata:{parentEmail:parent.email}};
+    var store=_readLinkStore();
+    if(!store.messages)store.messages=[];
+    store.messages.unshift(msg);
+    _writeLinkStore(store);
     toggleCompose(false);
-    renderMsgs();
+    renderMsgs(); // reloads from store, will show sent message
     toast('Message sent to '+to+'!');
 }
 
@@ -830,7 +847,80 @@ function changeSchedDate(delta){
 
 // PICKUP & ARRIVAL
 var PARENT_REQ_KEY = 'campistry_parent_requests_v1';
+var LINK_STORE_KEY = 'campistry_link_v1';
 var pickupRequests = [];
+
+// ── Shared message store helpers ──────────────────────────────────────────────
+function _readLinkStore(){try{return JSON.parse(localStorage.getItem(LINK_STORE_KEY)||'{}');}catch(e){return {};}}
+function _writeLinkStore(s){try{localStorage.setItem(LINK_STORE_KEY,JSON.stringify(s));}catch(e){}}
+
+function _formatMsgDate(d){
+    if(!d)return '—';
+    var dt=new Date(d);if(isNaN(dt))return String(d);
+    var diff=Date.now()-dt, h=Math.floor(diff/3600000);
+    if(h<1)return Math.max(1,Math.floor(diff/60000))+'m ago';
+    if(h<24)return h+'h ago';
+    return dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+}
+
+function _loadMessages(){
+    var store=_readLinkStore();
+    var storeMsgs=store.messages||[], broadcasts=store.broadcasts||[], notifs=store.notifications||[];
+    messages=[];
+    storeMsgs.forEach(function(m){
+        var forMe=m.direction==='out'&&(m.to===parent.name||m.to===parent.email);
+        var byMe =m.direction==='in' &&(m.from===parent.name||(m.metadata&&m.metadata.parentEmail===parent.email));
+        if(!forMe&&!byMe)return;
+        messages.push({
+            id:m.id,type:byMe?'sent':'direct',
+            from:byMe?('You → '+m.to):'Camp Office',
+            subject:m.subject||'(No subject)',
+            preview:(m.body||'').slice(0,80),
+            body:'<p>'+(m.body||'').replace(/\n/g,'</p><p>')+'</p>',
+            date:_formatMsgDate(m.date),_rawDate:m.date,
+            read:m.read||byMe,_storeId:m.id
+        });
+    });
+    broadcasts.forEach(function(b){
+        messages.push({
+            id:b.id,type:'announcement',from:'Camp — All Families',
+            subject:b.subject||'(No subject)',preview:(b.body||'').slice(0,80),
+            body:'<p>'+(b.body||'').replace(/\n/g,'</p><p>')+'</p>',
+            date:_formatMsgDate(b.date),_rawDate:b.date,read:true
+        });
+    });
+    if(parent.name||parent.email){
+        notifs.filter(function(n){return n.parentName===parent.name||n.parentEmail===parent.email;})
+        .forEach(function(n){
+            messages.push({
+                id:n.id,type:'announcement',from:'Camp Update',
+                subject:n.subject||'(No subject)',preview:(n.body||'').slice(0,80),
+                body:'<p>'+(n.body||'').replace(/\n/g,'</p><p>')+'</p>',
+                date:_formatMsgDate(n.date),_rawDate:n.date,read:true
+            });
+        });
+    }
+    messages.sort(function(a,b){
+        var da=a._rawDate?new Date(a._rawDate):new Date(0);
+        var db=b._rawDate?new Date(b._rawDate):new Date(0);
+        return db-da;
+    });
+}
+
+// ── Snacks canteen data reader ────────────────────────────────────────────────
+function _loadSnacksData(childrenList){
+    var gs={};try{gs=JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');}catch(e){}
+    var snacks=gs.campistrySnacks||{}, accts=snacks.accounts||{}, txs=snacks.transactions||[];
+    childrenList.forEach(function(c){
+        var a=accts[c.name]||{};
+        if(a.balance   !=null)c.canteenBalance=a.balance;
+        if(a.dailyLimit!=null)c.dailyLimit=a.dailyLimit;
+        var childTx=txs.filter(function(t){return t.camper===c.name;});
+        canteenTxByChild[c.id]=childTx.map(function(t){
+            return{name:t.items||'Purchase',date:(t.time||'')+(t.date?' · '+t.date:''),amt:-Math.abs(t.amount||0)};
+        });
+    });
+}
 function selPickup(type, btn) {
     document.querySelectorAll('.pickup-type-btn').forEach(function(b){b.classList.remove('active')});
     btn.classList.add('active');
@@ -948,6 +1038,36 @@ function initPickupTabs() {
 
 init();
 initPickupTabs();
+
+// ── Cross-tab storage sync ─────────────────────────────────────────────────────
+window.addEventListener('storage', function(e) {
+    // Live updated a pickup request status — refresh history panel
+    if (e.key === PARENT_REQ_KEY) {
+        renderPickupHistory();
+    }
+    // Admin sent a message / broadcast / notification — refresh inbox badge + list
+    if (e.key === LINK_STORE_KEY) {
+        _loadMessages();
+        var unread = messages.filter(function(m){ return !m.read; }).length;
+        var nm = document.getElementById('navMsgCount');
+        if (nm){ nm.textContent = unread; nm.style.display = unread ? '' : 'none'; }
+        var mb = document.getElementById('homeMsgBadge');
+        if (mb){ mb.textContent = unread; mb.style.display = unread ? 'flex' : 'none'; }
+        var ms = document.getElementById('homeMsgSub');
+        if (ms) ms.textContent = unread ? unread + ' unread' : 'All caught up';
+    }
+    // Snacks POS ran a transaction — refresh canteen balance
+    if (e.key === 'campGlobalSettings_v1' && children.length) {
+        _loadSnacksData(children);
+        var activeTab = document.querySelector('#canteenTabs .lk-tab.active');
+        var activeId = activeTab ? children.find(function(c){ return c.name.split(' ')[0] === activeTab.textContent.trim(); }) : children[0];
+        if (activeId) switchCanteen(activeId.id);
+        // Refresh home canteen total
+        var bal = children.reduce(function(s,c){ return s + (c.canteenBalance || 0); }, 0);
+        var cs = document.getElementById('homeCanteenSub');
+        if (cs) cs.textContent = '$' + bal.toFixed(2);
+    }
+});
 </script>
 <script src="campistry_notes_quick.js"></script>
 <script src="supabase-js@2.js"></script>
@@ -1035,7 +1155,9 @@ initPickupTabs();
         if (realChildren.length) {
             children = realChildren;
             var newTx = {}; realChildren.forEach(function(c){newTx[c.id]=[];}); canteenTxByChild = newTx;
+            _loadSnacksData(realChildren); // pull real balances + transactions from Campistry Snacks
         }
+        _loadMessages(); // pull messages/broadcasts/notifications from shared store
         init();
         _hideOverlay('parentAuthOverlay');
         // Load camp-configured forms after portal is visible

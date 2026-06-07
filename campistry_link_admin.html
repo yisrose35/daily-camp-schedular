@@ -820,29 +820,36 @@ function updateSmartBadge() {
 function renderSent() {}
 
 // ─── ADMIN MESSAGES ───────────────────────────────────────────────────────────
-var adminMessages = [
-    { id:1, from:'Sarah Miller', role:'Parent', subject:'Question about visiting day', preview:'When is visiting day exactly? We have a conflict...', body:'<p>Hi,</p><p>When is visiting day exactly? We have a potential conflict and wanted to confirm the date. Also, can family members other than parents attend?</p><p>Thank you,<br>Sarah Miller</p>', date:'2h ago', read:false },
-    { id:2, from:'David Cohen',  role:'Parent', subject:"Eli's medication reminder",    preview:"Just a reminder that Eli needs his afternoon dose...", body:'<p>Hi,</p><p>Just a reminder that Eli needs his afternoon medication (Ritalin 10mg) at 2:00 PM. The nurse should have the prescription on file. Please confirm.</p><p>Thanks,<br>David Cohen</p>', date:'5h ago', read:false }
-];
+function _fmtMsgTime(d) {
+    if (!d) return '—';
+    var dt = new Date(d); if (isNaN(dt)) return String(d);
+    var diff = Date.now() - dt, h = Math.floor(diff / 3600000);
+    if (h < 1) return Math.max(1, Math.floor(diff / 60000)) + 'm ago';
+    if (h < 24) return h + 'h ago';
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
 
 function renderAdminMsgs(filter) {
-    var list = adminMessages;
-    if (filter === 'unread') list = adminMessages.filter(function(m) { return !m.read; });
+    var cl = CL();
+    var list = cl ? cl.msg.getInbox() : [];
+    if (filter === 'unread') list = list.filter(function(m) { return !m.read; });
     var c = document.getElementById('adminMsgList');
     if (!list.length) {
-        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages</h3></div>';
+        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages from parents yet</h3><p>When a parent sends a message from the portal, it will appear here.</p></div>';
         return;
     }
     c.innerHTML = '';
     list.forEach(function(m) {
-        c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(' + m.id + ')">' +
+        var from = m.from || 'Parent';
+        var preview = (m.body || '').slice(0, 80);
+        c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + esc(m.id) + '\')">' +
             '<div class="msg-dot"></div>' +
             '<div class="msg-body">' +
-                '<div class="msg-subj">' + esc(m.subject) + '</div>' +
-                '<div class="msg-preview">' + esc(m.preview) + '</div>' +
-                '<div class="msg-from">' + esc(m.from) + ' (' + esc(m.role) + ')</div>' +
+                '<div class="msg-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="msg-preview">' + esc(preview) + '</div>' +
+                '<div class="msg-from">' + esc(from) + ' (Parent)</div>' +
             '</div>' +
-            '<span class="msg-time">' + esc(m.date) + '</span>' +
+            '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
         '</div>';
     });
 }
@@ -851,26 +858,40 @@ function filterAdminMsgs(filter, btn) {
     renderAdminMsgs(filter);
 }
 function openAdminMsg(id) {
-    var m = adminMessages.find(function(x) { return x.id === id; }); if (!m) return;
-    m.read = true;
+    var cl = CL();
+    var m = cl ? cl.msg.getInbox().find(function(x) { return x.id === id; }) : null;
+    if (!m) return;
+    cl.msg.markRead(id);
+    var from = m.from || 'Parent';
+    var body = m.body || '';
+    if (!body.startsWith('<')) body = '<p>' + body.replace(/\n/g, '</p><p>') + '</p>';
     document.getElementById('adminMsgListView').style.display = 'none';
     document.getElementById('adminMsgDetailView').style.display = 'block';
     document.getElementById('adminMsgDetail').innerHTML =
         '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
-            '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject) + '</div>' +
+            '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
             '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
-                '<span>From: <strong>' + esc(m.from) + '</strong></span>' +
-                '<span>' + esc(m.date) + '</span>' +
-                '<span class="badge badge-neutral">' + esc(m.role) + '</span>' +
+                '<span>From: <strong>' + esc(from) + '</strong></span>' +
+                '<span>' + esc(_fmtMsgTime(m.date)) + '</span>' +
+                '<span class="badge badge-neutral">Parent</span>' +
             '</div>' +
         '</div>' +
-        '<div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">' + m.body + '</div>' +
+        '<div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">' + body + '</div>' +
         '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">' +
-            '<textarea class="lk-textarea" placeholder="Write a reply..." style="min-height:80px;"></textarea>' +
-            '<div style="margin-top:8px;text-align:right;">' +
-                '<button class="btn btn-primary btn-sm" onclick="toast(\'Reply sent to ' + esc(m.from) + '!\')">Send Reply</button>' +
+            '<textarea class="lk-textarea" id="adminReplyBody" placeholder="Write a reply to ' + esc(from) + '..." style="min-height:80px;"></textarea>' +
+            '<div style="margin-top:8px;display:flex;gap:6px;justify-content:flex-end;">' +
+                '<button class="btn btn-primary btn-sm" onclick="sendAdminReply(\'' + esc(m.id) + '\',\'' + esc(from) + '\')">Send Reply</button>' +
             '</div>' +
         '</div>';
+    renderAdminMsgs('all');
+}
+function sendAdminReply(threadId, toName) {
+    var body = (document.getElementById('adminReplyBody') || {}).value || '';
+    if (!body.trim()) { toast('Enter a reply'); return; }
+    var cl = CL();
+    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: channels, threadId: threadId || null });
+    toast('Reply sent to ' + toName + '!');
+    closeAdminMsgDetail();
 }
 function closeAdminMsgDetail() {
     document.getElementById('adminMsgListView').style.display = '';
@@ -1019,8 +1040,26 @@ function moveToFolder(docId) {
     toast(esc(d.camper)+'\'s '+esc(d.name)+' filed into "'+esc(f.name)+'"');
 }
 
-function showCreateFolder() { document.getElementById('createFolderForm').style.display = ''; document.getElementById('folderName').focus(); }
+function showCreateFolder() {
+    document.getElementById('createFolderForm').style.display = '';
+    document.getElementById('folderName').focus();
+    _populateFolderDropdowns();
+}
 function hideCreateFolder() { document.getElementById('createFolderForm').style.display = 'none'; }
+function _populateFolderDropdowns() {
+    var cl = CL(); if (!cl) return;
+    var struct = cl.data.getStructure();
+    var divSel = document.getElementById('folderDivision');
+    var gradeSel = document.getElementById('folderGrade');
+    if (!divSel || !gradeSel) return;
+    var divs = Object.keys(struct);
+    divSel.innerHTML = '<option value="">Any division</option>' +
+        divs.map(function(d) { return '<option value="' + esc(d) + '">' + esc(d) + '</option>'; }).join('');
+    var grades = {};
+    divs.forEach(function(d) { Object.keys((struct[d] && struct[d].grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+    gradeSel.innerHTML = '<option value="">Any grade</option>' +
+        Object.keys(grades).sort().map(function(g) { return '<option value="' + esc(g) + '">' + esc(g) + '</option>'; }).join('');
+}
 
 function createFolder() {
     var name = document.getElementById('folderName').value.trim();
@@ -1177,7 +1216,15 @@ function boot() {
     }
 
     window.addEventListener('storage', function(e) {
-        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') { renderDash(); }
+        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {
+            if (window.CampistryLink) window.CampistryLink.refresh();
+            renderDash();
+        }
+        // Parent sent a message — refresh admin inbox in real time
+        if (e.key === 'campistry_link_v1') {
+            if (window.CampistryLink) window.CampistryLink.refresh();
+            if (currentMsgTab === 'inbox') renderAdminMsgs('all');
+        }
     });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
