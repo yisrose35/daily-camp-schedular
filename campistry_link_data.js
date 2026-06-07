@@ -350,25 +350,28 @@
             });
         });
 
-        // Second pass: roster entries not in any family
+        // Second pass: group roster-only campers by parent email/name into implied families
+        var impliedFamilies = {};
         Object.entries(roster).forEach(function(entry) {
             var name = entry[0], c = entry[1];
             if (!c.parent1Name) return;
             var key = (c.parent1Email || c.parent1Name || '').toLowerCase();
-            if (seen[key]) return;
-            seen[key] = true;
-            directory.push({
-                parentName: c.parent1Name,
-                parentEmail: c.parent1Email || '',
-                parentPhone: c.parent1Phone || '',
-                parent2Name: '',
-                parent2Phone: '',
-                children: [{ name: name, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId }],
-                familyId: null,
-                familyName: name.split(' ').pop() + ' Family',
-                address: [c.street, c.city, c.state, c.zip].filter(Boolean).join(', ')
-            });
+            if (seen[key]) return; // already captured by a proper family record
+            if (!impliedFamilies[key]) {
+                impliedFamilies[key] = {
+                    parentName: c.parent1Name,
+                    parentEmail: c.parent1Email || '',
+                    parentPhone: c.parent1Phone || '',
+                    parent2Name: '', parent2Phone: '',
+                    children: [],
+                    familyId: null,
+                    familyName: (name.split(' ').pop() || '') + ' Family',
+                    address: [c.street, c.city, c.state, c.zip].filter(Boolean).join(', ')
+                };
+            }
+            impliedFamilies[key].children.push({ name: name, division: c.division, grade: c.grade, bunk: c.bunk, camperId: c.camperId });
         });
+        Object.values(impliedFamilies).forEach(function(f) { directory.push(f); });
 
         return directory;
     };
@@ -408,7 +411,7 @@
                 parentEmail: c.parent1Email || '',
                 parentPhone: c.parent1Phone || '',
                 familyId: null,
-                familyName: ''
+                familyName: (name.split(' ').pop() || '') + ' Family'
             });
         });
 

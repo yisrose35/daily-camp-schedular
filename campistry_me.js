@@ -747,6 +747,33 @@ function saveCamper(){
     };
     // Sync address to Campistry Go format
     syncAddressToGo(full,roster[full]);
+    // Every camper always belongs to a family — create one if needed
+    if(last){
+        var famKey='fam_'+last.toLowerCase().replace(/[^a-z0-9]/g,'');
+        if(!families[famKey]){
+            var p1e={name:roster[full].parent1Name||'',phone:roster[full].parent1Phone||'',email:roster[full].parent1Email||'',relation:'Parent'};
+            families[famKey]={
+                name:last+' Family',
+                households:[{label:'Primary',parents:[p1e],address:[roster[full].street,roster[full].city,roster[full].state,roster[full].zip].filter(Boolean).join(', '),billingContact:true}],
+                camperIds:[full],
+                balance:0,totalPaid:0,notes:'Added via camper profile'
+            };
+        } else {
+            // Add this camper to existing family if not already there
+            if(families[famKey].camperIds.indexOf(full)<0)families[famKey].camperIds.push(full);
+            // Backfill parent info if the primary household had none
+            var hh0=families[famKey].households&&families[famKey].households[0];
+            if(hh0&&hh0.parents&&hh0.parents[0]&&!hh0.parents[0].name&&roster[full].parent1Name){
+                hh0.parents[0].name=roster[full].parent1Name;
+                hh0.parents[0].email=roster[full].parent1Email||'';
+                hh0.parents[0].phone=roster[full].parent1Phone||'';
+            }
+            // Update address if family has none
+            if(hh0&&!hh0.address&&roster[full].street){
+                hh0.address=[roster[full].street,roster[full].city,roster[full].state,roster[full].zip].filter(Boolean).join(', ');
+            }
+        }
+    }
     save();closeModal('camperEditModal');render(curPage);toast(editingCamper?'Updated':'Added');
 }
 function deleteCamper(n){
