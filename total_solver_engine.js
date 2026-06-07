@@ -1650,17 +1650,21 @@
     //   config directly, so it is robust to whichever activityProperties is live.
     var _specFeat = (typeof window.computeManualSpecialFeatures === 'function')
         ? window.computeManualSpecialFeatures(_actName, block.startTime, block.endTime, bunk, window.activityProperties) : null;
+    // ★ multiPart per-part LOCATION: place this part in its own room (and reserve
+    //   it under that room) when the part defines one; else use the base field.
+    var _wField = (_specFeat && _specFeat._partLocation) ? _specFeat._partLocation : fName;
     for (var i = 0; i < slots.length; i++) {
-        var _ent = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        var _ent = { field: _wField, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
         if (_specFeat) {
             if (_specFeat._partLabel) { _ent._partNumber = _specFeat._partNumber; _ent._totalParts = _specFeat._totalParts; _ent._partLabel = _specFeat._partLabel; }
+            if (_specFeat._partLocation) _ent._partLocation = _specFeat._partLocation;
             if (i === 0) {
                 if (_specFeat._prepDuration) { _ent._prepDuration = _specFeat._prepDuration; _ent._prepLabel = _specFeat._prepLabel; _ent._prepLocation = _specFeat._prepLocation; }
                 if (_specFeat._endMin && slots.length === 1) { _ent._endMin = _specFeat._endMin; _ent._durationBestFit = _specFeat._durationBestFit; }
             }
         }
         window.scheduleAssignments[bunk][slots[i]] = _ent;
-        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || _actName; }
+        if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][_wField]) window.fieldUsageBySlot[slots[i]][_wField] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][_wField].count++; window.fieldUsageBySlot[slots[i]][_wField].bunks[bunk] = pick.sport || _actName; }
     }
     // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
     // Without this, _todayCache returns stale "not done today" for this bunk,

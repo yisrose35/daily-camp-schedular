@@ -2385,7 +2385,7 @@ function _pcExpandPrepBlocks(schedule, bunk, dn) {
         var prep = (entry && !entry.continuation && entry._prepDuration > 0) ? entry._prepDuration : 0;
         if (prep > 0 && (slot.endMin - slot.startMin) > (prep + 4)) {
             var pS = slot.startMin, pE = slot.startMin + prep;
-            out.push({ startMin: pS, endMin: pE, label: fmt(pS) + ' - ' + fmt(pE), _prepBuffer: true, _prepLabel: entry._prepLabel || 'Prep' });
+            out.push({ startMin: pS, endMin: pE, label: fmt(pS) + ' - ' + fmt(pE), _prepBuffer: true, _prepLabel: entry._prepLabel || 'Prep', _prepLocation: entry._prepLocation || '' });
             out.push({ startMin: pE, endMin: slot.endMin, label: fmt(pE) + ' - ' + fmt(slot.endMin), event: slot.event, isLeague: slot.isLeague, _lookupStart: lookup });
         } else {
             out.push(slot);
@@ -2446,7 +2446,8 @@ function renderBunkSheet(bunk) {
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
             html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#7c3aed;font-style:italic;background:repeating-linear-gradient(45deg,#EDE9FE,#EDE9FE 6px,#DDD6FE 6px,#DDD6FE 12px);">' + escHtml(_prepTxt) + '</td>';
-            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
+            var _prepLoc = slot._prepLocation || '';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#7c3aed;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
             html += '</tr>';
             return;
         }

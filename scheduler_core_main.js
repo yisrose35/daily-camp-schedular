@@ -408,10 +408,18 @@
                 if (partNo <= total) {
                     const part = (Array.isArray(mp.parts) && mp.parts[partNo - 1]) ? mp.parts[partNo - 1] : null;
                     const partName = (part && typeof part.name === 'string' && part.name.trim()) ? part.name.trim() : null;
+                    const partLoc = (part && typeof part.location === 'string' && part.location.trim()) ? part.location.trim() : null;
                     out = out || {};
                     out._partNumber = partNo;
                     out._totalParts = total;
                     out._partLabel = (partName ? partName : actName) + ' ' + partNo + '/' + total;
+                    // ★ per-part LOCATION: the auto builder places each part in its own
+                    //   room (parts[i].location). Port it: the writer overrides the slot's
+                    //   field to this room and registers usage under it, so the part is
+                    //   actually placed (and reserved) in its own room — not the base
+                    //   special location. Whole-tile (not sub-slot), so it maps cleanly to
+                    //   the manual slot model. Null when the part has no own location.
+                    if (partLoc) out._partLocation = partLoc;
                 }
             }
         }
@@ -600,6 +608,12 @@
                         _entry._totalParts = _specFeat._totalParts;
                         _entry._partLabel = _specFeat._partLabel;
                     }
+                    // ★ per-part location: place this part in its own room (whole-tile
+                    //   override; usage registered under it below).
+                    if (_specFeat._partLocation) {
+                        _entry.field = _specFeat._partLocation;
+                        _entry._partLocation = _specFeat._partLocation;
+                    }
                     // prep + duration clamp apply to the first slot only
                     if (i === 0) {
                         if (_specFeat._prepDuration) {
@@ -614,7 +628,7 @@
                     }
                 }
                 window.scheduleAssignments[bunk][slotIndex] = _entry;
-                window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
+                window.registerSingleSlotUsage(slotIndex, _entry.field, block.divName, bunk, pick._activity || _entry.field, fieldUsageBySlot, activityProperties);
             } else {
                 console.log(`[fillBlock] ⚠️ Skipped write for ${bunk} slot ${slotIndex} - existing: ${existing?._activity}`);
             }
