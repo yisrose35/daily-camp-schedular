@@ -343,6 +343,84 @@
     }
 
     // -------------------------------------------------------------------------
+    // computeManualSpecialFeatures — port of the AUTO builder's Day-19 special
+    // placement features (durations[] best-fit, multiPart part-labeling, prep
+    // lead-in) into the MANUAL builder. Returns a metadata patch to merge onto
+    // the written slot, or null. EVERY branch is gated on the special opting in
+    // (durations.length>1 / multiPart.enabled / prepDuration>0), so ordinary
+    // sports and specials that don't configure these get null → zero behavior
+    // change. Mirrors scheduler_core_auto.js getMultiPartInfo (L959) and the
+    // duration/prep handling there.
+    // -------------------------------------------------------------------------
+    function computeManualSpecialFeatures(actName, tileStart, tileEnd, bunk, activityProperties) {
+        if (!actName || !activityProperties) return null;
+        let props = activityProperties[actName];
+        if (!props) {
+            const _k = Object.keys(activityProperties).find(k => k.toLowerCase() === String(actName).toLowerCase());
+            props = _k ? activityProperties[_k] : null;
+        }
+        if (!props) return null;
+        const tileLen = (typeof tileStart === 'number' && typeof tileEnd === 'number') ? (tileEnd - tileStart) : 0;
+        let out = null;
+
+        // durations[] best-fit: pick the largest configured duration that fits the
+        // tile (smallest if none fit). Honors the user's allowed lengths instead
+        // of always stretching the special across the whole tile. When the chosen
+        // length is shorter than the tile, _endMin is clamped so the special shows
+        // its real duration (the validator derives times from divisionTimes, not
+        // _endMin, so this never creates phantom conflicts).
+        if (Array.isArray(props.durations) && props.durations.length > 1 && tileLen > 0) {
+            const _ds = props.durations.map(d => parseInt(d) || 0).filter(d => d > 0);
+            if (_ds.length) {
+                const _fit = _ds.filter(d => d <= tileLen);
+                const _best = _fit.length ? Math.max.apply(null, _fit) : Math.min.apply(null, _ds);
+                if (_best > 0 && _best < tileLen) {
+                    out = out || {};
+                    out._endMin = tileStart + _best;
+                    out._durationBestFit = _best;
+                }
+            }
+        }
+
+        // multiPart: stamp part number/label so the schedule shows "VR Lab 1/2".
+        // _activity stays the base name (rotation counts by base); the visible
+        // name comes from _partLabel via Utils.getActivityDisplayName. The
+        // daysBetween/totalParts placement gate lives in calculateLimitScore.
+        const mp = props.multiPart;
+        if (mp && mp.enabled) {
+            const total = parseInt(mp.totalParts) || 0;
+            if (total > 0) {
+                const prior = (window.RotationEngine && typeof window.RotationEngine.getActivityCount === 'function')
+                    ? (window.RotationEngine.getActivityCount(bunk, actName) || 0) : 0;
+                const partNo = prior + 1;
+                if (partNo <= total) {
+                    const part = (Array.isArray(mp.parts) && mp.parts[partNo - 1]) ? mp.parts[partNo - 1] : null;
+                    const partName = (part && typeof part.name === 'string' && part.name.trim()) ? part.name.trim() : null;
+                    out = out || {};
+                    out._partNumber = partNo;
+                    out._totalParts = total;
+                    out._partLabel = (partName ? partName : actName) + ' ' + partNo + '/' + total;
+                }
+            }
+        }
+
+        // prep: reserve the lead-in time as a prep sub-block. Same-location prep
+        // needs no extra field reservation (the bunk already holds the location
+        // for the whole tile); the print sheet splits [Prep][activity] visually,
+        // mirroring the zone travel buffer.
+        const prepDur = parseInt(props.prepDuration) || 0;
+        if (prepDur > 0 && tileLen > prepDur + 4) {
+            out = out || {};
+            out._prepDuration = prepDur;
+            out._prepLabel = (props.prepConfig && typeof props.prepConfig.label === 'string' && props.prepConfig.label.trim())
+                ? props.prepConfig.label.trim() : (actName + ' Prep');
+            out._prepLocation = (props.prepConfig && typeof props.prepConfig.location === 'string') ? props.prepConfig.location.trim() : '';
+        }
+        return out;
+    }
+    window.computeManualSpecialFeatures = computeManualSpecialFeatures;
+
+    // -------------------------------------------------------------------------
     // fillBlock — Buffer/Merge-Safe Inline Writer
     // -------------------------------------------------------------------------
     // v17.7 FIX: Split tile blocks now use explicit slots and properly propagate metadata
@@ -469,19 +547,24 @@
             return;
         }
 
+        // ★ Day-19 special features (durations best-fit / multiPart / prep) for
+        //   MANUAL mode. Computed once per fill; gated — null for ordinary fills.
+        const _specActName = pick._activity || pick.activityName || pick.sport || fName;
+        const _specFeat = computeManualSpecialFeatures(_specActName, block.startTime, block.endTime, bunk, activityProperties);
+
         mainSlots.forEach((slotIndex, i) => {
             const existing = window.scheduleAssignments[bunk][slotIndex];
-            
+
             // ★★★ v17.7 FIX: Check BOTH block.fromSplitTile AND pick._fromSplitTile ★★★
-            const canWrite = !existing || 
+            const canWrite = !existing ||
                             existing._isTransition ||
                             isSplitTileBlock ||  // ← NEW: Allow writes for any split tile block
-                            (pick._fromSplitTile && existing._fromSplitTile && 
+                            (pick._fromSplitTile && existing._fromSplitTile &&
                              block.startTime !== undefined && existing._startMin !== undefined &&
                              (block.startTime >= existing._endMin || block.endTime <= existing._startMin));
-            
+
             if (canWrite) {
-                window.scheduleAssignments[bunk][slotIndex] = {
+                const _entry = {
                     field: fName,
                     sport: pick.sport,
                     continuation: i > 0,
@@ -498,6 +581,27 @@
                     _endMin: block.endTime,
                     _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false
                 };
+                if (_specFeat) {
+                    // part label on every slot (so continuations also display it)
+                    if (_specFeat._partLabel) {
+                        _entry._partNumber = _specFeat._partNumber;
+                        _entry._totalParts = _specFeat._totalParts;
+                        _entry._partLabel = _specFeat._partLabel;
+                    }
+                    // prep + duration clamp apply to the first slot only
+                    if (i === 0) {
+                        if (_specFeat._prepDuration) {
+                            _entry._prepDuration = _specFeat._prepDuration;
+                            _entry._prepLabel = _specFeat._prepLabel;
+                            _entry._prepLocation = _specFeat._prepLocation;
+                        }
+                        if (_specFeat._endMin && mainSlots.length === 1) {
+                            _entry._endMin = _specFeat._endMin;
+                            _entry._durationBestFit = _specFeat._durationBestFit;
+                        }
+                    }
+                }
+                window.scheduleAssignments[bunk][slotIndex] = _entry;
                 window.registerSingleSlotUsage(slotIndex, fName, block.divName, bunk, pick._activity || fName, fieldUsageBySlot, activityProperties);
             } else {
                 console.log(`[fillBlock] ⚠️ Skipped write for ${bunk} slot ${slotIndex} - existing: ${existing?._activity}`);

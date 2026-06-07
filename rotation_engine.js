@@ -950,6 +950,30 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
             }
         }
 
+        // ★ multiPart daysBetween + totalParts gate (manual-audit fix; mirrors
+        //   auto scheduler_core_auto.js:4306-4338). AUTO pre-gates multiPart
+        //   specials in its planner — the gap since the previous part must be
+        //   >= daysBetween, and it refuses to place once all totalParts are done.
+        //   The shared rotation path never checked either, so the MANUAL builder
+        //   ignored multiPart entirely (placed it as an ordinary repeating
+        //   special). Gate here → fixes manual; harmless for auto (its planner
+        //   already pre-filters with the identical rule). Counting by the base
+        //   activity name matches the writer, which keeps _activity as the base.
+        var _mp = props.multiPart;
+        if (_mp && _mp.enabled) {
+            var _mpTotal = parseInt(_mp.totalParts) || 0;
+            var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')
+                ? (RotationEngine.getActivityCount(bunkName, activityName) || 0) : 0;
+            // All parts already placed → never schedule this special again.
+            if (_mpTotal > 0 && _mpPrior >= _mpTotal) return Infinity;
+            // daysBetween: minimum gap since the previous part must elapse.
+            var _mpGap = parseInt(_mp.daysBetween) || 0;
+            if (_mpGap > 0) {
+                var _mpSince = RotationEngine.getDaysSinceActivity(bunkName, activityName);
+                if (typeof _mpSince === 'number' && _mpSince > 0 && _mpSince < _mpGap) return Infinity;
+            }
+        }
+
         // ★ availableDays weekday gate (manual-audit fix): mirror auto's
         //   isSpecialAvailableOnDay (scheduler_core_auto.js:382-383). A special
         //   restricted to certain weekdays must NEVER be selected on others.

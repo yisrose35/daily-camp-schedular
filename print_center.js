@@ -2365,6 +2365,35 @@ function _pcExpandZoneBuffers(schedule, bunk, dn) {
     return out;
 }
 
+// ★ Prep lead-in (manual mode): split a special that configured prepDuration
+//   into [🍳 Prep][activity], mirroring the zone travel buffer. The slot entry
+//   carries _prepDuration/_prepLabel (stamped by computeManualSpecialFeatures in
+//   scheduler_core_main.js). Render-only; no-op when no prep is configured.
+function _pcExpandPrepBlocks(schedule, bunk, dn) {
+    function fmt(m) {
+        var SCU = window.SchedulerCoreUtils;
+        if (SCU && SCU.fmtTime) return SCU.fmtTime(m);
+        var h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'PM' : 'AM', h12 = h > 12 ? h - 12 : (h === 0 ? 12 : h);
+        return h12 + ':' + (mm < 10 ? '0' + mm : mm) + ' ' + ap;
+    }
+    var out = [];
+    schedule.forEach(function (slot) {
+        if (slot._travelBuffer || slot._prepBuffer) { out.push(slot); return; }
+        var lookup = slot._lookupStart != null ? slot._lookupStart : slot.startMin;
+        var slotIdx = findFirstSlotForTime(lookup, dn);
+        var entry = slotIdx >= 0 ? getEntry(bunk, slotIdx) : null;
+        var prep = (entry && !entry.continuation && entry._prepDuration > 0) ? entry._prepDuration : 0;
+        if (prep > 0 && (slot.endMin - slot.startMin) > (prep + 4)) {
+            var pS = slot.startMin, pE = slot.startMin + prep;
+            out.push({ startMin: pS, endMin: pE, label: fmt(pS) + ' - ' + fmt(pE), _prepBuffer: true, _prepLabel: entry._prepLabel || 'Prep' });
+            out.push({ startMin: pE, endMin: slot.endMin, label: fmt(pE) + ' - ' + fmt(slot.endMin), event: slot.event, isLeague: slot.isLeague, _lookupStart: lookup });
+        } else {
+            out.push(slot);
+        }
+    });
+    return out;
+}
+
 function renderBunkSheet(bunk) {
     var t = _currentTemplate;
     var divs = getDivisions(), dn = null;
@@ -2377,6 +2406,8 @@ function renderBunkSheet(bunk) {
         schedule = blocks.map(function (b) { return { startMin: b.startMin, endMin: b.endMin, label: b.label, event: b.event, isLeague: b.isLeague }; });
         // ★ Zone travel-buffer: split zoned activity rows into travel + activity + travel
         schedule = _pcExpandZoneBuffers(schedule, bunk, dn);
+        // ★ Prep lead-in: split special rows that configured a prep duration
+        schedule = _pcExpandPrepBlocks(schedule, bunk, dn);
     }
 
     var html = '<div class="pc3-sheet"><div class="pc3-sheet-head"><span class="pc3-sheet-title">' + escHtml(bunk) + '</span>';
@@ -2404,6 +2435,17 @@ function renderBunkSheet(bunk) {
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
             html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#b45309;font-style:italic;background:repeating-linear-gradient(45deg,#FEF3C7,#FEF3C7 6px,#FDE68A 6px,#FDE68A 12px);">🚶 Travel</td>';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
+            html += '</tr>';
+            return;
+        }
+        // ★ Prep lead-in synthetic row (manual special prep) — render directly
+        if (slot._prepBuffer) {
+            var _prepTxt = '🍳 ' + (slot._prepLabel || 'Prep');
+            html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
+            html += pcRowNum(rowR);
+            html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#7c3aed;font-style:italic;background:repeating-linear-gradient(45deg,#EDE9FE,#EDE9FE 6px,#DDD6FE 6px,#DDD6FE 12px);">' + escHtml(_prepTxt) + '</td>';
             html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
             html += '</tr>';
             return;
