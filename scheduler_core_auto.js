@@ -1998,6 +1998,9 @@
                     priorityList: _normAccess.priorityList || [],
                     // Per-grade sharing overrides
                     gradeShareRules: props.gradeShareRules || field.gradeShareRules || {},
+                    // Exclusive field preference (read field cfg too — activityProperties
+                    // can drop it). {enabled, exclusive, list:[divisions]}
+                    preferences: field.preferences || props.preferences || null,
                     claims: []
                 };
             });
@@ -2093,6 +2096,21 @@
                 const bunkAllow = divRules[gradeKey] || divRules[grade];
                 if (Array.isArray(bunkAllow) && bunkAllow.length > 0
                     && !bunkAllow.map(String).includes(String(bunk))) return false;
+            }
+
+            // ★ FIELD PREFERENCES (exclusive): a field whose preference list is
+            //   marked exclusive may ONLY be used by divisions in that list.
+            //   Mirrors the manual canBlockFit + total_solver L2500 exclusive-pref
+            //   reject; the auto field gate previously ignored preferences, so an
+            //   exclusive field leaked to non-preferred grades (live bug: Trench
+            //   exclusive→Majors was used by Trios). Soft (non-exclusive) prefs are
+            //   scoring-only and intentionally NOT a hard gate.
+            const _fPref = ledger.preferences;
+            if (_fPref && _fPref.enabled === true && _fPref.exclusive === true
+                && Array.isArray(_fPref.list) && _fPref.list.length > 0 && grade != null
+                && _fPref.list.indexOf(String(grade)) === -1
+                && _fPref.list.indexOf(grade) === -1) {
+                return false;
             }
 
             // Capacity
