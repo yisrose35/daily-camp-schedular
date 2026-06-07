@@ -963,6 +963,12 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
         //   single authority and uses its own allDailyData count source, so we
         //   never want to double-enforce here with getActivityCount's source.
         var _mp = props.multiPart;
+        // Robust read: if the (possibly rebuilt/whitelisted) activityProperties
+        // dropped multiPart, fall back to the canonical special config store —
+        // same reason computeManualSpecialFeatures reads it directly.
+        if (!_mp && typeof window.getSpecialActivityByName === 'function') {
+            try { var _spCfg = window.getSpecialActivityByName(activityName); if (_spCfg) _mp = _spCfg.multiPart; } catch (e) {}
+        }
         if (window._daBuilderMode !== 'auto' && _mp && _mp.enabled) {
             var _mpTotal = parseInt(_mp.totalParts) || 0;
             var _mpPrior = (typeof RotationEngine.getActivityCount === 'function')

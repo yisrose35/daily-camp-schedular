@@ -353,11 +353,23 @@
     // duration/prep handling there.
     // -------------------------------------------------------------------------
     function computeManualSpecialFeatures(actName, tileStart, tileEnd, bunk, activityProperties) {
-        if (!actName || !activityProperties) return null;
-        let props = activityProperties[actName];
-        if (!props) {
-            const _k = Object.keys(activityProperties).find(k => k.toLowerCase() === String(actName).toLowerCase());
-            props = _k ? activityProperties[_k] : null;
+        if (!actName) return null;
+        // ★ Read the canonical special config DIRECTLY (mirrors the AUTO builder,
+        //   which reads getSpecialConfig / getSpecialActivityByName rather than the
+        //   derived activityProperties). Several activityProperties rebuilders
+        //   whitelist fields and drop durations/multiPart/prep, and at least one
+        //   runs mid-generation — so the activityProperties handed to fillBlock can
+        //   lack these fields even though buildActivityProperties now copies them.
+        //   Reading the config store directly makes the features robust to which
+        //   activityProperties object happens to be live. Falls back to the passed
+        //   activityProperties (covers non-special activities / no config store).
+        let props = null;
+        if (typeof window.getSpecialActivityByName === 'function') {
+            try { props = window.getSpecialActivityByName(actName); } catch (e) { props = null; }
+        }
+        if (!props && activityProperties) {
+            props = activityProperties[actName] ||
+                activityProperties[Object.keys(activityProperties).find(k => k.toLowerCase() === String(actName).toLowerCase())];
         }
         if (!props) return null;
         const tileLen = (typeof tileStart === 'number' && typeof tileEnd === 'number') ? (tileEnd - tileStart) : 0;
