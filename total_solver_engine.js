@@ -1640,8 +1640,26 @@
         }
     }
     }    var _actName = pick._activity || pick.activityName || pick.sport || fName;
+    // ★ Day-19 special features (durations[] best-fit / multiPart part labels /
+    //   prep lead-in) for the manual solver's MAIN write path. This is where
+    //   sports AND specials are written by the solver — fillBlock only handles
+    //   pinned/zone tiles, so the features have to be applied here too or they
+    //   silently no-op for every solver-placed special. Mirrors the same call in
+    //   scheduler_core_main.js fillBlock; computeManualSpecialFeatures is
+    //   gated/no-op for ordinary activities and reads the canonical special
+    //   config directly, so it is robust to whichever activityProperties is live.
+    var _specFeat = (typeof window.computeManualSpecialFeatures === 'function')
+        ? window.computeManualSpecialFeatures(_actName, block.startTime, block.endTime, bunk, window.activityProperties) : null;
     for (var i = 0; i < slots.length; i++) {
-        window.scheduleAssignments[bunk][slots[i]] = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        var _ent = { field: fName, sport: pick.sport, continuation: i > 0, _fixed: false, _activity: _actName, _fromSplitTile: block.fromSplitTile || false, _startMin: block.startTime, _endMin: block.endTime };
+        if (_specFeat) {
+            if (_specFeat._partLabel) { _ent._partNumber = _specFeat._partNumber; _ent._totalParts = _specFeat._totalParts; _ent._partLabel = _specFeat._partLabel; }
+            if (i === 0) {
+                if (_specFeat._prepDuration) { _ent._prepDuration = _specFeat._prepDuration; _ent._prepLabel = _specFeat._prepLabel; _ent._prepLocation = _specFeat._prepLocation; }
+                if (_specFeat._endMin && slots.length === 1) { _ent._endMin = _specFeat._endMin; _ent._durationBestFit = _specFeat._durationBestFit; }
+            }
+        }
+        window.scheduleAssignments[bunk][slots[i]] = _ent;
         if (window.fieldUsageBySlot && window.fieldUsageBySlot[slots[i]]) { if (!window.fieldUsageBySlot[slots[i]][fName]) window.fieldUsageBySlot[slots[i]][fName] = { count: 0, bunks: {} }; window.fieldUsageBySlot[slots[i]][fName].count++; window.fieldUsageBySlot[slots[i]][fName].bunks[bunk] = pick.sport || _actName; }
     }
     // ★★★ v15.1 FIX: Clear stale caches so next penalty check sees this assignment ★★★
