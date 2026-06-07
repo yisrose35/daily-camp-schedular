@@ -309,6 +309,90 @@
             </div>
             <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
         </div>
+
+        <!-- ── CUSTOM GROUP MESSAGE ─────────────────────────────────────────── -->
+        <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
+            <div class="lk-card-head"><h2>Custom Group Message</h2><span class="badge badge-neutral" id="massTargetBadge">—</span></div>
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Write one message — each parent receives it personalized with <em>their</em> child's info. Use merge tags to insert individual details automatically.</p>
+
+            <!-- Target group -->
+            <div class="lk-field">
+                <label>Send to</label>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                    <select class="lk-input" id="massTargetType" style="max-width:160px;" onchange="onMassTargetChange()">
+                        <option value="all">All Families</option>
+                        <option value="division">By Division</option>
+                        <option value="grade">By Grade</option>
+                        <option value="bunk">By Bunk</option>
+                    </select>
+                    <select class="lk-input" id="massTargetValue" style="max-width:200px;display:none;" onchange="updateMassTargetCount();updateMassPreview()"></select>
+                    <span id="massTargetCount" style="font-size:.78rem;color:var(--text-muted);"></span>
+                </div>
+            </div>
+
+            <!-- Merge tags -->
+            <div class="lk-field">
+                <label style="display:flex;align-items:center;gap:6px;">Available merge tags <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">click to insert into message</span></label>
+                <div id="mergeTagsBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{child_name}}')">{{child_name}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{parent_name}}')">{{parent_name}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{bunk}}')">{{bunk}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{division}}')">{{division}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{grade}}')">{{grade}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{family_name}}')">{{family_name}}</button>
+                </div>
+            </div>
+
+            <!-- Subject -->
+            <div class="lk-field">
+                <label>Subject</label>
+                <input type="text" class="lk-input" id="massSubj" placeholder="e.g. Bunk assignment for {{child_name}}" oninput="updateMassPreview()">
+            </div>
+
+            <!-- Body -->
+            <div class="lk-field">
+                <label>Message</label>
+                <textarea class="lk-textarea" id="massBody" placeholder="Dear {{parent_name}},&#10;&#10;We're excited to let you know that {{child_name}} has been placed in {{bunk}} ({{division}}).&#10;&#10;See you at camp!" style="min-height:110px;" oninput="updateMassPreview()"></textarea>
+            </div>
+
+            <!-- Live preview of first recipient -->
+            <div id="massPreviewWrap" style="display:none;margin-bottom:12px;">
+                <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview — first recipient</div>
+                <div id="massPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:11px 14px;font-size:.82rem;white-space:pre-wrap;color:var(--slate-700);"></div>
+            </div>
+
+            <!-- Delivery channels -->
+            <div class="lk-field">
+                <label>Delivery</label>
+                <div class="channel-btns" id="massChannelBtns">
+                    <button class="channel-btn selected" data-ch="app" onclick="toggleMassCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                        In-App
+                    </button>
+                    <button class="channel-btn" data-ch="email" onclick="toggleMassCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                        Email
+                    </button>
+                    <button class="channel-btn" data-ch="sms" onclick="toggleMassCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                        SMS
+                    </button>
+                </div>
+            </div>
+
+            <!-- Actions -->
+            <div style="display:flex;gap:8px;align-items:center;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
+                <button class="btn btn-secondary btn-sm" onclick="previewMassSend()">Preview All</button>
+                <button class="btn btn-primary" onclick="sendMassSend()">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Send to Group
+                </button>
+            </div>
+
+            <!-- Preview all list -->
+            <div id="massAllPreviewWrap" style="display:none;margin-top:12px;"></div>
+        </div>
+
         <div class="lk-card">
             <div class="lk-card-head"><h2>Manual Message</h2></div>
             <div class="lk-field">
@@ -605,7 +689,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  renderAdminMsgs('all');
-    if (tab === 'outbox') updateSmartBadge();
+    if (tab === 'outbox') { updateSmartBadge(); onMassTargetChange(); }
     if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); }
 }
 
@@ -814,6 +898,178 @@ function updateSmartBadge() {
     var c = cl.msg.getBroadcasts().length;
     document.getElementById('smartBadge').textContent = c ? c + ' sent' : 'Ready';
     document.getElementById('smartBadge').className = 'badge ' + (c ? 'badge-ok' : 'badge-neutral');
+}
+
+// ─── CUSTOM GROUP MESSAGE (PERSONALIZED MASS SEND) ───────────────────────────
+var massChannels = ['app'];
+
+function _getMassTargets() {
+    var cl = CL(); if (!cl) return [];
+    var type = (document.getElementById('massTargetType') || {}).value || 'all';
+    var value = ((document.getElementById('massTargetValue') || {}).value || '').trim();
+    var map = cl.data.getCamperParentMap();
+    var targets = [];
+    Object.entries(map).forEach(function(entry) {
+        var name = entry[0], c = entry[1];
+        if (!c.parentName) return;
+        var match = (type === 'all') ||
+            (type === 'division' && value && c.division === value) ||
+            (type === 'grade'    && value && c.grade    === value) ||
+            (type === 'bunk'     && value && c.bunk     === value);
+        if (!match) return;
+        targets.push({
+            camperName:  name,
+            parentName:  c.parentName,
+            parentEmail: c.parentEmail || '',
+            bunk:        c.bunk        || '',
+            division:    c.division    || '',
+            grade:       c.grade       || '',
+            familyName:  c.familyName  || (name.split(' ').pop() + ' Family')
+        });
+    });
+    return targets;
+}
+
+function _applyMergeTags(template, d) {
+    return template
+        .replace(/\{\{child_name\}\}/gi,   d.camperName  || '')
+        .replace(/\{\{parent_name\}\}/gi,  d.parentName  || '')
+        .replace(/\{\{bunk\}\}/gi,         d.bunk        || '(unassigned)')
+        .replace(/\{\{division\}\}/gi,     d.division    || '')
+        .replace(/\{\{grade\}\}/gi,        d.grade       || '')
+        .replace(/\{\{family_name\}\}/gi,  d.familyName  || '');
+}
+
+function onMassTargetChange() {
+    var typeEl  = document.getElementById('massTargetType');
+    var valueEl = document.getElementById('massTargetValue');
+    if (!typeEl || !valueEl) return;
+    var type = typeEl.value;
+    var cl = CL();
+    if (type === 'all') {
+        valueEl.style.display = 'none';
+    } else {
+        valueEl.style.display = '';
+        var struct = cl ? cl.data.getStructure() : {};
+        var opts = ['<option value="">— Select —</option>'];
+        if (type === 'division') {
+            Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+        } else if (type === 'grade') {
+            var grades = {};
+            Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+            Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+        } else if (type === 'bunk') {
+            var bunks = {};
+            Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+            Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+        }
+        valueEl.innerHTML = opts.join('');
+    }
+    updateMassTargetCount();
+    updateMassPreview();
+}
+
+function updateMassTargetCount() {
+    var targets = _getMassTargets();
+    var el = document.getElementById('massTargetCount');
+    if (el) el.textContent = targets.length ? targets.length + ' recipient(s)' : 'No matches';
+    var badge = document.getElementById('massTargetBadge');
+    if (badge) {
+        badge.textContent = targets.length ? targets.length + ' recipients' : '—';
+        badge.className = 'badge ' + (targets.length ? 'badge-ok' : 'badge-neutral');
+    }
+}
+
+function updateMassPreview() {
+    var targets = _getMassTargets();
+    var body = (document.getElementById('massBody') || {}).value || '';
+    var subj = (document.getElementById('massSubj') || {}).value || '';
+    var wrap = document.getElementById('massPreviewWrap');
+    var pre  = document.getElementById('massPreview');
+    if (!wrap || !pre) return;
+    if (!targets.length || !body.trim()) { wrap.style.display = 'none'; return; }
+    var t = targets[0];
+    var subjLine = subj ? 'Subject: ' + _applyMergeTags(subj, t) + '\n\n' : '';
+    pre.textContent = subjLine + _applyMergeTags(body, t);
+    wrap.style.display = '';
+}
+
+function insertMergeTag(tag) {
+    var ta = document.getElementById('massBody');
+    if (!ta) return;
+    var s = ta.selectionStart, e = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + tag + ta.value.slice(e);
+    ta.setSelectionRange(s + tag.length, s + tag.length);
+    ta.focus();
+    updateMassPreview();
+}
+
+function toggleMassCh(btn) {
+    btn.classList.toggle('selected');
+    massChannels = [];
+    document.querySelectorAll('#massChannelBtns .channel-btn.selected').forEach(function(b) { massChannels.push(b.dataset.ch); });
+    if (!massChannels.length) { btn.classList.add('selected'); massChannels = [btn.dataset.ch]; }
+}
+
+function previewMassSend() {
+    var targets = _getMassTargets();
+    var body = ((document.getElementById('massBody') || {}).value || '').trim();
+    var subj = ((document.getElementById('massSubj') || {}).value || '').trim();
+    var wrap = document.getElementById('massAllPreviewWrap');
+    if (!wrap) return;
+    if (!targets.length) { toast('No recipients match the selected group'); return; }
+    if (!body) { toast('Enter a message body first'); return; }
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:340px;overflow-y:auto;">' +
+        '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
+            '<span>' + targets.length + ' personalized messages</span>' +
+            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'massAllPreviewWrap\').style.display=\'none\'">✕</button>' +
+        '</div>';
+    targets.slice(0, 15).forEach(function(t) {
+        var personalBody = _applyMergeTags(body, t);
+        var personalSubj = subj ? _applyMergeTags(subj, t) : '';
+        h += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;">' +
+                '<strong>' + esc(t.parentName) + '</strong>' +
+                '<span style="color:var(--text-muted);font-size:.72rem;">' + esc(t.camperName) + (t.bunk ? ' · ' + esc(t.bunk) : '') + '</span>' +
+            '</div>' +
+            (personalSubj ? '<div style="font-size:.75rem;font-weight:600;margin-top:3px;">' + esc(personalSubj) + '</div>' : '') +
+            '<div style="color:var(--slate-500);font-size:.76rem;margin-top:3px;white-space:pre-line;max-height:56px;overflow:hidden;">' + esc(personalBody.substring(0, 200)) + (personalBody.length > 200 ? '…' : '') + '</div>' +
+        '</div>';
+    });
+    if (targets.length > 15) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (targets.length - 15) + ' more recipients</div>';
+    h += '</div>';
+    wrap.innerHTML = h;
+    wrap.style.display = '';
+}
+
+function sendMassSend() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var subj = ((document.getElementById('massSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('massBody') || {}).value || '').trim();
+    if (!subj) { toast('Subject is required'); return; }
+    if (!body) { toast('Message body is required'); return; }
+    var targets = _getMassTargets();
+    if (!targets.length) { toast('No recipients match the selected group'); return; }
+    var sent = 0;
+    targets.forEach(function(t) {
+        cl.msg.send({
+            to:      t.parentName,
+            toType:  'individual',
+            subject: _applyMergeTags(subj, t),
+            body:    _applyMergeTags(body, t),
+            channels: massChannels,
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: true }
+        });
+        sent++;
+    });
+    toast(sent + ' personalized message' + (sent === 1 ? '' : 's') + ' sent!');
+    document.getElementById('massSubj').value  = '';
+    document.getElementById('massBody').value  = '';
+    document.getElementById('massAllPreviewWrap').style.display = 'none';
+    document.getElementById('massPreviewWrap').style.display    = 'none';
+    document.getElementById('massTargetBadge').textContent = '—';
+    document.getElementById('massTargetBadge').className   = 'badge badge-neutral';
+    updateSmartBadge();
 }
 
 // ─── SENT / BROADCASTS (kept for compat) ─────────────────────────────────────
