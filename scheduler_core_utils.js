@@ -1032,6 +1032,30 @@
                 }
             }
 
+            // =================================================================
+            // ★ SPORT maxPlayers — combined-headcount cap when SHARING a field.
+            //   The capacity check above limits the BUNK COUNT; a sport's
+            //   maxPlayers (rules.js sportMetaData) limits the combined PLAYER
+            //   count. Auto-builder share/fill paths could add a 2nd same-division
+            //   bunk that passes the count cap yet pushes combined headcount over
+            //   the sport max (e.g. 15+11=26 players on a max-20 sport). Enforce
+            //   here at the shared fit-check so BOTH builders honor it. Gated to
+            //   actual sharing (currentCount>0) with known sizes; a lone bunk over
+            //   max is unaffected (maxPlayers is a "combined when shared" cap).
+            // =================================================================
+            if (currentCount > 0 && mySize > 0 && actName) {
+                const _spReq = sportMeta[actName] || sportMeta[actName.toLowerCase()];
+                const _spMax = _spReq ? (parseInt(_spReq.maxPlayers) || 0) : 0;
+                if (_spMax > 0) {
+                    let _combinedPlayers = mySize;
+                    for (const _ob of allBunks) { _combinedPlayers += (bunkMeta[_ob]?.size || 0); }
+                    if (_combinedPlayers > _spMax) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport maxPlayers combined ${_combinedPlayers} > ${_spMax}`);
+                        return false;
+                    }
+                }
+            }
+
            if (!Utils.isTimeAvailable(idx, divFilteredProps)) {
                 if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - time not available at slot ${idx}`);
                 return false;
