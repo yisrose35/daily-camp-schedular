@@ -281,157 +281,94 @@
 
     <!-- ── OUTBOX ─────────────────────────────────────── -->
     <div id="msgTabOutbox" style="display:none;">
-        <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
-            <div class="lk-card-head"><h2>Smart Notifications</h2><span class="badge" id="smartBadge">—</span></div>
-            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">One click — each parent gets info for <strong>their child only</strong>.</p>
-            <div style="font-size:.72rem;color:var(--text-muted);margin-bottom:8px;">
-                Bus → Campistry Go &nbsp;|&nbsp; Bunk &amp; Schedule → Campistry Me / Flow
+        <div class="lk-card">
+            <!-- Quick templates -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border-light);">
+                <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);flex-shrink:0;white-space:nowrap;">Quick fill:</span>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk Assignment</button>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
+                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
             </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
-                <button class="btn btn-primary btn-sm" onclick="smartSend('bus')">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="1" y="3" width="15" height="13" rx="1"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>
-                    Bus Stops
-                </button>
-                <button class="btn btn-primary btn-sm" onclick="smartSend('bunk')">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
-                    Bunk Assignments
-                </button>
-                <button class="btn btn-primary btn-sm" onclick="smartSend('schedule')">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
-                    Today's Schedule
-                </button>
-            </div>
-            <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <button class="btn btn-secondary btn-sm" onclick="smartPreview('bus')">Preview Bus</button>
-                <button class="btn btn-secondary btn-sm" onclick="smartPreview('bunk')">Preview Bunk</button>
-                <button class="btn btn-secondary btn-sm" onclick="smartPreview('schedule')">Preview Schedule</button>
-                <button class="btn btn-secondary btn-sm" onclick="smartExportCSV()">Export CSV</button>
-            </div>
-            <div id="smartPreviewBox" style="display:none;margin-top:12px;"></div>
-        </div>
 
-        <!-- ── CUSTOM GROUP MESSAGE ─────────────────────────────────────────── -->
-        <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:16px;">
-            <div class="lk-card-head"><h2>Custom Group Message</h2><span class="badge badge-neutral" id="massTargetBadge">—</span></div>
-            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:14px;">Write one message — each parent receives it personalized with <em>their</em> child's info. Use merge tags to insert individual details automatically.</p>
-
-            <!-- Target group -->
+            <!-- To -->
             <div class="lk-field">
-                <label>Send to</label>
-                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                    <select class="lk-input" id="massTargetType" style="max-width:160px;" onchange="onMassTargetChange()">
-                        <option value="all">All Families</option>
+                <label>To</label>
+                <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+                    <select class="lk-input" id="cScope" style="max-width:180px;flex-shrink:0;" onchange="onScopeChange()">
+                        <option value="all">Everyone</option>
                         <option value="division">By Division</option>
                         <option value="grade">By Grade</option>
                         <option value="bunk">By Bunk</option>
+                        <option value="individual">Specific Parent</option>
                     </select>
-                    <select class="lk-input" id="massTargetValue" style="max-width:200px;display:none;" onchange="updateMassTargetCount();updateMassPreview()"></select>
-                    <span id="massTargetCount" style="font-size:.78rem;color:var(--text-muted);"></span>
+                    <select class="lk-input" id="cScopeVal" style="max-width:200px;display:none;" onchange="onScopeValChange()"></select>
+                    <div id="cIndivWrap" style="display:none;flex:1;min-width:180px;position:relative;">
+                        <input type="text" class="lk-input" id="cIndivSearch" placeholder="Search parent or camper..." oninput="onIndivSearch(this.value)" autocomplete="off">
+                        <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
+                    </div>
+                    <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;"></div>
                 </div>
+                <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:5px;min-height:18px;"></div>
             </div>
 
             <!-- Merge tags -->
             <div class="lk-field">
-                <label style="display:flex;align-items:center;gap:6px;">Available merge tags <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">click to insert into message</span></label>
-                <div id="mergeTagsBar" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{child_name}}')">{{child_name}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{parent_name}}')">{{parent_name}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{bunk}}')">{{bunk}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{division}}')">{{division}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{grade}}')">{{grade}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.73rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:3px 9px;" onclick="insertMergeTag('{{family_name}}')">{{family_name}}</button>
+                <label>Insert into message <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">— click a tag to add it at the cursor</span></label>
+                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;">
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{child_name}}')">{{child_name}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{parent_name}}')">{{parent_name}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{bunk}}')">{{bunk}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{bus_route}}')">{{bus_route}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{grade}}')">{{grade}}</button>
+                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{division}}')">{{division}}</button>
                 </div>
             </div>
 
             <!-- Subject -->
             <div class="lk-field">
                 <label>Subject</label>
-                <input type="text" class="lk-input" id="massSubj" placeholder="e.g. Bunk assignment for {{child_name}}" oninput="updateMassPreview()">
+                <input type="text" class="lk-input" id="cSubj" placeholder="Subject..." oninput="updateComposePreview()">
             </div>
 
             <!-- Body -->
             <div class="lk-field">
                 <label>Message</label>
-                <textarea class="lk-textarea" id="massBody" placeholder="Dear {{parent_name}},&#10;&#10;We're excited to let you know that {{child_name}} has been placed in {{bunk}} ({{division}}).&#10;&#10;See you at camp!" style="min-height:110px;" oninput="updateMassPreview()"></textarea>
+                <textarea class="lk-textarea" id="cBody" placeholder="Type your message here…" style="min-height:120px;" oninput="updateComposePreview()"></textarea>
             </div>
 
-            <!-- Live preview of first recipient -->
-            <div id="massPreviewWrap" style="display:none;margin-bottom:12px;">
-                <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview — first recipient</div>
-                <div id="massPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:11px 14px;font-size:.82rem;white-space:pre-wrap;color:var(--slate-700);"></div>
+            <!-- Live preview -->
+            <div id="cPreviewWrap" style="display:none;margin-bottom:14px;">
+                <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview <span id="cPreviewFor" style="text-transform:none;font-weight:400;font-size:.76rem;"></span></div>
+                <div id="cPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:12px 14px;font-size:.82rem;white-space:pre-wrap;color:var(--slate-700);max-height:130px;overflow-y:auto;"></div>
             </div>
 
-            <!-- Delivery channels -->
-            <div class="lk-field">
-                <label>Delivery</label>
-                <div class="channel-btns" id="massChannelBtns">
-                    <button class="channel-btn selected" data-ch="app" onclick="toggleMassCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            <!-- Bottom bar -->
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-top:10px;border-top:1px solid var(--border-light);">
+                <div class="channel-btns" id="cChannelBtns">
+                    <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                         In-App
                     </button>
-                    <button class="channel-btn" data-ch="email" onclick="toggleMassCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
                         Email
                     </button>
-                    <button class="channel-btn" data-ch="sms" onclick="toggleMassCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
                         SMS
                     </button>
                 </div>
-            </div>
-
-            <!-- Actions -->
-            <div style="display:flex;gap:8px;align-items:center;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
-                <button class="btn btn-secondary btn-sm" onclick="previewMassSend()">Preview All</button>
-                <button class="btn btn-primary" onclick="sendMassSend()">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                    Send to Group
-                </button>
+                <div style="display:flex;gap:8px;">
+                    <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
+                    <button class="btn btn-primary" onclick="sendCompose()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        Send
+                    </button>
+                </div>
             </div>
 
             <!-- Preview all list -->
-            <div id="massAllPreviewWrap" style="display:none;margin-top:12px;"></div>
-        </div>
-
-        <div class="lk-card">
-            <div class="lk-card-head"><h2>Manual Message</h2></div>
-            <div class="lk-field">
-                <label>Recipient</label>
-                <input type="text" class="lk-input" placeholder="Search parent, camper, family..." id="recipSearch" oninput="searchRecip(this.value)">
-                <div id="recipResults" style="border:1px solid var(--border-light);border-radius:var(--radius-md);margin-top:4px;max-height:150px;overflow-y:auto;display:none;"></div>
-                <div id="recipChips" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px;"></div>
-            </div>
-            <div class="lk-field">
-                <label>Delivery</label>
-                <div class="channel-btns">
-                    <button class="channel-btn selected" data-ch="app" onclick="toggleCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        In-App
-                    </button>
-                    <button class="channel-btn" data-ch="email" onclick="toggleCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                        Email
-                    </button>
-                    <button class="channel-btn" data-ch="sms" onclick="toggleCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
-                        SMS
-                    </button>
-                </div>
-            </div>
-            <div class="lk-field">
-                <label>Subject</label>
-                <input type="text" class="lk-input" id="compSubj" placeholder="Subject...">
-            </div>
-            <div class="lk-field">
-                <label>Message</label>
-                <textarea class="lk-textarea" id="compBody" placeholder="Type message..." style="min-height:120px;"></textarea>
-            </div>
-            <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:8px;border-top:1px solid var(--border-light);">
-                <button class="btn btn-primary" onclick="sendManual()">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                    Send
-                </button>
-            </div>
+            <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
         </div>
     </div>
 
@@ -689,7 +626,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  renderAdminMsgs('all');
-    if (tab === 'outbox') { updateSmartBadge(); onMassTargetChange(); }
+    if (tab === 'outbox') { onScopeChange(); }
     if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); }
 }
 
@@ -799,123 +736,153 @@ function renderCampers(q) {
 }
 
 // ─── RECIPIENT SEARCH ─────────────────────────────────────────────────────────
-function searchRecip(q) {
-    var box = document.getElementById('recipResults');
+// ─── UNIFIED COMPOSE (OUTBOX) ─────────────────────────────────────────────────
+var compChannels = ['app'];
+
+// Templates that pre-fill subject + body
+function loadTemplate(type) {
+    var subj = document.getElementById('cSubj');
+    var body = document.getElementById('cBody');
+    if (!subj || !body) return;
+    if (type === 'bunk') {
+        subj.value = "{{child_name}}'s bunk assignment";
+        body.value = "Hi {{parent_name}},\n\nWe're excited to share that {{child_name}} has been placed in {{bunk}} ({{division}}) this summer!\n\nSee you at camp!";
+    } else if (type === 'bus') {
+        subj.value = "Bus route info for {{child_name}}";
+        body.value = "Hi {{parent_name}},\n\n{{child_name}} will be on {{bus_route}} this summer.\n\nPlease be at your stop a few minutes early. Questions? Reply to this message.\n\nSee you at camp!";
+    } else if (type === 'form') {
+        subj.value = "Action needed: forms for {{child_name}}";
+        body.value = "Hi {{parent_name}},\n\nWe still need a few forms completed for {{child_name}} before camp begins.\n\nPlease log in to the parent portal and complete the required forms at your earliest convenience.\n\nThank you!";
+    }
+    updateComposePreview();
+    body.focus();
+}
+
+// Scope change — show/hide the secondary filter or individual search
+function onScopeChange() {
+    var scope    = (document.getElementById('cScope')    || {}).value || 'all';
+    var scopeVal = document.getElementById('cScopeVal');
+    var indivWrap= document.getElementById('cIndivWrap');
+    var chips    = document.getElementById('cIndivChips');
+    if (!scopeVal || !indivWrap) return;
+
+    var isIndiv = scope === 'individual';
+    indivWrap.style.display  = isIndiv ? '' : 'none';
+    chips.innerHTML          = '';
+
+    if (isIndiv) {
+        scopeVal.style.display = 'none';
+    } else if (scope === 'all') {
+        scopeVal.style.display = 'none';
+    } else {
+        scopeVal.style.display = '';
+        var cl = CL();
+        var struct = cl ? cl.data.getStructure() : {};
+        var opts = ['<option value="">— Select —</option>'];
+        if (scope === 'division') {
+            Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+        } else if (scope === 'grade') {
+            var grades = {};
+            Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+            Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+        } else if (scope === 'bunk') {
+            var bunks = {};
+            Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+            Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+        }
+        scopeVal.innerHTML = opts.join('');
+    }
+    onScopeValChange();
+}
+
+function onScopeValChange() {
+    _updateScopeCount();
+    updateComposePreview();
+}
+
+// Individual parent search
+function onIndivSearch(q) {
+    var box = document.getElementById('cIndivResults');
     if (!q || q.length < 2 || !CL()) { box.style.display = 'none'; return; }
     q = q.toLowerCase();
     var dir = CL().data.getParentDirectory();
-    var hits = dir.filter(function(p) { return (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c) { return c.name; }).join(' ')).toLowerCase().indexOf(q) >= 0; });
+    var hits = dir.filter(function(p) {
+        return (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c){return c.name;}).join(' ')).toLowerCase().indexOf(q) >= 0;
+    });
     if (!hits.length) { box.innerHTML = '<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>'; box.style.display = 'block'; return; }
     box.innerHTML = hits.slice(0, 8).map(function(p) {
-        return '<div style="padding:8px 12px;cursor:pointer;font-size:.82rem;border-bottom:1px solid var(--border-light);" onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" onclick="pickRecip(\'' + esc(p.parentName) + '\')"><strong>' + esc(p.parentName) + '</strong> <span style="color:var(--text-muted);">— ' + p.children.map(function(c) { return esc(c.name); }).join(', ') + '</span></div>';
+        return '<div style="padding:8px 12px;cursor:pointer;font-size:.82rem;border-bottom:1px solid var(--border-light);" ' +
+            'onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" ' +
+            'onclick="pickIndiv(\'' + esc(p.parentName) + '\')">' +
+            '<strong>' + esc(p.parentName) + '</strong> <span style="color:var(--text-muted);">— ' + p.children.map(function(c){return esc(c.name);}).join(', ') + '</span></div>';
     }).join('');
     box.style.display = 'block';
 }
-function pickRecip(name) {
-    document.getElementById('recipResults').style.display = 'none';
-    document.getElementById('recipSearch').value = '';
-    var box = document.getElementById('recipChips');
-    if (box.querySelector('[data-name="' + name + '"]')) return;
+
+function pickIndiv(name) {
+    var box = document.getElementById('cIndivResults');
+    var inp = document.getElementById('cIndivSearch');
+    var chips = document.getElementById('cIndivChips');
+    if (box) box.style.display = 'none';
+    if (inp) inp.value = '';
+    if (!chips || chips.querySelector('[data-name="' + name + '"]')) return;
     var chip = document.createElement('span');
     chip.dataset.name = name;
-    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--link-tint);color:var(--link-color);border-radius:var(--radius-full);font-size:.78rem;font-weight:600;';
-    chip.innerHTML = esc(name) + ' <span onclick="this.parentElement.remove()" style="cursor:pointer;">&times;</span>';
-    box.appendChild(chip);
-}
-function msgParent(name) { nav('messages'); switchMsgTab('outbox', null); pickRecip(name); }
-
-// ─── CHANNELS / SEND ─────────────────────────────────────────────────────────
-function toggleCh(btn) {
-    btn.classList.toggle('selected');
-    channels = [];
-    document.querySelectorAll('.channel-btn.selected').forEach(function(b) { channels.push(b.dataset.ch); });
-    if (!channels.length) { btn.classList.add('selected'); channels.push(btn.dataset.ch); }
-}
-function sendManual() {
-    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
-    var subj = document.getElementById('compSubj').value.trim();
-    var body = document.getElementById('compBody').value.trim();
-    if (!subj) { toast('Enter a subject'); return; }
-    if (!body)  { toast('Enter a message'); return; }
-    var chips = document.querySelectorAll('#recipChips span[data-name]');
-    if (!chips.length) { toast('Select a recipient'); return; }
-    chips.forEach(function(c) { cl.msg.send({to:c.dataset.name,toType:'individual',subject:subj,body:body,channels:channels}); });
-    toast('Sent to ' + chips.length + ' recipient(s)');
-    document.getElementById('compSubj').value = '';
-    document.getElementById('compBody').value = '';
-    document.getElementById('recipChips').innerHTML = '';
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--link-tint);color:var(--link-color);border-radius:var(--radius-full);font-size:.78rem;font-weight:600;cursor:default;';
+    chip.innerHTML = esc(name) + ' <span onclick="this.parentElement.remove();_updateScopeCount();updateComposePreview();" style="cursor:pointer;opacity:.7;">&times;</span>';
+    chips.appendChild(chip);
+    _updateScopeCount();
+    updateComposePreview();
 }
 
-// ─── SMART NOTIFICATIONS ─────────────────────────────────────────────────────
-function smartSend(type) {
-    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
-    var r;
-    if (type === 'bus')          r = cl.notify.sendBusStopNotifications(channels);
-    else if (type === 'bunk')     r = cl.notify.sendBunkAssignments(channels);
-    else if (type === 'schedule') r = cl.notify.sendDailySchedules(channels);
-    if (r && r.success) toast(r.sent + ' notifications queued!');
-    else toast(r ? (r.error || 'No data found — check source apps') : 'Failed to load data bridge');
-    updateSmartBadge();
-}
-function smartPreview(type) {
-    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
-    var notifs;
-    if (type === 'bus')          notifs = cl.notify.generateBusStopNotifications();
-    else if (type === 'bunk')    notifs = cl.notify.generateBunkAssignmentNotifications();
-    else if (type === 'schedule') notifs = cl.notify.generateScheduleNotifications();
-    var box = document.getElementById('smartPreviewBox');
-    var hints = { bus: 'Make sure routes are generated in Campistry Go', bunk: 'Make sure campers have division/bunk in Campistry Me', schedule: 'Make sure a schedule is generated in Campistry Flow for today' };
-    if (!notifs || !notifs.length) {
-        box.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-muted);font-size:.82rem;">No data. ' + (hints[type] || '') + '.</div>';
-        box.style.display = 'block'; return;
-    }
-    var label = { bus: 'Bus Stop', bunk: 'Bunk Assignment', schedule: 'Schedule' }[type] || type;
-    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:280px;overflow-y:auto;">' +
-        '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
-            '<span>' + notifs.length + ' ' + label + ' notifications</span>' +
-            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'smartPreviewBox\').style.display=\'none\'">✕</button>' +
-        '</div>';
-    notifs.slice(0, 10).forEach(function(n) {
-        h += '<div style="padding:8px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;">' +
-            '<div style="display:flex;justify-content:space-between;"><strong>' + esc(n.camperName) + '</strong><span style="color:var(--text-muted);font-size:.72rem;">' + esc(n.parentName || '?') + '</span></div>' +
-            '<div style="color:var(--text-muted);font-size:.72rem;margin-top:3px;white-space:pre-line;max-height:60px;overflow:hidden;">' + esc((n.body || '').substring(0, 160)) + '…</div>' +
-        '</div>';
-    });
-    if (notifs.length > 10) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (notifs.length - 10) + ' more</div>';
-    h += '</div>';
-    box.innerHTML = h; box.style.display = 'block';
-}
-function smartExportCSV() {
-    var cl = CL(); if (!cl) return;
-    var n = cl.notify.generateBusStopNotifications();
-    if (!n.length) n = cl.notify.generateBunkAssignmentNotifications();
-    if (!n.length) { toast('No data'); return; }
-    cl.send.downloadCSV(n, 'campistry_link_export.csv');
-    toast('CSV: ' + n.length + ' rows');
-}
-function updateSmartBadge() {
-    var cl = CL(); if (!cl) return;
-    var c = cl.msg.getBroadcasts().length;
-    document.getElementById('smartBadge').textContent = c ? c + ' sent' : 'Ready';
-    document.getElementById('smartBadge').className = 'badge ' + (c ? 'badge-ok' : 'badge-neutral');
+// Navigate to outbox and pre-select a parent (used from inbox reply)
+function msgParent(name) {
+    nav('messages');
+    switchMsgTab('outbox', null);
+    document.getElementById('cScope').value = 'individual';
+    onScopeChange();
+    pickIndiv(name);
 }
 
-// ─── CUSTOM GROUP MESSAGE (PERSONALIZED MASS SEND) ───────────────────────────
-var massChannels = ['app'];
-
-function _getMassTargets() {
+// Build the target list from current compose state
+function _getComposeTargets() {
     var cl = CL(); if (!cl) return [];
-    var type = (document.getElementById('massTargetType') || {}).value || 'all';
-    var value = ((document.getElementById('massTargetValue') || {}).value || '').trim();
+    var scope = (document.getElementById('cScope') || {}).value || 'all';
+    var value = ((document.getElementById('cScopeVal') || {}).value || '').trim();
+
+    if (scope === 'individual') {
+        var chips = document.querySelectorAll('#cIndivChips [data-name]');
+        if (!chips.length) return [];
+        var dir = cl.data.getParentDirectory();
+        var targets = [];
+        chips.forEach(function(chip) {
+            var parentName = chip.dataset.name;
+            var entry = dir.find(function(p) { return p.parentName === parentName; });
+            if (!entry) return;
+            entry.children.forEach(function(child) {
+                targets.push({
+                    camperName:  child.name,
+                    parentName:  entry.parentName,
+                    parentEmail: entry.parentEmail || '',
+                    bunk:        child.bunk        || '',
+                    division:    child.division    || '',
+                    grade:       child.grade       || '',
+                    familyName:  entry.familyName  || ''
+                });
+            });
+        });
+        return targets;
+    }
+
     var map = cl.data.getCamperParentMap();
     var targets = [];
     Object.entries(map).forEach(function(entry) {
         var name = entry[0], c = entry[1];
         if (!c.parentName) return;
-        var match = (type === 'all') ||
-            (type === 'division' && value && c.division === value) ||
-            (type === 'grade'    && value && c.grade    === value) ||
-            (type === 'bunk'     && value && c.bunk     === value);
+        var match = (scope === 'all') ||
+            (scope === 'division' && value && c.division === value) ||
+            (scope === 'grade'    && value && c.grade    === value) ||
+            (scope === 'bunk'     && value && c.bunk     === value);
         if (!match) return;
         targets.push({
             camperName:  name,
@@ -930,147 +897,146 @@ function _getMassTargets() {
     return targets;
 }
 
-function _applyMergeTags(template, d) {
+// Build a camperName → bus route map from campistry_go_data
+function _buildBusRouteMap() {
+    var map = {};
+    try {
+        var go = JSON.parse(localStorage.getItem('campistry_go_data') || '{}');
+        var routes = go.routes || go.busRoutes || {};
+        Object.entries(routes).forEach(function(re) {
+            var routeName = re[0], route = re[1];
+            var stops = route.stops || route.addresses || [];
+            stops.forEach(function(stop) {
+                (stop.campers || stop.riders || []).forEach(function(n) { map[n] = routeName; });
+            });
+        });
+    } catch(e) {}
+    return map;
+}
+
+function _applyMergeTags(template, d, busMap) {
+    busMap = busMap || {};
     return template
         .replace(/\{\{child_name\}\}/gi,   d.camperName  || '')
         .replace(/\{\{parent_name\}\}/gi,  d.parentName  || '')
         .replace(/\{\{bunk\}\}/gi,         d.bunk        || '(unassigned)')
         .replace(/\{\{division\}\}/gi,     d.division    || '')
         .replace(/\{\{grade\}\}/gi,        d.grade       || '')
-        .replace(/\{\{family_name\}\}/gi,  d.familyName  || '');
+        .replace(/\{\{family_name\}\}/gi,  d.familyName  || '')
+        .replace(/\{\{bus_route\}\}/gi,    busMap[d.camperName] || '(see Go app)');
 }
 
-function onMassTargetChange() {
-    var typeEl  = document.getElementById('massTargetType');
-    var valueEl = document.getElementById('massTargetValue');
-    if (!typeEl || !valueEl) return;
-    var type = typeEl.value;
-    var cl = CL();
-    if (type === 'all') {
-        valueEl.style.display = 'none';
+function _updateScopeCount() {
+    var targets = _getComposeTargets();
+    var scope = (document.getElementById('cScope') || {}).value || 'all';
+    var el = document.getElementById('cScopeCount');
+    var btn = document.getElementById('cPreviewAllBtn');
+    if (!el) return;
+    var isGroup = scope !== 'individual';
+    if (!targets.length) {
+        el.textContent = isGroup ? '' : 'No match';
+    } else if (isGroup) {
+        el.textContent = targets.length + ' recipient' + (targets.length === 1 ? '' : 's');
     } else {
-        valueEl.style.display = '';
-        var struct = cl ? cl.data.getStructure() : {};
-        var opts = ['<option value="">— Select —</option>'];
-        if (type === 'division') {
-            Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
-        } else if (type === 'grade') {
-            var grades = {};
-            Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
-            Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
-        } else if (type === 'bunk') {
-            var bunks = {};
-            Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
-            Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
-        }
-        valueEl.innerHTML = opts.join('');
+        el.textContent = targets.length + ' child' + (targets.length === 1 ? '' : 'ren') + ' included';
     }
-    updateMassTargetCount();
-    updateMassPreview();
+    if (btn) btn.style.display = (targets.length > 1) ? '' : 'none';
 }
 
-function updateMassTargetCount() {
-    var targets = _getMassTargets();
-    var el = document.getElementById('massTargetCount');
-    if (el) el.textContent = targets.length ? targets.length + ' recipient(s)' : 'No matches';
-    var badge = document.getElementById('massTargetBadge');
-    if (badge) {
-        badge.textContent = targets.length ? targets.length + ' recipients' : '—';
-        badge.className = 'badge ' + (targets.length ? 'badge-ok' : 'badge-neutral');
-    }
-}
-
-function updateMassPreview() {
-    var targets = _getMassTargets();
-    var body = (document.getElementById('massBody') || {}).value || '';
-    var subj = (document.getElementById('massSubj') || {}).value || '';
-    var wrap = document.getElementById('massPreviewWrap');
-    var pre  = document.getElementById('massPreview');
+function updateComposePreview() {
+    var targets = _getComposeTargets();
+    var body = (document.getElementById('cBody') || {}).value || '';
+    var subj = (document.getElementById('cSubj') || {}).value || '';
+    var wrap = document.getElementById('cPreviewWrap');
+    var pre  = document.getElementById('cPreview');
+    var lbl  = document.getElementById('cPreviewFor');
     if (!wrap || !pre) return;
     if (!targets.length || !body.trim()) { wrap.style.display = 'none'; return; }
+    var busMap = _buildBusRouteMap();
     var t = targets[0];
-    var subjLine = subj ? 'Subject: ' + _applyMergeTags(subj, t) + '\n\n' : '';
-    pre.textContent = subjLine + _applyMergeTags(body, t);
+    var subjLine = subj ? 'Subject: ' + _applyMergeTags(subj, t, busMap) + '\n\n' : '';
+    pre.textContent = subjLine + _applyMergeTags(body, t, busMap);
+    if (lbl) lbl.textContent = '— ' + t.parentName + (t.camperName ? ' (' + t.camperName + ')' : '');
     wrap.style.display = '';
+    _updateScopeCount();
 }
 
-function insertMergeTag(tag) {
-    var ta = document.getElementById('massBody');
+function insertTag(tag) {
+    var ta = document.getElementById('cBody');
     if (!ta) return;
     var s = ta.selectionStart, e = ta.selectionEnd;
     ta.value = ta.value.slice(0, s) + tag + ta.value.slice(e);
     ta.setSelectionRange(s + tag.length, s + tag.length);
     ta.focus();
-    updateMassPreview();
+    updateComposePreview();
 }
 
-function toggleMassCh(btn) {
+function toggleCompCh(btn) {
     btn.classList.toggle('selected');
-    massChannels = [];
-    document.querySelectorAll('#massChannelBtns .channel-btn.selected').forEach(function(b) { massChannels.push(b.dataset.ch); });
-    if (!massChannels.length) { btn.classList.add('selected'); massChannels = [btn.dataset.ch]; }
+    compChannels = [];
+    document.querySelectorAll('#cChannelBtns .channel-btn.selected').forEach(function(b) { compChannels.push(b.dataset.ch); });
+    if (!compChannels.length) { btn.classList.add('selected'); compChannels = [btn.dataset.ch]; }
 }
 
-function previewMassSend() {
-    var targets = _getMassTargets();
-    var body = ((document.getElementById('massBody') || {}).value || '').trim();
-    var subj = ((document.getElementById('massSubj') || {}).value || '').trim();
-    var wrap = document.getElementById('massAllPreviewWrap');
-    if (!wrap) return;
-    if (!targets.length) { toast('No recipients match the selected group'); return; }
-    if (!body) { toast('Enter a message body first'); return; }
+function showComposePreviewAll() {
+    var targets = _getComposeTargets();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var wrap = document.getElementById('cPreviewAll');
+    if (!wrap || !targets.length || !body) return;
+    var busMap = _buildBusRouteMap();
     var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:340px;overflow-y:auto;">' +
         '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
             '<span>' + targets.length + ' personalized messages</span>' +
-            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'massAllPreviewWrap\').style.display=\'none\'">✕</button>' +
+            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'cPreviewAll\').style.display=\'none\'">✕</button>' +
         '</div>';
     targets.slice(0, 15).forEach(function(t) {
-        var personalBody = _applyMergeTags(body, t);
-        var personalSubj = subj ? _applyMergeTags(subj, t) : '';
+        var pb = _applyMergeTags(body, t, busMap);
+        var ps = subj ? _applyMergeTags(subj, t, busMap) : '';
         h += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;">' +
             '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;">' +
                 '<strong>' + esc(t.parentName) + '</strong>' +
                 '<span style="color:var(--text-muted);font-size:.72rem;">' + esc(t.camperName) + (t.bunk ? ' · ' + esc(t.bunk) : '') + '</span>' +
             '</div>' +
-            (personalSubj ? '<div style="font-size:.75rem;font-weight:600;margin-top:3px;">' + esc(personalSubj) + '</div>' : '') +
-            '<div style="color:var(--slate-500);font-size:.76rem;margin-top:3px;white-space:pre-line;max-height:56px;overflow:hidden;">' + esc(personalBody.substring(0, 200)) + (personalBody.length > 200 ? '…' : '') + '</div>' +
+            (ps ? '<div style="font-size:.75rem;font-weight:600;margin-top:3px;color:var(--slate-600);">' + esc(ps) + '</div>' : '') +
+            '<div style="color:var(--slate-500);font-size:.76rem;margin-top:3px;white-space:pre-line;max-height:50px;overflow:hidden;">' + esc(pb.substring(0, 200)) + (pb.length > 200 ? '…' : '') + '</div>' +
         '</div>';
     });
-    if (targets.length > 15) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (targets.length - 15) + ' more recipients</div>';
+    if (targets.length > 15) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (targets.length - 15) + ' more</div>';
     h += '</div>';
-    wrap.innerHTML = h;
-    wrap.style.display = '';
+    wrap.innerHTML = h; wrap.style.display = '';
 }
 
-function sendMassSend() {
+function sendCompose() {
     var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
-    var subj = ((document.getElementById('massSubj') || {}).value || '').trim();
-    var body = ((document.getElementById('massBody') || {}).value || '').trim();
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
     if (!subj) { toast('Subject is required'); return; }
-    if (!body) { toast('Message body is required'); return; }
-    var targets = _getMassTargets();
-    if (!targets.length) { toast('No recipients match the selected group'); return; }
-    var sent = 0;
+    if (!body) { toast('Message is required'); return; }
+    var targets = _getComposeTargets();
+    if (!targets.length) { toast('Select a recipient or group'); return; }
+    var busMap = _buildBusRouteMap();
+    var isGroup = targets.length > 1;
     targets.forEach(function(t) {
         cl.msg.send({
-            to:      t.parentName,
-            toType:  'individual',
-            subject: _applyMergeTags(subj, t),
-            body:    _applyMergeTags(body, t),
-            channels: massChannels,
-            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: true }
+            to: t.parentName, toType: 'individual',
+            subject: _applyMergeTags(subj, t, busMap),
+            body:    _applyMergeTags(body, t, busMap),
+            channels: compChannels,
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup }
         });
-        sent++;
     });
-    toast(sent + ' personalized message' + (sent === 1 ? '' : 's') + ' sent!');
-    document.getElementById('massSubj').value  = '';
-    document.getElementById('massBody').value  = '';
-    document.getElementById('massAllPreviewWrap').style.display = 'none';
-    document.getElementById('massPreviewWrap').style.display    = 'none';
-    document.getElementById('massTargetBadge').textContent = '—';
-    document.getElementById('massTargetBadge').className   = 'badge badge-neutral';
-    updateSmartBadge();
+    toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
+    document.getElementById('cSubj').value = '';
+    document.getElementById('cBody').value = '';
+    document.getElementById('cPreviewWrap').style.display  = 'none';
+    document.getElementById('cPreviewAll').style.display   = 'none';
+    document.getElementById('cScopeCount').textContent     = '';
+    document.getElementById('cPreviewAllBtn').style.display= 'none';
+    document.getElementById('cIndivChips').innerHTML       = '';
 }
+
+function updateSmartBadge() {} // kept for compat — badge removed in new UI
 
 // ─── SENT / BROADCASTS (kept for compat) ─────────────────────────────────────
 function renderSent() {}
