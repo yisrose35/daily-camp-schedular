@@ -277,7 +277,21 @@
                 minFrequency: a.minFrequency || 0,
                 minFrequencyPeriod: a.minFrequencyPeriod || null,
                 rotationCohort: a.rotationCohort || null,
-                fullGrade: a.fullGrade === true
+                fullGrade: a.fullGrade === true,
+                // ★ Day-19 special features (manual port): propagate durations[],
+                //   multiPart, and prep config so the MANUAL builder's
+                //   computeManualSpecialFeatures (scheduler_core_main.js) can apply
+                //   best-fit durations, multiPart part labels, and prep lead-ins.
+                //   These were AUTO-only (the auto solver reads getSpecialConfig /
+                //   getSpecialActivityByName directly); buildActivityProperties never
+                //   copied them, so the manual solver's activityProperties carried
+                //   none and the features silently no-op'd. Same root cause as the
+                //   rotation/frequency fields above.
+                durations: Array.isArray(a.durations) ? a.durations : null,
+                duration: a.duration || 0,
+                multiPart: (a.multiPart && typeof a.multiPart === 'object') ? a.multiPart : null,
+                prepDuration: a.prepDuration || 0,
+                prepConfig: (a.prepConfig && typeof a.prepConfig === 'object') ? a.prepConfig : null
             });
             props[a.name] = propEntry;
             const lowerKey = a.name.toLowerCase().trim();
