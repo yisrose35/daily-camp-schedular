@@ -552,7 +552,13 @@
         // Write straight to memory — no save, no toast, no updateTable.
         if (!window.scheduleAssignments) window.scheduleAssignments = {};
         if (!window.scheduleAssignments[bunk]) window.scheduleAssignments[bunk] = [];
-        window.scheduleAssignments[bunk][slotIdx] = {
+        // ★ Day-19 special features for the leftover-slot auto-fill path too, so a
+        //   special filled here honors multiPart part label/location, prep, and
+        //   durations best-fit just like the main solver write. Gated/no-op for
+        //   ordinary activities.
+        const _afFeat = (typeof window.computeManualSpecialFeatures === 'function')
+            ? window.computeManualSpecialFeatures(best.activity, slotStart, slotEnd, bunk, actProps) : null;
+        const _afEntry = {
             field: best.field || best.activity,
             sport: best.activity,
             _activity: best.activity,
@@ -562,6 +568,13 @@
             _autoFilled: true,
             _editedAt: Date.now(),
         };
+        if (_afFeat) {
+            if (_afFeat._partLabel) { _afEntry._partNumber = _afFeat._partNumber; _afEntry._totalParts = _afFeat._totalParts; _afEntry._partLabel = _afFeat._partLabel; }
+            if (_afFeat._partLocation) { _afEntry.field = _afFeat._partLocation; _afEntry._location = _afFeat._partLocation; _afEntry._partLocation = _afFeat._partLocation; }
+            if (_afFeat._prepDuration) { _afEntry._prepDuration = _afFeat._prepDuration; _afEntry._prepLabel = _afFeat._prepLabel; _afEntry._prepLocation = _afFeat._prepLocation; }
+            if (_afFeat._endMin) { _afEntry._startMin = slotStart; _afEntry._endMin = _afFeat._endMin; _afEntry._durationBestFit = _afFeat._durationBestFit; }
+        }
+        window.scheduleAssignments[bunk][slotIdx] = _afEntry;
         return true;
     }
 
