@@ -6331,6 +6331,8 @@
                 }).sort((a, b) => b.sportsNeeded - a.sportsNeeded);
 
                 const fieldSlots = availFields.map(f => ({ ...f }));
+                const _bmdSW = window.getBunkMetaData ? window.getBunkMetaData() : (window.bunkMetaData || {});
+                const _szSW = (bb) => (_bmdSW[bb] && typeof _bmdSW[bb].size === 'number') ? _bmdSW[bb].size : 0;
 
                 for (const { bunk } of scoredBunks) {
                     const sl = shoppingLists[bunk];
@@ -6351,6 +6353,25 @@
                             if (fs.remaining <= 0) continue;
                             if (!fs.activities.includes(sport.name)) continue;
                             if (!isFieldStillAvailable(fs.name, win.start, win.end, bunk, sport.name)) continue;
+
+                            // ★ Sport maxPlayers — combined-headcount cap when SHARING.
+                            //   fs.remaining limits the BUNK COUNT only; maxPlayers limits
+                            //   combined PLAYERS. Without this, 2 same-division bunks summing
+                            //   over max share a cap-2 field (live bug: 15+11=26 on a max-20
+                            //   sport). Sum the planner's current roster on this field/slot;
+                            //   skip if adding this bunk would push combined players past the
+                            //   sport max (mirrors total_solver's >20%-over hard-block). Gated
+                            //   to actual sharing (someone already on the field this slot).
+                            {
+                                const _spMaxP = (window.sportMetaData && window.sportMetaData[sport.name] && parseInt(window.sportMetaData[sport.name].maxPlayers)) || 0;
+                                if (_spMaxP > 0) {
+                                    let _occP = 0;
+                                    for (const _pc of plannerFieldClaims) {
+                                        if (_pc.field === fs.name && _pc.bunk !== bunk && _pc.startMin < win.end && _pc.endMin > win.start) _occP += _szSW(_pc.bunk);
+                                    }
+                                    if (_occP > 0 && (_occP + _szSW(bunk)) > _spMaxP * 1.2) continue;
+                                }
+                            }
 
                             if (!claimFieldForPlanner(fs.name, win.start, win.end, bunk, sport.name)) continue;
                             fs.remaining--;
