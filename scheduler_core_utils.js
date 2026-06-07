@@ -602,10 +602,12 @@
         if (rules.length === 0) return props.available !== false;
         if (!props.available) return false;
 
-        let allowed = !rules.some(r => r.type === "Available");
+        // ★ Case-insensitive type match (see note at the main fit-check): tolerate
+        //   lowercase 'available'/'unavailable' so config field timeRules are enforced.
+        let allowed = !rules.some(r => String(r.type).toLowerCase() === "available");
 
         for (const rule of rules) {
-            if (rule.type === "Available" &&
+            if (String(rule.type).toLowerCase() === "available" &&
                 slotStart >= rule.startMin &&
                 slotEnd <= rule.endMin) {
                 allowed = true;
@@ -616,7 +618,7 @@
         if (!allowed) return false;
 
         for (const rule of rules) {
-            if (rule.type === "Unavailable" &&
+            if (String(rule.type).toLowerCase() === "unavailable" &&
                 slotStart < rule.endMin &&
                 slotEnd > rule.startMin) {
                 return false;
@@ -799,8 +801,13 @@
             
             if (blockStartMin != null && blockEndMin != null) {
                 // Separate rules by type
-                const availableRules = effectiveProps.timeRules.filter(r => r.type === 'Available' || r.available === true);
-                const unavailableRules = effectiveProps.timeRules.filter(r => r.type === 'Unavailable' || r.available === false);
+                // ★ Case-insensitive type match (mirrors auto_fill_slot.js:129 +
+                //   the DA iron-gate): config field timeRules can carry a lowercase
+                //   `type` ('unavailable'/'available') from non-UI/older paths, which
+                //   the capital-only comparison silently dropped → rule never enforced
+                //   in manual mode (auto already lowercased). Brings manual to parity.
+                const availableRules = effectiveProps.timeRules.filter(r => String(r.type).toLowerCase() === 'available' || r.available === true);
+                const unavailableRules = effectiveProps.timeRules.filter(r => String(r.type).toLowerCase() === 'unavailable' || r.available === false);
                 
                 // ★★★ v7.7: Filter rules by division applicability ★★★
                 const blockDivision = block.divName;

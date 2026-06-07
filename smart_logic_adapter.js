@@ -369,7 +369,9 @@
             endMin: parseTime(r.end) ?? r.endMin
         }));
 
-        const availableRules = parsedRules.filter(r => r.type === "Available");
+        // ★ Case-insensitive type match (parity with the field fit-check + auto):
+        //   tolerate lowercase 'available'/'unavailable' on special-activity timeRules.
+        const availableRules = parsedRules.filter(r => String(r.type).toLowerCase() === "available");
         if (availableRules.length > 0) {
             const inAvailable = availableRules.some(r =>
                 startMin >= r.startMin && endMin <= r.endMin
@@ -377,7 +379,7 @@
             if (!inAvailable) return false;
         }
 
-        const unavailableRules = parsedRules.filter(r => r.type === "Unavailable");
+        const unavailableRules = parsedRules.filter(r => String(r.type).toLowerCase() === "unavailable");
         for (const rule of unavailableRules) {
             if (startMin < rule.endMin && endMin > rule.startMin) {
                 return false;
