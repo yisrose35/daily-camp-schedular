@@ -929,6 +929,14 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
      */
     RotationEngine.calculateLimitScore = function(bunkName, activityName, activityProperties, divisionName) {
         var props = (activityProperties && activityProperties[activityName]) || {};
+        // ★ available=false hard gate: a globally-disabled special must never be
+        //   scheduled. canBlockFit also rejects available===false, but some manual
+        //   solver placement paths score candidates via this function without going
+        //   through canBlockFit — so a disabled special could still be selected and
+        //   written. Block it here (the shared rotation-scoring choke point) so a
+        //   disabled special is never picked. activityProperties carries `available`
+        //   for every special (buildActivityProperties copies it), so props is reliable.
+        if (props.available === false) return Infinity;
         var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;
         var _cdForEsc = parseInt(props.frequencyDays) || 0;
 
