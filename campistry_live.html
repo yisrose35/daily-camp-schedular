@@ -137,6 +137,8 @@
     <div class="page-header">
         <div><div class="page-title">Morning Roll Call</div><div class="page-subtitle">Mark attendance by division — who's here today?</div></div>
         <div class="page-actions">
+            <button class="btn btn-secondary" onclick="AttendanceScanner.printTemplates()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print Templates</button>
+            <button class="btn btn-secondary" onclick="AttendanceScanner.open()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Scan Sheet</button>
             <button class="btn btn-secondary" onclick="CampistryLive.markAllPresent()">Mark All Present</button>
         </div>
     </div>
@@ -235,6 +237,48 @@
 </div>
 
 <!-- Toast -->
+
+<!-- ═══ ATTENDANCE SCANNER MODAL ═══ -->
+<div class="modal-overlay" id="scanModal">
+    <div class="modal" style="max-width:580px;">
+        <div class="modal-header">
+            <h3>Scan Attendance Sheet</h3>
+            <button class="modal-close" onclick="CampistryLive.closeModal('scanModal')">&times;</button>
+        </div>
+        <div class="modal-body" id="scanModalBody">
+            <!-- Step 1: upload -->
+            <div id="scanStep1">
+                <div style="padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:.8rem;color:#1e40af;margin-bottom:14px;line-height:1.5;">
+                    <strong>How it works:</strong> Print today&#39;s template &rarr; secretary fills bubbles &rarr; scan the sheet. The QR code tells the app which bunk it is; bubble positions are read automatically. <strong>Zero cost, no internet needed for scanning.</strong>
+                </div>
+                <div id="scanDropZone" style="border:2px dashed var(--slate-300);border-radius:12px;padding:28px;text-align:center;background:var(--slate-50);cursor:pointer;transition:border-color .2s;" onclick="document.getElementById('scanFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='#2563eb'" ondragleave="this.style.borderColor=''" ondrop="AttendanceScanner.handleDrop(event)">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--slate-400)" stroke-width="1.5" style="margin:0 auto 10px;display:block;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    <div style="font-weight:600;color:var(--slate-700);">Tap to take photo or upload image</div>
+                    <div style="font-size:.75rem;color:var(--slate-400);margin-top:4px;">Photo the filled attendance sheet — QR code must be visible</div>
+                    <input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none" onchange="AttendanceScanner.handleFileSelect(this.files[0])">
+                </div>
+                <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--slate-100);display:flex;align-items:center;justify-content:space-between;">
+                    <span style="font-size:.76rem;color:var(--slate-500);">Need a template to print?</span>
+                    <button class="btn btn-secondary" style="font-size:.78rem;padding:5px 12px;" onclick="AttendanceScanner.printTemplates()">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right:4px;vertical-align:-.1em;"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                        Print Today&#39;s Templates
+                    </button>
+                </div>
+            </div>
+            <!-- Step 2: scanning + preview -->
+            <div id="scanStep2" style="display:none;">
+                <div id="scanStatusMsg" style="margin-bottom:12px;"></div>
+                <div id="scanPreviewTable"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="scanBackBtn" style="display:none;" onclick="AttendanceScanner.back()">&#8592; Back</button>
+            <button class="btn btn-secondary" onclick="CampistryLive.closeModal('scanModal')">Cancel</button>
+            <button class="btn btn-primary" id="scanConfirmBtn" style="display:none;" onclick="AttendanceScanner.confirm()">Apply to Roll Call</button>
+        </div>
+    </div>
+</div>
+
 <div class="toast" id="toastEl"></div>
 
 <!-- ═══ SCRIPTS ═══ -->
@@ -243,6 +287,7 @@
 <script src="supabase_client.js"></script>
 <script src="integration_hooks.js"></script>
 <script src="campistry_cloud_bootstrap.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="campistry_live.js"></script>
 <script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
 <script>
