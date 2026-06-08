@@ -44,6 +44,30 @@
             to   { transform: translateX(0); opacity: 1; }
         }
     </style>
+    <style>
+        /* Fill-online drawer */
+        .fo-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.35); z-index:900; }
+        .fo-backdrop.open { display:block; }
+        .fo-drawer {
+            position:fixed; top:0; right:0; bottom:0; width:480px; max-width:100vw;
+            background:#fff; box-shadow:-6px 0 32px rgba(0,0,0,.13);
+            z-index:901; overflow-y:auto; padding:0;
+            transform:translateX(100%); transition:transform .24s cubic-bezier(.4,0,.2,1);
+        }
+        .fo-drawer.open { transform:translateX(0); }
+        .fo-head { display:flex; align-items:flex-start; justify-content:space-between; padding:18px 22px 14px; border-bottom:1px solid #E2E8F0; position:sticky; top:0; background:#fff; z-index:2; }
+        .fo-head h2 { font-size:1rem; font-weight:700; margin:0 0 2px; color:#0F172A; }
+        .fo-head p { font-size:.78rem; color:#64748B; margin:0; }
+        .fo-body { padding:20px 22px 36px; }
+        .fo-field { margin-bottom:18px; }
+        .fo-label { display:block; font-size:.8rem; font-weight:600; color:#334155; margin-bottom:6px; }
+        .fo-label .req { color:#EF4444; margin-left:2px; }
+        .fo-sig-wrap { border:1.5px solid #CBD5E1; border-radius:8px; background:#F8FAFC; overflow:hidden; }
+        .fo-sig-canvas { display:block; width:100%; touch-action:none; cursor:crosshair; }
+        .fo-sig-clear { font-size:.72rem; color:#64748B; background:none; border:none; cursor:pointer; margin-top:4px; padding:0; }
+        .fo-submitted-badge { display:inline-flex; align-items:center; gap:5px; padding:5px 10px; border-radius:999px; background:#F0FDF4; color:#16A34A; font-size:.78rem; font-weight:600; }
+        .fo-submitted-badge svg { flex-shrink:0; }
+    </style>
 </head>
 <body>
 
@@ -721,6 +745,28 @@ function handleFormReturn(formId,camperName,formName,input){
         var actions=row.querySelector('div[style*="display:flex"]');
         if(actions){actions.innerHTML='<button class="btn btn-ghost btn-sm" onclick="toast(\'Re-uploading...\')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Re-upload</button>';}
     }
+    // Record submission so admin can see it in the Received tab
+    try {
+        var now2 = new Date();
+        var sub = {
+            id: 'sub_' + Date.now(),
+            formId: formId,
+            formName: formName,
+            docType: 'upload',
+            camper: camperName,
+            grade: '', division: '', bunk: '',
+            date: now2.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}),
+            submittedAt: now2.toISOString(),
+            values: { 'File': file.name },
+            signatureDataUrl: null,
+            mode: 'upload',
+            filename: file.name,
+            folderId: null
+        };
+        var subs = JSON.parse(localStorage.getItem('campistry_link_form_submissions_v1')||'[]');
+        subs.push(sub);
+        localStorage.setItem('campistry_link_form_submissions_v1', JSON.stringify(subs));
+    } catch(e){}
     toast(camperName+' — '+formName+' submitted! Camp will review it shortly.');
     input.value='';
 }
@@ -1173,27 +1219,42 @@ window.addEventListener('storage', function(e) {
     }
 
     function _renderLinkForms(digital, printReturn, documents) {
+        // Expose digital forms for the fill-online module
+        if (typeof _currentDigitalForms !== 'undefined') _currentDigitalForms = digital;
+
         var docSvgFill='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>';
         var dlSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>';
         var ulSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+        var checkSvg='<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
         var emptyEl = '<div style="font-size:.8rem;color:var(--text-muted);padding:8px 0;">No forms assigned yet.</div>';
+
+        // Get submissions for this parent to show submitted state
+        var mySubs = (typeof _foGetMySubmissions === 'function') ? _foGetMySubmissions() : [];
 
         // Digital forms
         var fol = document.getElementById('formsOnlineList');
         if (fol) {
             if (digital.length) {
                 var fh='';
-                digital.forEach(function(f) {
+                digital.forEach(function(f, fi) {
                     children.forEach(function(c) {
+                        var submitted = mySubs.some(function(s){ return s.formId === f.id && s.camper === c.name; });
+                        var reqBadge = f.required && !submitted ? '<span class="badge badge-warn" style="font-size:.62rem;">Required</span> ' : '';
                         fh+='<div class="doc-item"><div class="doc-icon" style="background:var(--product-50);color:var(--product-600);">'+docSvgFill+'</div>';
-                        fh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+'</p></div>';
-                        fh+='<button class="btn btn-primary btn-sm" onclick="toast(\'Coming soon!\')">Complete</button></div>';
+                        fh+='<div class="doc-info"><h4>'+_escHtml(f.name)+'</h4><p>'+_escHtml(c.name.split(' ')[0])+(f.description?' · '+_escHtml(f.description):'')+' '+reqBadge+'</p></div>';
+                        if (submitted) {
+                            fh+='<span class="fo-submitted-badge">'+checkSvg+' Submitted</span>';
+                        } else {
+                            fh+='<button class="btn btn-primary btn-sm" onclick="openFillOnline('+fi+',\''+_escHtml(c.name)+'\',\''+_escHtml(c.id||'')+'\')">Complete</button>';
+                        }
+                        fh+='</div>';
                     });
                 });
                 fol.innerHTML=fh;
-                // Update badge count
+                // Update badge count (only pending, not submitted)
+                var pending = digital.reduce(function(acc, f, fi){ return acc + children.filter(function(c){ return !mySubs.some(function(s){ return s.formId===f.id && s.camper===c.name; }); }).length; }, 0);
                 var onlineBadge=document.getElementById('formsOnlineBadge');
-                if(onlineBadge){onlineBadge.textContent=digital.length*children.length;onlineBadge.style.display=digital.length?'':'none';}
+                if(onlineBadge){if(pending>0){onlineBadge.textContent=pending;onlineBadge.style.display='';}else{onlineBadge.style.display='none';}}
             }
         }
 
@@ -1489,6 +1550,200 @@ window.addEventListener('storage', function(e) {
     }
 
 })();
+</script>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  FILL-ONLINE DRAWER                                 -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="fo-backdrop" id="foBackdrop" onclick="closeFillOnline()"></div>
+<div class="fo-drawer" id="foDrawer">
+    <div class="fo-head">
+        <div>
+            <h2 id="foTitle">Form</h2>
+            <p id="foFor"></p>
+        </div>
+        <button onclick="closeFillOnline()" style="background:none;border:1px solid #E2E8F0;border-radius:7px;padding:5px 10px;font-size:.76rem;font-weight:600;color:#64748B;cursor:pointer;flex-shrink:0;margin-left:12px;margin-top:2px;">✕</button>
+    </div>
+    <div class="fo-body" id="foBody"></div>
+</div>
+
+<script>
+// ── Fill-online module ───────────────────────────────────────────────────────
+var _foFormDef = null;
+var _foCamper = null;
+var _foCamperId = null;
+var _currentDigitalForms = [];
+var FORM_SUB_KEY_P = 'campistry_link_form_submissions_v1';
+
+function _foEsc(s){ return String(s||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function _foGetMySubmissions(){
+    return JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
+}
+
+function openFillOnline(formIdx, camperName, camperId){
+    var formDef = _currentDigitalForms[formIdx];
+    if (!formDef) { return; }
+    _foFormDef = formDef;
+    _foCamper = camperName;
+    _foCamperId = camperId || '';
+
+    document.getElementById('foTitle').textContent = formDef.name || 'Form';
+    document.getElementById('foFor').textContent = 'For: ' + camperName;
+
+    var body = '';
+    var fields = formDef.fields || [];
+    fields.forEach(function(field, i){
+        var fid = 'foF_' + i;
+        var req = field.required ? '<span class="req">*</span>' : '';
+        body += '<div class="fo-field">';
+        body += '<label class="fo-label" for="'+fid+'">' + _foEsc(field.label||'') + req + '</label>';
+        if (field.type === 'text' || field.type === 'email' || field.type === 'phone') {
+            body += '<input type="'+(field.type==='phone'?'tel':field.type)+'" id="'+fid+'" class="lk-input" placeholder="'+_foEsc(field.label)+'">';
+        } else if (field.type === 'date') {
+            body += '<input type="date" id="'+fid+'" class="lk-input">';
+        } else if (field.type === 'textarea') {
+            body += '<textarea id="'+fid+'" class="lk-textarea" rows="3" placeholder="'+_foEsc(field.label)+'"></textarea>';
+        } else if (field.type === 'checkbox') {
+            body += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;line-height:1.4;">';
+            body += '<input type="checkbox" id="'+fid+'" style="width:15px;height:15px;flex-shrink:0;margin-top:2px;">';
+            body += '<span>I confirm and agree</span></label>';
+        } else if (field.type === 'signature') {
+            body += '<div class="fo-sig-wrap"><canvas id="'+fid+'_c" class="fo-sig-canvas" width="440" height="110"></canvas></div>';
+            body += '<button type="button" class="fo-sig-clear" onclick="_foClearSig(\''+fid+'_c\')">Clear signature</button>';
+        }
+        body += '</div>';
+    });
+
+    if (!fields.length) {
+        body += '<div style="font-size:.86rem;color:#64748B;padding:12px 0;">This form has no fields configured yet.</div>';
+    }
+
+    body += '<div style="padding-top:16px;border-top:1px solid #E2E8F0;display:flex;gap:8px;justify-content:flex-end;margin-top:8px;">';
+    body += '<button onclick="closeFillOnline()" style="background:none;border:1px solid #CBD5E1;border-radius:8px;padding:9px 18px;font-size:.85rem;font-weight:600;color:#64748B;cursor:pointer;">Cancel</button>';
+    body += '<button onclick="submitFillOnline()" style="background:#3B82F6;color:#fff;border:none;border-radius:8px;padding:9px 22px;font-size:.85rem;font-weight:600;cursor:pointer;">Submit</button>';
+    body += '</div>';
+
+    document.getElementById('foBody').innerHTML = body;
+
+    // Init signature canvases
+    fields.forEach(function(field, i){
+        if (field.type === 'signature') { _foInitSig('foF_' + i + '_c'); }
+    });
+
+    document.getElementById('foBackdrop').classList.add('open');
+    document.getElementById('foDrawer').classList.add('open');
+}
+
+function closeFillOnline(){
+    document.getElementById('foBackdrop').classList.remove('open');
+    document.getElementById('foDrawer').classList.remove('open');
+    _foFormDef = null;
+}
+
+function _foInitSig(canvasId){
+    var cv = document.getElementById(canvasId); if (!cv) return;
+    var ctx = cv.getContext('2d');
+    var drawing = false, lx = 0, ly = 0;
+    function pos(e){ var r = cv.getBoundingClientRect(), sx = cv.width/r.width, sy = cv.height/r.height, src = e.touches?e.touches[0]:e; return {x:(src.clientX-r.left)*sx, y:(src.clientY-r.top)*sy}; }
+    cv.addEventListener('mousedown',  function(e){ drawing=true; var p=pos(e); lx=p.x; ly=p.y; });
+    cv.addEventListener('mousemove',  function(e){ if(!drawing) return; var p=pos(e); ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(p.x,p.y); ctx.strokeStyle='#1e293b'; ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke(); lx=p.x; ly=p.y; });
+    cv.addEventListener('mouseup',    function(){ drawing=false; });
+    cv.addEventListener('mouseleave', function(){ drawing=false; });
+    cv.addEventListener('touchstart', function(e){ e.preventDefault(); drawing=true; var p=pos(e); lx=p.x; ly=p.y; }, {passive:false});
+    cv.addEventListener('touchmove',  function(e){ e.preventDefault(); if(!drawing) return; var p=pos(e); ctx.beginPath(); ctx.moveTo(lx,ly); ctx.lineTo(p.x,p.y); ctx.strokeStyle='#1e293b'; ctx.lineWidth=2; ctx.lineCap='round'; ctx.stroke(); lx=p.x; ly=p.y; }, {passive:false});
+    cv.addEventListener('touchend',   function(){ drawing=false; });
+}
+
+function _foClearSig(canvasId){
+    var cv = document.getElementById(canvasId); if (!cv) return;
+    cv.getContext('2d').clearRect(0,0,cv.width,cv.height);
+}
+
+function _foSigEmpty(canvasId){
+    var cv = document.getElementById(canvasId); if (!cv) return true;
+    var d = cv.getContext('2d').getImageData(0,0,cv.width,cv.height).data;
+    for (var i=3; i<d.length; i+=4){ if (d[i]>0) return false; }
+    return true;
+}
+
+function submitFillOnline(){
+    var formDef = _foFormDef; if (!formDef) return;
+    var fields = formDef.fields || [];
+    var values = {};
+    var sigDataUrl = null;
+
+    for (var i=0; i<fields.length; i++){
+        var field = fields[i], fid = 'foF_'+i;
+        if (field.type === 'signature'){
+            if (field.required && _foSigEmpty(fid+'_c')){ _foToast('Please sign: '+field.label); return; }
+            sigDataUrl = document.getElementById(fid+'_c').toDataURL('image/png');
+            values[field.label] = '[signature]';
+        } else if (field.type === 'checkbox'){
+            var chk = document.getElementById(fid);
+            if (field.required && !chk.checked){ _foToast(field.label+' is required'); return; }
+            values[field.label] = chk.checked ? 'Yes' : 'No';
+        } else {
+            var el = document.getElementById(fid);
+            var val = (el ? el.value : '').trim();
+            if (field.required && !val){ _foToast(field.label+' is required'); return; }
+            values[field.label] = val;
+        }
+    }
+
+    var now = new Date();
+    var ds = now.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    var parentInfo = {};
+    try {
+        if (window.CampistryLink && window.CampistryLink.data){
+            var pm = window.CampistryLink.data.getCamperParentMap();
+            parentInfo = pm[_foCamper] || {};
+        }
+    } catch(e){}
+
+    var sub = {
+        id: 'sub_'+Date.now(),
+        formId: formDef.id||'',
+        formName: formDef.name||'Form',
+        docType: formDef.category||'custom',
+        camper: _foCamper,
+        camperId: _foCamperId,
+        parentName: parentInfo.parentName||'',
+        grade: parentInfo.grade||'',
+        division: parentInfo.division||'',
+        bunk: parentInfo.bunk||'',
+        date: ds,
+        submittedAt: now.toISOString(),
+        values: values,
+        signatureDataUrl: sigDataUrl,
+        mode: 'digital',
+        filename: null,
+        folderId: null
+    };
+
+    var subs = JSON.parse(localStorage.getItem(FORM_SUB_KEY_P)||'[]');
+    subs.push(sub);
+    localStorage.setItem(FORM_SUB_KEY_P, JSON.stringify(subs));
+
+    closeFillOnline();
+    _foToast('Form submitted!');
+
+    // Refresh forms display to show submitted state
+    var lf = JSON.parse(localStorage.getItem('campGlobalSettings_v1')||'{}');
+    var linkForms = lf.link_forms || {};
+    if (typeof _renderLinkForms === 'function') {
+        _renderLinkForms(linkForms.digital||[], linkForms.printReturn||[], linkForms.documents||[]);
+    }
+}
+
+function _foToast(msg){
+    var box = document.getElementById('toastBox');
+    if (!box){ alert(msg); return; }
+    var t = document.createElement('div');
+    t.className = 'lk-toast'; t.textContent = msg;
+    box.appendChild(t);
+    setTimeout(function(){ t.classList.add('hide'); setTimeout(function(){ if(t.parentNode) t.parentNode.removeChild(t); },350); }, 2600);
+}
 </script>
 </body>
 </html>

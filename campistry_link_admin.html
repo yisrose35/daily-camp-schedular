@@ -63,6 +63,10 @@
         .compose-drawer-head h2 { font-size:1rem; font-weight:700; margin:0; }
         .compose-drawer-body { padding:18px 22px 28px; }
 
+        /* Form-builder field row */
+        .ft-field-row { display:flex; align-items:center; gap:6px; padding:7px 0; border-bottom:1px solid var(--slate-100); }
+        .ft-field-drag { color:var(--text-muted); flex-shrink:0; font-size:.95rem; cursor:grab; }
+
         /* Sent list item */
         .sent-item { display:flex; align-items:flex-start; gap:10px; padding:12px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
         .sent-item:hover { background:var(--slate-50); }
@@ -326,6 +330,7 @@
         <div class="lk-tabs" style="margin-bottom:16px;">
             <button class="lk-tab active" data-formtab="received" onclick="switchFormsTab('received',this)">Received</button>
             <button class="lk-tab" data-formtab="sendout" onclick="switchFormsTab('sendout',this)">Send Out</button>
+            <button class="lk-tab" data-formtab="manage" onclick="switchFormsTab('manage',this)">Manage Forms</button>
         </div>
 
         <!-- RECEIVED -->
@@ -475,6 +480,56 @@
                 <div id="fsSentHistory"></div>
             </div>
         </div><!-- /formsTabSendout -->
+
+        <!-- MANAGE FORMS -->
+        <div id="formsTabManage" style="display:none;">
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:18px;">Create and edit the forms that appear in the parent portal. Changes are live immediately.</p>
+
+            <!-- Fill Online -->
+            <div class="lk-card" style="margin-bottom:12px;">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Fill Online</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents fill these out directly in the portal — no printing needed.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('digital')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Form
+                    </button>
+                </div>
+                <div id="ftDigitalList"></div>
+            </div>
+
+            <!-- Print & Return -->
+            <div class="lk-card" style="margin-bottom:12px;">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Print &amp; Return</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents download the PDF, fill by hand, and upload back.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('printReturn')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Form
+                    </button>
+                </div>
+                <div id="ftPrintList"></div>
+            </div>
+
+            <!-- Camp Documents -->
+            <div class="lk-card">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Camp Documents</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Read-only downloads — handbooks, packing lists, calendars.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('document')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Document
+                    </button>
+                </div>
+                <div id="ftDocsList"></div>
+            </div>
+        </div><!-- /formsTabManage -->
     </div>
 
 </div>
@@ -694,6 +749,75 @@
 </div><!-- /.lk-main -->
 <div id="toastBox"></div>
 
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  FORM BUILDER DRAWER                                -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="compose-backdrop" id="formTplBackdrop" onclick="closeFormDrawer()"></div>
+<div class="compose-drawer" id="formTplDrawer">
+    <div class="compose-drawer-head">
+        <h2 id="formTplDrawerTitle">New Form</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeFormDrawer()" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="compose-drawer-body">
+
+        <div class="lk-field">
+            <label>Form Name</label>
+            <input type="text" class="lk-input" id="ftName" placeholder="e.g. Health Waiver 2026">
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="lk-field">
+                <label>Category</label>
+                <select class="lk-select" id="ftCat">
+                    <option value="medical">Medical Form</option>
+                    <option value="waiver">Waiver / Liability</option>
+                    <option value="permission">Permission Slip</option>
+                    <option value="emergency">Emergency Contact</option>
+                    <option value="dietary">Dietary / Allergy</option>
+                    <option value="custom">Other</option>
+                </select>
+            </div>
+            <div class="lk-field" id="ftReqRow">
+                <label>Required?</label>
+                <select class="lk-select" id="ftRequiredSel">
+                    <option value="1">Yes — Required</option>
+                    <option value="0">No — Optional</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="lk-field">
+            <label>Description <span style="font-weight:400;color:var(--text-muted);">shown to parents</span></label>
+            <input type="text" class="lk-input" id="ftDesc" placeholder="e.g. Annual health clearance form">
+        </div>
+
+        <!-- URL field — for print & return and documents -->
+        <div id="ftUrlSection" style="display:none;" class="lk-field">
+            <label>PDF / Document URL <span style="font-weight:400;color:var(--text-muted);">Google Drive, Dropbox, etc.</span></label>
+            <input type="text" class="lk-input" id="ftUrl" placeholder="https://drive.google.com/...">
+            <p style="font-size:.73rem;color:var(--text-muted);margin-top:4px;">Parents see a "Download" button linking to this URL.</p>
+        </div>
+
+        <!-- Field builder — for digital fill-online forms -->
+        <div id="ftFieldsSection" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;">
+                <span style="font-size:.78rem;font-weight:700;color:var(--slate-700);text-transform:uppercase;letter-spacing:.04em;">Form Fields</span>
+                <button class="btn btn-ghost btn-sm" onclick="_addFormField()" style="font-size:.77rem;">+ Add Field</button>
+            </div>
+            <div id="ftFieldsList"></div>
+            <p style="font-size:.73rem;color:var(--text-muted);margin-top:8px;">Parents fill in these fields when they tap "Complete" in the portal.</p>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border-light);margin-top:12px;">
+            <button class="btn btn-ghost" onclick="closeFormDrawer()">Cancel</button>
+            <button class="btn btn-primary" onclick="_saveFormDrawer()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                Save Form
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Scripts -->
 <script src="offline_data.js" onerror=""></script>
 <script src="demo_mode.js"></script>
@@ -746,7 +870,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
-    if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); updateFsCount(); }
+    if (tab === 'forms')  { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions('all', ''); updateFsCount(); }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
@@ -830,7 +954,10 @@ function switchFormsTab(tab, btn) {
     if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
     document.getElementById('formsTabReceived').style.display = tab === 'received' ? '' : 'none';
     document.getElementById('formsTabSendout').style.display  = tab === 'sendout'  ? '' : 'none';
+    document.getElementById('formsTabManage').style.display   = tab === 'manage'   ? '' : 'none';
     if (tab === 'sendout') { updateFsCount(); renderFsSentHistory(); }
+    if (tab === 'received') { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions(currentDocFilter, ''); }
+    if (tab === 'manage') { renderFormTemplatesAdmin(); }
 }
 
 function onFormTypeChange() {
@@ -1618,25 +1745,29 @@ function renderDocSubmissions(f, q) {
 }
 
 function docRow(d, inFolder) {
-    var ext = (d.filename||'').split('.').pop().toUpperCase();
-    var extColor = ext==='PDF' ? 'var(--red-500)' : 'var(--blue-500)';
+    var isDigital = d.mode === 'digital';
+    var ext = isDigital ? 'FORM' : (d.filename||'').split('.').pop().toUpperCase() || 'FILE';
+    var extColor = isDigital ? 'var(--link-color)' : (ext==='PDF' ? 'var(--red-500)' : 'var(--blue-500)');
+    var extBg = isDigital ? 'var(--link-tint)' : 'var(--slate-100)';
     var folderInfo = !inFolder && d.folderId ? '<span class="badge badge-ok" style="font-size:.62rem;">Filed: '+esc((docFolders.find(function(f){return f.id===d.folderId;})||{name:'—'}).name)+'</span>' : '';
     var unfiledBadge = !inFolder && !d.folderId ? '<span class="badge badge-warn" style="font-size:.62rem;">Unfiled</span>' : '';
+    var viewBtn = isDigital ? '<button class="btn btn-secondary btn-sm" onclick="viewFormSubmission(\''+esc(d.id)+'\')">View</button>' :
+                              '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading '+esc(d.filename||'file')+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>';
     return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
-        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:var(--slate-100);display:flex;align-items:center;justify-content:center;font-size:.62rem;font-weight:800;color:'+extColor+';flex-shrink:0;">'+ext+'</div>' +
+        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:'+extBg+';display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:'+extColor+';flex-shrink:0;">'+ext+'</div>' +
         '<div style="flex:1;min-width:0;">' +
             '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(d.name)+'</div>' +
-            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">'+esc(d.camper)+' &nbsp;&middot;&nbsp; '+esc(d.grade||d.division)+' &nbsp;&middot;&nbsp; Submitted '+esc(d.date)+' &nbsp;'+folderInfo+unfiledBadge+'</div>' +
+            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">'+esc(d.camper)+' &nbsp;&middot;&nbsp; '+esc(d.grade||d.division||'—')+' &nbsp;&middot;&nbsp; Submitted '+esc(d.date)+' &nbsp;'+folderInfo+unfiledBadge+'</div>' +
         '</div>' +
         '<div style="display:flex;gap:5px;flex-shrink:0;">' +
-            '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading '+esc(d.filename)+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>' +
-            (!inFolder ? '<button class="btn btn-ghost btn-sm" onclick="moveToFolder('+d.id+')" title="File into folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>' : '') +
+            viewBtn +
+            (!inFolder ? '<button class="btn btn-ghost btn-sm" onclick="moveToFolder(\''+esc(d.id)+'\')" title="File into folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>' : '') +
         '</div>' +
     '</div>';
 }
 
 function moveToFolder(docId) {
-    var d = docSubmissions.find(function(x){ return x.id===docId; }); if (!d) return;
+    var d = docSubmissions.find(function(x){ return String(x.id)===String(docId); }); if (!d) return;
     if (!docFolders.length) { toast('Create a folder first'); return; }
     var sel = prompt('File into folder:\n' + docFolders.map(function(f,i){ return (i+1)+'. '+f.name; }).join('\n') + '\nEnter number:');
     var idx = parseInt(sel,10) - 1;
@@ -1719,6 +1850,220 @@ function deleteFolderPrompt() {
     toast('Folder deleted');
 }
 
+// ─── FORM TEMPLATE MANAGER ───────────────────────────────────────────────────
+var FORM_SUB_KEY = 'campistry_link_form_submissions_v1';
+var _ftMode = 'digital';   // 'digital' | 'printReturn' | 'document'
+var _ftFields = [];         // field list for the open drawer
+var _ftEditId = null;       // null = new, string = editing by id
+
+function _loadLinkForms() {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    var lf = s.link_forms || {};
+    return { digital: lf.digital || [], printReturn: lf.printReturn || [], documents: lf.documents || [] };
+}
+function _saveLinkForms(lf) {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    s.link_forms = lf;
+    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(s));
+}
+
+function renderFormTemplatesAdmin() {
+    var lf = _loadLinkForms();
+    var docSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+    function tplRow(f, type) {
+        var reqBadge = (type !== 'document' && f.required) ? '<span class="badge badge-warn" style="font-size:.6rem;">Required</span>' : '';
+        var fieldsBadge = (type === 'digital' && f.fields && f.fields.length) ? '<span class="badge badge-neutral" style="font-size:.6rem;">'+f.fields.length+' field'+(f.fields.length!==1?'s':'')+'</span>' : '';
+        var urlBadge = (type !== 'digital') ? (f.downloadUrl ? '<span class="badge badge-ok" style="font-size:.6rem;">URL set</span>' : '<span class="badge badge-warn" style="font-size:.6rem;">No URL</span>') : '';
+        var sub = f.description ? '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">'+esc(f.description)+'</div>' : '';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<div style="width:32px;height:32px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">'+docSvg+'</div>' +
+            '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(f.name)+'</div>' +
+                '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px;">'+reqBadge+fieldsBadge+urlBadge+'</div>'+sub+
+            '</div>' +
+            '<button class="btn btn-secondary btn-sm" onclick="_editFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')">Edit</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="_deleteFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')" style="color:var(--red-500);">' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+            '</button>' +
+        '</div>';
+    }
+    var emptyHtml = '<div style="padding:12px 0;font-size:.8rem;color:var(--text-muted);">None added yet.</div>';
+    var dl = document.getElementById('ftDigitalList');
+    var pl = document.getElementById('ftPrintList');
+    var ddl = document.getElementById('ftDocsList');
+    if (dl)  dl.innerHTML  = lf.digital.length    ? lf.digital.map(function(f){ return tplRow(f,'digital'); }).join('')    : emptyHtml;
+    if (pl)  pl.innerHTML  = lf.printReturn.length ? lf.printReturn.map(function(f){ return tplRow(f,'printReturn'); }).join('') : emptyHtml;
+    if (ddl) ddl.innerHTML = lf.documents.length   ? lf.documents.map(function(f){ return tplRow(f,'document'); }).join('')  : emptyHtml;
+}
+
+function openFormDrawer(mode, editId) {
+    _ftMode = mode || 'digital';
+    _ftEditId = editId || null;
+    var lf = _loadLinkForms();
+    var arr = mode === 'digital' ? lf.digital : mode === 'printReturn' ? lf.printReturn : lf.documents;
+    var existing = editId ? (arr.find(function(f){ return f.id === editId; }) || null) : null;
+
+    var titles = { digital: 'Fill-Online Form', printReturn: 'Print & Return Form', document: 'Camp Document' };
+    document.getElementById('formTplDrawerTitle').textContent = (existing ? 'Edit ' : 'New ') + titles[_ftMode];
+    document.getElementById('ftName').value = existing ? (existing.name || '') : '';
+    document.getElementById('ftCat').value  = existing ? (existing.category || 'medical') : 'medical';
+    document.getElementById('ftDesc').value = existing ? (existing.description || '') : '';
+    document.getElementById('ftUrl').value  = existing ? (existing.downloadUrl || '') : '';
+    document.getElementById('ftRequiredSel').value = (existing && !existing.required) ? '0' : '1';
+
+    document.getElementById('ftFieldsSection').style.display = mode === 'digital'   ? '' : 'none';
+    document.getElementById('ftUrlSection').style.display    = mode !== 'digital'   ? '' : 'none';
+    document.getElementById('ftReqRow').style.display        = mode !== 'document'  ? '' : 'none';
+
+    _ftFields = [];
+    if (mode === 'digital') {
+        if (existing && existing.fields && existing.fields.length) {
+            _ftFields = existing.fields.map(function(f){ return Object.assign({}, f); });
+        } else if (!existing) {
+            _ftFields = [
+                { id: 'f_'+Date.now(),   type: 'text',      label: 'Full Name',       required: true },
+                { id: 'f_'+(Date.now()+1), type: 'date',    label: 'Date',            required: true },
+                { id: 'f_'+(Date.now()+2), type: 'signature', label: 'Parent Signature', required: true }
+            ];
+        }
+    }
+    _renderFormFieldsList();
+
+    document.getElementById('formTplBackdrop').classList.add('open');
+    document.getElementById('formTplDrawer').classList.add('open');
+    setTimeout(function(){ document.getElementById('ftName').focus(); }, 200);
+}
+
+function closeFormDrawer() {
+    document.getElementById('formTplBackdrop').classList.remove('open');
+    document.getElementById('formTplDrawer').classList.remove('open');
+}
+
+function _renderFormFieldsList() {
+    var list = document.getElementById('ftFieldsList'); if (!list) return;
+    if (!_ftFields.length) {
+        list.innerHTML = '<div style="font-size:.78rem;color:var(--text-muted);padding:8px 0;">No fields yet — click "+ Add Field" above.</div>';
+        return;
+    }
+    var typeOptions = ['text','email','phone','date','textarea','checkbox','signature'];
+    list.innerHTML = _ftFields.map(function(f, i) {
+        var opts = typeOptions.map(function(t){
+            return '<option value="'+t+'"'+(f.type===t?' selected':'')+'>'+(t==='textarea'?'Long Text':t.charAt(0).toUpperCase()+t.slice(1))+'</option>';
+        }).join('');
+        return '<div class="ft-field-row" id="ftFRow_'+i+'">' +
+            '<span class="ft-field-drag">&#9776;</span>' +
+            '<select class="lk-input" style="max-width:108px;font-size:.76rem;padding:4px 6px;height:auto;" onchange="_ftFields['+i+'].type=this.value;_renderFormFieldsList()">'+opts+'</select>' +
+            '<input type="text" class="lk-input" style="flex:1;font-size:.81rem;padding:4px 8px;height:auto;" value="'+esc(f.label||'')+'" placeholder="Label" oninput="_ftFields['+i+'].label=this.value">' +
+            '<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;flex-shrink:0;white-space:nowrap;">' +
+                '<input type="checkbox"'+(f.required?' checked':'')+' onchange="_ftFields['+i+'].required=this.checked" style="width:13px;height:13px;"> Req' +
+            '</label>' +
+            '<button class="btn btn-ghost btn-sm" onclick="_removeFormField('+i+')" style="flex-shrink:0;color:var(--red-500);padding:3px 5px;">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+            '</button>' +
+        '</div>';
+    }).join('');
+}
+
+function _addFormField() {
+    _ftFields.push({ id: 'f_'+Date.now(), type: 'text', label: '', required: false });
+    _renderFormFieldsList();
+    var rows = document.querySelectorAll('#ftFieldsList .ft-field-row');
+    var last = rows[rows.length - 1];
+    if (last) { var inp = last.querySelector('input[type="text"]'); if (inp) { inp.focus(); } }
+}
+
+function _removeFormField(idx) {
+    _ftFields.splice(idx, 1);
+    _renderFormFieldsList();
+}
+
+function _saveFormDrawer() {
+    var name = (document.getElementById('ftName').value || '').trim();
+    if (!name) { toast('Enter a form name'); return; }
+    var lf = _loadLinkForms();
+    var prefix = _ftMode === 'digital' ? 'lfd_' : _ftMode === 'printReturn' ? 'lfp_' : 'lfdoc_';
+    var item = {
+        id: _ftEditId || (prefix + Date.now()),
+        name: name,
+        category: document.getElementById('ftCat').value,
+        description: (document.getElementById('ftDesc').value || '').trim(),
+        required: document.getElementById('ftRequiredSel').value === '1',
+        created: Date.now()
+    };
+    if (_ftMode !== 'digital') { item.downloadUrl = (document.getElementById('ftUrl').value || '').trim(); }
+    if (_ftMode === 'digital') { item.fields = _ftFields.filter(function(f){ return (f.label||'').trim(); }); }
+
+    var arr = _ftMode === 'digital' ? lf.digital : _ftMode === 'printReturn' ? lf.printReturn : lf.documents;
+    if (_ftEditId) {
+        var idx = arr.findIndex(function(f){ return f.id === _ftEditId; });
+        if (idx >= 0) { item.created = arr[idx].created || Date.now(); arr[idx] = item; } else { arr.push(item); }
+    } else {
+        arr.push(item);
+    }
+    _saveLinkForms(lf);
+    closeFormDrawer();
+    renderFormTemplatesAdmin();
+    toast(esc(name) + ' saved!');
+}
+
+function _editFormTpl(type, id) { openFormDrawer(type, id); }
+
+function _deleteFormTpl(type, id) {
+    if (!confirm('Delete this form?')) return;
+    var lf = _loadLinkForms();
+    var arr = type === 'digital' ? lf.digital : type === 'printReturn' ? lf.printReturn : lf.documents;
+    var idx = arr.findIndex(function(f){ return f.id === id; });
+    if (idx >= 0) arr.splice(idx, 1);
+    _saveLinkForms(lf);
+    renderFormTemplatesAdmin();
+    toast('Deleted');
+}
+
+// ─── FORM SUBMISSION VIEWER ──────────────────────────────────────────────────
+function _loadFormSubmissions() {
+    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
+    docSubmissions = raw.map(function(s) {
+        return {
+            id: s.id, name: s.formName, docType: s.docType,
+            camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
+            date: s.date, submittedAt: s.submittedAt,
+            filename: s.mode === 'digital' ? null : (s.filename || 'upload'),
+            folderId: s.folderId || null,
+            values: s.values || {}, signatureDataUrl: s.signatureDataUrl || null,
+            mode: s.mode || 'upload'
+        };
+    });
+    docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
+}
+
+function viewFormSubmission(subId) {
+    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
+    var s = raw.find(function(x){ return x.id === subId; }); if (!s) return;
+    var vals = s.values || {};
+    var rows = Object.entries(vals).map(function(kv){
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--slate-100);display:flex;gap:10px;">' +
+            '<div style="flex:1;font-size:.8rem;font-weight:600;color:var(--slate-700);">'+esc(kv[0])+'</div>' +
+            '<div style="flex:2;font-size:.82rem;color:var(--slate-900);">'+(kv[1]==='[signature]'?'<em>Signed</em>':esc(kv[1]))+'</div>' +
+        '</div>';
+    }).join('');
+    var sigHtml = s.signatureDataUrl ? '<div style="margin-top:14px;"><div style="font-size:.78rem;font-weight:600;color:var(--slate-700);margin-bottom:6px;">Signature</div><div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--slate-50);padding:4px;display:inline-block;"><img src="'+s.signatureDataUrl+'" style="max-width:300px;height:auto;display:block;"></div></div>' : '';
+    var html = '<div style="font-size:.85rem;font-weight:700;margin-bottom:10px;color:var(--slate-900);">'+esc(s.formName)+' — '+esc(s.camper)+'</div>' +
+               '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px;">Submitted '+esc(s.date)+(s.grade?' &nbsp;·&nbsp; '+esc(s.grade):'')+(s.bunk?' &nbsp;·&nbsp; '+esc(s.bunk):'')+'</div>' +
+               rows + sigHtml;
+    // Simple modal via overlay
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
+    el.innerHTML = '<div style="background:#fff;border-radius:var(--radius-lg);max-width:520px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:#fff;">' +
+            '<span style="font-size:.92rem;font-weight:700;">Form Submission</span>' +
+            '<button onclick="this.closest(\'[style*=fixed]\').remove()" style="background:none;border:1px solid var(--border-light);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.8rem;">Close</button>' +
+        '</div>' +
+        '<div style="padding:18px 20px;">'+html+'</div>' +
+    '</div>';
+    el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
+    document.body.appendChild(el);
+}
+
 // ─── PHOTOS ───────────────────────────────────────────────────────────────────
 async function buildIndex() {
     var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
@@ -1799,6 +2144,7 @@ function previewPhotos() {
 function boot() {
     renderDash();
     renderAdminMsgs('all');
+    _loadFormSubmissions();
 
     window.addEventListener('campistry-cloud-hydrated', function() {
         console.log('[Link Admin] Cloud hydrated — refreshing');
@@ -1833,6 +2179,15 @@ function boot() {
         if (e.key === 'campistry_link_v1') {
             if (window.CampistryLink) window.CampistryLink.refresh();
             if (currentMsgTab === 'inbox') renderAdminMsgs('all');
+        }
+        // Parent submitted a form — refresh submissions
+        if (e.key === FORM_SUB_KEY) {
+            _loadFormSubmissions();
+            if (currentMsgTab === 'forms') renderDocSubmissions(currentDocFilter, document.getElementById('docSearch') ? document.getElementById('docSearch').value : '');
+        }
+        // Admin saved form templates in Me page — refresh manage tab
+        if (e.key === 'campGlobalSettings_v1' && currentMsgTab === 'forms') {
+            renderFormTemplatesAdmin();
         }
     });
 }
