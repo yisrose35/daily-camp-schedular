@@ -4436,32 +4436,18 @@
                     }
                 }
 
-                // ★ durations[] BEST-FIT: when a special permits MULTIPLE durations,
-                //   hand the packer the real range (min..max) and prefer the LARGEST
-                //   (dIdeal=max) so it fills the available window with the largest
-                //   configured duration that fits — instead of always pinning to the
-                //   smallest (getSpecialDuration returns all[0]). Reuses the existing
-                //   flex-duration packing; periodMin granularity keeps the placed length
-                //   on a configured boundary. Single-duration specials stay pinned
-                //   (min==max==ideal, isFlexDuration=false) — unchanged behavior.
-                var _spDurSet = (getSpecialDurations(s.name, activityProperties, globalSettings) || []).slice().sort(function(a,b){return a-b;});
-                var _spMulti = _spDurSet.length > 1;
-                var _spDMin = _spMulti ? _spDurSet[0] : specificDuration;
-                var _spDMax = _spMulti ? _spDurSet[_spDurSet.length - 1] : specificDuration;
-                var _spDIdeal = _spMulti ? _spDurSet[_spDurSet.length - 1] : specificDuration;
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
-                    duration: _spMulti ? null : specificDuration,
-                    dMin: _spDMin || specialConstraints.dMin,
-                    dMax: _spDMax || specialConstraints.dMax,
-                    dIdeal: _spDIdeal || specialConstraints.dIdeal,
-                    isFlexDuration: _spMulti ? true : !specificDuration,
-                    _discreteDurations: _spMulti ? _spDurSet : null,
+                    duration: specificDuration,
+                    dMin: specificDuration || specialConstraints.dMin,
+                    dMax: specificDuration || specialConstraints.dMax,
+                    dIdeal: specificDuration || specialConstraints.dIdeal,
+                    isFlexDuration: !specificDuration,
                     capacity: getSpecialCapacity(s.name, activityProperties, globalSettings),
                     location, isScarce: scarce,
                     isIndoor: !isSpecialOnField(s.name, activityProperties, globalSettings),
                     prepDuration: effectivePrepDur,
-                    totalDuration: (_spDIdeal || specialConstraints.dIdeal) + effectivePrepDur,
+                    totalDuration: (specificDuration || specialConstraints.dIdeal) + effectivePrepDur,
                     timeWindow, _linkedPair: prepAttached && prepDuration > 0,
                     _flexPrep: (!prepAttached && prepDuration > 0) ? { duration: prepDuration, location: prepCfgEntry.location || null, sync: prepCfgEntry.sync || 'staggered' } : null,
                     _layer: specialLayer,
