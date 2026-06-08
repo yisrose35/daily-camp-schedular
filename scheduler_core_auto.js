@@ -5014,7 +5014,15 @@
                         if (!_canPickSpecialBySubcategory(sp, sl, result)) continue;
                         var d = sp.totalDuration || sp.dMin || sp.duration || 30;
                         if (d < 5) continue;
-                        avail.push({ name: sp.name, duration: d, item: sp });
+                        // ★ durations[] BEST-FIT: expose the special's full configured
+                        //   duration set so findExactSubsets can fill a window with the
+                        //   LARGEST configured duration that fits — not just the smallest
+                        //   (getSpecialDuration returns all[0]). Only when the base set
+                        //   contains d (i.e. no attached-prep offset confuses it); a
+                        //   single-duration special gets durs=[d] = unchanged behavior.
+                        var _durSet = (typeof getSpecialDurations === 'function' ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []);
+                        var _multiDur = _durSet.length > 1 && _durSet.indexOf(d) >= 0;
+                        avail.push({ name: sp.name, duration: d, durs: _multiDur ? _durSet.slice().sort(function (a, b) { return b - a; }) : [d], item: sp });
                     }
                     return avail;
                 }
@@ -5040,22 +5048,34 @@
                         }
                         if (sum > target || picked.length >= 4) return;
                         for (var i = idx; i < items.length; i++) {
-                            if (sum + items[i].duration > target) continue;
-                            var _sk = null;
-                            if (_subEnforced) {
-                                _sk = _gpCanonSub(items[i].item ? items[i].item.subcategory : items[i].subcategory);
-                                var _capV = _subCaps[_sk];
-                                if (_capV == null) continue; // subcategory not demanded by any layer
-                                if (_capV !== Infinity) {
-                                    var _already = (result.subcategoryAssigned && result.subcategoryAssigned[_sk]) || 0;
-                                    if (_already + (subCount[_sk] || 0) >= _capV) continue;
+                            // ★ durations[] BEST-FIT: try each of the special's configured
+                            //   durations (largest first) so the subset can fill the window
+                            //   with the largest that fits. A given special appears at most
+                            //   once per subset. Single-duration specials have one option =
+                            //   unchanged behavior.
+                            var _opts = items[i].durs || [items[i].duration];
+                            var _nameDup = false;
+                            for (var _pj = 0; _pj < picked.length; _pj++) { if (picked[_pj].name === items[i].name) { _nameDup = true; break; } }
+                            if (_nameDup) continue;
+                            for (var _oi = 0; _oi < _opts.length; _oi++) {
+                                var _od = _opts[_oi];
+                                if (sum + _od > target) continue;
+                                var _sk = null;
+                                if (_subEnforced) {
+                                    _sk = _gpCanonSub(items[i].item ? items[i].item.subcategory : items[i].subcategory);
+                                    var _capV = _subCaps[_sk];
+                                    if (_capV == null) continue; // subcategory not demanded by any layer
+                                    if (_capV !== Infinity) {
+                                        var _already = (result.subcategoryAssigned && result.subcategoryAssigned[_sk]) || 0;
+                                        if (_already + (subCount[_sk] || 0) >= _capV) continue;
+                                    }
                                 }
+                                picked.push({ name: items[i].name, duration: _od, item: items[i].item });
+                                if (_sk) subCount[_sk] = (subCount[_sk] || 0) + 1;
+                                recurse(i + 1, picked, sum + _od, subCount);
+                                if (_sk) subCount[_sk]--;
+                                picked.pop();
                             }
-                            picked.push(items[i]);
-                            if (_sk) subCount[_sk] = (subCount[_sk] || 0) + 1;
-                            recurse(i + 1, picked, sum + items[i].duration, subCount);
-                            if (_sk) subCount[_sk]--;
-                            picked.pop();
                         }
                     }
                     recurse(0, [], 0, {});
