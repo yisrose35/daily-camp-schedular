@@ -16,66 +16,168 @@
     console.log('[Live] Campistry Live v1.0 loading...');
 
     // =========================================================================
-    // STORAGE
+    // RENDER: ROLL CALL
     // =========================================================================
-    const STORAGE_KEY = 'campGlobalSettings_v1';
-    const LIVE_KEY = 'campistry_live_v1';
+    let _rcFilter = '';
 
-    function readGlobal() {
-        // integration_hooks provides _localCache (full state, roster not stripped)
-        if (typeof window.loadGlobalSettings === 'function') {
-            try {
-                var s = window.loadGlobalSettings();
-                if (s && (s.app1 || s.campStructure || s.campistryMe)) return s;
-            } catch (_) {}
+    function rcIsPresent(name, today) {
+        return !today.absences.some(a => a.name === name) && today.attendance[name] !== false;
+    }
+
+    function rcInitials(name) {
+        return String(name).split(' ').map(p => p[0] || '').join('').slice(0, 2).toUpperCase();
+    }
+
+    function rcRow(name, c, today, showBunk) {
+        const present = rcIsPresent(name, today);
+        const check = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>';
+        const x = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        return '<div class="rc-row ' + (present ? 'present' : 'absent') + '" data-camper="' + esc(name) + '" onclick="CampistryLive.toggleByEl(this)">' +
+            '<div class="rc-avatar">' + esc(rcInitials(name)) + '</div>' +
+            '<div class="rc-info">' +
+            '<div class="rc-name">' + esc(name) + '</div>' +
+            (showBunk && c.bunk ? '<div class="rc-detail">' + esc(c.bunk) + (c.division ? ' · ' + esc(c.division) : '') + '</div>' : '') +
+            '</div>' +
+            '<div class="rc-check">' + (present ? check : x) + '</div>' +
+            '</div>';
+    }
+
+    function renderRollCall() {
+        const struct = getStructure();
+        const roster = getRoster();
+        const today = getTodayData();
+        const body = document.getElementById('rollCallBody');
+        if (!body) return;
+
+        const savedScroll = body.closest('.live-page')?.scrollTop || window.scrollY;
+        const filter = _rcFilter.toLowerCase().trim();
+
+        let html = '<div class="rc-search-wrap">' +
+            '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>' +
+            '<input id="rcSearchInput" type="text" placeholder="Search camper…" value="' + esc(filter) + '" oninput="CampistryLive.filterRollCall(this.value)" autocomplete="off">' +
+            (filter ? '<button class="rc-clear" onclick="CampistryLive.clearRcFilter()">&times;</button>' : '') +
+            '</div>';
+
+        if (filter) {
+            const matches = Object.entries(roster)
+                .filter(([name]) => name.toLowerCase().includes(filter))
+                .sort(([a], [b]) => a.localeCompare(b));
+
+            if (!matches.length) {
+                html += '<div class="empty-state">No campers matching “' + esc(filter) + '”</div>';
+            } else {
+                html += '<div class="rc-division"><div class="rc-div-header" style="border-left:none">' +
+                    '<div class="rc-div-left"><div class="rc-div-name">Search results</div><div class="rc-div-sub">' + matches.length + ' camper' + (matches.length !== 1 ? 's' : '') + ' found</div></div></div>';
+                matches.forEach(([name, c]) => { html += rcRow(name, c, today, true); });
+                html += '</div>';
+            }
+        } else {
+            const divEntries = Object.entries(struct);
+            if (!divEntries.length) {
+                html += '<div class="empty-state">No divisions configured. Set up camp structure in Campistry Me.</div>';
+            }
+
+            divEntries.forEach(([divName, divData]) => {
+                const color = divData.color || '#3b82f6';
+                const divCampers = Object.entries(roster).filter(([, c]) => c.division === divName);
+                if (!divCampers.length) return;
+
+                const presentInDiv = divCampers.filter(([n]) => rcIsPresent(n, today)).length;
+                const pct = divCampers.length ? Math.round((presentInDiv / divCampers.length) * 100) : 0;
+
+                // Group by bunk
+                const bunkMap = {};
+                divCampers.forEach(([name, c]) => {
+                    const bk = c.bunk || '—';
+                    if (!bunkMap[bk]) bunkMap[bk] = [];
+                    bunkMap[bk].push([name, c]);
+                });
+                Object.values(bunkMap).forEach(list => list.sort(([a], [b]) => a.localeCompare(b)));
+
+                html += '<div class="rc-division" style="border-left:4px solid ' + esc(color) + '">';
+                html += '<div class="rc-div-header">' +
+                    '<div class="rc-div-left"><div class="rc-div-name">' + esc(divName) + '</div>' +
+                    '<div class="rc-div-sub">' + divCampers.length + ' campers &nbsp;&middot;&nbsp; ' + Object.keys(bunkMap).length + ' bunk' + (Object.keys(bunkMap).length !== 1 ? 's' : '') + '</div></div>' +
+                    '<div class="rc-div-right">' +
+                    '<div class="rc-div-count">' + presentInDiv + ' <span>/ ' + divCampers.length + '</span></div>' +
+                    '<div class="rc-div-bar"><div class="rc-div-bar-fill" style="width:' + pct + '%;background:' + esc(color) + '"></div></div>' +
+                    '</div></div>';
+
+                Object.entries(bunkMap).forEach(([bunkName, campers]) => {
+                    const presentInBunk = campers.filter(([n]) => rcIsPresent(n, today)).length;
+                    html += '<div class="rc-bunk">' +
+                        '<div class="rc-bunk-header">' +
+                        '<span class="rc-bunk-name">' + esc(bunkName) + '</span>' +
+                        '<span class="rc-bunk-count">' + presentInBunk + '/' + campers.length + '</span>' +
+                        '<button class="rc-bunk-all" data-bunk="' + esc(bunkName) + '" onclick="event.stopPropagation();CampistryLive.markBunkByEl(this)">All Present</button>' +
+                        '</div>';
+                    campers.forEach(([name, c]) => { html += rcRow(name, c, today, false); });
+                    html += '</div>';
+                });
+
+                html += '</div>';
+            });
         }
-        try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}'); } catch (e) { return {}; }
-    }
-    function getRoster() { const g = readGlobal(); return (g.app1 && g.app1.camperRoster) || {}; }
-    function getStructure() { return readGlobal().campStructure || {}; }
-    function getCampName() { const g = readGlobal(); return g.camp_name || g.campName || 'Camp'; }
 
-    function getLiveData() {
-        try { return JSON.parse(localStorage.getItem(LIVE_KEY) || '{}'); } catch (e) { return {}; }
-    }
-    function saveLiveData(data) {
-        try { data.updated_at = new Date().toISOString(); localStorage.setItem(LIVE_KEY, JSON.stringify(data)); } catch (e) { console.error('[Live] Save failed', e); }
+        body.innerHTML = html;
+
+        if (filter) {
+            const inp = document.getElementById('rcSearchInput');
+            if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+        }
     }
 
-    function getTodayKey() {
-        const d = new Date(); d.setHours(12, 0, 0, 0);
-        return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    function filterRollCall(val) {
+        _rcFilter = val;
+        renderRollCall();
     }
 
-    function getTodayData() {
-        const data = getLiveData();
-        const key = getTodayKey();
-        if (!data[key]) data[key] = { attendance: {}, absences: [], earlyPickups: [], notes: '' };
-        return data[key];
+    function toggleAttendance(name) {
+        const today = getTodayData();
+        today.absences = today.absences.filter(a => a.name !== name);
+        if (today.attendance[name] === false) {
+            delete today.attendance[name];
+        } else {
+            today.attendance[name] = false;
+        }
+        saveTodayData(today);
+        renderRollCall();
+        renderDashboard();
+        toast(name + (today.attendance[name] === false ? ' marked absent' : ' marked present'));
     }
 
-    function saveTodayData(today) {
-        const data = getLiveData();
-        data[getTodayKey()] = today;
-        saveLiveData(data);
+    function markAllPresent() {
+        const today = getTodayData();
+        today.attendance = {};
+        today.absences = [];
+        saveTodayData(today);
+        renderRollCall();
+        renderDashboard();
+        toast('All campers marked present');
     }
 
-    // =========================================================================
-    // HELPERS
-    // =========================================================================
-    const esc = s => { if (s == null) return ''; const m = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#x27;' }; return String(s).replace(/[&<>"']/g, c => m[c]); };
-
-    let _toastTimer = null;
-    function toast(msg, type) {
-        const el = document.getElementById('toastEl');
-        if (!el) return;
-        el.textContent = msg;
-        el.className = 'toast' + (type === 'error' ? ' error' : '');
-        clearTimeout(_toastTimer);
-        requestAnimationFrame(() => { el.classList.add('show'); _toastTimer = setTimeout(() => el.classList.remove('show'), 2500); });
+    function markBunkPresent(bunkName) {
+        const roster = getRoster();
+        const today = getTodayData();
+        let count = 0;
+        Object.entries(roster).forEach(([name, c]) => {
+            if (c.bunk === bunkName) {
+                today.absences = today.absences.filter(a => a.name !== name);
+                delete today.attendance[name];
+                count++;
+            }
+        });
+        saveTodayData(today);
+        renderRollCall();
+        renderDashboard();
+        toast(esc(bunkName) + ' — all ' + count + ' marked present');
     }
-    function openModal(id) { const el = document.getElementById(id); if (el) el.classList.add('open'); }
-    function closeModal(id) { const el = document.getElementById(id); if (el) el.classList.remove('open'); }
+
+    function clearRcFilter() { _rcFilter = ''; renderRollCall(); }
+    function filterRollCall(val) { _rcFilter = val || ''; renderRollCall(); }
+    function toggleByEl(el) { toggleAttendance(el.getAttribute('data-camper')); }
+    function markBunkByEl(el) { markBunkPresent(el.getAttribute('data-bunk')); }
+
 
     function getCurrentTimeMinutes() {
         const now = new Date();
@@ -947,7 +1049,12 @@ document.querySelectorAll('[data-qr]').forEach(function(el){
     window.CampistryLive = {
         refresh,
         toggleAttendance,
+        toggleByEl,
         markAllPresent,
+        markBunkPresent,
+        markBunkByEl,
+        filterRollCall,
+        clearRcFilter,
         openAbsenceModal,
         filterAbsenceSearch,
         saveAbsence,
