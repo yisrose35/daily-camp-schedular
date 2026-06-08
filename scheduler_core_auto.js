@@ -21599,23 +21599,13 @@
             catch (e) { warn('[5] Sync: ' + e.message); }
         }
 
-        // ★ Save rotation counts to cloud so next generation (or another scheduler) sees them
-        if (window.RotationCloud?.save) {
-            try {
-                const rotDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-                await window.RotationCloud.save(rotDateKey, window.scheduleAssignments || {});
-                log('[5] ☁️ Rotation counts saved to cloud');
-            } catch (e) { warn('[5] RotationCloud save: ' + e.message); }
-        }
-        // ★ Also keep local historicalCounts in sync so the rotation tab works
-        //   when cloud is unavailable (offline, missing campId, partial sync).
-        //   Rebuild scans the freshly-saved allDaily and is deterministic.
-        if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
-            try {
-                window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
-                log('[5] 🧮 Rebuilt local historicalCounts');
-            } catch (e) { warn('[5] historicalCounts rebuild: ' + e.message); }
-        }
+        // ★ ROTATION COUNTS MOVED TO STEP 6.9 (below): STEP 5 runs BEFORE the post-complete
+        //   passes (FQ-REOPT, ACTIVE-PAIRING, TIME-RELOC, DROP-REFILL, FN-22, STEP 6.6 dead-cont
+        //   repair, 6.7 time-rule scrub, 6.8 share-fill) mutate window.scheduleAssignments, so
+        //   counting here recorded the PRE-PASS "intended" grid — not what was actually placed.
+        //   Nothing between here and the dispatch reads historicalCounts (it is only read at
+        //   gen-start), so deferring the count write to the FINAL grid is behavior-neutral for
+        //   the passes and makes rotation counts match the actual saved schedule.
 
         const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
         log('\n═══════════════════════════════════════════════════════════');
@@ -23533,6 +23523,35 @@
                 else log('[STEP 6.8 SHARE-FILL] no shareable/empty non-repeat fill for remaining Free slots');
             } catch (_eSF) { try { warn('[STEP 6.8 SHARE-FILL] error: ' + (_eSF && _eSF.message)); } catch (_x) {} }
         })();
+
+        // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
+        //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
+        //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes
+        //   the daily store with the final grid first so rebuildHistoricalCounts (which scans
+        //   loadAllDailyData) counts the post-pass schedule; RotationCloud.save extracts counts
+        //   straight from the passed final grid. The generation-complete handler also recomputes
+        //   from the final grid — this in-solver pass makes the solver self-sufficient.
+        try {
+            const _rcDate = currentDate || window.currentScheduleDate || '';
+            if (_rcDate) {
+                try {
+                    const _DK = 'campDailyData_v1';
+                    const _all = JSON.parse(localStorage.getItem(_DK) || '{}');
+                    const _ex = _all[_rcDate] || {};
+                    _ex.scheduleAssignments = window.scheduleAssignments || {};
+                    _all[_rcDate] = _ex;
+                    localStorage.setItem(_DK, JSON.stringify(_all));
+                } catch (_e69a) { /* non-fatal: rebuild still runs on the prior store */ }
+                if (window.RotationCloud?.save) {
+                    try { await window.RotationCloud.save(_rcDate, window.scheduleAssignments || {}); log('[6.9] ☁️ Rotation counts saved from FINAL grid'); }
+                    catch (_e69b) { warn('[6.9] RotationCloud save: ' + (_e69b && _e69b.message)); }
+                }
+                if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                    try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); log('[6.9] 🧮 Rebuilt local historicalCounts from FINAL grid'); }
+                    catch (_e69c) { warn('[6.9] historicalCounts rebuild: ' + (_e69c && _e69c.message)); }
+                }
+            }
+        } catch (_e69) { try { warn('[6.9] rotation-count error: ' + (_e69 && _e69.message)); } catch (_x) {} }
 
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         // ★ FN-14 DATE-DESYNC FIX: stamp the complete event with the date this gen
