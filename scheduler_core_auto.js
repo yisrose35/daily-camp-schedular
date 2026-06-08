@@ -2250,9 +2250,6 @@
             if (comboLookup) {
                 const normFn = (n) => (n || '').toLowerCase().trim();
                 const normField = normFn(fieldName);
-                if (normField === 'elbow tag' || normField === 'lineup') {
-                    try { var _dbg = JSON.parse(localStorage.getItem('__comboDbg') || '[]'); if (_dbg.length < 60) { _dbg.push(fieldName + '|s' + startMin + '|combos:' + Object.keys(comboLookup.combinedToSubs || {}).join(',') + '>' + Object.keys(comboLookup.subToCombined || {}).join(',') + '|ET' + ((fieldLedger['Elbow Tag'] && fieldLedger['Elbow Tag'].claims.length) || 'X') + '|LU' + ((fieldLedger['Lineup'] && fieldLedger['Lineup'].claims.length) || 'X')); localStorage.setItem('__comboDbg', JSON.stringify(_dbg)); } } catch (e) {}
-                }
 
                 // Case 1: requesting the combined field — block if any sub-field is in use
                 const subs = comboLookup.combinedToSubs[normField];
