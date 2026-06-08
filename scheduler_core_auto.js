@@ -20695,6 +20695,68 @@
         })();
         log('[STEP 4.97] Null-bucket finalizer ended.');
 
+        // =====================================================================
+        // STEP 4.97b — GUARANTEE FULL DAY: fill any remaining Free/empty slot
+        // =====================================================================
+        // The solver + null-bucket finalizer can leave a schedulable slot Free when
+        // every candidate in the layer's preferred pool is rotation-exhausted (no-repeat
+        // / frequency), even though a valid field+activity is physically available (e.g.
+        // an empty field hosting an activity the bunk hasn't done). This final pass fills
+        // EVERY remaining Free slot with the best VALID activity. HARD CONFIG IS NEVER
+        // VIOLATED: each candidate must pass _validateWritePlacement (access / time-rules
+        // / DA-disabled / field-preferences) AND the field must be under capacity AND
+        // either empty or used only by THIS grade at that window (so no cross-division
+        // sharing violation). It PREFERS an activity the bunk hasn't done today; only if
+        // none is available does it allow a same-day repeat (a soft preference). A slot
+        // is left Free ONLY when no hostable+valid activity exists anywhere at that time.
+        (function _guaranteeFullDayFill() {
+            try {
+                const _sa = window.scheduleAssignments || {};
+                const _dt = window.divisionTimes || {};
+                const _gs = getGlobalSettings();
+                const _allF = ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                if (!_allF.length) return;
+                const _bg = {};
+                Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
+                const _nm = function (s) { return String(s || '').toLowerCase().trim(); };
+                const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                const _isFree = function (en) { if (!en) return true; if (en.continuation) return false; const a = en._activity || en.sport || en.event; return !a || /^free$/i.test(a) || en.field === 'Free'; };
+                const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
+                let _filled = 0, _leftFree = 0;
+                Object.keys(_sa).forEach(function (bunk) {
+                    const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    const grade = _bg[bunk]; const ds = _dt[grade] || [];
+                    const done = {}; slots.forEach(function (en) { if (en && !en.continuation) { const a = en._activity || en.sport || en.event; if (a) done[_nm(a)] = true; } });
+                    slots.forEach(function (en, idx) {
+                        if (!_isFree(en)) return;
+                        const s = (en && en._startMin != null) ? en._startMin : (ds[idx] && ds[idx].startMin);
+                        const e = (en && en._endMin != null) ? en._endMin : (ds[idx] && ds[idx].endMin);
+                        if (s == null || e == null) return;
+                        let bestNew = null, bestRepeat = null;
+                        for (let fi = 0; fi < _allF.length && !bestNew; fi++) {
+                            const F = _allF[fi];
+                            const o = _occ(F.name, s, e, bunk);
+                            if (o.count >= _cap(F.name)) continue;                           // field at capacity
+                            if (o.count > 0 && !(o.divs.length === 1 && o.divs[0] === grade)) continue; // avoid cross-division sharing
+                            for (let ai = 0; ai < F.activities.length; ai++) {
+                                const A = F.activities[ai];
+                                if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; // hard config gate
+                                if (!done[_nm(A)]) { bestNew = { field: F.name, act: A }; break; }
+                                else if (!bestRepeat) bestRepeat = { field: F.name, act: A };
+                            }
+                        }
+                        const pick = bestNew || bestRepeat;
+                        if (pick) {
+                            slots[idx] = { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'guarantee-full-fill' + (bestNew ? '' : '-repeat'), continuation: false };
+                            done[_nm(pick.act)] = true;
+                            _filled++;
+                        } else _leftFree++;
+                    });
+                });
+                if (_filled || _leftFree) log('[STEP 4.97b] Guarantee-full-day: filled ' + _filled + ' slot(s), left ' + _leftFree + ' Free (no valid option)');
+            } catch (_eGF) { try { warn('[STEP 4.97b] guarantee-full error: ' + (_eGF && _eGF.message)); } catch (_e2) {} }
+        })();
+
         // ★ STEP 4.98 — IRON GATE: final scrub for DA Resources daily time rules.
         //   No matter which path placed an activity, this pass clears any slot
         //   that overlaps an Unavailable window or falls outside an Available
