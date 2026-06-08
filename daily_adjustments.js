@@ -4737,6 +4737,15 @@ async function runOptimizer() {
     _daOptimizerRunning = true;
     try {
 
+    // ★ FN-14 (final): snapshot the gen date NOW. The txn-wait + FN-17 guard above just
+    //   confirmed the date transition has settled and picker === window.currentScheduleDate,
+    //   so this is the AUTHORITATIVE date the user selected. runAutoScheduler (L873) reads
+    //   window._activeGenDate FIRST, so the gen targets THIS date even if
+    //   window.currentScheduleDate transiently reverts to the previous date mid-gen (the
+    //   accumulated-async-state race that left a freshly-selected date empty). Cleared in
+    //   the finally below.
+    try { window._activeGenDate = window.currentScheduleDate || (document.getElementById('calendar-date-picker') || {}).value || ''; } catch (_eSnap) {}
+
     // ★★★ v3.13: Apply generation scope from settings picker ★★★
     if (_generationScope && _generationScope.size > 0) {
         window.selectedDivisionsForGeneration = [..._generationScope];

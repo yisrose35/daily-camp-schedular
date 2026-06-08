@@ -870,11 +870,14 @@
             warn('Failed to merge dailyFieldAvailability: ' + e.message);
         }
 
-        const currentDate = window.currentScheduleDate || window.currentDate || '';
-        // ★ FN-14: expose the gen-start date so post-gen awaited saves (runOptimizer's
-        //   verified save) target THIS date, not a window.currentScheduleDate that may
-        //   have reverted to the previous date mid-gen. Cleared in the top-level finally.
-        try { window._activeGenDate = currentDate; } catch (_e) {}
+        // ★ FN-14 (final): prefer the date runOptimizer snapshotted at entry
+        //   (window._activeGenDate, set right AFTER the FN-17 guard confirmed
+        //   picker===currentScheduleDate) over window.currentScheduleDate — which can
+        //   transiently revert to the PREVIOUS date mid-gen (accumulated-async-state race
+        //   that left a freshly-selected date empty). For a direct/console call that
+        //   bypassed runOptimizer, fall back to the live globals and seed _activeGenDate.
+        const currentDate = window._activeGenDate || window.currentScheduleDate || window.currentDate || '';
+        try { if (!window._activeGenDate) window._activeGenDate = currentDate; } catch (_e) {}
         let dayName = 'Monday';
         if (currentDate) {
             const parts = currentDate.split('-').map(Number);
