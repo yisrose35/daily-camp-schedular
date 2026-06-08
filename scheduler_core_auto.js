@@ -20756,6 +20756,13 @@
                 const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
                 const _isFree = function (en) { if (!en) return true; if (en.continuation) return false; const a = en._activity || en.sport || en.event; return !a || /^free$/i.test(a) || en.field === 'Free'; };
                 const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
+                // ★ Issue-1 cross-day rotation: prefer the least-recently-done valid activity
+                //   (lowest loadRotationHistory timestamp; 0 = never done) so coverage-fill
+                //   never parks a bunk on the same filler activity day after day. History is
+                //   keyed by RAW _activity name and stamped at generation-complete (prior days
+                //   only during this gen), so a lower stamp == done longer ago == preferred.
+                const _rhB = (function () { try { const _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
+                const _rotTs = function (b, a) { try { const _m = _rhB[b]; const _t = _m && _m[a]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
                 let _filled = 0, _leftFree = 0;
                 Object.keys(_sa).forEach(function (bunk) {
                     const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
@@ -20766,8 +20773,8 @@
                         const s = (en && en._startMin != null) ? en._startMin : (ds[idx] && ds[idx].startMin);
                         const e = (en && en._endMin != null) ? en._endMin : (ds[idx] && ds[idx].endMin);
                         if (s == null || e == null) return;
-                        let bestNew = null, bestRepeat = null;
-                        for (let fi = 0; fi < _allF.length && !bestNew; fi++) {
+                        let bestNew = null, bestNewTs = Infinity, bestRepeat = null, bestRepeatTs = Infinity;
+                        for (let fi = 0; fi < _allF.length; fi++) {   // ★ Issue-1: scan ALL fields (no early break) to rank by cross-day recency
                             const F = _allF[fi];
                             const o = _occ(F.name, s, e, bunk);
                             if (o.count >= _cap(F.name)) continue;                           // field at capacity
@@ -20775,8 +20782,9 @@
                             for (let ai = 0; ai < F.activities.length; ai++) {
                                 const A = F.activities[ai];
                                 if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; // hard config gate
-                                if (!done[_nm(A)]) { bestNew = { field: F.name, act: A }; break; }
-                                else if (!bestRepeat) bestRepeat = { field: F.name, act: A };
+                                const _ts = _rotTs(bunk, A);   // ★ Issue-1: lower = less recently done = preferred (0 = never)
+                                if (!done[_nm(A)]) { if (_ts < bestNewTs) { bestNew = { field: F.name, act: A }; bestNewTs = _ts; } }
+                                else { if (_ts < bestRepeatTs) { bestRepeat = { field: F.name, act: A }; bestRepeatTs = _ts; } }
                             }
                         }
                         const pick = bestNew || bestRepeat;
@@ -23362,6 +23370,9 @@
                 const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
                 const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
                 const _pbsFor = function (grade, bunk) { return (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]) || null; };
+                // ★ Issue-1 cross-day rotation: same recency-aware preference as 4.97b.
+                const _rhB = (function () { try { const _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
+                const _rotTs = function (b, a) { try { const _m = _rhB[b]; const _t = _m && _m[a]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
                 let _dead = 0, _filled = 0, _free = 0;
                 Object.keys(_sa).forEach(function (bunk) {
                     const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
@@ -23373,8 +23384,8 @@
                         const per = pbs[idx]; if (!per || per.startMin == null || per.endMin == null) return;
                         const s = per.startMin, e = per.endMin;
                         _dead++;
-                        let bestNew = null, bestRepeat = null;
-                        for (let fi = 0; fi < _allF.length && !bestNew; fi++) {
+                        let bestNew = null, bestNewTs = Infinity, bestRepeat = null, bestRepeatTs = Infinity;
+                        for (let fi = 0; fi < _allF.length; fi++) {   // ★ Issue-1: scan ALL fields (no early break) to rank by cross-day recency
                             const F = _allF[fi];
                             const o = _occ(F.name, s, e, bunk);
                             if (o.count >= _cap(F.name)) continue;                            // field at capacity
@@ -23382,8 +23393,9 @@
                             for (let ai = 0; ai < F.activities.length; ai++) {
                                 const A = F.activities[ai];
                                 if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; // hard config gate
-                                if (!done[_nm(A)]) { bestNew = { field: F.name, act: A }; break; }
-                                else if (!bestRepeat) bestRepeat = { field: F.name, act: A };
+                                const _ts = _rotTs(bunk, A);   // ★ Issue-1: lower = less recently done = preferred (0 = never)
+                                if (!done[_nm(A)]) { if (_ts < bestNewTs) { bestNew = { field: F.name, act: A }; bestNewTs = _ts; } }
+                                else { if (_ts < bestRepeatTs) { bestRepeat = { field: F.name, act: A }; bestRepeatTs = _ts; } }
                             }
                         }
                         const pick = bestNew || bestRepeat;
@@ -23483,6 +23495,9 @@
                 var _capCfg = {}; ((_app1 && _app1.fields) || []).forEach(function (f) { if (f && f.name) { var _sw = f.sharableWith || {}; if (_sw.capacity != null) _capCfg[f.name] = _sw.capacity; } });
                 var _cap = function (fn) { if (_capCfg[fn] != null) return _capCfg[fn]; try { var _g = window.getFieldCapacity && window.getFieldCapacity(fn); if (_g != null) return _g; } catch (e) {} return 1; };
                 var _occ = function (fn, s, e, exclB) { var c = 0, dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; var arr = _sa[b]; if (!Array.isArray(arr)) return; var ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; var es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
+                // ★ Issue-1 cross-day rotation: same recency-aware preference as 4.97b.
+                var _rhB = (function () { try { var _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
+                var _rotTs = function (b, a) { try { var _m = _rhB[b]; var _t = _m && _m[a]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
                 var _filled = 0, _shared = 0, _det = [];
                 Object.keys(_sa).forEach(function (bunk) {
                     var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
@@ -23494,8 +23509,8 @@
                         if (!(!a0 || /^free$/i.test(a0) || en.field === 'Free')) return;           // only Free slots
                         if (en._intentionalFree || en._source === 'bunk-delete-override') return;    // user-intended Free
                         var s = en._startMin, e = en._endMin; if (s == null || e == null) return;
-                        var pick = null, isShared = false;
-                        for (var fi = 0; fi < _allF.length && !pick; fi++) {
+                        var pick = null, isShared = false, _pickTs = Infinity;
+                        for (var fi = 0; fi < _allF.length; fi++) {   // ★ Issue-1: scan ALL fields to rank by cross-day recency
                             var F = _allF[fi];
                             var o = _occ(F.name, s, e, bunk);
                             if (o.count >= _cap(F.name)) continue;                                          // field full
@@ -23504,7 +23519,7 @@
                                 var A = F.activities[ai];
                                 if (done[_nm(A)]) continue;                                                 // non-repeat only
                                 if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue;
-                                pick = { field: F.name, act: A }; isShared = o.count > 0; break;
+                                var _ts = _rotTs(bunk, A); if (_ts < _pickTs) { pick = { field: F.name, act: A }; isShared = o.count > 0; _pickTs = _ts; }   // ★ Issue-1: least-recently-done wins
                             }
                         }
                         if (pick) {

@@ -4916,6 +4916,14 @@ async function runOptimizer() {
                         detail: { date: window.currentScheduleDate || new Date().toISOString().split('T')[0], mode: 'auto' }
                     }));
                 } catch (_) { /* non-fatal */ }
+                // ★ FN-26: the gen + awaited verified save are DONE here. Release the
+                //   re-entrancy guard BEFORE the cosmetic success modal — otherwise
+                //   `await daShowAlert` blocks until the user dismisses it, holding
+                //   _daOptimizerRunning=true and locking out the next Generate (the
+                //   "guard sticks until reload" symptom under back-to-back gens). The
+                //   modal is blocking for a real user, so no overlap can occur; the
+                //   finally below still clears it as an idempotent backstop.
+                _daOptimizerRunning = false;
                 await daShowAlert("✅ Schedule Generated!");
                 window.showTab?.('schedule');
                 const schedEl = document.getElementById('scheduleTable');
@@ -5205,6 +5213,7 @@ if (success) {
           }));
       } catch (e) { /* non-fatal */ }
 
+      _daOptimizerRunning = false; // ★ FN-26: release guard before cosmetic modal (see auto path) so an undismissed "Generated!" modal never locks out the next gen
       await daShowAlert("✅ Schedule Generated!");
       window.showTab?.('schedule');
       // Force full re-render with clean state
