@@ -20747,13 +20747,25 @@
             try {
                 const _sa = window.scheduleAssignments || {};
                 const _dt = window.divisionTimes || {};
-                const _gs = getGlobalSettings();
-                const _allF = ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                // ★ FN-25c: source fields from the DURABLE app1 config. getGlobalSettings()
+                //   returns {} mid/post-gen (the FN-24 disease) → _allF was empty → this
+                //   whole guarantee-fill pass bailed at the length check, leaving fillable
+                //   Free slots uncovered. _fn24DurableApp1() prefers live getGlobalSettings
+                //   when populated (identical behavior) and falls back to the durable
+                //   localStorage config otherwise. Mirrors STEP 6.7/6.8/_validateWritePlacement.
+                const _app1 = _fn24DurableApp1();
+                const _allF = ((_app1 && _app1.fields) || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
                 if (!_allF.length) return;
                 const _bg = {};
                 Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
                 const _nm = function (s) { return String(s || '').toLowerCase().trim(); };
-                const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                // ★ FN-25c: durable sharing capacity. getFieldCapacity() also returns null
+                //   when getGlobalSettings() is empty mid-gen → _cap fell back to 1, so every
+                //   same_division cap-2 field looked FULL and this pass never shared onto a
+                //   half-full field. Read sharableWith.capacity from durable config first
+                //   (mirrors STEP 6.8's FN-25b fix).
+                const _capCfg = {}; ((_app1 && _app1.fields) || []).forEach(function (f) { if (f && f.name) { var _sw = f.sharableWith || {}; if (_sw.capacity != null) _capCfg[f.name] = _sw.capacity; } });
+                const _cap = function (fn) { if (_capCfg[fn] != null) return _capCfg[fn]; try { var _g = window.getFieldCapacity && window.getFieldCapacity(fn); if (_g != null) return _g; } catch (e) {} return 1; };
                 const _isFree = function (en) { if (!en) return true; if (en.continuation) return false; const a = en._activity || en.sport || en.event; return !a || /^free$/i.test(a) || en.field === 'Free'; };
                 const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
                 // ★ Issue-1 cross-day rotation: prefer the least-recently-done valid activity
@@ -23351,13 +23363,20 @@
             try {
                 const _sa = window.scheduleAssignments || {};
                 const _dt = window.divisionTimes || {};
-                const _gs = getGlobalSettings();
-                const _allF = ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                // ★ FN-25c: durable field source (see STEP 4.97b). getGlobalSettings() is {}
+                //   mid/post-gen, which bailed this dead-continuation repair entirely —
+                //   leaving stranded continuations as un-fillable dead slots that STEP 6.8
+                //   then skips (it ignores continuation slots). Use the durable app1 config.
+                const _app1 = _fn24DurableApp1();
+                const _allF = ((_app1 && _app1.fields) || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
                 if (!_allF.length) return;
                 const _bg = {};
                 Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
                 const _nm = function (s) { return String(s || '').toLowerCase().trim(); };
-                const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                // ★ FN-25c: durable sharing capacity (mirrors STEP 6.8 — getFieldCapacity()
+                //   returns null when getGlobalSettings() is empty → cap-2 fields looked FULL).
+                const _capCfg = {}; ((_app1 && _app1.fields) || []).forEach(function (f) { if (f && f.name) { var _sw = f.sharableWith || {}; if (_sw.capacity != null) _capCfg[f.name] = _sw.capacity; } });
+                const _cap = function (fn) { if (_capCfg[fn] != null) return _capCfg[fn]; try { var _g = window.getFieldCapacity && window.getFieldCapacity(fn); if (_g != null) return _g; } catch (e) {} return 1; };
                 const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
                 const _pbsFor = function (grade, bunk) { return (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]) || null; };
                 // ★ Issue-1 cross-day rotation: same recency-aware preference as 4.97b.
