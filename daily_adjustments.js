@@ -4866,6 +4866,23 @@ async function runOptimizer() {
             } catch (_eIron) { console.warn('[IRON GATE INLINE] error: ' + _eIron.message); }
             delete window.selectedDivisionsForGeneration;
             if (success) {
+                // ★ FN-14 SAVE-SERIALIZATION: persist THIS date's schedule (awaited +
+                //   verified) BEFORE the gen is considered complete — before the
+                //   "✅ Generated" alert and before _daOptimizerRunning clears (L~5177
+                //   finally). Previously the cloud save fired asynchronously via the
+                //   generation-complete event, so a rapid next-gen or date-switch could
+                //   run — and the freshly-generated schedule could be lost — before its
+                //   save landed (the 07-10-empty data loss seen in testing).
+                //   verifiedScheduleSave has its own cross-date guard (refuses if memory
+                //   no longer belongs to this date), so this can never write the wrong
+                //   day's data; worst case it's a no-op deduped save.
+                try {
+                    const _genDate = window.currentScheduleDate;
+                    if (_genDate && window.verifiedScheduleSave) {
+                        await window.verifiedScheduleSave(_genDate);
+                        console.log('[Optimizer] ✅ post-gen verified save confirmed for ' + _genDate);
+                    }
+                } catch (_eSerSave) { console.warn('[Optimizer] post-gen verified save failed: ' + (_eSerSave && _eSerSave.message)); }
                 // Match the manual builder's completion flow: confirm popup,
                 // then jump to the schedule view with a clean re-render.
                 try {
