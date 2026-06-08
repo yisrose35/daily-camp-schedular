@@ -253,21 +253,20 @@
     <!-- ── INBOX ─────────────────────────────────────── -->
     <div id="msgTabInbox">
         <div id="adminMsgListView">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-                <div class="lk-tabs" style="margin-bottom:0;border-bottom:none;">
-                    <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
-                    <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+            <!-- Read / Unread tabs -->
+            <div class="lk-tabs" style="margin-bottom:10px;">
+                <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+            </div>
+            <!-- Filter bar -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+                <div style="flex:1;min-width:160px;position:relative;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" class="lk-input" id="inboxSearch" placeholder="Search name, camper, subject…" style="padding-left:32px;" oninput="onInboxFilter()">
                 </div>
-                <div style="display:flex;align-items:center;gap:8px;">
-                    <a href="campistry_live.html" class="btn btn-secondary btn-sm" style="display:inline-flex;align-items:center;gap:5px;font-size:.75rem;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-                        Pickup requests → Live
-                    </a>
-                    <button class="btn btn-primary btn-sm" onclick="switchMsgTab('outbox',null)" style="flex-shrink:0;">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Compose
-                    </button>
-                </div>
+                <select class="lk-input" id="inboxFGrade" style="max-width:130px;" onchange="onInboxFilter()"><option value="">All Grades</option></select>
+                <select class="lk-input" id="inboxFDiv"   style="max-width:140px;" onchange="onInboxFilter()"><option value="">All Divisions</option></select>
+                <select class="lk-input" id="inboxFBunk"  style="max-width:130px;" onchange="onInboxFilter()"><option value="">All Bunks</option></select>
             </div>
             <div class="lk-card" style="padding:0;overflow:hidden;">
                 <div id="adminMsgList"></div>
@@ -303,7 +302,7 @@
                     </select>
                     <select class="lk-input" id="cScopeVal" style="max-width:200px;display:none;" onchange="onScopeValChange()"></select>
                     <div id="cIndivWrap" style="display:none;flex:1;min-width:180px;position:relative;">
-                        <input type="text" class="lk-input" id="cIndivSearch" placeholder="Search parent or camper..." oninput="onIndivSearch(this.value)" autocomplete="off">
+                        <input type="text" class="lk-input" id="cIndivSearch" placeholder="Search by camper or parent name — add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
                         <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
                     </div>
                     <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;"></div>
@@ -625,7 +624,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
-    if (tab === 'inbox')  renderAdminMsgs('all');
+    if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { onScopeChange(); }
     if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); }
 }
@@ -800,21 +799,37 @@ function onScopeValChange() {
     updateComposePreview();
 }
 
-// Individual parent search
+// Individual parent search — results show camper names prominently
 function onIndivSearch(q) {
     var box = document.getElementById('cIndivResults');
     if (!q || q.length < 2 || !CL()) { box.style.display = 'none'; return; }
     q = q.toLowerCase();
     var dir = CL().data.getParentDirectory();
-    var hits = dir.filter(function(p) {
-        return (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c){return c.name;}).join(' ')).toLowerCase().indexOf(q) >= 0;
+    // Collect matching (child, parent) rows — one row per matching child
+    var rows = [];
+    dir.forEach(function(p) {
+        p.children.forEach(function(child) {
+            if ((child.name + ' ' + p.parentName + ' ' + p.familyName).toLowerCase().indexOf(q) >= 0) {
+                rows.push({ child: child, parent: p });
+            }
+        });
+        // Also match parent-only (no children yet)
+        if (!p.children.length && (p.parentName + ' ' + p.familyName).toLowerCase().indexOf(q) >= 0) {
+            rows.push({ child: null, parent: p });
+        }
     });
-    if (!hits.length) { box.innerHTML = '<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>'; box.style.display = 'block'; return; }
-    box.innerHTML = hits.slice(0, 8).map(function(p) {
-        return '<div style="padding:8px 12px;cursor:pointer;font-size:.82rem;border-bottom:1px solid var(--border-light);" ' +
+    // Deduplicate by parentName when the same parent appears multiple times
+    if (!rows.length) { box.innerHTML = '<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>'; box.style.display = 'block'; return; }
+    box.innerHTML = rows.slice(0, 12).map(function(r) {
+        var child = r.child, p = r.parent;
+        var label = child
+            ? '<strong>' + esc(child.name) + '</strong>' +
+              (child.bunk ? '<span style="font-size:.72rem;color:var(--text-muted);"> · ' + esc(child.bunk) + '</span>' : '') +
+              '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">parent: ' + esc(p.parentName) + '</div>'
+            : '<strong>' + esc(p.parentName) + '</strong><div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">no campers on file</div>';
+        return '<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light);" ' +
             'onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" ' +
-            'onclick="pickIndiv(\'' + esc(p.parentName) + '\')">' +
-            '<strong>' + esc(p.parentName) + '</strong> <span style="color:var(--text-muted);">— ' + p.children.map(function(c){return esc(c.name);}).join(', ') + '</span></div>';
+            'onclick="pickIndiv(\'' + esc(p.parentName) + '\')">' + label + '</div>';
     }).join('');
     box.style.display = 'block';
 }
@@ -1051,33 +1066,101 @@ function _fmtMsgTime(d) {
     return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+var _inboxReadFilter = 'all';
+
+function _populateInboxFilters() {
+    var cl = CL(); if (!cl) return;
+    var struct = cl.data.getStructure();
+    var grades = {}, divs = {}, bunks = {};
+    Object.entries(struct).forEach(function(de) {
+        var dname = de[0], div = de[1];
+        divs[dname] = 1;
+        Object.entries((div && div.grades) || {}).forEach(function(ge) {
+            grades[ge[0]] = 1;
+            (ge[1].bunks || []).forEach(function(b) { bunks[b] = 1; });
+        });
+    });
+    function fill(id, items, placeholder) {
+        var el = document.getElementById(id); if (!el) return;
+        var cur = el.value;
+        el.innerHTML = '<option value="">' + placeholder + '</option>' +
+            Object.keys(items).sort().map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+        if (cur) el.value = cur;
+    }
+    fill('inboxFGrade', grades, 'All Grades');
+    fill('inboxFDiv',   divs,   'All Divisions');
+    fill('inboxFBunk',  bunks,  'All Bunks');
+}
+
+function onInboxFilter() { renderAdminMsgs(_inboxReadFilter); }
+
+function filterAdminMsgs(filter, btn) {
+    _inboxReadFilter = filter;
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    renderAdminMsgs(filter);
+}
+
 function renderAdminMsgs(filter) {
     var cl = CL();
     var list = cl ? cl.msg.getInbox() : [];
+
+    // Read/unread
     if (filter === 'unread') list = list.filter(function(m) { return !m.read; });
+
+    // Text search
+    var q       = ((document.getElementById('inboxSearch')  || {}).value || '').trim().toLowerCase();
+    var fGrade  = ((document.getElementById('inboxFGrade')  || {}).value || '');
+    var fDiv    = ((document.getElementById('inboxFDiv')    || {}).value || '');
+    var fBunk   = ((document.getElementById('inboxFBunk')   || {}).value || '');
+
+    if (q) {
+        list = list.filter(function(m) {
+            var camper = (m.metadata && m.metadata.camperName) || '';
+            return (m.from    || '').toLowerCase().indexOf(q) >= 0 ||
+                   (m.subject || '').toLowerCase().indexOf(q) >= 0 ||
+                   (m.body    || '').toLowerCase().indexOf(q) >= 0 ||
+                   camper.toLowerCase().indexOf(q) >= 0;
+        });
+    }
+
+    // Field filters — look up sender's children in the directory
+    if ((fGrade || fDiv || fBunk) && cl) {
+        var dir = cl.data.getParentDirectory();
+        var parentMap = {};
+        dir.forEach(function(p) { parentMap[p.parentName] = p.children || []; });
+        list = list.filter(function(m) {
+            var children = parentMap[m.from || ''] || [];
+            return children.some(function(child) {
+                return (!fGrade || child.grade    === fGrade) &&
+                       (!fDiv   || child.division === fDiv)   &&
+                       (!fBunk  || child.bunk     === fBunk);
+            });
+        });
+    }
+
     var c = document.getElementById('adminMsgList');
     if (!list.length) {
-        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div><h3>No messages from parents yet</h3><p>When a parent sends a message from the portal, it will appear here.</p></div>';
+        var anyFilter = q || fGrade || fDiv || fBunk;
+        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>' +
+            '<h3>' + (anyFilter ? 'No messages match this filter' : 'No messages from parents yet') + '</h3>' +
+            '<p>' + (anyFilter ? 'Try clearing the search or filters.' : 'When a parent sends a message from the portal, it will appear here.') + '</p></div>';
         return;
     }
     c.innerHTML = '';
     list.forEach(function(m) {
-        var from = m.from || 'Parent';
+        var from   = m.from || 'Parent';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
         var preview = (m.body || '').slice(0, 80);
         c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + esc(m.id) + '\')">' +
             '<div class="msg-dot"></div>' +
             '<div class="msg-body">' +
                 '<div class="msg-subj">' + esc(m.subject || '(No subject)') + '</div>' +
                 '<div class="msg-preview">' + esc(preview) + '</div>' +
-                '<div class="msg-from">' + esc(from) + ' (Parent)</div>' +
+                '<div class="msg-from">' + esc(from + camper) + '</div>' +
             '</div>' +
             '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
         '</div>';
     });
-}
-function filterAdminMsgs(filter, btn) {
-    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
-    renderAdminMsgs(filter);
 }
 function openAdminMsg(id) {
     var cl = CL();
@@ -1111,7 +1194,7 @@ function sendAdminReply(threadId, toName) {
     var body = (document.getElementById('adminReplyBody') || {}).value || '';
     if (!body.trim()) { toast('Enter a reply'); return; }
     var cl = CL();
-    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: channels, threadId: threadId || null });
+    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: compChannels, threadId: threadId || null });
     toast('Reply sent to ' + toName + '!');
     closeAdminMsgDetail();
 }
