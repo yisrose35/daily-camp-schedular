@@ -21398,6 +21398,92 @@
         })();
 
         // =====================================================================
+        // STEP 4.996d — COMBINED-FIELD RECONCILIATION ON THE *RENDERED* SCHEDULE
+        // =====================================================================
+        // Final, phase-agnostic guarantee that a combined field and its sub-fields
+        // (the SAME physical space) are never in use at the same time (combined<->sub;
+        // sibling subs stay independent). The per-write guards (isFieldAvailable on the
+        // claimField path; _validateWritePlacement on direct-write paths) catch most
+        // cases, but late phases (BFS repair, main-write, drop-refill) can still land an
+        // overlap. The earlier 4.995b pass runs before the final render and its edits get
+        // rebuilt away — so this copy runs HERE, on the rendered grid (same layer as
+        // 4.996b), where edits ship. Demotes the loser to Free and backfills with a
+        // sharable filler so no Free hole appears. Early-returns when no combos exist →
+        // zero effect on schedules without combos (e.g. the real camp has none).
+        (function _step4996dCombinedFieldReconcile() {
+            try {
+                let _cl = window.getFieldComboLookup && window.getFieldComboLookup();
+                if (!_cl || Object.keys(_cl.combinedToSubs || {}).length === 0) {
+                    const _g = getGlobalSettings();
+                    const _fc = (_g.app1 && _g.app1.fieldCombos) || _g.fieldCombos || {};
+                    if (Object.keys(_fc).length === 0) return;
+                    _cl = { combinedToSubs: {} };
+                    Object.values(_fc).forEach(function (c) {
+                        if (!c || !c.combinedField || !Array.isArray(c.subFields)) return;
+                        _cl.combinedToSubs[String(c.combinedField).toLowerCase().trim()] = c.subFields.map(function (s) { return String(s).toLowerCase().trim(); });
+                    });
+                }
+                const _combs = Object.keys(_cl.combinedToSubs || {});
+                if (!_combs.length) return;
+                const _sa = window.scheduleAssignments || {};
+                const _dt = window.divisionTimes || {};
+                const _nm = function (s) { return String(s || '').toLowerCase().trim(); };
+                var _bkToGradeD = {};
+                try { allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _bkToGradeD[String(b)] = g; }); }); } catch (_eBGD) {}
+                const _use = {};
+                Object.keys(_sa).forEach(function (bunk) {
+                    const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    slots.forEach(function (en, idx) {
+                        if (!en || en.continuation || !en.field) return;
+                        let s = en._startMin, e = en._endMin;
+                        if (s == null) { const dv = en._division; const ds = dv ? _dt[dv] : null; if (ds && ds[idx]) { s = ds[idx].startMin; e = ds[idx].endMin; } }
+                        if (s == null || e == null) return;
+                        const prot = !!(en._isTrip || en._userPinned || en._isLeague);
+                        (_use[_nm(en.field)] = _use[_nm(en.field)] || []).push({ bunk: bunk, entry: en, s: s, e: e, dur: e - s, prot: prot });
+                    });
+                });
+                const _ov = function (a, b) { return a.s < b.e && a.e > b.s; };
+                let _demoted = 0;
+                _combs.forEach(function (cNorm) {
+                    const combUses = _use[cNorm] || [];
+                    (_cl.combinedToSubs[cNorm] || []).forEach(function (subNorm) {
+                        const subUses = _use[subNorm] || [];
+                        combUses.forEach(function (ce) {
+                            subUses.forEach(function (se) {
+                                if (!_ov(ce, se)) return;
+                                if (ce.entry._activity === 'Free' || se.entry._activity === 'Free') return;
+                                let loser;
+                                if (ce.prot !== se.prot) loser = ce.prot ? se : ce;
+                                else if (ce.s !== se.s) loser = ce.s > se.s ? ce : se;
+                                else loser = ce.dur <= se.dur ? ce : se;
+                                const x = loser.entry;
+                                const _origField = x.field;
+                                x.type = 'slot'; x._activity = 'Free'; x.event = 'Free';
+                                if (x.sport) delete x.sport;
+                                x.field = null;
+                                x._assignedSpecial = null; x._assignedSport = null; x._isSpecialLocation = false;
+                                x._fixed = false; x._activityLocked = false;
+                                x._source = 'combined-field-demoted-rendered';
+                                x._wasCombinedFieldDemotion = { original: { field: _origField }, combo: cNorm };
+                                // Backfill with a sharable filler special so no Free hole ships (mirror 4.996b).
+                                try {
+                                    var _exHasD = {};
+                                    (_sa[loser.bunk] || []).forEach(function (_o) { if (!_o) return; var _n = _o._assignedSpecial || _o._activity || _o.event || ''; if (_n) _exHasD[String(_n).toLowerCase()] = true; });
+                                    var _fnmD = (typeof _pickSharableFiller === 'function') ? _pickSharableFiller(_bkToGradeD[loser.bunk], loser.bunk, loser.dur, _exHasD) : null;
+                                    if (_fnmD) { x.type = 'special'; x.event = _fnmD; x._activity = _fnmD; x._assignedSpecial = _fnmD; x._source = 'combined-demote-backfill-rendered'; }
+                                } catch (_eBFD) {}
+                                loser.entry._activity = x._activity; // keep _use view consistent for later pairs
+                                _demoted++;
+                            });
+                        });
+                    });
+                });
+                if (_demoted > 0) log('[STEP 4.996d] Combined-field reconcile (rendered): demoted ' + _demoted + ' combo overlap(s)');
+                else log('[STEP 4.996d] Combined-field reconcile (rendered): clean');
+            } catch (_eCFRD) { try { warn('[STEP 4.996d] combo reconcile error: ' + (_eCFRD && _eCFRD.message)); } catch (_e) {} }
+        })();
+
+        // =====================================================================
         // STEP 4.996c — MARK ROTATION-EVENT COMPLETIONS FROM THE FINAL GRID
         // =====================================================================
         // Completions used to be marked at STEP 2.5+ from the pre-demotion seed,
