@@ -23475,7 +23475,13 @@
                 var _dt = window.divisionTimes || {};
                 var _bg = {}; Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
                 var _nm = function (s) { return String(s || '').toLowerCase().trim(); };
-                var _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                // ★ FN-25b: getFieldCapacity() returns null when getGlobalSettings() is
+                //   empty mid-gen (same disease as FN-24) → _cap fell back to 1, so every
+                //   same_division cap-2 field looked FULL and STEP 6.8 never shared (the
+                //   exact missed-share the user reported). Read the sharing capacity from
+                //   the DURABLE field config (sharableWith.capacity) first.
+                var _capCfg = {}; ((_app1 && _app1.fields) || []).forEach(function (f) { if (f && f.name) { var _sw = f.sharableWith || {}; if (_sw.capacity != null) _capCfg[f.name] = _sw.capacity; } });
+                var _cap = function (fn) { if (_capCfg[fn] != null) return _capCfg[fn]; try { var _g = window.getFieldCapacity && window.getFieldCapacity(fn); if (_g != null) return _g; } catch (e) {} return 1; };
                 var _occ = function (fn, s, e, exclB) { var c = 0, dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; var arr = _sa[b]; if (!Array.isArray(arr)) return; var ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; var es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
                 var _filled = 0, _shared = 0, _det = [];
                 Object.keys(_sa).forEach(function (bunk) {
