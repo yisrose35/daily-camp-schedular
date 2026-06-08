@@ -4705,6 +4705,19 @@ async function runOptimizer() {
     if (!window.runSkeletonOptimizer) { await daShowAlert("Error: 'runSkeletonOptimizer' not found."); return; }
     // ★ Day 22.5 audit fix: re-entrancy guard — refuse a second concurrent run.
     if (_daOptimizerRunning) { await daShowAlert("A schedule is already being generated — please wait for it to finish."); return; }
+    // ★ FN-14: wait for any in-flight date transition (date-picker change → async
+    //   load, serialized via window.__dateTxnInProgress) to FULLY settle before we read
+    //   the date. Otherwise the gen can capture a date that is still mid-revert — observed:
+    //   selected 07-11 but the gen ran for (and saved to) 07-10 because
+    //   window.currentScheduleDate had not yet settled to 07-11 at gen start, leaving the
+    //   selected date empty. Bounded so a stuck transition can never deadlock generation.
+    try {
+        var _fn14TxnWait = 0;
+        while (window.__dateTxnInProgress && _fn14TxnWait < 8000) {
+            await new Promise(function (r) { setTimeout(r, 50); });
+            _fn14TxnWait += 50;
+        }
+    } catch (_eFn14Txn) { /* non-fatal — fall through to the equality guard below */ }
     // ★ FN-17 date-settle guard — refuse to generate when the date picker shows a
     //   different date than the one currently loaded (window.currentScheduleDate).
     //   That mismatch means a date change is still in-flight (its async load hasn't
