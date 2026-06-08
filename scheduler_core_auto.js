@@ -23121,7 +23121,7 @@
                         for (var fi = 0; fi < _sportFields.length; fi++) {
                             var f = _sportFields[fi]; var fl = String(f.name).toLowerCase().trim();
                             if (_skip2[fl] || !_fieldFree(fl, t.s, t.e) || !_access(f, g)) continue;
-                            var act = null; for (var ai = 0; ai < f.activities.length; ai++) { var c = f.activities[ai]; if (c && !_done[b][String(c).toLowerCase()]) { act = c; break; } }
+                            var act = null; for (var ai = 0; ai < f.activities.length; ai++) { var c = f.activities[ai]; if (c && !_done[b][String(c).toLowerCase()] && _validateWritePlacement(f.name, c, g, b, t.s, t.e) === null) { act = c; break; } } // ★ FN-24: was access-only — now full gate (time-rules/exclusive). An EMPTY field can still be time-Unavailable (Belts until 12:30).
                             if (!act) continue;
                             _sa[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _autoMode: true, _freeFilled: true, continuation: false };
                             (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e }); _done[b][String(act).toLowerCase()] = 1; _filled++;
@@ -23398,6 +23398,58 @@
                 });
                 if (_dead) log('[STEP 6.6 DEAD-CONT REPAIR] ' + _dead + ' stranded continuation(s): ' + _filled + ' filled, ' + _free + ' reset to Free');
             } catch (_eDC) { try { warn('[STEP 6.6 DEAD-CONT REPAIR] error: ' + (_eDC && _eDC.message)); } catch (_x) {} }
+        })();
+
+        // ★ STEP 6.7 — FN-24b FINAL SETUP-LEVEL TIME-RULE SCRUB (durable, runs last).
+        //   STEP 4.98 IRON GATE only reads DAILY (DA-Resources) time-rule sources and
+        //   runs BEFORE the post-complete passes — so a SETUP-level field time rule
+        //   (config'd in Facilities, stored on field.timeRules) violated by a LATE
+        //   pass survives it. This scrub reads the DURABLE field config (the same
+        //   _fn24DurableApp1 fallback — getGlobalSettings() is unreliable here), runs
+        //   AFTER every placement pass, and demotes any slot overlapping a field's
+        //   Unavailable window (or outside its Available window) for its grade to Free.
+        //   Belt-and-suspenders behind FN-24 + the FN-22 gate: GUARANTEES zero surviving
+        //   setup-level field time-rule violations regardless of which pass placed it.
+        (function _fn24bFinalTimeRuleScrub() {
+            try {
+                var _app1 = _fn24DurableApp1();
+                var _flds = (_app1 && _app1.fields) || [];
+                if (!_flds.length) return;
+                var _rb = {};
+                _flds.forEach(function (f) { if (f && f.name && Array.isArray(f.timeRules) && f.timeRules.length) _rb[f.name] = f.timeRules; });
+                if (!Object.keys(_rb).length) return;
+                var _sa = window.scheduleAssignments || {};
+                var _bg = {};
+                Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
+                var _cleared = 0, _det = [];
+                Object.keys(_sa).forEach(function (b) {
+                    var arr = _sa[b]; if (!Array.isArray(arr)) return; var g = _bg[b];
+                    arr.forEach(function (en, i) {
+                        if (!en || en.continuation) return;
+                        var fn = (typeof en.field === 'object') ? (en.field && en.field.name) : en.field;
+                        if (!fn || fn === 'Free') return;
+                        var rules = _rb[fn]; if (!rules) return;
+                        var s = en._startMin, e = en._endMin; if (s == null || e == null) return;
+                        var bad = false, hasAvail = false, inside = false;
+                        for (var k = 0; k < rules.length; k++) {
+                            var r = rules[k], t = String(r.type || '').toLowerCase();
+                            var un = t === 'unavailable' || r.available === false, av = t === 'available' || r.available === true;
+                            var rs = r.startMin, re = r.endMin; if (rs == null || re == null) continue;
+                            if (Array.isArray(r.divisions) && r.divisions.length && g != null && r.divisions.map(String).indexOf(String(g)) < 0) continue;
+                            if (un && rs < e && re > s) { bad = true; break; }
+                            if (av) { hasAvail = true; if (s >= rs && e <= re) inside = true; }
+                        }
+                        if (!bad && hasAvail && !inside) bad = true;
+                        if (bad) {
+                            if (_det.length < 12) _det.push(b + '/' + fn + '@' + s + '-' + e);
+                            arr[i] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: s, _endMin: e, _source: 'fn24b-timerule-scrub', _violationReason: 'setup-level time rule on ' + fn, continuation: false };
+                            _cleared++;
+                        }
+                    });
+                });
+                if (_cleared) warn('[STEP 6.7 FN-24b TIME-RULE SCRUB] demoted ' + _cleared + ' setup-level time-rule violation(s) to Free: ' + _det.join(', '));
+                else log('[STEP 6.7 FN-24b TIME-RULE SCRUB] ✅ no setup-level time-rule violations');
+            } catch (_eTRS) { try { warn('[STEP 6.7 FN-24b] error: ' + (_eTRS && _eTRS.message)); } catch (_x) {} }
         })();
 
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
