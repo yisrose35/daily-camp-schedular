@@ -2181,6 +2181,21 @@
                         rainyDayStartTime: window.rainyDayStartTime,
                         source: result.source
                     });
+                } else if (result && result.success) {
+                    // ★ FN-14 FIX: the load SUCCEEDED but this date has NO saved schedule
+                    //   (a fresh/empty date). The old code had no else branch, so
+                    //   window.scheduleAssignments kept the PREVIOUS date's data and
+                    //   _scheduleAssignmentsDate kept the previous date — a generate/save
+                    //   here then mis-stamped to that stale date, leaving the SELECTED date
+                    //   empty (the FN-14 empty-gen). Clear in-memory and bind the stamp to
+                    //   the selected date. Gated on result.success so it ONLY fires on a
+                    //   confirmed-empty result, never a transient load error → it can never
+                    //   blank a date that actually has data.
+                    window.scheduleAssignments = {};
+                    window.leagueAssignments = {};
+                    window._scheduleAssignmentsDate = newDateKey;
+                    if (window.updateTable) { try { window.updateTable(); } catch (_e) {} }
+                    console.log('🔗 No saved schedule for', newDateKey, '— cleared in-memory (fresh/empty date, FN-14 guard)');
                 }
             }
 
