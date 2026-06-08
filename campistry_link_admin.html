@@ -49,6 +49,29 @@
         .lk-sync-badge::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-500); flex-shrink:0; }
         .lk-main { margin-left: 240px; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
 
+        /* Compose drawer */
+        .compose-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.28); z-index:900; }
+        .compose-backdrop.open { display:block; }
+        .compose-drawer {
+            position:fixed; top:0; right:0; bottom:0; width:520px; max-width:100vw;
+            background:#fff; box-shadow:-6px 0 32px rgba(0,0,0,.13);
+            z-index:901; overflow-y:auto; padding:0;
+            transform:translateX(100%); transition:transform .24s cubic-bezier(.4,0,.2,1);
+        }
+        .compose-drawer.open { transform:translateX(0); }
+        .compose-drawer-head { display:flex; align-items:center; justify-content:space-between; padding:18px 22px 14px; border-bottom:1px solid var(--border-light); position:sticky; top:0; background:#fff; z-index:2; }
+        .compose-drawer-head h2 { font-size:1rem; font-weight:700; margin:0; }
+        .compose-drawer-body { padding:18px 22px 28px; }
+
+        /* Sent list item */
+        .sent-item { display:flex; align-items:flex-start; gap:10px; padding:12px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
+        .sent-item:hover { background:var(--slate-50); }
+        .sent-item-body { flex:1; min-width:0; }
+        .sent-item-subj { font-size:.84rem; font-weight:600; color:var(--slate-800); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sent-item-to { font-size:.74rem; color:var(--text-muted); margin-top:2px; }
+        .sent-item-preview { font-size:.77rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sent-item-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
+
         /* Page hero — matches parent portal pattern */
         .lk-page-hero { display:flex; align-items:center; gap:16px; margin-bottom:22px; padding-bottom:16px; border-bottom:1px solid var(--slate-100); }
         .lk-page-hero-icon { width:44px; height:44px; border-radius:var(--radius-md); background:var(--link-tint); color:var(--link-color); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
@@ -246,7 +269,7 @@
     <!-- Top-level section tabs -->
     <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
         <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
-        <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Outbox</button>
+        <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
         <button class="lk-tab" data-msgtab="forms" onclick="switchMsgTab('forms',this)">Forms</button>
     </div>
 
@@ -278,101 +301,35 @@
         </div>
     </div>
 
-    <!-- ── OUTBOX ─────────────────────────────────────── -->
+    <!-- ── SENT ──────────────────────────────────────── -->
     <div id="msgTabOutbox" style="display:none;">
-        <div class="lk-card">
-            <!-- Quick templates -->
-            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:18px;padding-bottom:16px;border-bottom:1px solid var(--border-light);">
-                <span style="font-size:.75rem;font-weight:600;color:var(--text-muted);flex-shrink:0;white-space:nowrap;">Quick fill:</span>
-                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk Assignment</button>
-                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
-                <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
-            </div>
-
-            <!-- To -->
-            <div class="lk-field">
-                <label>To</label>
-                <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
-                    <select class="lk-input" id="cScope" style="max-width:180px;flex-shrink:0;" onchange="onScopeChange()">
-                        <option value="all">Everyone</option>
-                        <option value="division">By Division</option>
-                        <option value="grade">By Grade</option>
-                        <option value="bunk">By Bunk</option>
-                        <option value="individual">Specific Parent</option>
-                    </select>
-                    <select class="lk-input" id="cScopeVal" style="max-width:200px;display:none;" onchange="onScopeValChange()"></select>
-                    <div id="cIndivWrap" style="display:none;flex:1;min-width:180px;position:relative;">
-                        <input type="text" class="lk-input" id="cIndivSearch" placeholder="Search by camper or parent name — add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
-                        <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
-                    </div>
-                    <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;"></div>
-                </div>
-                <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:5px;min-height:18px;"></div>
-            </div>
-
-            <!-- Merge tags -->
-            <div class="lk-field">
-                <label>Insert into message <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">— click a tag to add it at the cursor</span></label>
-                <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;">
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{child_name}}')">{{child_name}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{parent_name}}')">{{parent_name}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{bunk}}')">{{bunk}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{bus_route}}')">{{bus_route}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{grade}}')">{{grade}}</button>
-                    <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.72rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 9px;" onclick="insertTag('{{division}}')">{{division}}</button>
-                </div>
-            </div>
-
-            <!-- Subject -->
-            <div class="lk-field">
-                <label>Subject</label>
-                <input type="text" class="lk-input" id="cSubj" placeholder="Subject..." oninput="updateComposePreview()">
-            </div>
-
-            <!-- Body -->
-            <div class="lk-field">
-                <label>Message</label>
-                <textarea class="lk-textarea" id="cBody" placeholder="Type your message here…" style="min-height:120px;" oninput="updateComposePreview()"></textarea>
-            </div>
-
-            <!-- Live preview -->
-            <div id="cPreviewWrap" style="display:none;margin-bottom:14px;">
-                <div style="font-size:.72rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview <span id="cPreviewFor" style="text-transform:none;font-weight:400;font-size:.76rem;"></span></div>
-                <div id="cPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:12px 14px;font-size:.82rem;white-space:pre-wrap;color:var(--slate-700);max-height:130px;overflow-y:auto;"></div>
-            </div>
-
-            <!-- Bottom bar -->
-            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;padding-top:10px;border-top:1px solid var(--border-light);">
-                <div class="channel-btns" id="cChannelBtns">
-                    <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                        In-App
-                    </button>
-                    <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                        Email
-                    </button>
-                    <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
-                        SMS
-                    </button>
-                </div>
-                <div style="display:flex;gap:8px;">
-                    <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
-                    <button class="btn btn-primary" onclick="sendCompose()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                        Send
-                    </button>
-                </div>
-            </div>
-
-            <!-- Preview all list -->
-            <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div></div>
+            <button class="btn btn-primary" onclick="openComposeDrawer()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Compose
+            </button>
+        </div>
+        <div class="lk-card" style="padding:0;overflow:hidden;">
+            <div id="sentMsgList"></div>
+        </div>
+        <!-- Sent message detail -->
+        <div id="sentDetailView" style="display:none;margin-top:14px;">
+            <button class="btn btn-ghost btn-sm" onclick="closeSentDetail()" style="margin-bottom:10px;">&larr; Back</button>
+            <div class="lk-card"><div id="sentDetail"></div></div>
         </div>
     </div>
 
     <!-- ── FORMS ──────────────────────────────────────── -->
     <div id="msgTabForms" style="display:none;">
+        <!-- Forms subtabs -->
+        <div class="lk-tabs" style="margin-bottom:16px;">
+            <button class="lk-tab active" data-formtab="received" onclick="switchFormsTab('received',this)">Received</button>
+            <button class="lk-tab" data-formtab="sendout" onclick="switchFormsTab('sendout',this)">Send Out</button>
+        </div>
+
+        <!-- RECEIVED -->
+        <div id="formsTabReceived">
         <div id="docFolderListView">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
                 <div class="lk-tabs" style="margin:0;border:none;">
@@ -403,22 +360,15 @@
                         <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
                             <select class="lk-select" id="folderGrade">
                                 <option value="">Any grade</option>
-                                <option>1st Grade</option>
-                                <option>2nd Grade</option>
-                                <option>3rd Grade</option>
-                                <option>4th Grade</option>
-                                <option>5th Grade</option>
-                                <option>6th Grade</option>
-                                <option>7th Grade</option>
-                                <option>8th Grade</option>
+                                <option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option>
+                                <option>4th Grade</option><option>5th Grade</option><option>6th Grade</option>
+                                <option>7th Grade</option><option>8th Grade</option>
                             </select>
                         </div>
                         <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
                             <select class="lk-select" id="folderDivision">
                                 <option value="">Any division</option>
-                                <option>Juniors</option>
-                                <option>Seniors</option>
-                                <option>CITs</option>
+                                <option>Juniors</option><option>Seniors</option><option>CITs</option>
                             </select>
                         </div>
                         <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
@@ -454,6 +404,176 @@
                 <div id="folderDetailList"></div>
             </div>
         </div>
+        </div><!-- /formsTabReceived -->
+
+        <!-- SEND OUT -->
+        <div id="formsTabSendout" style="display:none;">
+            <div class="lk-card">
+                <div class="lk-card-head"><h2>Send a Form Request</h2></div>
+                <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px;">Each parent receives a personalized message asking them to complete the form for their child.</p>
+
+                <div class="lk-field">
+                    <label>Form type</label>
+                    <select class="lk-input" id="fsFormType" onchange="onFormTypeChange()">
+                        <option value="medical">Medical Form</option>
+                        <option value="waiver">Waiver</option>
+                        <option value="permission">Permission Slip</option>
+                        <option value="emergency">Emergency Contact Form</option>
+                        <option value="dietary">Dietary / Allergy Form</option>
+                        <option value="custom">Custom…</option>
+                    </select>
+                </div>
+                <div class="lk-field" id="fsCustomNameWrap" style="display:none;">
+                    <label>Form name</label>
+                    <input type="text" class="lk-input" id="fsCustomName" placeholder="e.g. Trip Permission Slip — Lake Day">
+                </div>
+
+                <div class="lk-field">
+                    <label>Send to</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <select class="lk-input" id="fsScope" style="max-width:180px;" onchange="onFsScopeChange()">
+                            <option value="all">Everyone</option>
+                            <option value="division">By Division</option>
+                            <option value="grade">By Grade</option>
+                            <option value="bunk">By Bunk</option>
+                        </select>
+                        <select class="lk-input" id="fsScopeVal" style="max-width:200px;display:none;" onchange="updateFsCount()"></select>
+                        <span id="fsScopeCount" style="font-size:.76rem;color:var(--text-muted);"></span>
+                    </div>
+                </div>
+
+                <div class="lk-field">
+                    <label>Optional note <span style="font-weight:400;color:var(--text-muted);">added after the standard message</span></label>
+                    <textarea class="lk-textarea" id="fsNote" placeholder="e.g. Please complete by Friday, June 20th." style="min-height:60px;"></textarea>
+                </div>
+
+                <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border-light);">
+                    <div class="channel-btns" id="fsChannelBtns">
+                        <button class="channel-btn selected" data-ch="app" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            In-App
+                        </button>
+                        <button class="channel-btn" data-ch="email" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                            Email
+                        </button>
+                        <button class="channel-btn" data-ch="sms" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                            SMS
+                        </button>
+                    </div>
+                    <button class="btn btn-primary" onclick="sendFormRequest()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        Send Request
+                    </button>
+                </div>
+            </div>
+
+            <!-- History -->
+            <div class="lk-card" style="margin-top:14px;">
+                <div class="lk-card-head"><h2>Recently Sent</h2></div>
+                <div id="fsSentHistory"></div>
+            </div>
+        </div><!-- /formsTabSendout -->
+    </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  COMPOSE DRAWER                                     -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="compose-backdrop" id="composeBackdrop" onclick="closeComposeDrawer()"></div>
+<div class="compose-drawer" id="composeDrawer">
+    <div class="compose-drawer-head">
+        <h2>New Message</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeComposeDrawer()" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="compose-drawer-body">
+        <!-- Quick templates -->
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">
+            <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);flex-shrink:0;">Quick fill:</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
+        </div>
+
+        <!-- To -->
+        <div class="lk-field">
+            <label>To</label>
+            <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+                <select class="lk-input" id="cScope" style="max-width:175px;flex-shrink:0;" onchange="onScopeChange()">
+                    <option value="all">Everyone</option>
+                    <option value="division">By Division</option>
+                    <option value="grade">By Grade</option>
+                    <option value="bunk">By Bunk</option>
+                    <option value="individual">Specific Parent</option>
+                </select>
+                <select class="lk-input" id="cScopeVal" style="max-width:195px;display:none;" onchange="onScopeValChange()"></select>
+                <div id="cIndivWrap" style="display:none;flex:1;min-width:170px;position:relative;">
+                    <input type="text" class="lk-input" id="cIndivSearch" placeholder="Type camper or parent name, add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
+                    <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
+                </div>
+            </div>
+            <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:6px;"></div>
+            <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:4px;min-height:16px;"></div>
+        </div>
+
+        <!-- Merge tags -->
+        <div class="lk-field">
+            <label>Insert tag <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">— click to insert at cursor</span></label>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;">
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{child_name}}')">{{child_name}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{parent_name}}')">{{parent_name}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{bunk}}')">{{bunk}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{bus_route}}')">{{bus_route}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{grade}}')">{{grade}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{division}}')">{{division}}</button>
+            </div>
+        </div>
+
+        <!-- Subject -->
+        <div class="lk-field">
+            <label>Subject</label>
+            <input type="text" class="lk-input" id="cSubj" placeholder="Subject…" oninput="updateComposePreview()">
+        </div>
+
+        <!-- Body -->
+        <div class="lk-field">
+            <label>Message</label>
+            <textarea class="lk-textarea" id="cBody" placeholder="Type your message here…" style="min-height:120px;" oninput="updateComposePreview()"></textarea>
+        </div>
+
+        <!-- Live preview -->
+        <div id="cPreviewWrap" style="display:none;margin-bottom:14px;">
+            <div style="font-size:.71rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview <span id="cPreviewFor" style="text-transform:none;font-weight:400;font-size:.75rem;"></span></div>
+            <div id="cPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:11px 13px;font-size:.81rem;white-space:pre-wrap;color:var(--slate-700);max-height:120px;overflow-y:auto;"></div>
+        </div>
+
+        <!-- Bottom bar -->
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
+            <div class="channel-btns" id="cChannelBtns">
+                <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    In-App
+                </button>
+                <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    Email
+                </button>
+                <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    SMS
+                </button>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
+                <button class="btn btn-primary" onclick="sendCompose()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Send
+                </button>
+            </div>
+        </div>
+        <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
     </div>
 </div>
 
@@ -625,8 +745,193 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
-    if (tab === 'outbox') { onScopeChange(); }
-    if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); }
+    if (tab === 'outbox') { renderSentList(); }
+    if (tab === 'forms')  { renderFoldersGrid(); renderDocSubmissions('all', ''); updateFsCount(); }
+}
+
+// ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
+function openComposeDrawer(presetName) {
+    document.getElementById('composeDrawer').classList.add('open');
+    document.getElementById('composeBackdrop').classList.add('open');
+    onScopeChange();
+    if (presetName) {
+        document.getElementById('cScope').value = 'individual';
+        onScopeChange();
+        pickIndiv(presetName);
+    }
+}
+function closeComposeDrawer() {
+    document.getElementById('composeDrawer').classList.remove('open');
+    document.getElementById('composeBackdrop').classList.remove('open');
+}
+
+// ─── SENT LIST ────────────────────────────────────────────────────────────────
+function renderSentList() {
+    var cl = CL();
+    var sent = cl ? cl.msg.getSent() : [];
+    var broadcasts = cl ? cl.msg.getBroadcasts() : [];
+    // Merge and sort newest first
+    var all = sent.concat(broadcasts).sort(function(a, b) {
+        return new Date(b.date || 0) - new Date(a.date || 0);
+    });
+    var el = document.getElementById('sentMsgList');
+    if (!el) return;
+    if (!all.length) {
+        el.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></div><h3>No sent messages yet</h3><p>Click Compose to write your first message.</p></div>';
+        return;
+    }
+    el.innerHTML = all.map(function(m) {
+        var toLabel = m.to || (m.recipients ? m.recipients.length + ' recipients' : 'All');
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var preview = (m.body || '').slice(0, 100);
+        return '<div class="sent-item" onclick="openSentDetail(\'' + esc(m.id) + '\')">' +
+            '<div class="sent-item-body">' +
+                '<div class="sent-item-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="sent-item-to">To: ' + esc(toLabel + camper) + '</div>' +
+                '<div class="sent-item-preview">' + esc(preview) + '</div>' +
+            '</div>' +
+            '<span class="sent-item-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
+        '</div>';
+    }).join('');
+}
+
+function openSentDetail(id) {
+    var cl = CL(); if (!cl) return;
+    var all = cl.msg.getSent().concat(cl.msg.getBroadcasts());
+    var m = all.find(function(x) { return x.id === id; });
+    if (!m) return;
+    var body = m.body || '';
+    if (!body.startsWith('<')) body = '<p>' + body.replace(/\n/g, '</p><p>') + '</p>';
+    document.getElementById('sentMsgList').closest('.lk-card').style.display = 'none';
+    var dv = document.getElementById('sentDetailView');
+    dv.style.display = '';
+    document.getElementById('sentDetail').innerHTML =
+        '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
+            '<div style="font-size:1.1rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
+            '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
+                '<span>To: <strong>' + esc(m.to || 'Group') + '</strong></span>' +
+                '<span>' + esc(_fmtMsgTime(m.date)) + '</span>' +
+            '</div>' +
+        '</div>' +
+        '<div style="font-size:.9rem;line-height:1.7;">' + body + '</div>';
+}
+
+function closeSentDetail() {
+    document.getElementById('sentDetailView').style.display = 'none';
+    var card = document.getElementById('sentMsgList').closest('.lk-card');
+    if (card) card.style.display = '';
+}
+
+// ─── FORMS SEND OUT ──────────────────────────────────────────────────────────
+var fsChannels = ['app'];
+var _formSendHistory = [];
+
+function switchFormsTab(tab, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    document.getElementById('formsTabReceived').style.display = tab === 'received' ? '' : 'none';
+    document.getElementById('formsTabSendout').style.display  = tab === 'sendout'  ? '' : 'none';
+    if (tab === 'sendout') { updateFsCount(); renderFsSentHistory(); }
+}
+
+function onFormTypeChange() {
+    var val = (document.getElementById('fsFormType') || {}).value;
+    var wrap = document.getElementById('fsCustomNameWrap');
+    if (wrap) wrap.style.display = val === 'custom' ? '' : 'none';
+}
+
+function onFsScopeChange() {
+    var scope = (document.getElementById('fsScope') || {}).value || 'all';
+    var valEl = document.getElementById('fsScopeVal');
+    if (!valEl) return;
+    if (scope === 'all') { valEl.style.display = 'none'; updateFsCount(); return; }
+    valEl.style.display = '';
+    var cl = CL(); var struct = cl ? cl.data.getStructure() : {};
+    var opts = ['<option value="">— Select —</option>'];
+    if (scope === 'division') {
+        Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+    } else if (scope === 'grade') {
+        var grades = {};
+        Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+        Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+    } else if (scope === 'bunk') {
+        var bunks = {};
+        Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+        Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+    }
+    valEl.innerHTML = opts.join('');
+    updateFsCount();
+}
+
+function _getFsTargets() {
+    var cl = CL(); if (!cl) return [];
+    var scope = (document.getElementById('fsScope') || {}).value || 'all';
+    var value = ((document.getElementById('fsScopeVal') || {}).value || '').trim();
+    var map = cl.data.getCamperParentMap();
+    var out = [];
+    Object.entries(map).forEach(function(e) {
+        var name = e[0], c = e[1]; if (!c.parentName) return;
+        var match = scope === 'all' ||
+            (scope === 'division' && value && c.division === value) ||
+            (scope === 'grade'    && value && c.grade    === value) ||
+            (scope === 'bunk'     && value && c.bunk     === value);
+        if (match) out.push({ camperName: name, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
+    });
+    return out;
+}
+
+function updateFsCount() {
+    var targets = _getFsTargets();
+    var el = document.getElementById('fsScopeCount');
+    if (el) el.textContent = targets.length ? targets.length + ' recipient(s)' : '';
+}
+
+function toggleFsCh(btn) {
+    btn.classList.toggle('selected');
+    fsChannels = [];
+    document.querySelectorAll('#fsChannelBtns .channel-btn.selected').forEach(function(b) { fsChannels.push(b.dataset.ch); });
+    if (!fsChannels.length) { btn.classList.add('selected'); fsChannels = [btn.dataset.ch]; }
+}
+
+function _fsFormLabel() {
+    var type = (document.getElementById('fsFormType') || {}).value || 'medical';
+    if (type === 'custom') return (document.getElementById('fsCustomName') || {}).value.trim() || 'form';
+    var labels = { medical: 'Medical Form', waiver: 'Waiver', permission: 'Permission Slip', emergency: 'Emergency Contact Form', dietary: 'Dietary / Allergy Form' };
+    return labels[type] || type;
+}
+
+function sendFormRequest() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var formLabel = _fsFormLabel();
+    if (!formLabel) { toast('Enter a form name'); return; }
+    var targets = _getFsTargets();
+    if (!targets.length) { toast('No recipients match'); return; }
+    var note = ((document.getElementById('fsNote') || {}).value || '').trim();
+    var busMap = _buildBusRouteMap();
+    var sent = 0;
+    targets.forEach(function(t) {
+        var body = 'Hi ' + (t.parentName || 'there') + ',\n\nWe need you to complete the ' + formLabel + ' for ' + t.camperName + ' before camp begins.\n\nPlease log in to the parent portal to submit it.' + (note ? '\n\n' + note : '') + '\n\nThank you!';
+        cl.msg.send({ to: t.parentName, toType: 'individual', subject: formLabel + ' needed for ' + t.camperName, body: body, channels: fsChannels, metadata: { parentEmail: t.parentEmail, camperName: t.camperName, formType: (document.getElementById('fsFormType') || {}).value, isFormRequest: true } });
+        sent++;
+    });
+    _formSendHistory.unshift({ formLabel: formLabel, count: sent, date: new Date().toISOString(), scope: (document.getElementById('fsScope') || {}).value });
+    toast(sent + ' form request' + (sent === 1 ? '' : 's') + ' sent!');
+    if (document.getElementById('fsNote')) document.getElementById('fsNote').value = '';
+    renderFsSentHistory();
+}
+
+function renderFsSentHistory() {
+    var el = document.getElementById('fsSentHistory');
+    if (!el) return;
+    if (!_formSendHistory.length) {
+        el.innerHTML = '<div style="padding:18px;text-align:center;font-size:.82rem;color:var(--text-muted);">No form requests sent yet.</div>';
+        return;
+    }
+    el.innerHTML = _formSendHistory.slice(0, 10).map(function(h) {
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-light);font-size:.82rem;">' +
+            '<div><strong>' + esc(h.formLabel) + '</strong><span style="color:var(--text-muted);margin-left:10px;">' + h.count + ' recipients</span></div>' +
+            '<span style="font-size:.74rem;color:var(--text-muted);">' + esc(_fmtMsgTime(h.date)) + '</span>' +
+        '</div>';
+    }).join('');
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
@@ -850,13 +1155,10 @@ function pickIndiv(name) {
     updateComposePreview();
 }
 
-// Navigate to outbox and pre-select a parent (used from inbox reply)
+// Navigate to messages and open compose drawer pre-addressed to a parent
 function msgParent(name) {
     nav('messages');
-    switchMsgTab('outbox', null);
-    document.getElementById('cScope').value = 'individual';
-    onScopeChange();
-    pickIndiv(name);
+    openComposeDrawer(name);
 }
 
 // Build the target list from current compose state
@@ -1044,11 +1346,13 @@ function sendCompose() {
     toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
     document.getElementById('cSubj').value = '';
     document.getElementById('cBody').value = '';
-    document.getElementById('cPreviewWrap').style.display  = 'none';
-    document.getElementById('cPreviewAll').style.display   = 'none';
-    document.getElementById('cScopeCount').textContent     = '';
-    document.getElementById('cPreviewAllBtn').style.display= 'none';
-    document.getElementById('cIndivChips').innerHTML       = '';
+    document.getElementById('cPreviewWrap').style.display   = 'none';
+    document.getElementById('cPreviewAll').style.display    = 'none';
+    document.getElementById('cScopeCount').textContent      = '';
+    document.getElementById('cPreviewAllBtn').style.display = 'none';
+    document.getElementById('cIndivChips').innerHTML        = '';
+    closeComposeDrawer();
+    if (currentMsgTab === 'outbox') renderSentList();
 }
 
 function updateSmartBadge() {} // kept for compat — badge removed in new UI
