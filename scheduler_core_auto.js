@@ -871,6 +871,10 @@
         }
 
         const currentDate = window.currentScheduleDate || window.currentDate || '';
+        // ★ FN-14: expose the gen-start date so post-gen awaited saves (runOptimizer's
+        //   verified save) target THIS date, not a window.currentScheduleDate that may
+        //   have reverted to the previous date mid-gen. Cleared in the top-level finally.
+        try { window._activeGenDate = currentDate; } catch (_e) {}
         let dayName = 'Monday';
         if (currentDate) {
             const parts = currentDate.split('-').map(Number);
@@ -23299,7 +23303,17 @@
         try { _freeFillSweepFN22(); } catch (_eff2) {}
 
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
-        window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings } }));
+        // ★ FN-14 DATE-DESYNC FIX: stamp the complete event with the date this gen
+        //   actually ran for (currentDate, captured at gen START from
+        //   window.currentScheduleDate, L873). Without this dateKey the
+        //   generation-complete handler fell back to window.currentScheduleDate read at
+        //   END-of-gen — which can have reverted to the previous date (observed:
+        //   requested 07-11 but the gen stamped+saved 07-10), leaving the SELECTED date
+        //   empty. The handler sets window._scheduleAssignmentsDate = dateKey
+        //   synchronously, so post-gen saves bound to the wrong date are then refused by
+        //   the cross-date guard. Re-derive from window.currentScheduleDate in the rare
+        //   case currentDate was empty at start.
+        window.dispatchEvent(new CustomEvent('campistry-generation-complete', { detail: { mode: 'auto', version: VERSION, elapsed, warnings, dateKey: (currentDate || window.currentScheduleDate || '') } }));
 
         // ─── Impossibility Report ─────────────────────────────────────────────
         // After all healing passes, any remaining Free blocks are true scheduling

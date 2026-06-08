@@ -4877,7 +4877,11 @@ async function runOptimizer() {
                 //   no longer belongs to this date), so this can never write the wrong
                 //   day's data; worst case it's a no-op deduped save.
                 try {
-                    const _genDate = window.currentScheduleDate;
+                    // ★ FN-14: prefer the gen-start date (window._activeGenDate, set by
+                    //   runAutoScheduler) over window.currentScheduleDate, which can have
+                    //   reverted to the previous date mid-gen — so the awaited save targets
+                    //   the date this gen actually produced.
+                    const _genDate = window._activeGenDate || window.currentScheduleDate;
                     if (_genDate && window.verifiedScheduleSave) {
                         await window.verifiedScheduleSave(_genDate);
                         console.log('[Optimizer] ✅ post-gen verified save confirmed for ' + _genDate);
@@ -5192,6 +5196,9 @@ if (success) {
       // ★ Day 22.5 audit fix: always release the re-entrancy guard, even if the
       //   solver threw, so the Generate button is never permanently locked out.
       _daOptimizerRunning = false;
+      // ★ FN-14: clear the gen-date marker now that this generation (and its awaited
+      //   verified save) is fully done, so it can never go stale between gens.
+      try { window._activeGenDate = null; } catch (_e) {}
   }
 }
   // =================================================================
