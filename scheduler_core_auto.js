@@ -17581,11 +17581,38 @@
         //   later write mutated app1.fields / specialActivities (cloud sync,
         //   late facility edits). commitWriteIfLegal already reads live for
         //   the same reason — this validator now matches.
+        // ★ FN-24: getGlobalSettings() can return {} mid/post-gen (observed: empty
+        //   keys), which silently emptied _fields/_specials below. The LATE
+        //   post-complete passes (active-pairing, drop-refill, FN-22, FQ-reopt) gate
+        //   through this validator — so with empty _fields they skipped field access /
+        //   time-rule / exclusive-pref checks ENTIRELY and could place a setup-level
+        //   unavailable field (observed: Belts, unavailable until 12:30, placed at
+        //   12:15). The main solve is unaffected (it reads its own gen-start model).
+        //   The setup-level field/special config always persists in
+        //   localStorage['campGlobalSettings_v1'] — fall back to it (parsed once per
+        //   gen) whenever the live read comes back empty, so every pass enforces the
+        //   same rules.
+        let _fn24DurableApp1Cache;
+        function _fn24DurableApp1() {
+            try {
+                const _g = getGlobalSettings();
+                if (_g && _g.app1 && ((Array.isArray(_g.app1.fields) && _g.app1.fields.length)
+                    || (Array.isArray(_g.app1.specialActivities) && _g.app1.specialActivities.length))) return _g.app1;
+            } catch (_e) {}
+            if (_fn24DurableApp1Cache === undefined) {
+                _fn24DurableApp1Cache = null;
+                try {
+                    const _raw = localStorage.getItem('campGlobalSettings_v1');
+                    if (_raw) { const _p = JSON.parse(_raw); _fn24DurableApp1Cache = (_p && _p.app1) ? _p.app1 : null; }
+                } catch (_e) {}
+            }
+            return _fn24DurableApp1Cache || {};
+        }
         function _validateWritePlacement(fieldName, activityName, grade, bunk, startMin, endMin) {
             if (!fieldName || fieldName === 'Free') return null;
-            const _gs = getGlobalSettings();
-            const _fields = _gs.app1?.fields || [];
-            const _specials = _gs.app1?.specialActivities || [];
+            const _app1 = _fn24DurableApp1();
+            const _fields = _app1.fields || [];
+            const _specials = _app1.specialActivities || [];
             const fld = _fields.find(f => f && f.name === fieldName);
             const spByName = activityName ? _specials.find(s => s && s.name === activityName) : null;
             // ★ DA Resources: field disabled for today → no placement allowed
