@@ -639,275 +639,306 @@
     }
 
     // =========================================================================
-    // ATTENDANCE SCANNER (Claude AI vision)
+    // ATTENDANCE SCANNER -- Template-based OMR (zero API cost)
+    //
+    // Template layout (must match printed template CSS):
+    //   Page 816x1056px, QR at right=48,top=48, size=140x140
+    //   Bubble rows start at top=220, height=52, bubble=32px at flex-end
+    //   QR top-left=(628,48), bubble center X=752, row-i center Y=246+i*52
+    //   Offsets from QR top-left: bDX=124, bDY0=198, bDDY=52
     // =========================================================================
-    const SCANNER_KEY = 'campistry_scanner_api_key';
-    let _scanResults = [];
+    const SCAN_TMPL = {
+        qrSize: 140,
+        bDX: 124,
+        bDY0: 198,
+        bDDY: 52,
+        sampleR: 14,
+        fillThresh: 0.22
+    };
 
-    function scannerGetApiKey() { return localStorage.getItem(SCANNER_KEY) || ''; }
+    let _scanResults = [];
+    let _scanBunkLabel = '';
+    let _scanCanvas = null, _scanCtx = null;
+
+    function scannerGetBunkCampers(bunkName) {
+        return Object.entries(getRoster())
+            .filter(([, c]) => c.bunk === bunkName)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([name]) => name);
+    }
 
     function scannerOpen() {
-        _scanResults = [];
-        const s1 = document.getElementById('scanStep1');
-        const s2 = document.getElementById('scanStep2');
-        const confirmBtn = document.getElementById('scanConfirmBtn');
-        const backBtn = document.getElementById('scanBackBtn');
-        if (s1) s1.style.display = '';
-        if (s2) s2.style.display = 'none';
-        if (confirmBtn) confirmBtn.style.display = 'none';
-        if (backBtn) backBtn.style.display = 'none';
-        scannerRenderStep1();
+        _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null;
+        const el = id => document.getElementById(id);
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+        if (el('scanStep2')) el('scanStep2').style.display = 'none';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanBackBtn')) el('scanBackBtn').style.display = 'none';
+        if (el('scanFileInput')) el('scanFileInput').value = '';
         openModal('scanModal');
-    }
-
-    function scannerRenderStep1() {
-        const hasKey = !!scannerGetApiKey();
-        const keyRow = document.getElementById('scanApiKeyRow');
-        const keyNote = document.getElementById('scanHasKeyNote');
-        if (keyRow) keyRow.style.display = hasKey ? 'none' : '';
-        if (keyNote) keyNote.style.display = hasKey ? 'flex' : 'none';
-        const fi = document.getElementById('scanFileInput');
-        if (fi) fi.value = '';
-    }
-
-    function scannerSaveApiKey() {
-        const val = (document.getElementById('scanApiKeyInput')?.value || '').trim();
-        if (!val.startsWith('sk-ant-')) { toast('Key should start with sk-ant-', 'error'); return; }
-        localStorage.setItem(SCANNER_KEY, val);
-        document.getElementById('scanApiKeyInput').value = '';
-        scannerRenderStep1();
-        toast('API key saved');
-    }
-
-    function scannerClearApiKey() {
-        localStorage.removeItem(SCANNER_KEY);
-        scannerRenderStep1();
     }
 
     function scannerHandleDrop(e) {
         e.preventDefault();
         document.getElementById('scanDropZone').style.borderColor = '';
         const file = e.dataTransfer?.files?.[0];
-        if (file) scannerHandleFileSelect(file);
+        if (file && file.type.startsWith('image/')) scannerHandleFileSelect(file);
     }
 
     function scannerHandleFileSelect(file) {
-        if (!file) return;
-        const apiKey = scannerGetApiKey();
-        if (!apiKey) { toast('Enter your Claude API key first', 'error'); return; }
-        if (!file.type.startsWith('image/')) { toast('Please select an image file', 'error'); return; }
+        if (!file || !file.type.startsWith('image/')) { toast('Please select an image file', 'error'); return; }
+        const el = id => document.getElementById(id);
+        if (el('scanStep1')) el('scanStep1').style.display = 'none';
+        if (el('scanStep2')) el('scanStep2').style.display = '';
+        if (el('scanBackBtn')) el('scanBackBtn').style.display = '';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML =
+            '<div style="display:flex;align-items:center;gap:10px;color:var(--slate-600);font-size:.875rem;">' +
+            '<div style="width:18px;height:18px;border:2px solid #2563eb;border-top-color:transparent;border-radius:50%;animation:spin .8s linear infinite;"></div>' +
+            'Scanning sheet...</div>';
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = '';
 
-        const s1 = document.getElementById('scanStep1');
-        const s2 = document.getElementById('scanStep2');
-        const statusMsg = document.getElementById('scanStatusMsg');
-        const previewTable = document.getElementById('scanPreviewTable');
-        const backBtn = document.getElementById('scanBackBtn');
-
-        if (s1) s1.style.display = 'none';
-        if (s2) s2.style.display = '';
-        if (statusMsg) statusMsg.innerHTML = '<div style="display:flex;align-items:center;gap:10px;color:var(--slate-600);font-size:.875rem;"><div style="width:18px;height:18px;border:2px solid #2563eb;border-top-color:transparent;border-radius:50%;animation:spin 0.8s linear infinite;"></div> Reading attendance sheet with AI...</div>';
-        if (previewTable) previewTable.innerHTML = '';
-        if (backBtn) backBtn.style.display = '';
-
-        const reader = new FileReader();
-        reader.onload = e => {
-            const dataUrl = e.target.result;
-            const base64 = dataUrl.split(',')[1];
-            const mimeType = file.type || 'image/jpeg';
-            scannerCallClaude(base64, mimeType, apiKey);
+        const img = new Image();
+        img.onload = () => {
+            _scanCanvas = document.createElement('canvas');
+            _scanCanvas.width = img.naturalWidth;
+            _scanCanvas.height = img.naturalHeight;
+            _scanCtx = _scanCanvas.getContext('2d', { willReadFrequently: true });
+            _scanCtx.drawImage(img, 0, 0);
+            URL.revokeObjectURL(img.src);
+            scannerProcessImage();
         };
-        reader.readAsDataURL(file);
+        img.onerror = () => scannerShowError('Could not load image. Please try a different file.');
+        img.src = URL.createObjectURL(file);
     }
 
-    async function scannerCallClaude(base64, mimeType, apiKey) {
-        const rosterNames = Object.keys(getRoster());
-        const rosterHint = rosterNames.length
-            ? '\n\nKnown roster names (match exactly if recognized): ' + rosterNames.slice(0, 60).join(', ')
-            : '';
-
-        const prompt = 'This is a paper attendance sheet. Extract every person name and whether they are marked present or absent.\n\nPresent indicators: checkmark ✓, check, P, Yes, +, circle.\nAbsent indicators: X, ✗, A, No, -, blank/empty cell next to name.\n\nReturn ONLY a valid JSON array — no markdown fences, no explanation:\n[{"name": "Full Name", "present": true}]\n\nIf a cell is blank with no mark, assume absent (present: false).' + rosterHint;
-
-        try {
-            const resp = await fetch('https://api.anthropic.com/v1/messages', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-api-key': apiKey,
-                    'anthropic-version': '2023-06-01',
-                    'anthropic-dangerous-allow-from-browser': 'true'
-                },
-                body: JSON.stringify({
-                    model: 'claude-haiku-4-5',
-                    max_tokens: 1024,
-                    messages: [{
-                        role: 'user',
-                        content: [
-                            { type: 'image', source: { type: 'base64', media_type: mimeType, data: base64 } },
-                            { type: 'text', text: prompt }
-                        ]
-                    }]
-                })
-            });
-
-            if (!resp.ok) {
-                const errData = await resp.json().catch(() => ({}));
-                const msg = errData.error?.message || ('API error ' + resp.status);
-                if (resp.status === 401) throw new Error('Invalid API key. Please check your key in the scanner.');
-                throw new Error(msg);
-            }
-
-            const data = await resp.json();
-            const text = data.content?.[0]?.text || '';
-
-            // Extract JSON array from response
-            const jsonMatch = text.match(/\[[\s\S]*?\]/);
-            if (!jsonMatch) throw new Error('AI response was not in expected format. Try a clearer photo.');
-            const detected = JSON.parse(jsonMatch[0]);
-            if (!Array.isArray(detected) || !detected.length) throw new Error('No names detected. Try a higher-resolution photo.');
-
-            scannerProcessResults(detected, rosterNames);
-        } catch (err) {
-            const statusMsg = document.getElementById('scanStatusMsg');
-            if (statusMsg) statusMsg.innerHTML = '<div style="padding:12px;background:#fef2f2;border-radius:8px;color:#dc2626;font-size:.8rem;"><strong>Scan failed:</strong> ' + esc(err.message) + '</div>';
-            const previewTable = document.getElementById('scanPreviewTable');
-            if (previewTable) previewTable.innerHTML = '<div style="text-align:center;margin-top:12px;"><button class="btn btn-secondary" onclick="AttendanceScanner.back()">Try Again</button></div>';
+    function scannerProcessImage() {
+        if (typeof jsQR === 'undefined') {
+            scannerShowError('jsQR library not loaded. Check your internet connection and reload the page.');
+            return;
         }
-    }
+        const imgData = _scanCtx.getImageData(0, 0, _scanCanvas.width, _scanCanvas.height);
+        const code = jsQR(imgData.data, imgData.width, imgData.height, { inversionAttempts: 'dontInvert' });
 
-    function scannerFuzzyMatch(detected, rosterNames) {
-        const d = detected.toLowerCase().replace(/[^a-z\s]/g, '').trim();
-        if (!d) return null;
-        // Exact match
-        const exact = rosterNames.find(n => n.toLowerCase() === d);
-        if (exact) return exact;
-        // Last name match
-        const dParts = d.split(/\s+/);
-        const lastMatch = rosterNames.find(n => {
-            const nParts = n.toLowerCase().split(/\s+/);
-            return dParts.some(dp => nParts.some(np => np === dp && dp.length > 2));
-        });
-        if (lastMatch) return lastMatch;
-        // Substring match
-        const sub = rosterNames.find(n => n.toLowerCase().includes(d) || d.includes(n.toLowerCase()));
-        return sub || null;
-    }
+        if (!code) {
+            scannerShowError('QR code not detected. Make sure the QR in the top-right corner is fully visible, in focus, and well-lit. Try photographing from directly above.');
+            return;
+        }
 
-    function scannerProcessResults(detected, rosterNames) {
-        _scanResults = detected.map(item => {
-            const matched = scannerFuzzyMatch(String(item.name || ''), rosterNames);
-            return { detected: String(item.name || ''), matched, present: item.present !== false };
+        let info;
+        try { info = JSON.parse(code.data); } catch (_) { info = null; }
+        if (!info || info.t !== 'cs-roll' || !info.bunk) {
+            scannerShowError('QR code found but is not a Campistry template. Use templates printed from this app.');
+            return;
+        }
+
+        const campers = scannerGetBunkCampers(info.bunk);
+        if (!campers.length) {
+            scannerShowError(`Bunk "${info.bunk}" has no campers in the roster. Make sure the roster is loaded.`);
+            return;
+        }
+
+        const loc = code.location;
+        const tl = loc.topLeftCorner, tr = loc.topRightCorner, bl = loc.bottomLeftCorner;
+        const pxX = { x: (tr.x - tl.x) / SCAN_TMPL.qrSize, y: (tr.y - tl.y) / SCAN_TMPL.qrSize };
+        const pxY = { x: (bl.x - tl.x) / SCAN_TMPL.qrSize, y: (bl.y - tl.y) / SCAN_TMPL.qrSize };
+        const photoQrW = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+        const sampleRPhoto = Math.round(SCAN_TMPL.sampleR * (photoQrW / SCAN_TMPL.qrSize));
+
+        _scanBunkLabel = info.bunk + (info.date ? ' · ' + info.date : '');
+        _scanResults = campers.map((name, i) => {
+            const dx = SCAN_TMPL.bDX, dy = SCAN_TMPL.bDY0 + i * SCAN_TMPL.bDDY;
+            const cx = Math.round(tl.x + dx * pxX.x + dy * pxY.x);
+            const cy = Math.round(tl.y + dx * pxX.y + dy * pxY.y);
+            const dark = scannerSampleDark(cx, cy, sampleRPhoto);
+            return { name, present: dark >= SCAN_TMPL.fillThresh };
         });
+
         scannerRenderPreview();
     }
 
-    function scannerRenderPreview() {
-        const matched = _scanResults.filter(r => r.matched).length;
-        const present = _scanResults.filter(r => r.present && r.matched).length;
-        const absent = _scanResults.filter(r => !r.present && r.matched).length;
-        const unmatched = _scanResults.length - matched;
-
-        const statusMsg = document.getElementById('scanStatusMsg');
-        if (statusMsg) {
-            statusMsg.innerHTML =
-                '<div style="padding:10px 14px;background:var(--slate-50);border-radius:8px;font-size:.8rem;display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px;">' +
-                '<span><strong>' + _scanResults.length + '</strong> names found</span>' +
-                '<span style="color:#16a34a;"><strong>' + present + '</strong> present</span>' +
-                '<span style="color:#dc2626;"><strong>' + absent + '</strong> absent</span>' +
-                (unmatched ? '<span style="color:var(--slate-400);">' + unmatched + ' unmatched (skipped)</span>' : '') +
-                '</div>' +
-                '<div style="font-size:.74rem;color:var(--slate-500);margin-bottom:8px;">Tap a status pill to toggle. Only matched names will be applied.</div>';
+    function scannerSampleDark(cx, cy, r) {
+        if (!_scanCtx) return 0;
+        const ri = Math.max(2, r);
+        let data;
+        try { data = _scanCtx.getImageData(Math.max(0, cx - ri), Math.max(0, cy - ri), 2 * ri + 1, 2 * ri + 1); }
+        catch (_) { return 0; }
+        let dark = 0, total = 0;
+        const size = 2 * ri + 1;
+        for (let i = 0; i < data.data.length; i += 4) {
+            const px = i / 4, dx = (px % size) - ri, dy = Math.floor(px / size) - ri;
+            if (dx * dx + dy * dy <= ri * ri) {
+                const luma = data.data[i] * 0.299 + data.data[i + 1] * 0.587 + data.data[i + 2] * 0.114;
+                if (luma < 128) dark++;
+                total++;
+            }
         }
+        return total > 0 ? dark / total : 0;
+    }
 
-        let html = '<div style="max-height:320px;overflow-y:auto;border:1px solid var(--slate-200);border-radius:8px;">';
-        html += '<table style="width:100%;border-collapse:collapse;font-size:.8rem;">';
-        html += '<thead><tr style="background:var(--slate-50);position:sticky;top:0;">';
-        html += '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--slate-600);">Detected</th>';
-        html += '<th style="text-align:left;padding:8px 10px;font-weight:600;color:var(--slate-600);">Roster Match</th>';
-        html += '<th style="text-align:center;padding:8px 10px;font-weight:600;color:var(--slate-600);">Status</th>';
-        html += '</tr></thead><tbody>';
+    function scannerShowError(msg) {
+        const el = id => document.getElementById(id);
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML =
+            '<div style="padding:12px;background:#fef2f2;border-radius:8px;color:#dc2626;font-size:.8rem;line-height:1.5;">' +
+            '<strong>Could not read sheet — </strong>' + esc(msg) + '</div>';
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML =
+            '<div style="text-align:center;margin-top:12px;">' +
+            '<button class="btn btn-secondary" onclick="AttendanceScanner.back()">&#8592; Try Again</button></div>';
+    }
+
+    function scannerRenderPreview() {
+        const present = _scanResults.filter(r => r.present).length;
+        const absent = _scanResults.length - present;
+        const el = id => document.getElementById(id);
+
+        if (el('scanStatusMsg')) el('scanStatusMsg').innerHTML =
+            '<div style="padding:10px 14px;background:var(--slate-50);border-radius:8px;font-size:.8rem;margin-bottom:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;">' +
+            '<strong>' + esc(_scanBunkLabel) + '</strong>' +
+            '<span style="color:#16a34a;font-weight:600;">' + present + ' present</span>' +
+            '<span style="color:#dc2626;font-weight:600;">' + absent + ' absent</span>' +
+            '</div>' +
+            '<div style="font-size:.74rem;color:var(--slate-500);margin-bottom:8px;">Tap a pill to correct any errors before applying.</div>';
+
+        let html = '<div style="max-height:300px;overflow-y:auto;border:1px solid var(--slate-200);border-radius:8px;">';
+        html += '<table style="width:100%;border-collapse:collapse;font-size:.82rem;">';
+        html += '<thead><tr style="background:var(--slate-50);position:sticky;top:0;">' +
+            '<th style="text-align:left;padding:8px 10px;">#</th>' +
+            '<th style="text-align:left;padding:8px 10px;">Camper</th>' +
+            '<th style="text-align:center;padding:8px 10px;">Status</th></tr></thead><tbody>';
 
         _scanResults.forEach((r, i) => {
-            const isPresent = r.present;
-            const pillBg = isPresent ? '#dcfce7' : '#fee2e2';
-            const pillColor = isPresent ? '#16a34a' : '#dc2626';
-            const pillText = isPresent ? '&#10003; Present' : '&#10007; Absent';
-            const matchCell = r.matched
-                ? '<span style="font-weight:600;color:var(--slate-700);">' + esc(r.matched) + '</span>'
-                : '<span style="color:var(--slate-400);font-style:italic;font-size:.75rem;">No match — skip</span>';
-            html += '<tr style="border-top:1px solid var(--slate-100);">';
-            html += '<td style="padding:7px 10px;color:var(--slate-500);">' + esc(r.detected) + '</td>';
-            html += '<td style="padding:7px 10px;">' + matchCell + '</td>';
-            html += '<td style="padding:7px 10px;text-align:center;">';
-            if (r.matched) {
-                html += '<button onclick="AttendanceScanner.toggleResult(' + i + ')" style="background:' + pillBg + ';color:' + pillColor + ';border:none;padding:3px 12px;border-radius:999px;cursor:pointer;font-weight:600;font-size:.74rem;white-space:nowrap;">' + pillText + '</button>';
-            }
-            html += '</td></tr>';
+            const bg = r.present ? '#dcfce7' : '#fee2e2';
+            const clr = r.present ? '#16a34a' : '#dc2626';
+            const lbl = r.present ? '&#10003; Present' : '&#10007; Absent';
+            html += '<tr style="border-top:1px solid var(--slate-100);">' +
+                '<td style="padding:7px 10px;color:var(--slate-400);">' + (i + 1) + '</td>' +
+                '<td style="padding:7px 10px;font-weight:500;">' + esc(r.name) + '</td>' +
+                '<td style="padding:7px 10px;text-align:center;">' +
+                '<button onclick="AttendanceScanner.toggleResult(' + i + ')" style="background:' + bg + ';color:' + clr + ';border:none;padding:3px 12px;border-radius:999px;cursor:pointer;font-weight:600;font-size:.74rem;">' + lbl + '</button>' +
+                '</td></tr>';
         });
 
         html += '</tbody></table></div>';
-        const previewTable = document.getElementById('scanPreviewTable');
-        if (previewTable) previewTable.innerHTML = html;
-
-        const confirmBtn = document.getElementById('scanConfirmBtn');
-        if (confirmBtn) confirmBtn.style.display = matched > 0 ? '' : 'none';
+        if (el('scanPreviewTable')) el('scanPreviewTable').innerHTML = html;
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = _scanResults.length ? '' : 'none';
     }
 
     function scannerToggleResult(i) {
-        if (_scanResults[i]) {
-            _scanResults[i].present = !_scanResults[i].present;
-            scannerRenderPreview();
-        }
+        if (_scanResults[i]) { _scanResults[i].present = !_scanResults[i].present; scannerRenderPreview(); }
     }
 
     function scannerBack() {
-        const s1 = document.getElementById('scanStep1');
-        const s2 = document.getElementById('scanStep2');
-        const confirmBtn = document.getElementById('scanConfirmBtn');
-        const backBtn = document.getElementById('scanBackBtn');
-        _scanResults = [];
-        if (s1) s1.style.display = '';
-        if (s2) s2.style.display = 'none';
-        if (confirmBtn) confirmBtn.style.display = 'none';
-        if (backBtn) backBtn.style.display = 'none';
-        scannerRenderStep1();
+        _scanResults = []; _scanBunkLabel = ''; _scanCanvas = null; _scanCtx = null;
+        const el = id => document.getElementById(id);
+        if (el('scanStep1')) el('scanStep1').style.display = '';
+        if (el('scanStep2')) el('scanStep2').style.display = 'none';
+        if (el('scanConfirmBtn')) el('scanConfirmBtn').style.display = 'none';
+        if (el('scanBackBtn')) el('scanBackBtn').style.display = 'none';
+        if (el('scanFileInput')) el('scanFileInput').value = '';
     }
 
     function scannerConfirm() {
         const today = getTodayData();
-        let applied = 0;
-
-        _scanResults.filter(r => r.matched).forEach(r => {
-            applied++;
+        _scanResults.forEach(r => {
             if (r.present) {
-                today.absences = today.absences.filter(a => a.name !== r.matched);
-                delete today.attendance[r.matched];
+                today.absences = today.absences.filter(a => a.name !== r.name);
+                delete today.attendance[r.name];
             } else {
-                if (!today.absences.some(a => a.name === r.matched)) {
-                    today.absences.push({ name: r.matched, reason: 'absent', notes: 'Via attendance scan', time: formatTimeNow(), timestamp: Date.now() });
+                if (!today.absences.some(a => a.name === r.name)) {
+                    today.absences.push({ name: r.name, reason: 'absent', notes: 'Via scan', time: formatTimeNow(), timestamp: Date.now() });
                 }
-                today.attendance[r.matched] = false;
+                today.attendance[r.name] = false;
             }
         });
-
         saveTodayData(today);
         closeModal('scanModal');
-        renderRollCall();
-        renderDashboard();
-        renderAbsences();
-        renderBunkTracker();
-        toast('Attendance updated — ' + applied + ' camper' + (applied !== 1 ? 's' : '') + ' applied from scan');
+        renderRollCall(); renderDashboard(); renderAbsences(); renderBunkTracker();
+        toast('Attendance updated \u2014 ' + _scanResults.length + ' camper' + (_scanResults.length !== 1 ? 's' : '') + ' from scan');
     }
 
-    // Expose as global (called from HTML)
+    function scannerPrintTemplates() {
+        const struct = getStructure();
+        const dateKey = getTodayKey();
+        const bunkPages = [];
+        Object.entries(struct).forEach(([, divData]) => {
+            Object.entries(divData.grades || {}).forEach(([, gradeData]) => {
+                (gradeData.bunks || []).forEach(bunkName => {
+                    const campers = scannerGetBunkCampers(bunkName);
+                    if (campers.length) bunkPages.push({ bunkName, campers });
+                });
+            });
+        });
+
+        if (!bunkPages.length) { toast('No campers found in any bunk', 'error'); return; }
+
+        const win = window.open('', '_blank');
+        if (!win) { toast('Pop-up blocked \u2014 please allow pop-ups for this site', 'error'); return; }
+
+        const date = new Date(dateKey + 'T12:00:00');
+        const dateStr = date.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+        const pages = bunkPages.map(({ bunkName, campers }) => {
+            const payload = JSON.stringify({ t: 'cs-roll', v: 1, bunk: bunkName, date: dateKey })
+                .replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+            const rowDate = new Date(dateKey + 'T12:00:00')
+                .toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+            const rows = campers.map((name, i) =>
+                `<div class="tmpl-row"><span class="tmpl-num">${i + 1}</span>` +
+                `<span class="tmpl-name">${esc(name)}</span><div class="tmpl-bubble"></div></div>`
+            ).join('');
+            return `<div class="tmpl-page"><div class="tmpl-inner">` +
+                `<div class="tmpl-qr" data-qr="${payload}"></div>` +
+                `<div class="tmpl-head">${esc(bunkName)}</div>` +
+                `<div class="tmpl-sub">${rowDate}</div>` +
+                `<hr class="tmpl-hr"><div class="tmpl-instr">&#9679; Fill bubble = <strong>PRESENT</strong> &nbsp; &#9675; Empty = ABSENT</div>` +
+                `<div class="tmpl-rows">${rows}</div></div></div>`;
+        }).join('\n');
+
+        win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Attendance ${dateKey}</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"><\/script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,Helvetica,sans-serif;background:#eee}
+@media print{body{background:#fff}.no-print{display:none!important}.tmpl-page{box-shadow:none!important;margin:0!important;page-break-after:always}}
+.no-print{background:#1e293b;color:#fff;padding:10px 20px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:10;font-family:inherit}
+.no-print button{background:#2563eb;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:14px;cursor:pointer}
+.tmpl-page{width:816px;height:1056px;position:relative;background:#fff;box-shadow:0 2px 10px rgba(0,0,0,.18);margin:24px auto;overflow:hidden}
+.tmpl-inner{padding:48px;height:100%}
+.tmpl-qr{position:absolute;right:48px;top:48px;width:140px;height:140px}
+.tmpl-qr svg{width:140px!important;height:140px!important;display:block}
+.tmpl-head{font-size:30px;font-weight:700;color:#111;margin-bottom:4px;padding-right:160px}
+.tmpl-sub{font-size:13px;color:#555;margin-bottom:10px;padding-right:160px}
+.tmpl-hr{border:none;border-top:2px solid #ddd;margin:8px 0}
+.tmpl-instr{font-size:11px;color:#555;padding:5px 8px;background:#f5f5f5;border-radius:4px;display:inline-block;margin-bottom:2px}
+.tmpl-rows{position:absolute;left:48px;right:48px;top:220px}
+.tmpl-row{display:flex;align-items:center;height:52px;border-bottom:1px solid #ebebeb}
+.tmpl-num{font-size:11px;color:#bbb;width:22px;flex-shrink:0}
+.tmpl-name{flex:1;font-size:15px;color:#111;padding-right:8px}
+.tmpl-bubble{width:32px;height:32px;border:2.5px solid #222;border-radius:50%;flex-shrink:0}
+</style></head><body>
+<div class="no-print">
+  <span style="font-weight:700">Campistry Attendance Templates</span>
+  <span style="opacity:.7;font-size:13px">${dateStr}</span>
+  <button onclick="window.print()">Print All (${bunkPages.length} sheets)</button>
+  <span style="opacity:.55;font-size:12px">Fill bubble = present today</span>
+</div>
+${pages}
+<script>
+document.querySelectorAll('[data-qr]').forEach(function(el){
+  try{var qr=qrcode(0,'M');qr.addData(el.getAttribute('data-qr'));qr.make();el.innerHTML=qr.createSvgTag(3,0);var s=el.querySelector('svg');if(s){s.setAttribute('width','140');s.setAttribute('height','140');}}catch(e){el.textContent='QR err';}
+});
+<\/script></body></html>`);
+        win.document.close();
+    }
+
     window.AttendanceScanner = {
         open: scannerOpen,
-        saveApiKey: scannerSaveApiKey,
-        clearApiKey: scannerClearApiKey,
         handleDrop: scannerHandleDrop,
         handleFileSelect: scannerHandleFileSelect,
         toggleResult: scannerToggleResult,
         back: scannerBack,
-        confirm: scannerConfirm
+        confirm: scannerConfirm,
+        printTemplates: scannerPrintTemplates
     };
 
     // =========================================================================
