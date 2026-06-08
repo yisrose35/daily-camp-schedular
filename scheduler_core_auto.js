@@ -17637,54 +17637,6 @@
                 return 'field preference: exclusive to other divisions';
             }
 
-            // ★ COMBINED FIELDS — a combined field and its sub-fields are the SAME
-            //   physical space; only ONE may be in use at a time (combined<->sub;
-            //   siblings stay independent). isFieldAvailable's combo guard covers the
-            //   claimField/planner path, but the direct-write phases (pairing
-            //   drop-refill/time-reloc, FQ-reopt, gap-fill) bypass claimField and so
-            //   leaked cross-grade combo conflicts. Gating here closes every write path.
-            //   Early-outs to null when the field isn't part of any combo (no scan cost).
-            try {
-                let _cl = window.getFieldComboLookup && window.getFieldComboLookup();
-                if (!_cl || Object.keys(_cl.combinedToSubs || {}).length === 0) {
-                    const _fc = _gs.app1?.fieldCombos || _gs.fieldCombos || {};
-                    if (Object.keys(_fc).length > 0) {
-                        _cl = { combinedToSubs: {}, subToCombined: {} };
-                        for (const _c of Object.values(_fc)) {
-                            if (!_c || !_c.combinedField || !Array.isArray(_c.subFields)) continue;
-                            _cl.combinedToSubs[String(_c.combinedField).toLowerCase().trim()] = _c.subFields.slice();
-                            for (const _s of _c.subFields) _cl.subToCombined[String(_s).toLowerCase().trim()] = _c.combinedField;
-                        }
-                    }
-                }
-                if (_cl) {
-                    const _nf = String(fieldName).toLowerCase().trim();
-                    const _partners = [];
-                    const _subs = _cl.combinedToSubs[_nf]; if (_subs) for (const _s of _subs) _partners.push(String(_s).toLowerCase().trim());
-                    const _cmb = _cl.subToCombined[_nf]; if (_cmb) _partners.push(String(_cmb).toLowerCase().trim());
-                    if (_partners.length > 0) {
-                        const _sa2 = window.scheduleAssignments || {};
-                        const _dt2 = window.divisionTimes || {};
-                        let _conflict = null;
-                        const _bunkKeys = Object.keys(_sa2);
-                        for (let _bk = 0; _bk < _bunkKeys.length && !_conflict; _bk++) {
-                            const _ob = _bunkKeys[_bk];
-                            if (String(_ob) === String(bunk)) continue;
-                            const _slots = _sa2[_ob]; if (!Array.isArray(_slots)) continue;
-                            for (let _i = 0; _i < _slots.length; _i++) {
-                                const _e = _slots[_i]; if (!_e || _e.continuation || !_e.field) continue;
-                                if (_partners.indexOf(String(_e.field).toLowerCase().trim()) === -1) continue;
-                                let _s2 = _e._startMin, _en2 = _e._endMin;
-                                if (_s2 == null) { const _dv = _e._division; const _ds = _dv ? _dt2[_dv] : null; if (_ds && _ds[_i]) { _s2 = _ds[_i].startMin; _en2 = _ds[_i].endMin; } }
-                                if (_s2 == null || _en2 == null) continue;
-                                if (_s2 < endMin && _en2 > startMin) { _conflict = _e.field; break; }
-                            }
-                        }
-                        if (_conflict) return 'combined field: ' + _conflict + ' (combo partner) already in use';
-                    }
-                }
-            } catch (_eCombo) {}
-
             // Field-level grade-scoped time rules
             // ★ Day 22.5 fix: ALSO read DA Resources daily rules from THREE
             //   sources, because window.activityProperties may be wiped between
