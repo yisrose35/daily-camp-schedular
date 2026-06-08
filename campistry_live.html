@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en" data-product="live">
+<head>
+    <meta charset="UTF-8" />
+    <title>Campistry Live | Mission Control</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <style>html:not(.css-ready) body{opacity:0}html.css-ready body{transition:opacity .15s ease}</style>
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_live.css" onload="document.documentElement.classList.add('css-ready')">
+    <noscript><style>html body{opacity:1!important}</style></noscript>
+</head>
+<body>
+
+<!-- ═══ HEADER ═══ -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" style="color:#2563EB;text-decoration:none;font-weight:500;margin-right:16px">&larr; Dashboard</a>
+        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        <div class="app-title">
+            <img src="Live_clean.png" alt="Campistry Live" class="app-logo-full" style="height:43px;max-height:45px;width:auto;position:relative;top:2px;">
+        </div>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me">
+            <img src="Me_clean.png" alt="Me" class="app-logo-full" style="height:40px;max-height:42px;width:auto;position:relative;top:4px;">
+        </a>
+        <a href="flow.html" class="header-app-switch" title="Campistry Flow">
+            <img src="Flow_clean.png" alt="Flow" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go">
+            <img src="Go_clean.png" alt="Go" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_health.html" class="header-app-switch" title="Campistry Health">
+            <img src="Health_clean.png" alt="Health" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_snacks.html" class="header-app-switch" title="Campistry Snacks">
+            <img src="Snacks_clean.png" alt="Snacks" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+        <a href="campistry_link_admin.html" class="header-app-switch" title="Campistry Link">
+            <img src="Link_clean.png" alt="Link" class="app-logo-full" style="height:38px;max-height:40px;width:auto;position:relative;top:2px;">
+        </a>
+    </div>
+    <div class="header-right">
+        <span class="nav-user" id="navUserEmail">Office</span>
+    </div>
+</header>
+
+<!-- ═══ SIDEBAR ═══ -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+<aside id="sidebar" class="sidebar">
+    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
+    <button class="sidebar-item" data-page="activity-board"><span class="sidebar-dot"></span> Activity Board</button>
+    <button class="sidebar-item" data-page="bunk-tracker"><span class="sidebar-dot"></span> Bunk Tracker</button>
+    <div class="sidebar-label">Attendance</div>
+    <button class="sidebar-item" data-page="roll-call"><span class="sidebar-dot"></span> Roll Call <span class="sb-badge" id="sbAbsentCount">0</span></button>
+    <button class="sidebar-item" data-page="absences"><span class="sidebar-dot"></span> Absences &amp; Exceptions</button>
+    <button class="sidebar-item" data-page="early-pickup"><span class="sidebar-dot"></span> Early Pickups</button>
+    <div class="sidebar-label">Reports</div>
+    <button class="sidebar-item" data-page="reports"><span class="sidebar-dot"></span> Attendance Reports</button>
+    <div class="sidebar-label">Parent</div>
+    <button class="sidebar-item" data-page="parent-requests"><span class="sidebar-dot"></span> Parent Requests <span class="sb-badge warn" id="sbParentReqCount" style="display:none;">0</span></button>
+</aside>
+
+<!-- ═══ MAIN CONTENT ═══ -->
+<div class="app-content">
+
+<!-- ── DASHBOARD ── -->
+<div id="page-dashboard" class="live-page active">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg></div>
+        <div><h1>Dashboard</h1><p>Live camp-wide attendance and activity overview</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-subtitle" id="dashDateLine">Loading...</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CampistryLive.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="8.5" cy="7" r="4"/><line x1="18" y1="8" x2="23" y2="13"/><line x1="23" y1="8" x2="18" y2="13"/></svg> Mark Absent</button>
+        </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon blue"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4-4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 00-3-3.87"/><path d="M16 3.13a4 4 0 010 7.75"/></svg></div><div><div class="stat-value" id="statTotalCampers">—</div><div class="stat-label">Total Campers</div></div></div>
+        <div class="stat-card"><div class="stat-icon green"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg></div><div><div class="stat-value" id="statPresent">—</div><div class="stat-label">Present Today</div></div></div>
+        <div class="stat-card"><div class="stat-icon red"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div><div><div class="stat-value" id="statAbsent">—</div><div class="stat-label">Absent</div></div></div>
+        <div class="stat-card"><div class="stat-icon amber"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></div><div><div class="stat-value" id="statCurrentPeriod">—</div><div class="stat-label">Current Period</div></div></div>
+    </div>
+
+    <!-- Live activity grid -->
+    <div class="card">
+        <div class="card-header"><h2>Right Now — Activity Overview</h2><span class="period-label" id="currentPeriodLabel"></span></div>
+        <div class="card-body" id="activityOverviewBody"><div class="empty-state">Loading schedule data...</div></div>
+    </div>
+
+    <!-- Division summary -->
+    <div class="card">
+        <div class="card-header"><h2>Division Summary</h2></div>
+        <div class="card-body" id="divisionSummaryBody"><div class="empty-state">Loading...</div></div>
+    </div>
+</div>
+
+<!-- ── ACTIVITY BOARD ── -->
+<div id="page-activity-board" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M8 6h13"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M3 6h.01"/><path d="M3 12h.01"/><path d="M3 18h.01"/></svg></div>
+        <div><h1>Activity Board</h1><p>Every activity happening right now — who's where</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Activity Board</div><div class="page-subtitle">Every activity happening right now — who's where</div></div>
+    </div>
+    <div id="activityBoardBody"><div class="empty-state">Loading...</div></div>
+</div>
+
+<!-- ── BUNK TRACKER ── -->
+<div id="page-bunk-tracker" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg></div>
+        <div><h1>Bunk Tracker</h1><p>Track every bunk through the day</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Bunk Tracker</div><div class="page-subtitle">Track every bunk through the day</div></div>
+        <div class="page-actions">
+            <div class="search-bar" style="width:280px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg><input type="text" id="bunkSearch" placeholder="Search bunk or camper..." oninput="CampistryLive.filterBunks(this.value)"></div>
+        </div>
+    </div>
+    <div id="bunkTrackerBody"><div class="empty-state">Loading...</div></div>
+</div>
+
+<!-- ── ROLL CALL ── -->
+<div id="page-roll-call" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+        <div><h1>Morning Roll Call</h1><p>Mark attendance by division — who's here today?</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Morning Roll Call</div><div class="page-subtitle">Mark attendance by division — who's here today?</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="AttendanceScanner.open()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg> Scan Sheet</button>
+            <button class="btn btn-secondary" onclick="CampistryLive.markAllPresent()">Mark All Present</button>
+        </div>
+    </div>
+    <div id="rollCallBody"><div class="empty-state">Loading roster...</div></div>
+</div>
+
+<!-- ── ABSENCES & EXCEPTIONS ── -->
+<div id="page-absences" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg></div>
+        <div><h1>Absences &amp; Exceptions</h1><p>Today's absent campers, late arrivals, early departures</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Absences &amp; Exceptions</div><div class="page-subtitle">Today's absent campers, late arrivals, early departures</div></div>
+        <div class="page-actions">
+            <button class="btn btn-primary" onclick="CampistryLive.openAbsenceModal()">+ Add Exception</button>
+        </div>
+    </div>
+    <div id="absencesBody"><div class="empty-state">No absences recorded today</div></div>
+</div>
+
+<!-- ── EARLY PICKUPS ── -->
+<div id="page-early-pickup" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg></div>
+        <div><h1>Early Pickups</h1><p>Campers leaving before dismissal</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Early Pickups</div><div class="page-subtitle">Campers leaving before dismissal</div></div>
+        <div class="page-actions">
+            <button class="btn btn-primary" onclick="CampistryLive.openPickupModal()">+ Early Pickup</button>
+        </div>
+    </div>
+    <div id="earlyPickupBody"><div class="empty-state">No early pickups today</div></div>
+</div>
+
+<!-- ── REPORTS ── -->
+<div id="page-reports" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></div>
+        <div><h1>Attendance Reports</h1><p>Daily and weekly attendance summaries</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Attendance Reports</div><div class="page-subtitle">Daily and weekly attendance summaries</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="CampistryLive.exportAttendanceCsv()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg> Export CSV</button>
+        </div>
+    </div>
+    <div id="reportsBody"><div class="empty-state">Generate a report to view attendance data</div></div>
+</div>
+
+<!-- ── PARENT REQUESTS ── -->
+<div id="page-parent-requests" class="live-page">
+    <div class="page-hero">
+        <div class="page-hero-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></div>
+        <div><h1>Parent Requests</h1><p>Late arrivals &amp; dismissal changes submitted by parents via Campistry Link</p></div>
+    </div>
+    <div class="page-header">
+        <div><div class="page-title">Parent Requests</div><div class="page-subtitle">Late arrivals &amp; dismissal changes submitted by parents via Campistry Link</div></div>
+        <div class="page-actions">
+            <button class="btn btn-secondary" onclick="ParentRequests.refresh()"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg> Refresh</button>
+        </div>
+    </div>
+    <div id="parentRequestsBody"><div class="empty-state">No parent requests yet — they'll appear here when parents submit from Campistry Link</div></div>
+</div>
+
+</div><!-- end app-content -->
+
+<!-- ═══ ABSENCE MODAL ═══ -->
+<div class="modal-overlay" id="absenceModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header"><h3 id="absenceModalTitle">Mark Absent</h3><button class="modal-close" onclick="CampistryLive.closeModal('absenceModal')">&times;</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="absenceSearch" placeholder="Start typing name..." oninput="CampistryLive.filterAbsenceSearch(this.value)"></div>
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-input" id="absenceCamper"><option value="">— Select —</option></select></div>
+            <div class="form-group"><label class="form-label">Reason</label><select class="form-input" id="absenceReason"><option value="absent">Absent (not coming today)</option><option value="sick">Sick</option><option value="late">Late Arrival</option><option value="appointment">Doctor/Appointment</option><option value="family">Family Event</option><option value="other">Other</option></select></div>
+            <div class="form-group"><label class="form-label">Notes (optional)</label><input type="text" class="form-input" id="absenceNotes" placeholder="Any additional details..."></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryLive.closeModal('absenceModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryLive.saveAbsence()">Save</button></div>
+    </div>
+</div>
+
+<!-- ═══ EARLY PICKUP MODAL ═══ -->
+<div class="modal-overlay" id="pickupModal">
+    <div class="modal" style="max-width:480px;">
+        <div class="modal-header"><h3>Early Pickup</h3><button class="modal-close" onclick="CampistryLive.closeModal('pickupModal')">&times;</button></div>
+        <div class="modal-body">
+            <div class="form-group"><label class="form-label">Search Camper</label><input type="text" class="form-input" id="pickupSearch" placeholder="Start typing name..." oninput="CampistryLive.filterPickupSearch(this.value)"></div>
+            <div class="form-group"><label class="form-label">Camper</label><select class="form-input" id="pickupCamper"><option value="">— Select —</option></select></div>
+            <div class="form-group"><label class="form-label">Pickup Time</label><input type="time" class="form-input" id="pickupTime"></div>
+            <div class="form-group"><label class="form-label">Picked Up By</label><input type="text" class="form-input" id="pickupBy" placeholder="Parent/guardian name"></div>
+            <div class="form-group"><label class="form-label">Reason</label><input type="text" class="form-input" id="pickupReason" placeholder="Optional"></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="CampistryLive.closeModal('pickupModal')">Cancel</button><button class="btn btn-primary" onclick="CampistryLive.savePickup()">Confirm Pickup</button></div>
+    </div>
+</div>
+
+<!-- Toast -->
+
+<!-- ═══ ATTENDANCE SCANNER MODAL ═══ -->
+<div class="modal-overlay" id="scanModal">
+    <div class="modal" style="max-width:580px;">
+        <div class="modal-header">
+            <h3>Scan Attendance Sheet</h3>
+            <button class="modal-close" onclick="CampistryLive.closeModal('scanModal')">&times;</button>
+        </div>
+        <div class="modal-body" id="scanModalBody">
+            <!-- Step 1: upload -->
+            <div id="scanStep1">
+                <p style="color:var(--slate-600);font-size:.875rem;margin-bottom:16px;">Take a photo of the attendance sheet or upload an image. Claude AI will read the names and mark attendance automatically.</p>
+                <div id="scanDropZone" style="border:2px dashed var(--slate-300);border-radius:12px;padding:28px;text-align:center;background:var(--slate-50);cursor:pointer;transition:border-color .2s;" onclick="document.getElementById('scanFileInput').click()" ondragover="event.preventDefault();this.style.borderColor='#2563eb'" ondragleave="this.style.borderColor=''" ondrop="AttendanceScanner.handleDrop(event)">
+                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="var(--slate-400)" stroke-width="1.5" style="margin:0 auto 10px;display:block;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                    <div style="font-weight:600;color:var(--slate-700);">Tap to take photo or upload</div>
+                    <div style="font-size:.75rem;color:var(--slate-400);margin-top:4px;">JPG, PNG, HEIC — any photo of a paper attendance sheet</div>
+                    <input type="file" id="scanFileInput" accept="image/*" capture="environment" style="display:none" onchange="AttendanceScanner.handleFileSelect(this.files[0])">
+                </div>
+                <!-- API Key Section -->
+                <div id="scanApiKeyRow" style="margin-top:16px;padding:14px;background:#fef9ec;border:1px solid #fcd34d;border-radius:10px;">
+                    <div style="font-size:.8rem;font-weight:600;color:#92400e;margin-bottom:8px;">Claude API Key required for AI scanning</div>
+                    <div style="font-size:.75rem;color:#78350f;margin-bottom:10px;">Your key is stored only on this device. Get one free at console.anthropic.com.</div>
+                    <div style="display:flex;gap:8px;">
+                        <input type="password" id="scanApiKeyInput" class="form-input" placeholder="sk-ant-..." style="flex:1;font-size:.8rem;">
+                        <button class="btn btn-primary" onclick="AttendanceScanner.saveApiKey()" style="white-space:nowrap;font-size:.8rem;">Save Key</button>
+                    </div>
+                </div>
+                <div id="scanHasKeyNote" style="display:none;margin-top:12px;padding:8px 12px;background:#f0fdf4;border-radius:8px;font-size:.75rem;color:#16a34a;display:flex;align-items:center;justify-content:space-between;">
+                    <span>&#10003; API key configured</span>
+                    <button onclick="AttendanceScanner.clearApiKey()" style="background:none;border:none;color:var(--slate-400);font-size:.75rem;cursor:pointer;padding:0;">Change</button>
+                </div>
+            </div>
+            <!-- Step 2: scanning + preview -->
+            <div id="scanStep2" style="display:none;">
+                <div id="scanStatusMsg" style="margin-bottom:12px;"></div>
+                <div id="scanPreviewTable"></div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="scanBackBtn" style="display:none;" onclick="AttendanceScanner.back()">&#8592; Back</button>
+            <button class="btn btn-secondary" onclick="CampistryLive.closeModal('scanModal')">Cancel</button>
+            <button class="btn btn-primary" id="scanConfirmBtn" style="display:none;" onclick="AttendanceScanner.confirm()">Apply to Roll Call</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toastEl"></div>
+
+<!-- ═══ SCRIPTS ═══ -->
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_live.js"></script>
+<script>setTimeout(function(){document.documentElement.classList.add('css-ready')},3000)</script>
+<script>
+// Sidebar toggle
+(function(){
+    var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open')}
+    function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy)}
+    h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open()});
+    bd.addEventListener('click',close);
+    sb.querySelectorAll('.sidebar-item').forEach(function(b){
+        b.addEventListener('click',function(){
+            var p=b.dataset.page;
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active')});
+            b.classList.add('active');
+            document.querySelectorAll('.live-page').forEach(function(x){x.classList.remove('active')});
+            var t=document.getElementById('page-'+p); if(t) t.classList.add('active');
+            // Sync bottom nav active state
+            document.querySelectorAll('.cs-bnav-item').forEach(function(x){x.classList.remove('active')});
+            var bn=document.querySelector('.cs-bnav-item[data-page="'+p+'"]');if(bn)bn.classList.add('active');
+            close();
+            if(p==='parent-requests'&&window.ParentRequests) ParentRequests.render();
+        });
+    });
+})();
+</script>
+<script>
+// ── Parent Requests bridge — reads from campistry_parent_requests_v1 ──────────
+var ParentRequests = (function(){
+    var PKEY = 'campistry_parent_requests_v1';
+    var LIVE_KEY = 'campistry_live_v1';
+
+    function esc(s){if(s==null)return'';var m={'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'};return String(s).replace(/[&<>"']/g,function(c){return m[c]});}
+    function getReqs(){try{return JSON.parse(localStorage.getItem(PKEY)||'[]');}catch(e){return[];}}
+    function saveReqs(arr){try{localStorage.setItem(PKEY,JSON.stringify(arr));}catch(e){}}
+    function getLive(){try{return JSON.parse(localStorage.getItem(LIVE_KEY)||'{}');}catch(e){return{};}}
+    function saveLive(d){try{d.updated_at=new Date().toISOString();localStorage.setItem(LIVE_KEY,JSON.stringify(d));}catch(e){}}
+    function todayKey(){var d=new Date();d.setHours(12,0,0,0);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+    function getTodayData(){var data=getLive(),key=todayKey();if(!data[key])data[key]={attendance:{},absences:[],earlyPickups:[],notes:''};return data[key];}
+    function saveTodayData(t){var d=getLive();d[todayKey()]=t;saveLive(d);}
+
+    function liveToast(msg){
+        var el=document.getElementById('toastEl');if(!el)return;
+        el.textContent=msg;el.className='toast';
+        requestAnimationFrame(function(){el.classList.add('show');setTimeout(function(){el.classList.remove('show');},2500);});
+    }
+
+    function fmtTime(ts){
+        if(!ts)return'';
+        var d=new Date(ts),now=new Date(),diff=now-d;
+        if(diff<60000)return'Just now';
+        if(diff<3600000)return Math.floor(diff/60000)+'m ago';
+        if(diff<86400000)return Math.floor(diff/3600000)+'h ago';
+        return (d.getMonth()+1)+'/'+d.getDate();
+    }
+
+    function updateBadge(){
+        var count=getReqs().filter(function(r){return r.status==='Pending';}).length;
+        var badge=document.getElementById('sbParentReqCount');
+        if(badge){badge.textContent=String(count);badge.style.display=count?'':'none';}
+    }
+
+    function render(){
+        var reqs=getReqs();
+        var body=document.getElementById('parentRequestsBody');if(!body)return;
+        updateBadge();
+        if(!reqs.length){body.innerHTML='<div class="empty-state">No parent requests yet — they\'ll appear here when parents submit from Campistry Link</div>';return;}
+
+        var typeLabel={early:'Early Pickup',change:'Pickup Change',friend:'Going With Friend',late:'Late Arrival'};
+        var typeClr={early:'var(--amber-600)',change:'var(--blue-500)',friend:'var(--purple-500)',late:'var(--red-500)'};
+        var html='<div class="card"><div class="card-body" style="padding:0 18px;">';
+        reqs.forEach(function(r,i){
+            var statusCls=r.status==='Pending'?'badge-warn':r.status==='Confirmed'?'badge-info':r.status==='Declined'?'badge-error':'badge-ok';
+            var details=[];
+            if(r.type==='early'){if(r.pickupTime)details.push('Pickup: '+r.pickupTime);if(r.pickupBy)details.push('By: '+r.pickupBy);}
+            else if(r.type==='change'){if(r.newPickupPerson)details.push('New person: '+r.newPickupPerson);if(r.phone)details.push(r.phone);}
+            else if(r.type==='friend'){if(r.friendName)details.push('Friend: '+r.friendName);if(r.friendParentName)details.push('Parent: '+r.friendParentName);}
+            else if(r.type==='late'){if(r.arrivalTime)details.push('Arriving: '+r.arrivalTime);if(r.reason)details.push(r.reason);}
+            if(r.notes)details.push('“'+r.notes+'”');
+            var initials=esc(r.childName||'').split(' ').map(function(n){return n[0]||'';}).join('').slice(0,2);
+            var actions=r.status==='Pending'?
+                '<div style="display:flex;gap:6px;margin-top:6px;">'+
+                '<button class="btn btn-primary btn-sm" onclick="ParentRequests.confirm('+i+')">Confirm</button>'+
+                '<button class="btn btn-secondary btn-sm" onclick="ParentRequests.decline('+i+')">Decline</button>'+
+                '</div>':'';
+            html+=
+                '<div style="display:flex;align-items:flex-start;gap:12px;padding:14px 0;border-bottom:1px solid var(--slate-100);">'+
+                '<div style="width:36px;height:36px;border-radius:50%;background:var(--slate-100);display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:.72rem;font-weight:700;color:var(--slate-600);">'+initials+'</div>'+
+                '<div style="flex:1;min-width:0;">'+
+                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'+
+                        '<span style="font-weight:700;">'+esc(r.childName)+'</span>'+
+                        (r.childBunk?'<span style="font-size:.7rem;color:var(--slate-400);background:var(--slate-100);padding:1px 8px;border-radius:999px;">'+esc(r.childBunk)+'</span>':'')+
+                        '<span style="font-size:.7rem;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--slate-50);color:'+typeClr[r.type||'early']+';">'+esc(r.label)+'</span>'+
+                    '</div>'+
+                    '<div style="font-size:.76rem;color:var(--slate-500);margin-top:2px;">From: '+esc(r.parentName)+'&nbsp;&middot;&nbsp;'+fmtTime(r.submittedAt)+'</div>'+
+                    (details.length?'<div style="font-size:.79rem;color:var(--slate-600);margin-top:4px;line-height:1.5;">'+details.map(esc).join('&nbsp;&nbsp;&middot;&nbsp;&nbsp;')+'</div>':'')+
+                    actions+
+                '</div>'+
+                '<span class="badge '+statusCls+'" style="flex-shrink:0;">'+esc(r.status)+'</span>'+
+                '</div>';
+        });
+        html+='</div></div>';
+        body.innerHTML=html;
+    }
+
+    function confirm(i){
+        var reqs=getReqs(),r=reqs[i];
+        if(!r||r.status!=='Pending')return;
+        r.status='Confirmed';
+        saveReqs(reqs);
+        // Inject into Live's own data store
+        var today=getTodayData();
+        var now=new Date(),timeStr=now.getHours()+':'+(now.getMinutes()<10?'0':'')+now.getMinutes();
+        if(r.type==='late'){
+            if(!today.absences.some(function(a){return a.name===r.childName;})){
+                today.absences.push({name:r.childName,reason:'late',notes:'Late arrival'+(r.arrivalTime?' — '+r.arrivalTime:'')+(r.notes?' ('+r.notes+')':''),time:timeStr,timestamp:Date.now(),fromParent:true});
+                today.attendance[r.childName]=false;
+            }
+        } else {
+            if(!today.earlyPickups.some(function(p){return p.name===r.childName;})){
+                today.earlyPickups.push({name:r.childName,pickupTime:r.pickupTime||r.arrivalTime||timeStr,pickedUpBy:r.pickupBy||r.newPickupPerson||r.friendParentName||r.parentName||'',reason:r.label+(r.notes?' — '+r.notes:''),timestamp:Date.now(),fromParent:true});
+            }
+        }
+        saveTodayData(today);
+        if(window.CampistryLive) CampistryLive.refresh();
+        render();
+        liveToast(r.childName+' — '+r.label+' confirmed');
+    }
+
+    function decline(i){
+        var reqs=getReqs(),r=reqs[i];
+        if(!r||r.status!=='Pending')return;
+        r.status='Declined';
+        saveReqs(reqs);
+        render();
+        liveToast((r.label||'Request')+' declined');
+    }
+
+    function refresh(){render();}
+
+    // Update badge on load
+    updateBadge();
+
+    return {render:render,confirm:confirm,decline:decline,refresh:refresh,updateBadge:updateBadge};
+})();
+</script>
+<script src="campistry_notes_quick.js"></script>
+
+<!-- ═══ BOTTOM NAV (mobile) ═══ -->
+<div class="cs-bnav" id="csBottomNav">
+  <button class="cs-bnav-item active" data-page="dashboard" onclick="CampistryLive && document.querySelector('.sidebar-item[data-page=dashboard]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+    Dashboard
+  </button>
+  <button class="cs-bnav-item" data-page="roll-call" onclick="document.querySelector('.sidebar-item[data-page=roll-call]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+    Roll Call
+  </button>
+  <button class="cs-bnav-item" data-page="absences" onclick="document.querySelector('.sidebar-item[data-page=absences]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>
+    Absences
+  </button>
+  <button class="cs-bnav-item" data-page="early-pickup" onclick="document.querySelector('.sidebar-item[data-page=early-pickup]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 17H3a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11a2 2 0 0 1 2 2v3"/><rect x="9" y="11" width="14" height="10" rx="2"/><circle cx="12" cy="16" r="1"/></svg>
+    Pickups
+  </button>
+  <button class="cs-bnav-item" data-page="parent-requests" onclick="document.querySelector('.sidebar-item[data-page=parent-requests]').click()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    Requests
+  </button>
+</div>
+</body>
+</html>
