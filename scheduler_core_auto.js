@@ -23452,6 +23452,67 @@
             } catch (_eTRS) { try { warn('[STEP 6.7 FN-24b] error: ' + (_eTRS && _eTRS.message)); } catch (_x) {} }
         })();
 
+        // ★ STEP 6.8 — FINAL SHARE-AWARE FREE-FILL (FN-25). The early guarantee-fill
+        //   (4.97b) IS share-aware but runs BEFORE the post-complete passes finalize
+        //   placements, so a same-division field that only becomes a half-full SHARE
+        //   target afterward (e.g. Elimination cap 2 with one Quints bunk on it) is
+        //   never offered to a still-Free slot. FN-22's late free-fill uses EMPTY
+        //   fields ONLY — it never shares. Net (observed): Quints 1/2/4/7 sat Free at
+        //   12:15 while Quints 3/5/6 were each alone on a half-full same_division field
+        //   (Elimination / Chalk Coloring / Volleyball, cap 2) they could simply join.
+        //   This pass runs LAST (after every placement settles), reads the durable
+        //   config, and fills each remaining NON-intentional Free slot by SHARING onto
+        //   a same-division field under capacity — or an empty field — with a NON-REPEAT
+        //   activity, fully validated (access/time/exclusive via _validateWritePlacement,
+        //   capacity + no cross-division share via occupancy). Non-repeat-only so it
+        //   never creates a same-day duplicate. Only ADDS coverage; never violates config.
+        (function _finalShareAwareFreeFill() {
+            try {
+                var _app1 = _fn24DurableApp1();
+                var _allF = ((_app1 && _app1.fields) || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                if (!_allF.length) return;
+                var _sa = window.scheduleAssignments || {};
+                var _dt = window.divisionTimes || {};
+                var _bg = {}; Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
+                var _nm = function (s) { return String(s || '').toLowerCase().trim(); };
+                var _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                var _occ = function (fn, s, e, exclB) { var c = 0, dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; var arr = _sa[b]; if (!Array.isArray(arr)) return; var ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; var es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
+                var _filled = 0, _shared = 0, _det = [];
+                Object.keys(_sa).forEach(function (bunk) {
+                    var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    var grade = _bg[bunk];
+                    var done = {}; slots.forEach(function (en) { if (en && !en.continuation) { var a = en._activity || en.sport || en.event; if (a && !/^free$/i.test(a)) done[_nm(a)] = true; } });
+                    slots.forEach(function (en, idx) {
+                        if (!en || en.continuation) return;
+                        var a0 = en._activity || en.sport || en.event;
+                        if (!(!a0 || /^free$/i.test(a0) || en.field === 'Free')) return;           // only Free slots
+                        if (en._intentionalFree || en._source === 'bunk-delete-override') return;    // user-intended Free
+                        var s = en._startMin, e = en._endMin; if (s == null || e == null) return;
+                        var pick = null, isShared = false;
+                        for (var fi = 0; fi < _allF.length && !pick; fi++) {
+                            var F = _allF[fi];
+                            var o = _occ(F.name, s, e, bunk);
+                            if (o.count >= _cap(F.name)) continue;                                          // field full
+                            if (o.count > 0 && !(o.divs.length === 1 && o.divs[0] === grade)) continue;      // cross-division share not allowed
+                            for (var ai = 0; ai < F.activities.length; ai++) {
+                                var A = F.activities[ai];
+                                if (done[_nm(A)]) continue;                                                 // non-repeat only
+                                if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue;
+                                pick = { field: F.name, act: A }; isShared = o.count > 0; break;
+                            }
+                        }
+                        if (pick) {
+                            slots[idx] = { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'share-fill' + (isShared ? '-shared' : '-empty'), continuation: false };
+                            done[_nm(pick.act)] = true; _filled++; if (isShared) _shared++;
+                            if (_det.length < 14) _det.push(bunk + '→' + pick.act + (isShared ? '(shared)' : ''));
+                        }
+                    });
+                });
+                if (_filled) log('[STEP 6.8 SHARE-FILL] filled ' + _filled + ' Free slot(s) (' + _shared + ' via same-division sharing): ' + _det.join(', '));
+                else log('[STEP 6.8 SHARE-FILL] no shareable/empty non-repeat fill for remaining Free slots');
+            } catch (_eSF) { try { warn('[STEP 6.8 SHARE-FILL] error: ' + (_eSF && _eSF.message)); } catch (_x) {} }
+        })();
+
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         // ★ FN-14 DATE-DESYNC FIX: stamp the complete event with the date this gen
         //   actually ran for (currentDate, captured at gen START from
