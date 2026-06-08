@@ -23305,6 +23305,74 @@
         //   construction, so they need no further sweep validation.
         try { _freeFillSweepFN22(); } catch (_eff2) {}
 
+        // ★ STEP 6.6 — DEAD-CONTINUATION REPAIR (FN-23, final healing pass)
+        // A continuation slot created by the STEP 4.9 perfection-extend carries NO
+        // _startMin/_endMin — it relies on the renderer to visually merge it into the
+        // previous activity, and the anchor's _endMin is never lengthened. When a LATER
+        // post-pass (drop-refill, active-pairing, FQ-reopt) REPLACES the anchor activity,
+        // or when the extend simply never covered the period, the continuation is stranded:
+        // it renders blank, the completeness check counts it as "filled" (it's a non-null
+        // object), 4.97b + FN-22 SKIP it (it's a continuation, not Free/null), yet the
+        // honest REAL-GAP verifier — and the user — see a real mid-day hole (e.g. the
+        // pre-lunch 12:15–12:55 gaps on morning-swim bunks). This pass finds every
+        // *timeless* continuation (legit multi-period continuations always carry real
+        // _startMin/_endMin, so they're never touched), recovers its true period window
+        // from _perBunkSlots, and fills it with a write-validated activity (same hard-config
+        // gate as 4.97b: access / time-rules / capacity / no cross-division sharing,
+        // preferring a non-repeat). Genuinely unfillable slots become an honest, visible
+        // Free block with real times instead of a phantom. It only ADDS coverage and never
+        // violates hard config. Geometry-agnostic: catches orphans from ANY prior pass.
+        (function _deadContinuationRepair() {
+            try {
+                const _sa = window.scheduleAssignments || {};
+                const _dt = window.divisionTimes || {};
+                const _gs = getGlobalSettings();
+                const _allF = ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).filter(function (f) { return f && f.name && Array.isArray(f.activities) && f.activities.length; });
+                if (!_allF.length) return;
+                const _bg = {};
+                Object.keys(divisions || {}).forEach(function (d) { ((divisions[d] && divisions[d].bunks) || []).forEach(function (b) { _bg[String(b)] = d; }); });
+                const _nm = function (s) { return String(s || '').toLowerCase().trim(); };
+                const _cap = function (fn) { try { return (window.getFieldCapacity && window.getFieldCapacity(fn)) || 1; } catch (e) { return 1; } };
+                const _occ = function (fn, s, e, exclB) { let c = 0; const dv = {}; Object.keys(_sa).forEach(function (b) { if (String(b) === String(exclB)) return; const arr = _sa[b]; if (!Array.isArray(arr)) return; const ds = _dt[_bg[b]] || []; arr.forEach(function (en, idx) { if (!en || en.continuation || _nm(en.field) !== _nm(fn)) return; const es = en._startMin != null ? en._startMin : (ds[idx] && ds[idx].startMin), ee = en._endMin != null ? en._endMin : (ds[idx] && ds[idx].endMin); if (es != null && es < e && ee > s) { c++; dv[_bg[b]] = true; } }); }); return { count: c, divs: Object.keys(dv) }; };
+                const _pbsFor = function (grade, bunk) { return (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_dt[grade] && _dt[grade]._perBunkSlots && _dt[grade]._perBunkSlots[bunk]) || null; };
+                let _dead = 0, _filled = 0, _free = 0;
+                Object.keys(_sa).forEach(function (bunk) {
+                    const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    const grade = _bg[bunk]; const pbs = _pbsFor(grade, bunk); if (!Array.isArray(pbs)) return;
+                    const done = {}; slots.forEach(function (en) { if (en && !en.continuation) { const a = en._activity || en.sport || en.event; if (a) done[_nm(a)] = true; } });
+                    slots.forEach(function (en, idx) {
+                        if (!en || !en.continuation) return;
+                        if (en._startMin != null && en._endMin != null) return;   // legit timed continuation — leave alone
+                        const per = pbs[idx]; if (!per || per.startMin == null || per.endMin == null) return;
+                        const s = per.startMin, e = per.endMin;
+                        _dead++;
+                        let bestNew = null, bestRepeat = null;
+                        for (let fi = 0; fi < _allF.length && !bestNew; fi++) {
+                            const F = _allF[fi];
+                            const o = _occ(F.name, s, e, bunk);
+                            if (o.count >= _cap(F.name)) continue;                            // field at capacity
+                            if (o.count > 0 && !(o.divs.length === 1 && o.divs[0] === grade)) continue; // avoid cross-division sharing
+                            for (let ai = 0; ai < F.activities.length; ai++) {
+                                const A = F.activities[ai];
+                                if (_validateWritePlacement(F.name, A, grade, bunk, s, e) !== null) continue; // hard config gate
+                                if (!done[_nm(A)]) { bestNew = { field: F.name, act: A }; break; }
+                                else if (!bestRepeat) bestRepeat = { field: F.name, act: A };
+                            }
+                        }
+                        const pick = bestNew || bestRepeat;
+                        if (pick) {
+                            slots[idx] = { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'dead-cont-fill' + (bestNew ? '' : '-repeat'), continuation: false };
+                            done[_nm(pick.act)] = true; _filled++;
+                        } else {
+                            slots[idx] = { field: 'Free', _activity: 'Free', _startMin: s, _endMin: e, _autoMode: true, _source: 'dead-cont-free', continuation: false };
+                            _free++;
+                        }
+                    });
+                });
+                if (_dead) log('[STEP 6.6 DEAD-CONT REPAIR] ' + _dead + ' stranded continuation(s): ' + _filled + ' filled, ' + _free + ' reset to Free');
+            } catch (_eDC) { try { warn('[STEP 6.6 DEAD-CONT REPAIR] error: ' + (_eDC && _eDC.message)); } catch (_x) {} }
+        })();
+
         window.__autoGenDeadline = 0; // ★ FN-17: clear the generation deadline (gen done) so it never affects later non-generation repair calls
         // ★ FN-14 DATE-DESYNC FIX: stamp the complete event with the date this gen
         //   actually ran for (currentDate, captured at gen START from
