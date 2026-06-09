@@ -1325,9 +1325,14 @@ function renderGeneralConfig(container, fac) {
 function summaryFacilityInstructors(fac) {
     const acts = fac.generalActivities || [];
     if (acts.length === 0) return 'No activities to tag';
-    const tagged = acts.filter(a => a && typeof a.instructor === 'string' && a.instructor.trim()).length;
-    if (tagged === 0) return 'No instructors set';
-    return tagged + ' of ' + acts.length + ' tagged';
+    // Distinct, non-empty instructor names across activities at this facility.
+    const set = new Set();
+    acts.forEach(a => {
+        if (a && typeof a.instructor === 'string' && a.instructor.trim()) set.add(a.instructor.trim());
+    });
+    if (set.size === 0) return 'No instructor set';
+    if (set.size === 1) return [...set][0];
+    return [...set].join(', ');
 }
 
 function renderFacilityInstructors(fac) {
@@ -1345,10 +1350,10 @@ function renderFacilityInstructors(fac) {
 
     const desc = document.createElement('div');
     desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
-    desc.textContent = 'Name the person who runs each activity here. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    desc.textContent = 'Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
     wrap.appendChild(desc);
 
-    // Single shared datalist for all rows
+    // Shared datalist of existing instructor names (specials + all general).
     const dlId = 'fac-instructor-list';
     let dl = document.getElementById(dlId);
     if (!dl) {
@@ -1374,21 +1379,22 @@ function renderFacilityInstructors(fac) {
         (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
     } catch {}
 
-    acts.forEach(ga => {
-        const row = document.createElement('div');
-        row.style.cssText = 'display:flex; align-items:center; gap:12px; padding:8px 10px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:6px;';
-
-        const nameEl = document.createElement('div');
-        nameEl.style.cssText = 'flex:1; font-weight:600; font-size:0.88rem; color:#1F2937;';
-        nameEl.textContent = ga.name;
-        row.appendChild(nameEl);
-
+    let primaryInstructor = '';
+    if (acts.length === 1) {
+        // Single activity — no name label (it's already shown above in Configured Activities).
+        const ga = acts[0];
+        primaryInstructor = (typeof ga.instructor === 'string' ? ga.instructor : '').trim();
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+        label.textContent = 'Instructor:';
         const input = document.createElement('input');
         input.type = 'text';
         input.placeholder = 'No instructor';
-        input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+        input.value = ga.instructor || '';
         input.setAttribute('list', dlId);
-        input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:200px; background:#fff;';
+        input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
         input.addEventListener('change', () => {
             const v = (input.value || '').trim();
             if ((ga.instructor || '') === v) return;
@@ -1396,12 +1402,64 @@ function renderFacilityInstructors(fac) {
             saveData();
             renderDetailPane();
         });
-        row.appendChild(input);
-        wrap.appendChild(row);
-    });
+        inputRow.appendChild(label);
+        inputRow.appendChild(input);
+        wrap.appendChild(inputRow);
+    } else {
+        // 2+ activities — keep per-activity labels so each input is unambiguous.
+        primaryInstructor = (typeof acts[0].instructor === 'string' ? acts[0].instructor : '').trim();
+        acts.forEach(ga => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:12px; padding:8px 10px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:6px;';
+            const nameEl = document.createElement('div');
+            nameEl.style.cssText = 'flex:1; font-weight:600; font-size:0.88rem; color:#1F2937;';
+            nameEl.textContent = ga.name;
+            row.appendChild(nameEl);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'No instructor';
+            input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+            input.setAttribute('list', dlId);
+            input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:200px; background:#fff;';
+            input.addEventListener('change', () => {
+                const v = (input.value || '').trim();
+                if ((ga.instructor || '') === v) return;
+                ga.instructor = v;
+                saveData();
+                renderDetailPane();
+            });
+            row.appendChild(input);
+            wrap.appendChild(row);
+        });
+    }
+
+    // Also-runs picker — declare other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(primaryInstructor, { facilityName: fac.name });
+    if (aBlock) wrap.appendChild(aBlock);
 
     return wrap;
 }
+
+// Cross-write helper — called from window.buildAlsoRunsChecklist when the
+// user toggles an "also runs" checkbox that targets a general activity.
+// Updates the in-memory facilities array, persists, and re-renders.
+window.setGeneralActivityInstructor = function(activityName, instructor) {
+    if (!activityName) return false;
+    let touched = false;
+    (facilities || []).forEach(f => {
+        (f.generalActivities || []).forEach(ga => {
+            if (ga && ga.name === activityName) {
+                ga.instructor = String(instructor || '');
+                touched = true;
+            }
+        });
+    });
+    if (touched) {
+        saveData();
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    }
+    return touched;
+};
 
 // =========================================================================
 // GENERAL ACTIVITY SHARING — Pair-based UI mirroring Specials

@@ -844,34 +844,138 @@ function renderInstructor(item) {
     row.appendChild(dl);
     wrap.appendChild(row);
 
-    // Also-runs preview: other activities tagged with the same instructor.
-    const cur = (item.instructor || '').trim().toLowerCase();
-    if (cur) {
-        const others = [];
-        (specialActivities || []).concat(rainyDayActivities || []).forEach(a => {
-            if (!a || a === item || !a.instructor) return;
-            if (String(a.instructor).trim().toLowerCase() === cur) others.push(a.name + ' (Special)');
-        });
-        try {
-            const settings = window.loadGlobalSettings?.() || {};
-            (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => {
-                if (ga && ga.name && ga.instructor && String(ga.instructor).trim().toLowerCase() === cur) {
-                    others.push(ga.name + ' @ ' + f.name);
-                }
-            }));
-        } catch {}
-        const info = document.createElement('div');
-        info.style.cssText = 'font-size:0.78rem; color:#374151; background:#F3F4F6; padding:8px 10px; border-radius:6px; margin-top:4px;';
-        if (others.length > 0) {
-            info.innerHTML = '<strong>Also runs:</strong> ' + others.map(o => '<span style="display:inline-block;background:#fff;border:1px solid #D1D5DB;border-radius:10px;padding:1px 8px;margin:2px 4px 2px 0;">' + window.CampUtils.escapeHtml(o) + '</span>').join('');
-        } else {
-            info.textContent = 'No other activity is tagged with this instructor yet.';
-        }
-        wrap.appendChild(info);
-    }
+    // Also-runs picker: interactive checklist of other activities the same
+    //   instructor runs. Toggling a checkbox writes/clears the instructor on
+    //   the target activity via the shared cross-write helpers.
+    const _aBlock = window.buildAlsoRunsChecklist?.(item.instructor, { specialName: item.name });
+    if (_aBlock) wrap.appendChild(_aBlock);
 
     return wrap;
 }
+
+// =========================================================================
+// CROSS-WRITE HELPERS — Instructor links between activities
+// =========================================================================
+// Used by the "Also runs" checklist to set / clear the instructor tag on a
+// target activity from either side (specials or facilities). Each helper
+// updates the canonical store for its own data type, then persists.
+
+window.setSpecialInstructor = function(activityName, instructor) {
+    if (!activityName) return false;
+    const norm = String(activityName);
+    let touched = false;
+    (specialActivities || []).forEach(s => { if (s && s.name === norm) { s.instructor = String(instructor || ''); touched = true; }});
+    (rainyDayActivities || []).forEach(s => { if (s && s.name === norm) { s.instructor = String(instructor || ''); touched = true; }});
+    if (touched) {
+        saveData();
+        if (_isInitialized) {
+            if (typeof renderMasterList === 'function') renderMasterList();
+            if (typeof renderRainyDayList === 'function') renderRainyDayList();
+            if (typeof renderDetailPane === 'function') renderDetailPane();
+        }
+    }
+    return touched;
+};
+
+// Render an "Also runs" interactive checklist for the given instructor.
+// `exclude` filters out self: { specialName?: string, facilityName?: string }.
+// Returns a DOM node. If currentInstructor is empty, shows a hint instead.
+window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
+    exclude = exclude || {};
+    const escape = (s) => (window.CampUtils && window.CampUtils.escapeHtml) ? window.CampUtils.escapeHtml(s) : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:6px; margin-top:10px; padding-top:10px; border-top:1px dashed #E5E7EB;';
+
+    const raw = (typeof currentInstructor === 'string') ? currentInstructor.trim() : '';
+    if (!raw) {
+        const hint = document.createElement('div');
+        hint.style.cssText = 'font-size:0.78rem; color:#9CA3AF; font-style:italic;';
+        hint.textContent = 'Type an instructor name above to link this person to other activities they also run.';
+        wrap.appendChild(hint);
+        return wrap;
+    }
+    const curLower = raw.toLowerCase();
+
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+    heading.innerHTML = escape(raw) + ' also runs:';
+    wrap.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+
+    const candidates = [];
+    // Specials (both regular + rainy-day)
+    const allSpecials = (window.getAllSpecialActivities && window.getAllSpecialActivities()) || [];
+    allSpecials.forEach(sp => {
+        if (!sp || !sp.name) return;
+        if (exclude.specialName && sp.name === exclude.specialName) return;
+        candidates.push({
+            label: sp.name + ' (Special)',
+            name: sp.name,
+            isSpecial: true,
+            currentInstructor: (typeof sp.instructor === 'string' ? sp.instructor : '').trim()
+        });
+    });
+    // General activities (across all facilities; skip the calling facility)
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        (settings.facilities || []).forEach(f => {
+            if (!f || !f.name) return;
+            if (exclude.facilityName && f.name === exclude.facilityName) return;
+            (f.generalActivities || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                candidates.push({
+                    label: ga.name + ' @ ' + f.name,
+                    name: ga.name,
+                    isSpecial: false,
+                    currentInstructor: (typeof ga.instructor === 'string' ? ga.instructor : '').trim()
+                });
+            });
+        });
+    } catch {}
+
+    if (candidates.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:0.78rem; color:#9CA3AF;';
+        empty.textContent = 'No other activities to link.';
+        wrap.appendChild(empty);
+        return wrap;
+    }
+
+    candidates.forEach(c => {
+        const item = document.createElement('label');
+        const isOn = c.currentInstructor.toLowerCase() === curLower;
+        item.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; background:' + (isOn ? '#e6f4f7' : '#fff') + '; border:1px solid ' + (isOn ? '#147D91' : '#E5E7EB') + '; border-radius:6px; cursor:pointer;';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = isOn;
+        cb.addEventListener('change', () => {
+            const newInstr = cb.checked ? raw : '';
+            if (c.isSpecial) {
+                window.setSpecialInstructor?.(c.name, newInstr);
+            } else {
+                window.setGeneralActivityInstructor?.(c.name, newInstr);
+            }
+        });
+        item.appendChild(cb);
+        const txt = document.createElement('span');
+        txt.style.cssText = 'font-size:0.85rem; flex:1;' + (isOn ? ' font-weight:500;' : '');
+        txt.textContent = c.label;
+        item.appendChild(txt);
+        if (c.currentInstructor && c.currentInstructor.toLowerCase() !== curLower) {
+            const conflict = document.createElement('span');
+            conflict.style.cssText = 'margin-left:auto; font-size:0.72rem; color:#92400E; background:#FEF3C7; padding:2px 6px; border-radius:10px;';
+            conflict.textContent = 'currently: ' + c.currentInstructor;
+            item.appendChild(conflict);
+        }
+        list.appendChild(item);
+    });
+
+    wrap.appendChild(list);
+    return wrap;
+};
 
 // =========================================================================
 // SUMMARY HELPERS
