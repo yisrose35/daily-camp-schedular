@@ -472,29 +472,48 @@
         if (usableSpecials.length === 0) return null;
         
         const bunkHistory = historicalCounts[bunk] || {};
-        
+
+        // ★ FN-30 (manual): PERIOD-SCOPED floor deficit. historicalCounts is all-time
+        //   cumulative; the ceilings in canBunkUseSpecial already use period-scoped
+        //   getPeriodActivityCount, but the floor boost previously used the all-time
+        //   count — so once a bunk's lifetime count passed the floor the boost died,
+        //   and a bunk sitting at 0 in a FRESH period never got re-prioritized. Compute
+        //   the min/exact shortage from the period count (each on its own period) so the
+        //   escalation re-fires every period. Precomputed once per special (not inside
+        //   the comparator) to avoid O(n log n) getPeriodActivityCount scans.
+        const _gpc = window.SchedulerCoreUtils?.getPeriodActivityCount;
+        const _floorEsc = {}; // special name -> escalation bonus from period-scoped floor deficit
+        usableSpecials.forEach(sp => {
+            const props = activityProps?.[sp.name] || sp;
+            const minF = parseInt(props.minFrequency) || 0;
+            const exactF = parseInt(props.exactFrequency) || 0;
+            if (minF <= 0 && exactF <= 0) { _floorEsc[sp.name] = 0; return; }
+            const allTime = bunkHistory[sp.name] || 0;
+            const minP = (props.minFrequencyPeriod === 'week' ? '1week' : props.minFrequencyPeriod) || '1week';
+            const exactP = props.exactFrequencyPeriod || '1week';
+            const minCnt = minF > 0 ? (_gpc ? _gpc(bunk, sp.name, minP) : allTime) : 0;
+            const exactCnt = exactF > 0 ? (_gpc ? _gpc(bunk, sp.name, exactP) : allTime) : 0;
+            const minShort = minF > 0 ? Math.max(minF - minCnt, 0) : 0;
+            const exactShort = exactF > 0 ? Math.max(exactF - exactCnt, 0) : 0;
+            let shortage, period;
+            if (exactShort >= minShort) { shortage = exactShort; period = exactP; }
+            else { shortage = minShort; period = minP; }
+            _floorEsc[sp.name] = shortage > 0
+                ? (window.SchedulerCoreUtils?.getEscalationBonus?.(period, shortage) || shortage * 100)
+                : 0;
+        });
+
         const sorted = [...usableSpecials].sort((a, b) => {
+            // Base score = all-time usage (least-used-first = variety). Below-floor
+            // specials get a strong negative escalation pull (period-scoped) so they
+            // sort ahead of every non-floor special — floors are near-mandatory.
             const countA = bunkHistory[a.name] || 0;
             const countB = bunkHistory[b.name] || 0;
-            // ★ Min frequency boost: activities where this bunk is below the floor
-            // are scored as if they have been used fewer times (higher priority)
-            const propsA = activityProps?.[a.name] || a;
-            const propsB = activityProps?.[b.name] || b;
-            const minFA = parseInt(propsA.minFrequency) || 0;
-            const minFB = parseInt(propsB.minFrequency) || 0;
-            const exactFA = parseInt(propsA.exactFrequency) || 0;
-            const exactFB = parseInt(propsB.exactFrequency) || 0;
-            const shortageA = Math.max(minFA - countA, exactFA - countA, 0);
-            const shortageB = Math.max(minFB - countB, exactFB - countB, 0);
-            const periodA = propsA.exactFrequencyPeriod || propsA.minFrequencyPeriod || '1week';
-            const periodB = propsB.exactFrequencyPeriod || propsB.minFrequencyPeriod || '1week';
-            const escA = shortageA > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodA, shortageA) || shortageA * 100) : 0;
-            const escB = shortageB > 0 ? (window.SchedulerCoreUtils?.getEscalationBonus?.(periodB, shortageB) || shortageB * 100) : 0;
-            const scoreA = countA - escA;
-            const scoreB = countB - escB;
+            const scoreA = countA - (_floorEsc[a.name] || 0);
+            const scoreB = countB - (_floorEsc[b.name] || 0);
             if (scoreA !== scoreB) return scoreA - scoreB;
             return Math.random() - 0.5;
-        });   
+        });
         return sorted[0];
     }
 
