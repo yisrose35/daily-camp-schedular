@@ -449,7 +449,10 @@
             // ★ Per-grade scoping: a rule with `divisions: ['1']` only applies
             //   when the current league touches grade 1. Rules with empty/missing
             //   `divisions` apply to all grades.
-            const _fieldTimeRules = activityProperties?.[field.name]?.timeRules;
+            // ★ FN-29: fall back to the canonical field.timeRules if activityProperties
+            //   is empty/stale (the FN-24 disease) so a facility's unavailable window is
+            //   honored by leagues even when the merged copy isn't populated.
+            const _fieldTimeRules = (activityProperties?.[field.name]?.timeRules) || field.timeRules || null;
             if (_fieldTimeRules && _fieldTimeRules.length > 0 && _poolStartMin != null && _poolEndMin != null) {
                 const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
                 const _curDivs = (divisionNames || []).map(String);
@@ -484,6 +487,15 @@
                 const allowedDivs = Object.keys(field.accessRestrictions.divisions || {});
                 const hasAllowed = divisionNames.some(d => allowedDivs.includes(d));
                 if (!hasAllowed) continue;
+            }
+
+            // ★ FN-29: weather availability — on a rainy day, leagues (like sports) may
+            //   only use rainy-available / indoor fields. getRainyDayFieldFilter excludes
+            //   outdoor fields for sports but RETURNS a filter object (doesn't mutate
+            //   field.available), so the league pool never saw it — a league could place a
+            //   game on an outdoor field in the rain (weather was scored, not enforced).
+            if (window.isRainyDay === true && !(field.rainyDayAvailable === true || field.isIndoor === true)) {
+                continue;
             }
 
             const fieldSports = field.activities || [];

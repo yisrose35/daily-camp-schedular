@@ -514,6 +514,11 @@
         // ★★★ FILTER OUT DISABLED AND ALREADY-LOCKED FIELDS ★★★
         const _disabledSet = new Set(window.currentDisabledFields || []);
         let availableFields = fields.filter(f => !_disabledSet.has(f));
+        // ★ FN-29: field-config map so specialty leagues honor the same facility configs
+        //   sports do — access restrictions, weather availability, and canonical
+        //   field.timeRules (fallback when the merged activityProperties copy is empty).
+        const _gsSL = (window.loadGlobalSettings && window.loadGlobalSettings()) || {};
+        const _fcfgSL = {}; ((_gsSL.app1 && _gsSL.app1.fields) || _gsSL.fields || []).forEach(f => { if (f && f.name) _fcfgSL[f.name] = f; });
         if (window.GlobalFieldLocks && slots && slots.length > 0) {
             availableFields = window.GlobalFieldLocks.filterAvailableFields(availableFields, slots);
 
@@ -534,7 +539,7 @@
                 const _parseMin = window.SchedulerCoreUtils?.parseTimeToMinutes;
                 const _curDivs = (Array.isArray(league.divisions) ? league.divisions : []).map(String);
                 availableFields = availableFields.filter(fName => {
-                    const rules = window.activityProperties?.[fName]?.timeRules;
+                    const rules = (window.activityProperties?.[fName]?.timeRules) || (_fcfgSL[fName] && _fcfgSL[fName].timeRules) || null;
                     if (!rules || rules.length === 0) return true;
                     let hasAvail = false, inAvail = false;
                     for (const r of rules) {
@@ -553,6 +558,24 @@
                     return !hasAvail || inAvail;
                 });
             }
+        }
+
+        // ★ FN-29: honor access restrictions + weather availability (the same field
+        //   configs sports respect). Time rules handled above; combined-field
+        //   exclusivity is handled in the assignment loop (_effectiveGames /
+        //   FieldCombos.getExclusiveFields). Additive filter — only removes fields.
+        {
+            const _slDivs = (Array.isArray(league.divisions) ? league.divisions : []).map(String);
+            const _slRainy = window.isRainyDay === true;
+            availableFields = availableFields.filter(fName => {
+                const fc = _fcfgSL[fName]; if (!fc) return true;
+                if (fc.accessRestrictions && fc.accessRestrictions.enabled) {
+                    const allowed = Object.keys(fc.accessRestrictions.divisions || {});
+                    if (allowed.length > 0 && !_slDivs.some(d => allowed.includes(d))) return false;
+                }
+                if (_slRainy && !(fc.rainyDayAvailable === true || fc.isIndoor === true)) return false;
+                return true;
+            });
         }
 
         if (availableFields.length === 0) {
