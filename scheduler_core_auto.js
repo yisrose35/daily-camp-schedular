@@ -22654,6 +22654,15 @@
                 }
                 var skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
                 var scanned = 0, replaced = 0;
+                // ★ Issue-1 parity for the pairing path: load cross-day rotation timestamps
+                //   ONCE so paired-bunk refills prefer the activity done longest ago. A small
+                //   division (e.g. Minors, 2 bunks) that must pair with itself for sport
+                //   minPlayers every day otherwise repeats the same sport — the coverage-fill
+                //   passes (4.97b/6.6/6.8) already rotate cross-day; this brings the pairing
+                //   refill to parity. Tiebreaker only: candidates are still fully validated
+                //   in the selection loop, so feasibility/min-players/sharing are unaffected.
+                var _rhPair = (function () { try { var _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
+                var _rotTsPair = function (b, a) { try { var _m = _rhPair[b]; var _t = _m && _m[String(a)]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
                 Object.keys(sa).forEach(function (aBunk) {
                     var aSlots = sa[aBunk] || [];
                     var grade = bunkGradeP[String(aBunk)];
@@ -22738,6 +22747,10 @@
                         }
                         var orig = aSlots[aIdx];
                         var success = false;
+                        // ★ Issue-1 parity: least-recently-done activity first, so the
+                        //   first-valid pick below rotates this bunk's pairing sport cross-day
+                        //   instead of grabbing the same pool-order activity every day.
+                        replacements.sort(function (x, y) { return _rotTsPair(aBunk, x.act) - _rotTsPair(aBunk, y.act); });
                         // ★ Day 23: among fully-valid refill candidates, PREFER fields that
                         //   don't break same_division — i.e. empty, or occupied only by this
                         //   bunk's OWN division. Co-locate cross-division ONLY when no
