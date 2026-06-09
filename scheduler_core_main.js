@@ -1928,6 +1928,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 }
                 window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(manualSkeleton, divisions);
                 console.log(`[STEP 1] Built divisionTimes for ${Object.keys(window.divisionTimes).length} divisions`);
+                // ★ MODE ISOLATION (FN-28): window._perBunkSlots is an AUTO-ONLY global —
+                //   set only by the auto solver (scheduler_core_auto.js). The manual gen's
+                //   sharing + free-fill sweeps (_rtime / _stime76) read it FIRST when
+                //   resolving each slot's time window, so a prior AUTO generation this
+                //   session leaks its per-bunk geometry (e.g. 700-730 windows crossing the
+                //   pinned lunch) into the manual schedule — the SAME class of corruption
+                //   the divisionTimes rebuild above guards against, which is why auto→manual
+                //   regen "messes up" the schedule while manual→auto (auto rebuilds its own
+                //   per-bunk grid) is clean. Clear it in manual mode so those sweeps fall
+                //   back to the manual entry / division-level times. Auto pipeline (which
+                //   takes the skip-rebuild branch above) keeps its pre-built per-bunk grid.
+                if (_miManualMode) { try { window._perBunkSlots = {}; } catch (_ePB) {} }
             }
         } else {
            
