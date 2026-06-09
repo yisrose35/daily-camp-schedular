@@ -4399,6 +4399,12 @@
                 // Cooldown days for this activity (used by escalation below)
                 const _cdForEsc = parseInt(props.frequencyDays || cfg?.frequencyDays) || 0;
 
+                // ★ FN-30: floor-deficit flag. Set true when this bunk is below an
+                //   exact-frequency or min-frequency floor for this special. Promotes
+                //   the special into the "urgent" sort tier (alongside scarce) so floors
+                //   are near-mandatory rather than a soft nudge that loses the slot race.
+                let _belowFloor = false;
+
                 // Exact frequency: acts as both ceiling and floor.
                 // Per-grade override takes precedence over the global value.
                 // Bonus escalates based on effective remaining camp days,
@@ -4415,6 +4421,7 @@
                         const _efNeeded = _efExact - _efCount;
                         const _efEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_efPeriod, _efNeeded, currentDate, _cdForEsc);
                         score -= _efEsc || (100 * _efNeeded);
+                        _belowFloor = true; // below exact-frequency floor → urgent
                     }
                 }
 
@@ -4432,12 +4439,14 @@
                             const _mfNeeded = _mfMin - _mfCount;
                             const _mfEsc = window.SchedulerCoreUtils?.getEscalationBonus?.(_mfPeriodNorm, _mfNeeded, currentDate, _cdForEsc);
                             score -= _mfEsc || (100 * _mfNeeded);
+                            _belowFloor = true; // below min-frequency floor → urgent
                         }
                     }
                 }
 
                 specialPriorityList.push({
                     name: s.name, type: 'special', rotationScore: score,
+                    _belowFloor: _belowFloor, // ★ FN-30: urgent-tier flag (floor deficit)
                     duration: specificDuration,
                     dMin: specificDuration || specialConstraints.dMin,
                     dMax: specificDuration || specialConstraints.dMax,
@@ -4456,7 +4465,11 @@
                     subcategory: (typeof s.subcategory === 'string' ? s.subcategory.trim() : '')
                 });
             });
-           specialPriorityList.sort((a, b) => { if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1; return a.rotationScore - b.rotationScore; });
+           // ★ FN-30: "urgent" tier = scarce OR below a floor (exact/min). Below-floor
+           //   specials join scarce at the front so floors are near-mandatory; within the
+           //   tier, the escalating floor-deficit score (strong negative) sorts the most
+           //   urgent first. Scarce specials stay in the tier (not starved).
+           specialPriorityList.sort((a, b) => { const aU = a.isScarce || a._belowFloor, bU = b.isScarce || b._belowFloor; if (aU !== bU) return aU ? -1 : 1; return a.rotationScore - b.rotationScore; });
             specialPriorityList._rerank = function() {
                 if (!window.RotationEngine?.calculateRotationScore) return;
                 for (let _i = 0; _i < specialPriorityList.length; _i++) {
@@ -4469,13 +4482,18 @@
                     _it.rotationScore = _s;
                 }
                 specialPriorityList.sort((a, b) => {
-                    if (a.isScarce !== b.isScarce) return a.isScarce ? -1 : 1;
+                    // ★ FN-30: keep below-floor specials in the urgent tier through rerank.
+                    //   _belowFloor was computed from the saved period count (stable within
+                    //   a day); RotationEngine's recomputed score also escalates floors, so
+                    //   ordering within the tier stays correct.
+                    const aU = a.isScarce || a._belowFloor, bU = b.isScarce || b._belowFloor;
+                    if (aU !== bU) return aU ? -1 : 1;
                     return a.rotationScore - b.rotationScore;
                 });
             };
-            // Iteration variation: shuffle non-scarce specials
+            // Iteration variation: shuffle non-urgent specials (keep scarce + below-floor pinned)
             if (_iterSeed > 0) {
-                const scarceEnd = specialPriorityList.findIndex(s => !s.isScarce);
+                const scarceEnd = specialPriorityList.findIndex(s => !(s.isScarce || s._belowFloor));
                 const nonScarce = scarceEnd >= 0 ? specialPriorityList.splice(scarceEnd) : [];
                 if (nonScarce.length > 1) {
                     const shuffled = seedShuffle(nonScarce, _iterSeed + parseInt(String(bunk).replace(/\D/g,'')) || 0);
