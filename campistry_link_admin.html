@@ -1,0 +1,2198 @@
+<!DOCTYPE html>
+<html lang="en" data-product="link">
+<head>
+    <meta charset="UTF-8">
+    <title>Campistry Link | Camp Admin</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/png" href="Campistry_logo.png">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=Fraunces:opsz,wght@9..144,600;9..144,700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="campistry-unified.css">
+    <link rel="stylesheet" href="campistry_link.css">
+    <!-- Splash screen — inline so it appears before any external CSS -->
+    <style>
+        #link-splash {
+            position: fixed; inset: 0; z-index: 9999999;
+            background: #fff;
+            display: flex; align-items: center; justify-content: center;
+            transition: opacity 0.4s ease;
+        }
+        #link-splash.hide { opacity: 0; pointer-events: none; }
+        #link-splash-wrap {
+            position: relative;
+            width: 220px; height: 220px;
+        }
+        .link-splash-half {
+            position: absolute; top: 0; left: 0;
+            width: 220px; height: 220px; object-fit: contain;
+        }
+        .link-splash-left {
+            clip-path: inset(0 50% 0 0);
+            animation: link-from-left 0.8s cubic-bezier(0.22,0.61,0.36,1) 0.15s both;
+        }
+        .link-splash-right {
+            clip-path: inset(0 0 0 50%);
+            animation: link-from-right 0.8s cubic-bezier(0.22,0.61,0.36,1) 0.15s both;
+        }
+        @keyframes link-from-left {
+            from { transform: translateX(-55vw); opacity: 0.85; }
+            to   { transform: translateX(0); opacity: 1; }
+        }
+        @keyframes link-from-right {
+            from { transform: translateX(55vw); opacity: 0.85; }
+            to   { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+    <style>
+        .lk-sync-badge { display:inline-flex; align-items:center; gap:5px; padding:4px 10px; border-radius:999px; font-size:.72rem; font-weight:600; color:var(--green-600); background:var(--green-50); }
+        .lk-sync-badge::before { content:''; width:7px; height:7px; border-radius:50%; background:var(--green-500); flex-shrink:0; }
+        .lk-main { margin-left: 240px; padding: 24px 28px 80px; min-height: calc(100vh - 58px); }
+
+        /* Compose drawer */
+        .compose-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.28); z-index:900; }
+        .compose-backdrop.open { display:block; }
+        .compose-drawer {
+            position:fixed; top:0; right:0; bottom:0; width:520px; max-width:100vw;
+            background:#fff; box-shadow:-6px 0 32px rgba(0,0,0,.13);
+            z-index:901; overflow-y:auto; padding:0;
+            transform:translateX(100%); transition:transform .24s cubic-bezier(.4,0,.2,1);
+        }
+        .compose-drawer.open { transform:translateX(0); }
+        .compose-drawer-head { display:flex; align-items:center; justify-content:space-between; padding:18px 22px 14px; border-bottom:1px solid var(--border-light); position:sticky; top:0; background:#fff; z-index:2; }
+        .compose-drawer-head h2 { font-size:1rem; font-weight:700; margin:0; }
+        .compose-drawer-body { padding:18px 22px 28px; }
+
+        /* Form-builder field row */
+        .ft-field-row { display:flex; align-items:center; gap:6px; padding:7px 0; border-bottom:1px solid var(--slate-100); }
+        .ft-field-drag { color:var(--text-muted); flex-shrink:0; font-size:.95rem; cursor:grab; }
+
+        /* Sent list item */
+        .sent-item { display:flex; align-items:flex-start; gap:10px; padding:12px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
+        .sent-item:hover { background:var(--slate-50); }
+        .sent-item-body { flex:1; min-width:0; }
+        .sent-item-subj { font-size:.84rem; font-weight:600; color:var(--slate-800); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sent-item-to { font-size:.74rem; color:var(--text-muted); margin-top:2px; }
+        .sent-item-preview { font-size:.77rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .sent-item-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
+
+        /* Page hero — matches parent portal pattern */
+        .lk-page-hero { display:flex; align-items:center; gap:16px; margin-bottom:22px; padding-bottom:16px; border-bottom:1px solid var(--slate-100); }
+        .lk-page-hero-icon { width:44px; height:44px; border-radius:var(--radius-md); background:var(--link-tint); color:var(--link-color); display:flex; align-items:center; justify-content:center; flex-shrink:0; }
+        .lk-page-hero-icon svg { width:22px; height:22px; }
+        .lk-page-hero h1 { font-family:var(--font-display); font-size:1.45rem; font-weight:700; margin-bottom:2px; color:var(--slate-900); }
+        .lk-page-hero p { font-size:.84rem; color:var(--slate-400); }
+
+        /* Admin messages */
+        .msg-item { display:flex; align-items:flex-start; gap:10px; padding:13px 16px; border-bottom:1px solid var(--slate-100); cursor:pointer; transition:background .15s; }
+        .msg-item:hover { background:var(--slate-50); }
+        .msg-item.unread { background:rgba(42,122,53,.02); }
+        .msg-dot { width:8px; height:8px; border-radius:50%; background:var(--link-color); margin-top:5px; flex-shrink:0; opacity:0; }
+        .msg-item.unread .msg-dot { opacity:1; }
+        .msg-body { flex:1; min-width:0; }
+        .msg-subj { font-size:.85rem; font-weight:600; color:var(--slate-900); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .msg-item.unread .msg-subj { font-weight:700; }
+        .msg-from { font-size:.74rem; color:var(--text-muted); margin-top:2px; }
+        .msg-preview { font-size:.78rem; color:var(--slate-500); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .msg-time { font-size:.72rem; color:var(--text-muted); flex-shrink:0; white-space:nowrap; padding-top:2px; }
+
+        /* Empty state */
+        .lk-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; padding:36px 20px; color:var(--text-muted); text-align:center; }
+        .lk-empty h3 { font-size:.95rem; font-weight:600; margin-bottom:4px; color:var(--slate-400); }
+        .lk-empty p { font-size:.8rem; }
+        .lk-empty-icon { margin-bottom:12px; opacity:.35; }
+
+        /* Photo upload zone */
+        .lk-upload-zone { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:8px; border:2px dashed var(--border-light); border-radius:var(--radius-md); padding:28px; text-align:center; cursor:pointer; transition:border-color .2s; }
+        .lk-upload-zone:hover { border-color:var(--link-color); background:var(--link-tint); }
+        .lk-upload-zone-icon { color:var(--slate-400); }
+        .lk-upload-zone h4 { font-size:.86rem; font-weight:600; color:var(--slate-600); }
+        .lk-upload-zone p { font-size:.76rem; color:var(--text-muted); }
+        .lk-upload-zone input[type=file] { display:none; }
+
+        /* Photo stats grid */
+        .lk-photo-stat-icon { font-size:0; display:inline-flex; align-items:center; justify-content:center; }
+
+        /* Channel buttons */
+        .channel-btns { display:flex; gap:6px; flex-wrap:wrap; }
+        .channel-btn { display:inline-flex; align-items:center; gap:6px; padding:7px 13px; font-size:.78rem; font-weight:600; border:1.5px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; color:var(--slate-600); cursor:pointer; font-family:var(--font-body); transition:all .2s; }
+        .channel-btn.selected { border-color:var(--link-color); background:var(--link-tint); color:var(--link-color); }
+
+        /* Progress bar */
+        .progress { width:100%; height:8px; background:var(--slate-100); border-radius:var(--radius-full); overflow:hidden; }
+        .progress-fill { height:100%; background:var(--link-color); border-radius:var(--radius-full); transition:width .3s ease; }
+
+        /* Mobile */
+        @media(max-width:768px) {
+            /* campistry_link.css sets display:none on the sidebar for the parent
+               portal (which has no hamburger). Override it here for the admin page
+               so the slide-in animation works. */
+            .lk-sidebar { display:block; transform:translateX(-100%); transition:transform .25s ease; }
+            body.sidebar-open .lk-sidebar { transform:translateX(0); }
+            .lk-main { margin-left:0; padding:16px 16px 80px; }
+            .lk-sidebar-backdrop { display:none; position:fixed; inset:0; background:rgba(0,0,0,.3); z-index:49; }
+            body.sidebar-open .lk-sidebar-backdrop { display:block; }
+        }
+
+        /* Hamburger */
+        .lk-hamburger { display:none; width:36px; height:36px; border:1px solid var(--slate-200); border-radius:var(--radius-sm); background:#fff; cursor:pointer; flex-direction:column; align-items:center; justify-content:center; gap:4px; padding:0; }
+        .lk-hamburger span { display:block; width:16px; height:2px; background:var(--slate-600); border-radius:1px; }
+        @media(max-width:768px) { .lk-hamburger { display:flex; } }
+
+        @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        #toastBox { position:fixed; bottom:90px; left:50%; transform:translateX(-50%); z-index:999; display:flex; flex-direction:column; align-items:center; gap:8px; pointer-events:none; }
+
+        /* Back to dashboard */
+        .lk-back-btn { display:inline-flex; align-items:center; gap:4px; font-size:.77rem; font-weight:600; color:var(--slate-500); text-decoration:none; padding:5px 9px; border-radius:var(--radius-sm); transition:color .15s,background .15s; flex-shrink:0; }
+        .lk-back-btn:hover { color:var(--slate-700); background:var(--slate-100); }
+        .lk-back-btn svg { flex-shrink:0; }
+    </style>
+</head>
+<body>
+
+<div id="link-splash">
+    <div id="link-splash-wrap">
+        <img src="Link_clean.png" alt="" class="link-splash-half link-splash-left">
+        <img src="Link_clean.png" alt="" class="link-splash-half link-splash-right">
+    </div>
+    <script>
+    (function() {
+        var ov = document.getElementById('link-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2200);
+    })();
+    </script>
+</div>
+
+<!-- HEADER -->
+<header class="lk-header">
+    <div class="lk-header-left">
+        <button class="lk-hamburger" id="hamburgerBtn" aria-label="Menu"><span></span><span></span><span></span></button>
+        <a href="dashboard.html" class="lk-back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            Dashboard
+        </a>
+        <a href="dashboard.html" class="lk-logo">
+            <img src="Link_clean.png" alt="Campistry Link" style="height:32px;width:auto;display:block;">
+        </a>
+        <span class="lk-camp-name" id="campNameDisplay">Camp</span>
+    </div>
+    <div class="lk-header-right">
+        <span class="lk-sync-badge" id="syncBadge">Live</span>
+        <div class="lk-avatar" id="adminAvatar">CA</div>
+    </div>
+</header>
+
+<!-- SIDEBAR BACKDROP (mobile) -->
+<div class="lk-sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<!-- SIDEBAR -->
+<nav class="lk-sidebar" id="sidebar">
+    <div class="lk-sidebar-nav">
+        <div class="lk-nav-label">Overview</div>
+        <button class="lk-nav-item active" data-page="dashboard" onclick="nav('dashboard')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Dashboard
+        </button>
+        <div class="lk-nav-divider"></div>
+        <button class="lk-nav-item" data-page="messages" onclick="nav('messages')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Messages
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Families</div>
+        <button class="lk-nav-item" data-page="directory" onclick="nav('directory')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            Parent Directory
+        </button>
+        <button class="lk-nav-item" data-page="campers" onclick="nav('campers')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Camper Lookup
+        </button>
+        <div class="lk-nav-divider"></div>
+        <div class="lk-nav-label">Content</div>
+        <button class="lk-nav-item" data-page="photos" onclick="nav('photos')">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Photos
+        </button>
+    </div>
+</nav>
+
+<!-- BOTTOM NAV (mobile) -->
+<div class="lk-bnav"><div class="lk-bnav-inner">
+    <button class="lk-bnav-item active" data-page="dashboard" onclick="nav('dashboard')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        Home
+    </button>
+    <button class="lk-bnav-item" data-page="messages" onclick="nav('messages')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        Messages
+    </button>
+    <button class="lk-bnav-item" data-page="photos" onclick="nav('photos')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        Photos
+    </button>
+</div></div>
+
+<!-- MAIN -->
+<div class="lk-main">
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  DASHBOARD                                          -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page active" id="page-dashboard">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </div>
+        <div>
+            <h1>Link Command Center</h1>
+            <p>Parent communication hub — data synced live from Campistry Me</p>
+        </div>
+    </div>
+    <div class="lk-stats" id="dashStats"></div>
+    <div class="lk-card" id="dashDataCheck"></div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  MESSAGES                                          -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-messages">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        </div>
+        <div>
+            <h1>Messages</h1>
+            <p>Inbox, outbox, and submitted forms</p>
+        </div>
+    </div>
+
+    <!-- Top-level section tabs -->
+    <div class="lk-tabs" id="msgTopTabs" style="margin-bottom:18px;">
+        <button class="lk-tab active" data-msgtab="inbox" onclick="switchMsgTab('inbox',this)">Inbox</button>
+        <button class="lk-tab" data-msgtab="outbox" onclick="switchMsgTab('outbox',this)">Sent</button>
+        <button class="lk-tab" data-msgtab="forms" onclick="switchMsgTab('forms',this)">Forms</button>
+    </div>
+
+    <!-- ── INBOX ─────────────────────────────────────── -->
+    <div id="msgTabInbox">
+        <div id="adminMsgListView">
+            <!-- Read / Unread tabs -->
+            <div class="lk-tabs" style="margin-bottom:10px;">
+                <button class="lk-tab active" onclick="filterAdminMsgs('all',this)">All</button>
+                <button class="lk-tab" onclick="filterAdminMsgs('unread',this)">Unread</button>
+            </div>
+            <!-- Filter bar -->
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">
+                <div style="flex:1;min-width:160px;position:relative;">
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--text-muted);pointer-events:none;"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" class="lk-input" id="inboxSearch" placeholder="Search name, camper, subject…" style="padding-left:32px;" oninput="onInboxFilter()">
+                </div>
+                <select class="lk-input" id="inboxFGrade" style="max-width:130px;" onchange="onInboxFilter()"><option value="">All Grades</option></select>
+                <select class="lk-input" id="inboxFDiv"   style="max-width:140px;" onchange="onInboxFilter()"><option value="">All Divisions</option></select>
+                <select class="lk-input" id="inboxFBunk"  style="max-width:130px;" onchange="onInboxFilter()"><option value="">All Bunks</option></select>
+            </div>
+            <div class="lk-card" style="padding:0;overflow:hidden;">
+                <div id="adminMsgList"></div>
+            </div>
+        </div>
+        <div id="adminMsgDetailView" style="display:none;">
+            <button class="btn btn-ghost btn-sm" onclick="closeAdminMsgDetail()" style="margin-bottom:10px;">&larr; Back</button>
+            <div class="lk-card"><div id="adminMsgDetail"></div></div>
+        </div>
+    </div>
+
+    <!-- ── SENT ──────────────────────────────────────── -->
+    <div id="msgTabOutbox" style="display:none;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+            <div></div>
+            <button class="btn btn-primary" onclick="openComposeDrawer()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Compose
+            </button>
+        </div>
+        <div class="lk-card" style="padding:0;overflow:hidden;">
+            <div id="sentMsgList"></div>
+        </div>
+        <!-- Sent message detail -->
+        <div id="sentDetailView" style="display:none;margin-top:14px;">
+            <button class="btn btn-ghost btn-sm" onclick="closeSentDetail()" style="margin-bottom:10px;">&larr; Back</button>
+            <div class="lk-card"><div id="sentDetail"></div></div>
+        </div>
+    </div>
+
+    <!-- ── FORMS ──────────────────────────────────────── -->
+    <div id="msgTabForms" style="display:none;">
+        <!-- Forms subtabs -->
+        <div class="lk-tabs" style="margin-bottom:16px;">
+            <button class="lk-tab active" data-formtab="received" onclick="switchFormsTab('received',this)">Received</button>
+            <button class="lk-tab" data-formtab="sendout" onclick="switchFormsTab('sendout',this)">Send Out</button>
+            <button class="lk-tab" data-formtab="manage" onclick="switchFormsTab('manage',this)">Manage Forms</button>
+        </div>
+
+        <!-- RECEIVED -->
+        <div id="formsTabReceived">
+        <div id="docFolderListView">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <div class="lk-tabs" style="margin:0;border:none;">
+                    <button class="lk-tab active" onclick="filterDocSubmissions('all',this)">All Submissions</button>
+                    <button class="lk-tab" onclick="filterDocSubmissions('unfiled',this)">Unfiled</button>
+                    <button class="lk-tab" onclick="filterDocSubmissions('folders',this)">Folders</button>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="showCreateFolder()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    New Folder
+                </button>
+            </div>
+            <div id="createFolderForm" style="display:none;">
+                <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:0;">
+                    <div class="lk-card-head"><h2>Create Folder</h2><button class="btn btn-ghost btn-sm" onclick="hideCreateFolder()">Cancel</button></div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                        <div class="lk-field" style="grid-column:1/-1;"><label>Folder Name</label><input type="text" class="lk-input" id="folderName" placeholder='e.g. "Grade 1 Waivers", "Seniors Trip Slips"'></div>
+                        <div class="lk-field"><label>Document Type <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderDocType">
+                                <option value="">Any document type</option>
+                                <option value="waiver">Waiver</option>
+                                <option value="medical">Medical Form</option>
+                                <option value="permission">Permission Slip</option>
+                                <option value="consent">Consent Form</option>
+                                <option value="other">Other</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderGrade">
+                                <option value="">Any grade</option>
+                                <option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option>
+                                <option>4th Grade</option><option>5th Grade</option><option>6th Grade</option>
+                                <option>7th Grade</option><option>8th Grade</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <select class="lk-select" id="folderDivision">
+                                <option value="">Any division</option>
+                                <option>Juniors</option><option>Seniors</option><option>CITs</option>
+                            </select>
+                        </div>
+                        <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
+                            <input type="text" class="lk-input" id="folderBunk" placeholder='e.g. "Bunk 4" or leave blank'>
+                        </div>
+                    </div>
+                    <p style="font-size:.76rem;color:var(--slate-400);margin:8px 0 12px;">All rules are optional — the more you fill in, the more specific the auto-filing. Leave all blank to manually file.</p>
+                    <button class="btn btn-primary btn-sm" onclick="createFolder()">Create Folder</button>
+                </div>
+            </div>
+            <div id="foldersGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px;"></div>
+            <div class="lk-card" id="docSubmissionsCard">
+                <div class="lk-card-head">
+                    <h2 id="docSubmissionsTitle">All Submissions</h2>
+                    <input type="text" class="lk-input" placeholder="Search..." id="docSearch" oninput="renderDocSubmissions(currentDocFilter,this.value)" style="max-width:180px;font-size:.8rem;padding:5px 10px;height:auto;">
+                </div>
+                <div id="docSubmissionsList"></div>
+            </div>
+        </div>
+        <div id="docFolderDetailView" style="display:none;">
+            <button class="btn btn-ghost btn-sm" onclick="closeFolderDetail()" style="margin-bottom:12px;">&larr; All Folders</button>
+            <div class="lk-card">
+                <div class="lk-card-head">
+                    <div>
+                        <h2 id="folderDetailName">Folder</h2>
+                        <div id="folderDetailRules" style="font-size:.74rem;color:var(--slate-400);margin-top:2px;"></div>
+                    </div>
+                    <div style="display:flex;gap:6px;">
+                        <button class="btn btn-secondary btn-sm" onclick="printFolderDocs()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print All</button>
+                        <button class="btn btn-ghost btn-sm" onclick="deleteFolderPrompt()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></button>
+                    </div>
+                </div>
+                <div id="folderDetailList"></div>
+            </div>
+        </div>
+        </div><!-- /formsTabReceived -->
+
+        <!-- SEND OUT -->
+        <div id="formsTabSendout" style="display:none;">
+            <div class="lk-card">
+                <div class="lk-card-head"><h2>Send a Form Request</h2></div>
+                <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px;">Each parent receives a personalized message asking them to complete the form for their child.</p>
+
+                <div class="lk-field">
+                    <label>Form type</label>
+                    <select class="lk-input" id="fsFormType" onchange="onFormTypeChange()">
+                        <option value="medical">Medical Form</option>
+                        <option value="waiver">Waiver</option>
+                        <option value="permission">Permission Slip</option>
+                        <option value="emergency">Emergency Contact Form</option>
+                        <option value="dietary">Dietary / Allergy Form</option>
+                        <option value="custom">Custom…</option>
+                    </select>
+                </div>
+                <div class="lk-field" id="fsCustomNameWrap" style="display:none;">
+                    <label>Form name</label>
+                    <input type="text" class="lk-input" id="fsCustomName" placeholder="e.g. Trip Permission Slip — Lake Day">
+                </div>
+
+                <div class="lk-field">
+                    <label>Send to</label>
+                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                        <select class="lk-input" id="fsScope" style="max-width:180px;" onchange="onFsScopeChange()">
+                            <option value="all">Everyone</option>
+                            <option value="division">By Division</option>
+                            <option value="grade">By Grade</option>
+                            <option value="bunk">By Bunk</option>
+                        </select>
+                        <select class="lk-input" id="fsScopeVal" style="max-width:200px;display:none;" onchange="updateFsCount()"></select>
+                        <span id="fsScopeCount" style="font-size:.76rem;color:var(--text-muted);"></span>
+                    </div>
+                </div>
+
+                <div class="lk-field">
+                    <label>Optional note <span style="font-weight:400;color:var(--text-muted);">added after the standard message</span></label>
+                    <textarea class="lk-textarea" id="fsNote" placeholder="e.g. Please complete by Friday, June 20th." style="min-height:60px;"></textarea>
+                </div>
+
+                <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border-light);">
+                    <div class="channel-btns" id="fsChannelBtns">
+                        <button class="channel-btn selected" data-ch="app" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                            In-App
+                        </button>
+                        <button class="channel-btn" data-ch="email" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                            Email
+                        </button>
+                        <button class="channel-btn" data-ch="sms" onclick="toggleFsCh(this)">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                            SMS
+                        </button>
+                    </div>
+                    <button class="btn btn-primary" onclick="sendFormRequest()">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                        Send Request
+                    </button>
+                </div>
+            </div>
+
+            <!-- History -->
+            <div class="lk-card" style="margin-top:14px;">
+                <div class="lk-card-head"><h2>Recently Sent</h2></div>
+                <div id="fsSentHistory"></div>
+            </div>
+        </div><!-- /formsTabSendout -->
+
+        <!-- MANAGE FORMS -->
+        <div id="formsTabManage" style="display:none;">
+            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:18px;">Create and edit the forms that appear in the parent portal. Changes are live immediately.</p>
+
+            <!-- Fill Online -->
+            <div class="lk-card" style="margin-bottom:12px;">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Fill Online</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents fill these out directly in the portal — no printing needed.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('digital')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Form
+                    </button>
+                </div>
+                <div id="ftDigitalList"></div>
+            </div>
+
+            <!-- Print & Return -->
+            <div class="lk-card" style="margin-bottom:12px;">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Print &amp; Return</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents download the PDF, fill by hand, and upload back.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('printReturn')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Form
+                    </button>
+                </div>
+                <div id="ftPrintList"></div>
+            </div>
+
+            <!-- Camp Documents -->
+            <div class="lk-card">
+                <div class="lk-card-head">
+                    <div>
+                        <h2>Camp Documents</h2>
+                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Read-only downloads — handbooks, packing lists, calendars.</p>
+                    </div>
+                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('document')">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                        Add Document
+                    </button>
+                </div>
+                <div id="ftDocsList"></div>
+            </div>
+        </div><!-- /formsTabManage -->
+    </div>
+
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  COMPOSE DRAWER                                     -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="compose-backdrop" id="composeBackdrop" onclick="closeComposeDrawer()"></div>
+<div class="compose-drawer" id="composeDrawer">
+    <div class="compose-drawer-head">
+        <h2>New Message</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeComposeDrawer()" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="compose-drawer-body">
+        <!-- Quick templates -->
+        <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">
+            <span style="font-size:.74rem;font-weight:600;color:var(--text-muted);flex-shrink:0;">Quick fill:</span>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bunk')" style="border:1px solid var(--border-light);">🏠 Bunk</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('bus')"  style="border:1px solid var(--border-light);">🚌 Bus Route</button>
+            <button class="btn btn-ghost btn-sm" onclick="loadTemplate('form')" style="border:1px solid var(--border-light);">📋 Form Reminder</button>
+        </div>
+
+        <!-- To -->
+        <div class="lk-field">
+            <label>To</label>
+            <div style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+                <select class="lk-input" id="cScope" style="max-width:175px;flex-shrink:0;" onchange="onScopeChange()">
+                    <option value="all">Everyone</option>
+                    <option value="division">By Division</option>
+                    <option value="grade">By Grade</option>
+                    <option value="bunk">By Bunk</option>
+                    <option value="individual">Specific Parent</option>
+                </select>
+                <select class="lk-input" id="cScopeVal" style="max-width:195px;display:none;" onchange="onScopeValChange()"></select>
+                <div id="cIndivWrap" style="display:none;flex:1;min-width:170px;position:relative;">
+                    <input type="text" class="lk-input" id="cIndivSearch" placeholder="Type camper or parent name, add as many as needed" oninput="onIndivSearch(this.value)" autocomplete="off">
+                    <div id="cIndivResults" style="position:absolute;top:100%;left:0;right:0;border:1px solid var(--border-light);border-radius:var(--radius-md);background:#fff;z-index:30;max-height:160px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.1);"></div>
+                </div>
+            </div>
+            <div id="cIndivChips" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:6px;"></div>
+            <div id="cScopeCount" style="font-size:.75rem;color:var(--text-muted);margin-top:4px;min-height:16px;"></div>
+        </div>
+
+        <!-- Merge tags -->
+        <div class="lk-field">
+            <label>Insert tag <span style="font-size:.71rem;font-weight:400;color:var(--text-muted);">— click to insert at cursor</span></label>
+            <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px;">
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{child_name}}')">{{child_name}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{parent_name}}')">{{parent_name}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{bunk}}')">{{bunk}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{bus_route}}')">{{bus_route}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{grade}}')">{{grade}}</button>
+                <button class="btn btn-ghost btn-sm" style="font-family:monospace;font-size:.71rem;border:1px solid var(--border-light);border-radius:var(--radius-full);padding:2px 8px;" onclick="insertTag('{{division}}')">{{division}}</button>
+            </div>
+        </div>
+
+        <!-- Subject -->
+        <div class="lk-field">
+            <label>Subject</label>
+            <input type="text" class="lk-input" id="cSubj" placeholder="Subject…" oninput="updateComposePreview()">
+        </div>
+
+        <!-- Body -->
+        <div class="lk-field">
+            <label>Message</label>
+            <textarea class="lk-textarea" id="cBody" placeholder="Type your message here…" style="min-height:120px;" oninput="updateComposePreview()"></textarea>
+        </div>
+
+        <!-- Live preview -->
+        <div id="cPreviewWrap" style="display:none;margin-bottom:14px;">
+            <div style="font-size:.71rem;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:5px;">Preview <span id="cPreviewFor" style="text-transform:none;font-weight:400;font-size:.75rem;"></span></div>
+            <div id="cPreview" style="background:var(--slate-50);border:1px solid var(--border-light);border-radius:var(--radius-md);padding:11px 13px;font-size:.81rem;white-space:pre-wrap;color:var(--slate-700);max-height:120px;overflow-y:auto;"></div>
+        </div>
+
+        <!-- Bottom bar -->
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;padding-top:10px;border-top:1px solid var(--border-light);">
+            <div class="channel-btns" id="cChannelBtns">
+                <button class="channel-btn selected" data-ch="app" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    In-App
+                </button>
+                <button class="channel-btn" data-ch="email" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    Email
+                </button>
+                <button class="channel-btn" data-ch="sms" onclick="toggleCompCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    SMS
+                </button>
+            </div>
+            <div style="display:flex;gap:8px;">
+                <button class="btn btn-secondary btn-sm" id="cPreviewAllBtn" style="display:none;" onclick="showComposePreviewAll()">Preview All</button>
+                <button class="btn btn-primary" onclick="sendCompose()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    Send
+                </button>
+            </div>
+        </div>
+        <div id="cPreviewAll" style="display:none;margin-top:12px;"></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PARENT DIRECTORY                                   -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-directory">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div>
+            <h1>Parent Directory</h1>
+            <p>Live from Campistry Me</p>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;">
+        <input type="text" class="lk-input" placeholder="Search parents or families..." id="dirSearch" oninput="renderDir(this.value)" style="max-width:400px;">
+    </div>
+    <div class="lk-card" style="padding:0;overflow:hidden;">
+        <table class="lk-table">
+            <thead><tr><th>Parent</th><th>Children</th><th>Division / Bunk</th><th>Email</th><th>Phone</th><th></th></tr></thead>
+            <tbody id="dirTable"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  CAMPER LOOKUP                                      -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-campers">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        </div>
+        <div>
+            <h1>Camper Lookup</h1>
+            <p>Live from Campistry Me</p>
+        </div>
+    </div>
+    <div style="margin-bottom:12px;">
+        <input type="text" class="lk-input" placeholder="Search camper..." id="camperSearch" oninput="renderCampers(this.value)" style="max-width:400px;">
+    </div>
+    <div class="lk-card" style="padding:0;overflow:hidden;">
+        <table class="lk-table">
+            <thead><tr><th>Camper</th><th>Division</th><th>Grade</th><th>Bunk</th><th>Parent</th><th>Phone</th><th>Bus</th></tr></thead>
+            <tbody id="camperTable"></tbody>
+        </table>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  PHOTOS                                             -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="lk-page" id="page-photos">
+    <div class="lk-page-hero">
+        <div class="lk-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        </div>
+        <div>
+            <h1>Photos</h1>
+            <p>Auto-tag with face recognition, send to parents</p>
+        </div>
+    </div>
+    <div class="lk-stats" id="photoStats"></div>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 1: Set Up Recognition</h2><span class="badge" id="indexBadge">Not built</span></div>
+        <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:12px;">Reads camper headshots from Me to learn who's who.</p>
+        <button class="btn btn-primary btn-sm" onclick="buildIndex()">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            Build Index
+        </button>
+        <div id="indexProg" style="display:none;margin-top:10px;"></div>
+    </div>
+    <div class="lk-card">
+        <div class="lk-card-head"><h2>Step 2: Upload Photos</h2></div>
+        <label class="lk-upload-zone" for="photoInput">
+            <div class="lk-upload-zone-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+            </div>
+            <h4>Click to upload photos</h4>
+            <p>JPG or PNG · multiple files supported</p>
+            <input type="file" id="photoInput" accept="image/*" multiple onchange="handlePhotos(this.files)">
+        </label>
+        <div id="uploadProg" style="display:none;margin-top:10px;"></div>
+    </div>
+    <div class="lk-card">
+        <div class="lk-card-head">
+            <h2>Step 3: Review &amp; Send</h2>
+            <button class="btn btn-ghost btn-sm" onclick="refreshPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+                Refresh
+            </button>
+        </div>
+        <div id="photoGrid" class="lk-photo-grid"></div>
+        <div id="photoEmpty" class="lk-empty" style="display:none;">
+            <div class="lk-empty-icon">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            </div>
+            <h3>No photos yet</h3>
+            <p>Upload photos in Step 2 to get started</p>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px;">
+            <button class="btn btn-primary btn-sm" onclick="sendPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send Roundup
+            </button>
+            <button class="btn btn-secondary btn-sm" onclick="previewPhotos()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                Preview
+            </button>
+        </div>
+        <div id="photoPreview" style="display:none;margin-top:10px;"></div>
+    </div>
+</div>
+
+
+</div><!-- /.lk-main -->
+<div id="toastBox"></div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  FORM BUILDER DRAWER                                -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div class="compose-backdrop" id="formTplBackdrop" onclick="closeFormDrawer()"></div>
+<div class="compose-drawer" id="formTplDrawer">
+    <div class="compose-drawer-head">
+        <h2 id="formTplDrawerTitle">New Form</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeFormDrawer()" style="padding:4px 10px;">✕</button>
+    </div>
+    <div class="compose-drawer-body">
+
+        <div class="lk-field">
+            <label>Form Name</label>
+            <input type="text" class="lk-input" id="ftName" placeholder="e.g. Health Waiver 2026">
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div class="lk-field">
+                <label>Category</label>
+                <select class="lk-select" id="ftCat">
+                    <option value="medical">Medical Form</option>
+                    <option value="waiver">Waiver / Liability</option>
+                    <option value="permission">Permission Slip</option>
+                    <option value="emergency">Emergency Contact</option>
+                    <option value="dietary">Dietary / Allergy</option>
+                    <option value="custom">Other</option>
+                </select>
+            </div>
+            <div class="lk-field" id="ftReqRow">
+                <label>Required?</label>
+                <select class="lk-select" id="ftRequiredSel">
+                    <option value="1">Yes — Required</option>
+                    <option value="0">No — Optional</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="lk-field">
+            <label>Description <span style="font-weight:400;color:var(--text-muted);">shown to parents</span></label>
+            <input type="text" class="lk-input" id="ftDesc" placeholder="e.g. Annual health clearance form">
+        </div>
+
+        <!-- URL field — for print & return and documents -->
+        <div id="ftUrlSection" style="display:none;" class="lk-field">
+            <label>PDF / Document URL <span style="font-weight:400;color:var(--text-muted);">Google Drive, Dropbox, etc.</span></label>
+            <input type="text" class="lk-input" id="ftUrl" placeholder="https://drive.google.com/...">
+            <p style="font-size:.73rem;color:var(--text-muted);margin-top:4px;">Parents see a "Download" button linking to this URL.</p>
+        </div>
+
+        <!-- Field builder — for digital fill-online forms -->
+        <div id="ftFieldsSection" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;">
+                <span style="font-size:.78rem;font-weight:700;color:var(--slate-700);text-transform:uppercase;letter-spacing:.04em;">Form Fields</span>
+                <button class="btn btn-ghost btn-sm" onclick="_addFormField()" style="font-size:.77rem;">+ Add Field</button>
+            </div>
+            <div id="ftFieldsList"></div>
+            <p style="font-size:.73rem;color:var(--text-muted);margin-top:8px;">Parents fill in these fields when they tap "Complete" in the portal.</p>
+        </div>
+
+        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border-light);margin-top:12px;">
+            <button class="btn btn-ghost" onclick="closeFormDrawer()">Cancel</button>
+            <button class="btn btn-primary" onclick="_saveFormDrawer()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+                Save Form
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Scripts -->
+<script src="offline_data.js" onerror=""></script>
+<script src="demo_mode.js"></script>
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_security.js"></script>
+<script src="integration_hooks.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_link_data.js"></script>
+<script src="campistry_link_photos.js"></script>
+<script>
+'use strict';
+
+// ─── HELPERS ─────────────────────────────────────────────────────────────────
+var esc = function(s) {
+    if (s == null) return '';
+    var m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'};
+    return String(s).replace(/[&<>"']/g, function(c) { return m[c]; });
+};
+var CL = function() { return window.CampistryLink || null; };
+var CP = function() { return window.CampistryPhotos || null; };
+var channels = ['app'];
+
+// ─── NAV ─────────────────────────────────────────────────────────────────────
+var currentMsgTab = 'inbox';
+
+function nav(p) {
+    document.querySelectorAll('.lk-page').forEach(function(e) { e.classList.remove('active'); });
+    document.querySelectorAll('.lk-nav-item,.lk-bnav-item').forEach(function(e) { e.classList.remove('active'); });
+    var el = document.getElementById('page-' + p);
+    if (el) el.classList.add('active');
+    document.querySelectorAll('[data-page="' + p + '"]').forEach(function(e) { e.classList.add('active'); });
+    document.body.classList.remove('sidebar-open');
+    window.scrollTo(0, 0);
+    if (p === 'dashboard') renderDash();
+    if (p === 'directory') renderDir('');
+    if (p === 'campers') renderCampers('');
+    if (p === 'photos') { refreshPhotos(); updatePhotoStats(); }
+    if (p === 'messages') switchMsgTab(currentMsgTab || 'inbox');
+}
+
+function switchMsgTab(tab, btn) {
+    currentMsgTab = tab;
+    document.querySelectorAll('#msgTopTabs .lk-tab').forEach(function(t) {
+        t.classList.toggle('active', t.dataset.msgtab === tab);
+    });
+    document.getElementById('msgTabInbox').style.display  = tab === 'inbox'  ? '' : 'none';
+    document.getElementById('msgTabOutbox').style.display = tab === 'outbox' ? '' : 'none';
+    document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
+    if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
+    if (tab === 'outbox') { renderSentList(); }
+    if (tab === 'forms')  { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions('all', ''); updateFsCount(); }
+}
+
+// ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
+function openComposeDrawer(presetName) {
+    document.getElementById('composeDrawer').classList.add('open');
+    document.getElementById('composeBackdrop').classList.add('open');
+    onScopeChange();
+    if (presetName) {
+        document.getElementById('cScope').value = 'individual';
+        onScopeChange();
+        pickIndiv(presetName);
+    }
+}
+function closeComposeDrawer() {
+    document.getElementById('composeDrawer').classList.remove('open');
+    document.getElementById('composeBackdrop').classList.remove('open');
+}
+
+// ─── SENT LIST ────────────────────────────────────────────────────────────────
+function renderSentList() {
+    var cl = CL();
+    var sent = cl ? cl.msg.getSent() : [];
+    var broadcasts = cl ? cl.msg.getBroadcasts() : [];
+    // Merge and sort newest first
+    var all = sent.concat(broadcasts).sort(function(a, b) {
+        return new Date(b.date || 0) - new Date(a.date || 0);
+    });
+    var el = document.getElementById('sentMsgList');
+    if (!el) return;
+    if (!all.length) {
+        el.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></div><h3>No sent messages yet</h3><p>Click Compose to write your first message.</p></div>';
+        return;
+    }
+    el.innerHTML = all.map(function(m) {
+        var toLabel = m.to || (m.recipients ? m.recipients.length + ' recipients' : 'All');
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var preview = (m.body || '').slice(0, 100);
+        return '<div class="sent-item" onclick="openSentDetail(\'' + esc(m.id) + '\')">' +
+            '<div class="sent-item-body">' +
+                '<div class="sent-item-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="sent-item-to">To: ' + esc(toLabel + camper) + '</div>' +
+                '<div class="sent-item-preview">' + esc(preview) + '</div>' +
+            '</div>' +
+            '<span class="sent-item-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
+        '</div>';
+    }).join('');
+}
+
+function openSentDetail(id) {
+    var cl = CL(); if (!cl) return;
+    var all = cl.msg.getSent().concat(cl.msg.getBroadcasts());
+    var m = all.find(function(x) { return x.id === id; });
+    if (!m) return;
+    var body = m.body || '';
+    if (!body.startsWith('<')) body = '<p>' + body.replace(/\n/g, '</p><p>') + '</p>';
+    document.getElementById('sentMsgList').closest('.lk-card').style.display = 'none';
+    var dv = document.getElementById('sentDetailView');
+    dv.style.display = '';
+    document.getElementById('sentDetail').innerHTML =
+        '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
+            '<div style="font-size:1.1rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
+            '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
+                '<span>To: <strong>' + esc(m.to || 'Group') + '</strong></span>' +
+                '<span>' + esc(_fmtMsgTime(m.date)) + '</span>' +
+            '</div>' +
+        '</div>' +
+        '<div style="font-size:.9rem;line-height:1.7;">' + body + '</div>';
+}
+
+function closeSentDetail() {
+    document.getElementById('sentDetailView').style.display = 'none';
+    var card = document.getElementById('sentMsgList').closest('.lk-card');
+    if (card) card.style.display = '';
+}
+
+// ─── FORMS SEND OUT ──────────────────────────────────────────────────────────
+var fsChannels = ['app'];
+var _formSendHistory = [];
+
+function switchFormsTab(tab, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    document.getElementById('formsTabReceived').style.display = tab === 'received' ? '' : 'none';
+    document.getElementById('formsTabSendout').style.display  = tab === 'sendout'  ? '' : 'none';
+    document.getElementById('formsTabManage').style.display   = tab === 'manage'   ? '' : 'none';
+    if (tab === 'sendout') { updateFsCount(); renderFsSentHistory(); }
+    if (tab === 'received') { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions(currentDocFilter, ''); }
+    if (tab === 'manage') { renderFormTemplatesAdmin(); }
+}
+
+function onFormTypeChange() {
+    var val = (document.getElementById('fsFormType') || {}).value;
+    var wrap = document.getElementById('fsCustomNameWrap');
+    if (wrap) wrap.style.display = val === 'custom' ? '' : 'none';
+}
+
+function onFsScopeChange() {
+    var scope = (document.getElementById('fsScope') || {}).value || 'all';
+    var valEl = document.getElementById('fsScopeVal');
+    if (!valEl) return;
+    if (scope === 'all') { valEl.style.display = 'none'; updateFsCount(); return; }
+    valEl.style.display = '';
+    var cl = CL(); var struct = cl ? cl.data.getStructure() : {};
+    var opts = ['<option value="">— Select —</option>'];
+    if (scope === 'division') {
+        Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+    } else if (scope === 'grade') {
+        var grades = {};
+        Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+        Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+    } else if (scope === 'bunk') {
+        var bunks = {};
+        Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+        Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+    }
+    valEl.innerHTML = opts.join('');
+    updateFsCount();
+}
+
+function _getFsTargets() {
+    var cl = CL(); if (!cl) return [];
+    var scope = (document.getElementById('fsScope') || {}).value || 'all';
+    var value = ((document.getElementById('fsScopeVal') || {}).value || '').trim();
+    var map = cl.data.getCamperParentMap();
+    var out = [];
+    Object.entries(map).forEach(function(e) {
+        var name = e[0], c = e[1]; if (!c.parentName) return;
+        var match = scope === 'all' ||
+            (scope === 'division' && value && c.division === value) ||
+            (scope === 'grade'    && value && c.grade    === value) ||
+            (scope === 'bunk'     && value && c.bunk     === value);
+        if (match) out.push({ camperName: name, parentName: c.parentName, parentEmail: c.parentEmail || '', bunk: c.bunk || '', division: c.division || '', grade: c.grade || '', familyName: c.familyName || '' });
+    });
+    return out;
+}
+
+function updateFsCount() {
+    var targets = _getFsTargets();
+    var el = document.getElementById('fsScopeCount');
+    if (el) el.textContent = targets.length ? targets.length + ' recipient(s)' : '';
+}
+
+function toggleFsCh(btn) {
+    btn.classList.toggle('selected');
+    fsChannels = [];
+    document.querySelectorAll('#fsChannelBtns .channel-btn.selected').forEach(function(b) { fsChannels.push(b.dataset.ch); });
+    if (!fsChannels.length) { btn.classList.add('selected'); fsChannels = [btn.dataset.ch]; }
+}
+
+function _fsFormLabel() {
+    var type = (document.getElementById('fsFormType') || {}).value || 'medical';
+    if (type === 'custom') return (document.getElementById('fsCustomName') || {}).value.trim() || 'form';
+    var labels = { medical: 'Medical Form', waiver: 'Waiver', permission: 'Permission Slip', emergency: 'Emergency Contact Form', dietary: 'Dietary / Allergy Form' };
+    return labels[type] || type;
+}
+
+function sendFormRequest() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var formLabel = _fsFormLabel();
+    if (!formLabel) { toast('Enter a form name'); return; }
+    var targets = _getFsTargets();
+    if (!targets.length) { toast('No recipients match'); return; }
+    var note = ((document.getElementById('fsNote') || {}).value || '').trim();
+    var busMap = _buildBusRouteMap();
+    var sent = 0;
+    targets.forEach(function(t) {
+        var body = 'Hi ' + (t.parentName || 'there') + ',\n\nWe need you to complete the ' + formLabel + ' for ' + t.camperName + ' before camp begins.\n\nPlease log in to the parent portal to submit it.' + (note ? '\n\n' + note : '') + '\n\nThank you!';
+        cl.msg.send({ to: t.parentName, toType: 'individual', subject: formLabel + ' needed for ' + t.camperName, body: body, channels: fsChannels, metadata: { parentEmail: t.parentEmail, camperName: t.camperName, formType: (document.getElementById('fsFormType') || {}).value, isFormRequest: true } });
+        sent++;
+    });
+    _formSendHistory.unshift({ formLabel: formLabel, count: sent, date: new Date().toISOString(), scope: (document.getElementById('fsScope') || {}).value });
+    toast(sent + ' form request' + (sent === 1 ? '' : 's') + ' sent!');
+    if (document.getElementById('fsNote')) document.getElementById('fsNote').value = '';
+    renderFsSentHistory();
+}
+
+function renderFsSentHistory() {
+    var el = document.getElementById('fsSentHistory');
+    if (!el) return;
+    if (!_formSendHistory.length) {
+        el.innerHTML = '<div style="padding:18px;text-align:center;font-size:.82rem;color:var(--text-muted);">No form requests sent yet.</div>';
+        return;
+    }
+    el.innerHTML = _formSendHistory.slice(0, 10).map(function(h) {
+        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-light);font-size:.82rem;">' +
+            '<div><strong>' + esc(h.formLabel) + '</strong><span style="color:var(--text-muted);margin-left:10px;">' + h.count + ' recipients</span></div>' +
+            '<span style="font-size:.74rem;color:var(--text-muted);">' + esc(_fmtMsgTime(h.date)) + '</span>' +
+        '</div>';
+    }).join('');
+}
+
+// ─── TOAST ───────────────────────────────────────────────────────────────────
+function toast(m) {
+    var t = document.createElement('div');
+    t.textContent = m;
+    t.style.cssText = 'background:#0F172A;color:#fff;padding:11px 22px;border-radius:12px;font-size:.83rem;font-weight:500;box-shadow:0 8px 24px rgba(0,0,0,.15);pointer-events:auto;animation:fadeUp .3s ease;';
+    document.getElementById('toastBox').appendChild(t);
+    setTimeout(function() { t.style.opacity = '0'; t.style.transition = 'opacity .3s'; }, 2500);
+    setTimeout(function() { t.remove(); }, 2800);
+}
+
+// ─── HAMBURGER SIDEBAR TOGGLE ─────────────────────────────────────────────────
+(function() {
+    var btn = document.getElementById('hamburgerBtn');
+    var backdrop = document.getElementById('sidebarBackdrop');
+    if (btn) btn.addEventListener('click', function() { document.body.classList.toggle('sidebar-open'); });
+    if (backdrop) backdrop.addEventListener('click', function() { document.body.classList.remove('sidebar-open'); });
+})();
+
+// ─── STAT HELPER ─────────────────────────────────────────────────────────────
+function stat(color, svgStr, val, label) {
+    return '<div class="lk-stat"><div class="lk-stat-icon ' + color + '">' + svgStr + '</div><div><div class="lk-stat-val">' + val + '</div><div class="lk-stat-lbl">' + esc(label) + '</div></div></div>';
+}
+
+var svgPeople = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>';
+var svgLayers = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>';
+var svgFolder = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
+var svgSend  = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>';
+
+// ─── DASHBOARD ───────────────────────────────────────────────────────────────
+function renderDash() {
+    var cl = CL(); if (!cl) return;
+    var dir    = cl.data.getParentDirectory();
+    var roster = cl.data.getRoster();
+    var struct = cl.data.getStructure();
+    var msgs   = cl.msg.getBroadcasts();
+
+    var goSetup; try { goSetup = JSON.parse(localStorage.getItem('campistry_go_data') || '{}').setup || {}; } catch(e) { goSetup = {}; }
+    var cn = goSetup.campName || '';
+    if (!cn) try { cn = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}').campName || ''; } catch(e) {}
+    document.getElementById('campNameDisplay').textContent = cn;
+
+    var rc = Object.keys(roster).length;
+    var dc = Object.keys(struct).length;
+    var fc = dir.length;
+
+    document.getElementById('dashStats').innerHTML =
+        stat('rose',  svgPeople, fc,        'Families')  +
+        stat('green', svgLayers, rc,        'Campers')   +
+        stat('amber', svgFolder, dc,        'Divisions') +
+        stat('blue',  svgSend,   msgs.length,'Broadcasts');
+
+    var issues = [];
+    if (!rc) issues.push('No campers — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">add in Me</a>');
+    if (!fc) issues.push('No families — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">create in Me</a>');
+    if (!dc) issues.push('No divisions — <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">set up in Me</a>');
+    var box = document.getElementById('dashDataCheck');
+    if (issues.length) {
+        box.innerHTML = '<div class="lk-card-head"><h2>Setup Needed</h2><span class="badge badge-warn">Action required</span></div>' + issues.map(function(i) { return '<p style="font-size:.85rem;color:var(--text-secondary);padding:4px 0;">' + i + '</p>'; }).join('');
+        box.style.display = '';
+    } else {
+        box.innerHTML = '<div class="lk-card-head"><h2>Connected to Me</h2><span class="badge badge-ok">Synced</span></div><p style="font-size:.85rem;color:var(--text-muted);">' + rc + ' campers, ' + fc + ' families, ' + dc + ' divisions synced live.</p>';
+    }
+}
+
+// ─── PARENT DIRECTORY ────────────────────────────────────────────────────────
+function renderDir(q) {
+    var cl = CL(); if (!cl) return;
+    q = (q || '').toLowerCase();
+    var dir = cl.data.getParentDirectory();
+    var tb = document.getElementById('dirTable');
+    if (!dir.length) {
+        tb.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:28px;color:var(--text-muted);">No parents. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add families in Me</a></td></tr>';
+        return;
+    }
+    var h = '';
+    dir.forEach(function(p) {
+        var s = (p.parentName + ' ' + p.familyName + ' ' + p.children.map(function(c) { return c.name; }).join(' ')).toLowerCase();
+        if (q && s.indexOf(q) < 0) return;
+        h += '<tr><td class="bold">' + esc(p.parentName || '—') + '</td><td>' + p.children.map(function(c) { return esc(c.name); }).join(', ') + '</td><td style="font-size:.78rem;">' + p.children.map(function(c) { return esc((c.division || '—') + ' / ' + (c.bunk || '—')); }).join('; ') + '</td><td style="font-size:.78rem;">' + esc(p.parentEmail || '—') + '</td><td style="font-size:.78rem;">' + esc(p.parentPhone || '—') + '</td><td><button class="btn btn-ghost btn-sm" onclick="msgParent(\'' + esc(p.parentName) + '\')">Msg</button></td></tr>';
+    });
+    tb.innerHTML = h || '<tr><td colspan="6" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';
+}
+
+// ─── CAMPER LOOKUP ────────────────────────────────────────────────────────────
+function renderCampers(q) {
+    var cl = CL(); if (!cl) return;
+    q = (q || '').toLowerCase();
+    var map = cl.data.getCamperParentMap();
+    var tb = document.getElementById('camperTable');
+    var entries = Object.entries(map);
+    if (!entries.length) {
+        tb.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:28px;color:var(--text-muted);">No campers. <a href="campistry_me.html" style="color:var(--link-color);font-weight:600;">Add in Me</a></td></tr>';
+        return;
+    }
+    var h = '';
+    entries.forEach(function(e) {
+        var name = e[0], c = e[1];
+        if (q && name.toLowerCase().indexOf(q) < 0) return;
+        var busInfo = cl.data.getCamperBusStop(name);
+        var busCell = busInfo ? '<span class="badge badge-ok">' + esc(busInfo.busName) + ' #' + busInfo.stopNum + '</span>' : '<span class="badge badge-neutral">—</span>';
+        h += '<tr><td class="bold">' + esc(name) + '</td><td>' + esc(c.division || '—') + '</td><td>' + esc(c.grade || '—') + '</td><td>' + esc(c.bunk || '—') + '</td><td>' + esc(c.parentName || c.parent1Name || '—') + '</td><td style="font-size:.78rem;">' + esc(c.parentPhone || c.parent1Phone || '—') + '</td><td>' + busCell + '</td></tr>';
+    });
+    tb.innerHTML = h || '<tr><td colspan="7" style="text-align:center;padding:20px;color:var(--text-muted);">No matches</td></tr>';
+}
+
+// ─── RECIPIENT SEARCH ─────────────────────────────────────────────────────────
+// ─── UNIFIED COMPOSE (OUTBOX) ─────────────────────────────────────────────────
+var compChannels = ['app'];
+
+// Templates that pre-fill subject + body
+function loadTemplate(type) {
+    var subj = document.getElementById('cSubj');
+    var body = document.getElementById('cBody');
+    if (!subj || !body) return;
+    if (type === 'bunk') {
+        subj.value = "{{child_name}}'s bunk assignment";
+        body.value = "Hi {{parent_name}},\n\nWe're excited to share that {{child_name}} has been placed in {{bunk}} ({{division}}) this summer!\n\nSee you at camp!";
+    } else if (type === 'bus') {
+        subj.value = "Bus route info for {{child_name}}";
+        body.value = "Hi {{parent_name}},\n\n{{child_name}} will be on {{bus_route}} this summer.\n\nPlease be at your stop a few minutes early. Questions? Reply to this message.\n\nSee you at camp!";
+    } else if (type === 'form') {
+        subj.value = "Action needed: forms for {{child_name}}";
+        body.value = "Hi {{parent_name}},\n\nWe still need a few forms completed for {{child_name}} before camp begins.\n\nPlease log in to the parent portal and complete the required forms at your earliest convenience.\n\nThank you!";
+    }
+    updateComposePreview();
+    body.focus();
+}
+
+// Scope change — show/hide the secondary filter or individual search
+function onScopeChange() {
+    var scope    = (document.getElementById('cScope')    || {}).value || 'all';
+    var scopeVal = document.getElementById('cScopeVal');
+    var indivWrap= document.getElementById('cIndivWrap');
+    var chips    = document.getElementById('cIndivChips');
+    if (!scopeVal || !indivWrap) return;
+
+    var isIndiv = scope === 'individual';
+    indivWrap.style.display  = isIndiv ? '' : 'none';
+    chips.innerHTML          = '';
+
+    if (isIndiv) {
+        scopeVal.style.display = 'none';
+    } else if (scope === 'all') {
+        scopeVal.style.display = 'none';
+    } else {
+        scopeVal.style.display = '';
+        var cl = CL();
+        var struct = cl ? cl.data.getStructure() : {};
+        var opts = ['<option value="">— Select —</option>'];
+        if (scope === 'division') {
+            Object.keys(struct).sort().forEach(function(d) { opts.push('<option value="' + esc(d) + '">' + esc(d) + '</option>'); });
+        } else if (scope === 'grade') {
+            var grades = {};
+            Object.values(struct).forEach(function(div) { Object.keys((div && div.grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+            Object.keys(grades).sort().forEach(function(g) { opts.push('<option value="' + esc(g) + '">' + esc(g) + '</option>'); });
+        } else if (scope === 'bunk') {
+            var bunks = {};
+            Object.values(struct).forEach(function(div) { Object.values((div && div.grades) || {}).forEach(function(gr) { (gr.bunks || []).forEach(function(b) { bunks[b] = 1; }); }); });
+            Object.keys(bunks).sort().forEach(function(b) { opts.push('<option value="' + esc(b) + '">' + esc(b) + '</option>'); });
+        }
+        scopeVal.innerHTML = opts.join('');
+    }
+    onScopeValChange();
+}
+
+function onScopeValChange() {
+    _updateScopeCount();
+    updateComposePreview();
+}
+
+// Individual parent search — results show camper names prominently
+function onIndivSearch(q) {
+    var box = document.getElementById('cIndivResults');
+    if (!q || q.length < 2 || !CL()) { box.style.display = 'none'; return; }
+    q = q.toLowerCase();
+    var dir = CL().data.getParentDirectory();
+    // Collect matching (child, parent) rows — one row per matching child
+    var rows = [];
+    dir.forEach(function(p) {
+        p.children.forEach(function(child) {
+            if ((child.name + ' ' + p.parentName + ' ' + p.familyName).toLowerCase().indexOf(q) >= 0) {
+                rows.push({ child: child, parent: p });
+            }
+        });
+        // Also match parent-only (no children yet)
+        if (!p.children.length && (p.parentName + ' ' + p.familyName).toLowerCase().indexOf(q) >= 0) {
+            rows.push({ child: null, parent: p });
+        }
+    });
+    // Deduplicate by parentName when the same parent appears multiple times
+    if (!rows.length) { box.innerHTML = '<div style="padding:10px;font-size:.8rem;color:var(--text-muted);">No results</div>'; box.style.display = 'block'; return; }
+    box.innerHTML = rows.slice(0, 12).map(function(r) {
+        var child = r.child, p = r.parent;
+        var label = child
+            ? '<strong>' + esc(child.name) + '</strong>' +
+              (child.bunk ? '<span style="font-size:.72rem;color:var(--text-muted);"> · ' + esc(child.bunk) + '</span>' : '') +
+              '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">parent: ' + esc(p.parentName) + '</div>'
+            : '<strong>' + esc(p.parentName) + '</strong><div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">no campers on file</div>';
+        return '<div style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--border-light);" ' +
+            'onmouseover="this.style.background=\'var(--slate-50)\'" onmouseout="this.style.background=\'\'" ' +
+            'onclick="pickIndiv(\'' + esc(p.parentName) + '\')">' + label + '</div>';
+    }).join('');
+    box.style.display = 'block';
+}
+
+function pickIndiv(name) {
+    var box = document.getElementById('cIndivResults');
+    var inp = document.getElementById('cIndivSearch');
+    var chips = document.getElementById('cIndivChips');
+    if (box) box.style.display = 'none';
+    if (inp) inp.value = '';
+    if (!chips || chips.querySelector('[data-name="' + name + '"]')) return;
+    var chip = document.createElement('span');
+    chip.dataset.name = name;
+    chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--link-tint);color:var(--link-color);border-radius:var(--radius-full);font-size:.78rem;font-weight:600;cursor:default;';
+    chip.innerHTML = esc(name) + ' <span onclick="this.parentElement.remove();_updateScopeCount();updateComposePreview();" style="cursor:pointer;opacity:.7;">&times;</span>';
+    chips.appendChild(chip);
+    _updateScopeCount();
+    updateComposePreview();
+}
+
+// Navigate to messages and open compose drawer pre-addressed to a parent
+function msgParent(name) {
+    nav('messages');
+    openComposeDrawer(name);
+}
+
+// Build the target list from current compose state
+function _getComposeTargets() {
+    var cl = CL(); if (!cl) return [];
+    var scope = (document.getElementById('cScope') || {}).value || 'all';
+    var value = ((document.getElementById('cScopeVal') || {}).value || '').trim();
+
+    if (scope === 'individual') {
+        var chips = document.querySelectorAll('#cIndivChips [data-name]');
+        if (!chips.length) return [];
+        var dir = cl.data.getParentDirectory();
+        var targets = [];
+        chips.forEach(function(chip) {
+            var parentName = chip.dataset.name;
+            var entry = dir.find(function(p) { return p.parentName === parentName; });
+            if (!entry) return;
+            entry.children.forEach(function(child) {
+                targets.push({
+                    camperName:  child.name,
+                    parentName:  entry.parentName,
+                    parentEmail: entry.parentEmail || '',
+                    bunk:        child.bunk        || '',
+                    division:    child.division    || '',
+                    grade:       child.grade       || '',
+                    familyName:  entry.familyName  || ''
+                });
+            });
+        });
+        return targets;
+    }
+
+    var map = cl.data.getCamperParentMap();
+    var targets = [];
+    Object.entries(map).forEach(function(entry) {
+        var name = entry[0], c = entry[1];
+        if (!c.parentName) return;
+        var match = (scope === 'all') ||
+            (scope === 'division' && value && c.division === value) ||
+            (scope === 'grade'    && value && c.grade    === value) ||
+            (scope === 'bunk'     && value && c.bunk     === value);
+        if (!match) return;
+        targets.push({
+            camperName:  name,
+            parentName:  c.parentName,
+            parentEmail: c.parentEmail || '',
+            bunk:        c.bunk        || '',
+            division:    c.division    || '',
+            grade:       c.grade       || '',
+            familyName:  c.familyName  || (name.split(' ').pop() + ' Family')
+        });
+    });
+    return targets;
+}
+
+// Build a camperName → bus route map from campistry_go_data
+function _buildBusRouteMap() {
+    var map = {};
+    try {
+        var go = JSON.parse(localStorage.getItem('campistry_go_data') || '{}');
+        var routes = go.routes || go.busRoutes || {};
+        Object.entries(routes).forEach(function(re) {
+            var routeName = re[0], route = re[1];
+            var stops = route.stops || route.addresses || [];
+            stops.forEach(function(stop) {
+                (stop.campers || stop.riders || []).forEach(function(n) { map[n] = routeName; });
+            });
+        });
+    } catch(e) {}
+    return map;
+}
+
+function _applyMergeTags(template, d, busMap) {
+    busMap = busMap || {};
+    return template
+        .replace(/\{\{child_name\}\}/gi,   d.camperName  || '')
+        .replace(/\{\{parent_name\}\}/gi,  d.parentName  || '')
+        .replace(/\{\{bunk\}\}/gi,         d.bunk        || '(unassigned)')
+        .replace(/\{\{division\}\}/gi,     d.division    || '')
+        .replace(/\{\{grade\}\}/gi,        d.grade       || '')
+        .replace(/\{\{family_name\}\}/gi,  d.familyName  || '')
+        .replace(/\{\{bus_route\}\}/gi,    busMap[d.camperName] || '(see Go app)');
+}
+
+function _updateScopeCount() {
+    var targets = _getComposeTargets();
+    var scope = (document.getElementById('cScope') || {}).value || 'all';
+    var el = document.getElementById('cScopeCount');
+    var btn = document.getElementById('cPreviewAllBtn');
+    if (!el) return;
+    var isGroup = scope !== 'individual';
+    if (!targets.length) {
+        el.textContent = isGroup ? '' : 'No match';
+    } else if (isGroup) {
+        el.textContent = targets.length + ' recipient' + (targets.length === 1 ? '' : 's');
+    } else {
+        el.textContent = targets.length + ' child' + (targets.length === 1 ? '' : 'ren') + ' included';
+    }
+    if (btn) btn.style.display = (targets.length > 1) ? '' : 'none';
+}
+
+function updateComposePreview() {
+    var targets = _getComposeTargets();
+    var body = (document.getElementById('cBody') || {}).value || '';
+    var subj = (document.getElementById('cSubj') || {}).value || '';
+    var wrap = document.getElementById('cPreviewWrap');
+    var pre  = document.getElementById('cPreview');
+    var lbl  = document.getElementById('cPreviewFor');
+    if (!wrap || !pre) return;
+    if (!targets.length || !body.trim()) { wrap.style.display = 'none'; return; }
+    var busMap = _buildBusRouteMap();
+    var t = targets[0];
+    var subjLine = subj ? 'Subject: ' + _applyMergeTags(subj, t, busMap) + '\n\n' : '';
+    pre.textContent = subjLine + _applyMergeTags(body, t, busMap);
+    if (lbl) lbl.textContent = '— ' + t.parentName + (t.camperName ? ' (' + t.camperName + ')' : '');
+    wrap.style.display = '';
+    _updateScopeCount();
+}
+
+function insertTag(tag) {
+    var ta = document.getElementById('cBody');
+    if (!ta) return;
+    var s = ta.selectionStart, e = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + tag + ta.value.slice(e);
+    ta.setSelectionRange(s + tag.length, s + tag.length);
+    ta.focus();
+    updateComposePreview();
+}
+
+function toggleCompCh(btn) {
+    btn.classList.toggle('selected');
+    compChannels = [];
+    document.querySelectorAll('#cChannelBtns .channel-btn.selected').forEach(function(b) { compChannels.push(b.dataset.ch); });
+    if (!compChannels.length) { btn.classList.add('selected'); compChannels = [btn.dataset.ch]; }
+}
+
+function showComposePreviewAll() {
+    var targets = _getComposeTargets();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var wrap = document.getElementById('cPreviewAll');
+    if (!wrap || !targets.length || !body) return;
+    var busMap = _buildBusRouteMap();
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:340px;overflow-y:auto;">' +
+        '<div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;display:flex;justify-content:space-between;align-items:center;">' +
+            '<span>' + targets.length + ' personalized messages</span>' +
+            '<button class="btn btn-ghost btn-sm" style="font-size:.72rem;padding:2px 8px;" onclick="document.getElementById(\'cPreviewAll\').style.display=\'none\'">✕</button>' +
+        '</div>';
+    targets.slice(0, 15).forEach(function(t) {
+        var pb = _applyMergeTags(body, t, busMap);
+        var ps = subj ? _applyMergeTags(subj, t, busMap) : '';
+        h += '<div style="padding:9px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;">' +
+            '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;">' +
+                '<strong>' + esc(t.parentName) + '</strong>' +
+                '<span style="color:var(--text-muted);font-size:.72rem;">' + esc(t.camperName) + (t.bunk ? ' · ' + esc(t.bunk) : '') + '</span>' +
+            '</div>' +
+            (ps ? '<div style="font-size:.75rem;font-weight:600;margin-top:3px;color:var(--slate-600);">' + esc(ps) + '</div>' : '') +
+            '<div style="color:var(--slate-500);font-size:.76rem;margin-top:3px;white-space:pre-line;max-height:50px;overflow:hidden;">' + esc(pb.substring(0, 200)) + (pb.length > 200 ? '…' : '') + '</div>' +
+        '</div>';
+    });
+    if (targets.length > 15) h += '<div style="padding:8px 14px;text-align:center;font-size:.76rem;color:var(--text-muted);">+ ' + (targets.length - 15) + ' more</div>';
+    h += '</div>';
+    wrap.innerHTML = h; wrap.style.display = '';
+}
+
+function sendCompose() {
+    var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
+    var subj = ((document.getElementById('cSubj') || {}).value || '').trim();
+    var body = ((document.getElementById('cBody') || {}).value || '').trim();
+    if (!subj) { toast('Subject is required'); return; }
+    if (!body) { toast('Message is required'); return; }
+    var targets = _getComposeTargets();
+    if (!targets.length) { toast('Select a recipient or group'); return; }
+    var busMap = _buildBusRouteMap();
+    var isGroup = targets.length > 1;
+    targets.forEach(function(t) {
+        cl.msg.send({
+            to: t.parentName, toType: 'individual',
+            subject: _applyMergeTags(subj, t, busMap),
+            body:    _applyMergeTags(body, t, busMap),
+            channels: compChannels,
+            metadata: { parentEmail: t.parentEmail, camperName: t.camperName, massSend: isGroup }
+        });
+    });
+    toast(targets.length + ' message' + (targets.length === 1 ? '' : 's') + ' sent!');
+    document.getElementById('cSubj').value = '';
+    document.getElementById('cBody').value = '';
+    document.getElementById('cPreviewWrap').style.display   = 'none';
+    document.getElementById('cPreviewAll').style.display    = 'none';
+    document.getElementById('cScopeCount').textContent      = '';
+    document.getElementById('cPreviewAllBtn').style.display = 'none';
+    document.getElementById('cIndivChips').innerHTML        = '';
+    closeComposeDrawer();
+    if (currentMsgTab === 'outbox') renderSentList();
+}
+
+function updateSmartBadge() {} // kept for compat — badge removed in new UI
+
+// ─── SENT / BROADCASTS (kept for compat) ─────────────────────────────────────
+function renderSent() {}
+
+// ─── ADMIN MESSAGES ───────────────────────────────────────────────────────────
+function _fmtMsgTime(d) {
+    if (!d) return '—';
+    var dt = new Date(d); if (isNaN(dt)) return String(d);
+    var diff = Date.now() - dt, h = Math.floor(diff / 3600000);
+    if (h < 1) return Math.max(1, Math.floor(diff / 60000)) + 'm ago';
+    if (h < 24) return h + 'h ago';
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+var _inboxReadFilter = 'all';
+
+function _populateInboxFilters() {
+    var cl = CL(); if (!cl) return;
+    var struct = cl.data.getStructure();
+    var grades = {}, divs = {}, bunks = {};
+    Object.entries(struct).forEach(function(de) {
+        var dname = de[0], div = de[1];
+        divs[dname] = 1;
+        Object.entries((div && div.grades) || {}).forEach(function(ge) {
+            grades[ge[0]] = 1;
+            (ge[1].bunks || []).forEach(function(b) { bunks[b] = 1; });
+        });
+    });
+    function fill(id, items, placeholder) {
+        var el = document.getElementById(id); if (!el) return;
+        var cur = el.value;
+        el.innerHTML = '<option value="">' + placeholder + '</option>' +
+            Object.keys(items).sort().map(function(v) { return '<option value="' + esc(v) + '">' + esc(v) + '</option>'; }).join('');
+        if (cur) el.value = cur;
+    }
+    fill('inboxFGrade', grades, 'All Grades');
+    fill('inboxFDiv',   divs,   'All Divisions');
+    fill('inboxFBunk',  bunks,  'All Bunks');
+}
+
+function onInboxFilter() { renderAdminMsgs(_inboxReadFilter); }
+
+function filterAdminMsgs(filter, btn) {
+    _inboxReadFilter = filter;
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    renderAdminMsgs(filter);
+}
+
+function renderAdminMsgs(filter) {
+    var cl = CL();
+    var list = cl ? cl.msg.getInbox() : [];
+
+    // Read/unread
+    if (filter === 'unread') list = list.filter(function(m) { return !m.read; });
+
+    // Text search
+    var q       = ((document.getElementById('inboxSearch')  || {}).value || '').trim().toLowerCase();
+    var fGrade  = ((document.getElementById('inboxFGrade')  || {}).value || '');
+    var fDiv    = ((document.getElementById('inboxFDiv')    || {}).value || '');
+    var fBunk   = ((document.getElementById('inboxFBunk')   || {}).value || '');
+
+    if (q) {
+        list = list.filter(function(m) {
+            var camper = (m.metadata && m.metadata.camperName) || '';
+            return (m.from    || '').toLowerCase().indexOf(q) >= 0 ||
+                   (m.subject || '').toLowerCase().indexOf(q) >= 0 ||
+                   (m.body    || '').toLowerCase().indexOf(q) >= 0 ||
+                   camper.toLowerCase().indexOf(q) >= 0;
+        });
+    }
+
+    // Field filters — look up sender's children in the directory
+    if ((fGrade || fDiv || fBunk) && cl) {
+        var dir = cl.data.getParentDirectory();
+        var parentMap = {};
+        dir.forEach(function(p) { parentMap[p.parentName] = p.children || []; });
+        list = list.filter(function(m) {
+            var children = parentMap[m.from || ''] || [];
+            return children.some(function(child) {
+                return (!fGrade || child.grade    === fGrade) &&
+                       (!fDiv   || child.division === fDiv)   &&
+                       (!fBunk  || child.bunk     === fBunk);
+            });
+        });
+    }
+
+    var c = document.getElementById('adminMsgList');
+    if (!list.length) {
+        var anyFilter = q || fGrade || fDiv || fBunk;
+        c.innerHTML = '<div class="lk-empty"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg></div>' +
+            '<h3>' + (anyFilter ? 'No messages match this filter' : 'No messages from parents yet') + '</h3>' +
+            '<p>' + (anyFilter ? 'Try clearing the search or filters.' : 'When a parent sends a message from the portal, it will appear here.') + '</p></div>';
+        return;
+    }
+    c.innerHTML = '';
+    list.forEach(function(m) {
+        var from   = m.from || 'Parent';
+        var camper = (m.metadata && m.metadata.camperName) ? ' · ' + m.metadata.camperName : '';
+        var preview = (m.body || '').slice(0, 80);
+        c.innerHTML += '<div class="msg-item ' + (m.read ? '' : 'unread') + '" onclick="openAdminMsg(\'' + esc(m.id) + '\')">' +
+            '<div class="msg-dot"></div>' +
+            '<div class="msg-body">' +
+                '<div class="msg-subj">' + esc(m.subject || '(No subject)') + '</div>' +
+                '<div class="msg-preview">' + esc(preview) + '</div>' +
+                '<div class="msg-from">' + esc(from + camper) + '</div>' +
+            '</div>' +
+            '<span class="msg-time">' + esc(_fmtMsgTime(m.date)) + '</span>' +
+        '</div>';
+    });
+}
+function openAdminMsg(id) {
+    var cl = CL();
+    var m = cl ? cl.msg.getInbox().find(function(x) { return x.id === id; }) : null;
+    if (!m) return;
+    cl.msg.markRead(id);
+    var from = m.from || 'Parent';
+    var body = m.body || '';
+    if (!body.startsWith('<')) body = '<p>' + body.replace(/\n/g, '</p><p>') + '</p>';
+    document.getElementById('adminMsgListView').style.display = 'none';
+    document.getElementById('adminMsgDetailView').style.display = 'block';
+    document.getElementById('adminMsgDetail').innerHTML =
+        '<div style="margin-bottom:16px;padding-bottom:14px;border-bottom:1px solid var(--border-light);">' +
+            '<div style="font-size:1.15rem;font-weight:700;margin-bottom:6px;">' + esc(m.subject || '(No subject)') + '</div>' +
+            '<div style="font-size:.78rem;color:var(--text-muted);display:flex;gap:14px;flex-wrap:wrap;">' +
+                '<span>From: <strong>' + esc(from) + '</strong></span>' +
+                '<span>' + esc(_fmtMsgTime(m.date)) + '</span>' +
+                '<span class="badge badge-neutral">Parent</span>' +
+            '</div>' +
+        '</div>' +
+        '<div style="font-size:.9rem;line-height:1.7;color:var(--text-secondary);">' + body + '</div>' +
+        '<div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border-light);">' +
+            '<textarea class="lk-textarea" id="adminReplyBody" placeholder="Write a reply to ' + esc(from) + '..." style="min-height:80px;"></textarea>' +
+            '<div style="margin-top:8px;display:flex;gap:6px;justify-content:flex-end;">' +
+                '<button class="btn btn-primary btn-sm" onclick="sendAdminReply(\'' + esc(m.id) + '\',\'' + esc(from) + '\')">Send Reply</button>' +
+            '</div>' +
+        '</div>';
+    renderAdminMsgs('all');
+}
+function sendAdminReply(threadId, toName) {
+    var body = (document.getElementById('adminReplyBody') || {}).value || '';
+    if (!body.trim()) { toast('Enter a reply'); return; }
+    var cl = CL();
+    if (cl) cl.msg.send({ to: toName, toType: 'individual', subject: 'Reply from Camp', body: body.trim(), channels: compChannels, threadId: threadId || null });
+    toast('Reply sent to ' + toName + '!');
+    closeAdminMsgDetail();
+}
+function closeAdminMsgDetail() {
+    document.getElementById('adminMsgListView').style.display = '';
+    document.getElementById('adminMsgDetailView').style.display = 'none';
+    renderAdminMsgs('all');
+}
+
+// ─── DOCUMENTS & FOLDER MANAGER ─────────────────────────────────────────────
+var docFolders = [
+];
+var docSubmissions = [];
+// Auto-file new submissions into matching folders on load
+docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
+
+var currentDocFilter = 'all';
+var currentFolderId = null;
+
+function autoFileSubmission(sub) {
+    docFolders.forEach(function(f) {
+        var r = f.rules;
+        var match = true;
+        if (r.docType   && r.docType   !== sub.docType)   match = false;
+        if (r.grade     && r.grade     !== sub.grade)     match = false;
+        if (r.division  && r.division  !== sub.division)  match = false;
+        if (r.bunk      && r.bunk      !== sub.bunk)      match = false;
+        if (match && !f.docs.find(function(d){ return d.id === sub.id; })) {
+            f.docs.push(sub);
+            sub.folderId = f.id;
+        }
+    });
+}
+
+function renderFoldersGrid() {
+    var g = document.getElementById('foldersGrid'); if (!g) return;
+    if (!docFolders.length) { g.innerHTML = ''; return; }
+    g.innerHTML = docFolders.map(function(f) {
+        var ruleChips = [];
+        if (f.rules.docType)   ruleChips.push(f.rules.docType);
+        if (f.rules.grade)     ruleChips.push(f.rules.grade);
+        if (f.rules.division)  ruleChips.push(f.rules.division);
+        if (f.rules.bunk)      ruleChips.push(f.rules.bunk);
+        var chips = ruleChips.map(function(r){ return '<span class="badge badge-neutral" style="font-size:.62rem;">'+esc(r)+'</span>'; }).join(' ');
+        return '<div class="lk-card" style="cursor:pointer;padding:14px;" onclick="openFolderDetail('+f.id+')">' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' +
+                '<div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
+                    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' +
+                '</div>' +
+                '<div style="flex:1;min-width:0;">' +
+                    '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);">'+esc(f.name)+'</div>' +
+                    '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">'+f.docs.length+' document'+(f.docs.length!==1?'s':'')+'</div>' +
+                '</div>' +
+            '</div>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:4px;">'+(chips||'<span style="font-size:.72rem;color:var(--slate-400);">No auto-file rules</span>')+'</div>' +
+        '</div>';
+    }).join('');
+}
+
+function openFolderDetail(fid) {
+    var f = docFolders.find(function(x){ return x.id === fid; }); if (!f) return;
+    currentFolderId = fid;
+    document.getElementById('docFolderListView').style.display = 'none';
+    document.getElementById('docFolderDetailView').style.display = '';
+    document.getElementById('folderDetailName').textContent = f.name;
+    var ruleStr = [];
+    if (f.rules.docType)   ruleStr.push('Type: '+f.rules.docType);
+    if (f.rules.grade)     ruleStr.push('Grade: '+f.rules.grade);
+    if (f.rules.division)  ruleStr.push('Division: '+f.rules.division);
+    if (f.rules.bunk)      ruleStr.push('Bunk: '+f.rules.bunk);
+    document.getElementById('folderDetailRules').textContent = ruleStr.length ? 'Auto-filing: ' + ruleStr.join(' · ') : 'No auto-file rules — manual filing only';
+    renderFolderDocs(f);
+}
+
+function renderFolderDocs(f) {
+    var box = document.getElementById('folderDetailList');
+    if (!f.docs.length) {
+        box.innerHTML = '<div class="lk-empty" style="padding:28px;"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div><h3>No documents yet</h3><p>Submissions matching this folder\'s rules will appear here automatically.</p></div>';
+        return;
+    }
+    box.innerHTML = f.docs.map(function(d){ return docRow(d, true); }).join('');
+}
+
+function closeFolderDetail() {
+    document.getElementById('docFolderDetailView').style.display = 'none';
+    document.getElementById('docFolderListView').style.display = '';
+    currentFolderId = null;
+    renderFoldersGrid();
+}
+
+function filterDocSubmissions(f, btn) {
+    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){ t.classList.remove('active'); }); btn.classList.add('active'); }
+    currentDocFilter = f;
+    if (f === 'folders') {
+        document.getElementById('docSubmissionsCard').style.display = 'none';
+    } else {
+        document.getElementById('docSubmissionsCard').style.display = '';
+        var title = f === 'unfiled' ? 'Unfiled Submissions' : 'All Submissions';
+        document.getElementById('docSubmissionsTitle').textContent = title;
+        renderDocSubmissions(f, document.getElementById('docSearch').value);
+    }
+}
+
+function renderDocSubmissions(f, q) {
+    q = (q || '').toLowerCase();
+    var list = docSubmissions.filter(function(d) {
+        if (f === 'unfiled' && d.folderId) return false;
+        if (q && (d.camper+d.name+d.docType+d.grade+d.division).toLowerCase().indexOf(q) < 0) return false;
+        return true;
+    });
+    var box = document.getElementById('docSubmissionsList');
+    if (!list.length) {
+        box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem);">' + (f==='unfiled'?'All submissions are filed!':'No submissions yet') + '</div>';
+        return;
+    }
+    box.innerHTML = list.map(function(d){ return docRow(d, false); }).join('');
+}
+
+function docRow(d, inFolder) {
+    var isDigital = d.mode === 'digital';
+    var ext = isDigital ? 'FORM' : (d.filename||'').split('.').pop().toUpperCase() || 'FILE';
+    var extColor = isDigital ? 'var(--link-color)' : (ext==='PDF' ? 'var(--red-500)' : 'var(--blue-500)');
+    var extBg = isDigital ? 'var(--link-tint)' : 'var(--slate-100)';
+    var folderInfo = !inFolder && d.folderId ? '<span class="badge badge-ok" style="font-size:.62rem;">Filed: '+esc((docFolders.find(function(f){return f.id===d.folderId;})||{name:'—'}).name)+'</span>' : '';
+    var unfiledBadge = !inFolder && !d.folderId ? '<span class="badge badge-warn" style="font-size:.62rem;">Unfiled</span>' : '';
+    var viewBtn = isDigital ? '<button class="btn btn-secondary btn-sm" onclick="viewFormSubmission(\''+esc(d.id)+'\')">View</button>' :
+                              '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading '+esc(d.filename||'file')+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:'+extBg+';display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:'+extColor+';flex-shrink:0;">'+ext+'</div>' +
+        '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(d.name)+'</div>' +
+            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">'+esc(d.camper)+' &nbsp;&middot;&nbsp; '+esc(d.grade||d.division||'—')+' &nbsp;&middot;&nbsp; Submitted '+esc(d.date)+' &nbsp;'+folderInfo+unfiledBadge+'</div>' +
+        '</div>' +
+        '<div style="display:flex;gap:5px;flex-shrink:0;">' +
+            viewBtn +
+            (!inFolder ? '<button class="btn btn-ghost btn-sm" onclick="moveToFolder(\''+esc(d.id)+'\')" title="File into folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>' : '') +
+        '</div>' +
+    '</div>';
+}
+
+function moveToFolder(docId) {
+    var d = docSubmissions.find(function(x){ return String(x.id)===String(docId); }); if (!d) return;
+    if (!docFolders.length) { toast('Create a folder first'); return; }
+    var sel = prompt('File into folder:\n' + docFolders.map(function(f,i){ return (i+1)+'. '+f.name; }).join('\n') + '\nEnter number:');
+    var idx = parseInt(sel,10) - 1;
+    if (isNaN(idx) || !docFolders[idx]) return;
+    var f = docFolders[idx];
+    d.folderId = f.id;
+    if (!f.docs.find(function(x){ return x.id===d.id; })) f.docs.push(d);
+    renderDocSubmissions(currentDocFilter, document.getElementById('docSearch').value);
+    renderFoldersGrid();
+    toast(esc(d.camper)+'\'s '+esc(d.name)+' filed into "'+esc(f.name)+'"');
+}
+
+function showCreateFolder() {
+    document.getElementById('createFolderForm').style.display = '';
+    document.getElementById('folderName').focus();
+    _populateFolderDropdowns();
+}
+function hideCreateFolder() { document.getElementById('createFolderForm').style.display = 'none'; }
+function _populateFolderDropdowns() {
+    var cl = CL(); if (!cl) return;
+    var struct = cl.data.getStructure();
+    var divSel = document.getElementById('folderDivision');
+    var gradeSel = document.getElementById('folderGrade');
+    if (!divSel || !gradeSel) return;
+    var divs = Object.keys(struct);
+    divSel.innerHTML = '<option value="">Any division</option>' +
+        divs.map(function(d) { return '<option value="' + esc(d) + '">' + esc(d) + '</option>'; }).join('');
+    var grades = {};
+    divs.forEach(function(d) { Object.keys((struct[d] && struct[d].grades) || {}).forEach(function(g) { grades[g] = 1; }); });
+    gradeSel.innerHTML = '<option value="">Any grade</option>' +
+        Object.keys(grades).sort().map(function(g) { return '<option value="' + esc(g) + '">' + esc(g) + '</option>'; }).join('');
+}
+
+function createFolder() {
+    var name = document.getElementById('folderName').value.trim();
+    if (!name) { toast('Enter a folder name'); return; }
+    var rules = {
+        docType:  document.getElementById('folderDocType').value,
+        grade:    document.getElementById('folderGrade').value,
+        division: document.getElementById('folderDivision').value,
+        bunk:     document.getElementById('folderBunk').value.trim()
+    };
+    var fid = Date.now();
+    var folder = { id:fid, name:name, rules:rules, docs:[] };
+    docFolders.push(folder);
+    // auto-file existing unmatched submissions
+    var newlyFiled = 0;
+    docSubmissions.forEach(function(sub) {
+        if (sub.folderId) return;
+        var r = rules, match = true;
+        if (r.docType  && r.docType  !== sub.docType)   match = false;
+        if (r.grade    && r.grade    !== sub.grade)      match = false;
+        if (r.division && r.division !== sub.division)   match = false;
+        if (r.bunk     && r.bunk     !== sub.bunk)       match = false;
+        if (match) { folder.docs.push(sub); sub.folderId = fid; newlyFiled++; }
+    });
+    hideCreateFolder();
+    document.getElementById('folderName').value = '';
+    document.getElementById('folderDocType').value = '';
+    document.getElementById('folderGrade').value = '';
+    document.getElementById('folderDivision').value = '';
+    document.getElementById('folderBunk').value = '';
+    renderFoldersGrid();
+    renderDocSubmissions(currentDocFilter, '');
+    toast('Folder "'+name+'" created' + (newlyFiled ? ' — '+newlyFiled+' existing submission'+(newlyFiled>1?'s':'')+' auto-filed' : ''));
+}
+
+function printFolderDocs() {
+    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
+    if (!f.docs.length) { toast('No documents in this folder'); return; }
+    toast('Printing '+f.docs.length+' document'+(f.docs.length>1?'s':'')+' from "'+f.name+'"...');
+}
+
+function deleteFolderPrompt() {
+    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
+    if (!confirm('Delete folder "'+f.name+'"? Documents will be unfiled (not deleted).')) return;
+    f.docs.forEach(function(d){ if(d.folderId===currentFolderId) d.folderId=null; });
+    docFolders = docFolders.filter(function(x){ return x.id!==currentFolderId; });
+    closeFolderDetail();
+    toast('Folder deleted');
+}
+
+// ─── FORM TEMPLATE MANAGER ───────────────────────────────────────────────────
+var FORM_SUB_KEY = 'campistry_link_form_submissions_v1';
+var _ftMode = 'digital';   // 'digital' | 'printReturn' | 'document'
+var _ftFields = [];         // field list for the open drawer
+var _ftEditId = null;       // null = new, string = editing by id
+
+function _loadLinkForms() {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    var lf = s.link_forms || {};
+    return { digital: lf.digital || [], printReturn: lf.printReturn || [], documents: lf.documents || [] };
+}
+function _saveLinkForms(lf) {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    s.link_forms = lf;
+    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(s));
+}
+
+function renderFormTemplatesAdmin() {
+    var lf = _loadLinkForms();
+    var docSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+    function tplRow(f, type) {
+        var reqBadge = (type !== 'document' && f.required) ? '<span class="badge badge-warn" style="font-size:.6rem;">Required</span>' : '';
+        var fieldsBadge = (type === 'digital' && f.fields && f.fields.length) ? '<span class="badge badge-neutral" style="font-size:.6rem;">'+f.fields.length+' field'+(f.fields.length!==1?'s':'')+'</span>' : '';
+        var urlBadge = (type !== 'digital') ? (f.downloadUrl ? '<span class="badge badge-ok" style="font-size:.6rem;">URL set</span>' : '<span class="badge badge-warn" style="font-size:.6rem;">No URL</span>') : '';
+        var sub = f.description ? '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">'+esc(f.description)+'</div>' : '';
+        return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
+            '<div style="width:32px;height:32px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">'+docSvg+'</div>' +
+            '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(f.name)+'</div>' +
+                '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px;">'+reqBadge+fieldsBadge+urlBadge+'</div>'+sub+
+            '</div>' +
+            '<button class="btn btn-secondary btn-sm" onclick="_editFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')">Edit</button>' +
+            '<button class="btn btn-ghost btn-sm" onclick="_deleteFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')" style="color:var(--red-500);">' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
+            '</button>' +
+        '</div>';
+    }
+    var emptyHtml = '<div style="padding:12px 0;font-size:.8rem;color:var(--text-muted);">None added yet.</div>';
+    var dl = document.getElementById('ftDigitalList');
+    var pl = document.getElementById('ftPrintList');
+    var ddl = document.getElementById('ftDocsList');
+    if (dl)  dl.innerHTML  = lf.digital.length    ? lf.digital.map(function(f){ return tplRow(f,'digital'); }).join('')    : emptyHtml;
+    if (pl)  pl.innerHTML  = lf.printReturn.length ? lf.printReturn.map(function(f){ return tplRow(f,'printReturn'); }).join('') : emptyHtml;
+    if (ddl) ddl.innerHTML = lf.documents.length   ? lf.documents.map(function(f){ return tplRow(f,'document'); }).join('')  : emptyHtml;
+}
+
+function openFormDrawer(mode, editId) {
+    _ftMode = mode || 'digital';
+    _ftEditId = editId || null;
+    var lf = _loadLinkForms();
+    var arr = mode === 'digital' ? lf.digital : mode === 'printReturn' ? lf.printReturn : lf.documents;
+    var existing = editId ? (arr.find(function(f){ return f.id === editId; }) || null) : null;
+
+    var titles = { digital: 'Fill-Online Form', printReturn: 'Print & Return Form', document: 'Camp Document' };
+    document.getElementById('formTplDrawerTitle').textContent = (existing ? 'Edit ' : 'New ') + titles[_ftMode];
+    document.getElementById('ftName').value = existing ? (existing.name || '') : '';
+    document.getElementById('ftCat').value  = existing ? (existing.category || 'medical') : 'medical';
+    document.getElementById('ftDesc').value = existing ? (existing.description || '') : '';
+    document.getElementById('ftUrl').value  = existing ? (existing.downloadUrl || '') : '';
+    document.getElementById('ftRequiredSel').value = (existing && !existing.required) ? '0' : '1';
+
+    document.getElementById('ftFieldsSection').style.display = mode === 'digital'   ? '' : 'none';
+    document.getElementById('ftUrlSection').style.display    = mode !== 'digital'   ? '' : 'none';
+    document.getElementById('ftReqRow').style.display        = mode !== 'document'  ? '' : 'none';
+
+    _ftFields = [];
+    if (mode === 'digital') {
+        if (existing && existing.fields && existing.fields.length) {
+            _ftFields = existing.fields.map(function(f){ return Object.assign({}, f); });
+        } else if (!existing) {
+            _ftFields = [
+                { id: 'f_'+Date.now(),   type: 'text',      label: 'Full Name',       required: true },
+                { id: 'f_'+(Date.now()+1), type: 'date',    label: 'Date',            required: true },
+                { id: 'f_'+(Date.now()+2), type: 'signature', label: 'Parent Signature', required: true }
+            ];
+        }
+    }
+    _renderFormFieldsList();
+
+    document.getElementById('formTplBackdrop').classList.add('open');
+    document.getElementById('formTplDrawer').classList.add('open');
+    setTimeout(function(){ document.getElementById('ftName').focus(); }, 200);
+}
+
+function closeFormDrawer() {
+    document.getElementById('formTplBackdrop').classList.remove('open');
+    document.getElementById('formTplDrawer').classList.remove('open');
+}
+
+function _renderFormFieldsList() {
+    var list = document.getElementById('ftFieldsList'); if (!list) return;
+    if (!_ftFields.length) {
+        list.innerHTML = '<div style="font-size:.78rem;color:var(--text-muted);padding:8px 0;">No fields yet — click "+ Add Field" above.</div>';
+        return;
+    }
+    var typeOptions = ['text','email','phone','date','textarea','checkbox','signature'];
+    list.innerHTML = _ftFields.map(function(f, i) {
+        var opts = typeOptions.map(function(t){
+            return '<option value="'+t+'"'+(f.type===t?' selected':'')+'>'+(t==='textarea'?'Long Text':t.charAt(0).toUpperCase()+t.slice(1))+'</option>';
+        }).join('');
+        return '<div class="ft-field-row" id="ftFRow_'+i+'">' +
+            '<span class="ft-field-drag">&#9776;</span>' +
+            '<select class="lk-input" style="max-width:108px;font-size:.76rem;padding:4px 6px;height:auto;" onchange="_ftFields['+i+'].type=this.value;_renderFormFieldsList()">'+opts+'</select>' +
+            '<input type="text" class="lk-input" style="flex:1;font-size:.81rem;padding:4px 8px;height:auto;" value="'+esc(f.label||'')+'" placeholder="Label" oninput="_ftFields['+i+'].label=this.value">' +
+            '<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;flex-shrink:0;white-space:nowrap;">' +
+                '<input type="checkbox"'+(f.required?' checked':'')+' onchange="_ftFields['+i+'].required=this.checked" style="width:13px;height:13px;"> Req' +
+            '</label>' +
+            '<button class="btn btn-ghost btn-sm" onclick="_removeFormField('+i+')" style="flex-shrink:0;color:var(--red-500);padding:3px 5px;">' +
+                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
+            '</button>' +
+        '</div>';
+    }).join('');
+}
+
+function _addFormField() {
+    _ftFields.push({ id: 'f_'+Date.now(), type: 'text', label: '', required: false });
+    _renderFormFieldsList();
+    var rows = document.querySelectorAll('#ftFieldsList .ft-field-row');
+    var last = rows[rows.length - 1];
+    if (last) { var inp = last.querySelector('input[type="text"]'); if (inp) { inp.focus(); } }
+}
+
+function _removeFormField(idx) {
+    _ftFields.splice(idx, 1);
+    _renderFormFieldsList();
+}
+
+function _saveFormDrawer() {
+    var name = (document.getElementById('ftName').value || '').trim();
+    if (!name) { toast('Enter a form name'); return; }
+    var lf = _loadLinkForms();
+    var prefix = _ftMode === 'digital' ? 'lfd_' : _ftMode === 'printReturn' ? 'lfp_' : 'lfdoc_';
+    var item = {
+        id: _ftEditId || (prefix + Date.now()),
+        name: name,
+        category: document.getElementById('ftCat').value,
+        description: (document.getElementById('ftDesc').value || '').trim(),
+        required: document.getElementById('ftRequiredSel').value === '1',
+        created: Date.now()
+    };
+    if (_ftMode !== 'digital') { item.downloadUrl = (document.getElementById('ftUrl').value || '').trim(); }
+    if (_ftMode === 'digital') { item.fields = _ftFields.filter(function(f){ return (f.label||'').trim(); }); }
+
+    var arr = _ftMode === 'digital' ? lf.digital : _ftMode === 'printReturn' ? lf.printReturn : lf.documents;
+    if (_ftEditId) {
+        var idx = arr.findIndex(function(f){ return f.id === _ftEditId; });
+        if (idx >= 0) { item.created = arr[idx].created || Date.now(); arr[idx] = item; } else { arr.push(item); }
+    } else {
+        arr.push(item);
+    }
+    _saveLinkForms(lf);
+    closeFormDrawer();
+    renderFormTemplatesAdmin();
+    toast(esc(name) + ' saved!');
+}
+
+function _editFormTpl(type, id) { openFormDrawer(type, id); }
+
+function _deleteFormTpl(type, id) {
+    if (!confirm('Delete this form?')) return;
+    var lf = _loadLinkForms();
+    var arr = type === 'digital' ? lf.digital : type === 'printReturn' ? lf.printReturn : lf.documents;
+    var idx = arr.findIndex(function(f){ return f.id === id; });
+    if (idx >= 0) arr.splice(idx, 1);
+    _saveLinkForms(lf);
+    renderFormTemplatesAdmin();
+    toast('Deleted');
+}
+
+// ─── FORM SUBMISSION VIEWER ──────────────────────────────────────────────────
+function _loadFormSubmissions() {
+    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
+    docSubmissions = raw.map(function(s) {
+        return {
+            id: s.id, name: s.formName, docType: s.docType,
+            camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
+            date: s.date, submittedAt: s.submittedAt,
+            filename: s.mode === 'digital' ? null : (s.filename || 'upload'),
+            folderId: s.folderId || null,
+            values: s.values || {}, signatureDataUrl: s.signatureDataUrl || null,
+            mode: s.mode || 'upload'
+        };
+    });
+    docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
+}
+
+function viewFormSubmission(subId) {
+    var raw = JSON.parse(localStorage.getItem(FORM_SUB_KEY) || '[]');
+    var s = raw.find(function(x){ return x.id === subId; }); if (!s) return;
+    var vals = s.values || {};
+    var rows = Object.entries(vals).map(function(kv){
+        return '<div style="padding:8px 0;border-bottom:1px solid var(--slate-100);display:flex;gap:10px;">' +
+            '<div style="flex:1;font-size:.8rem;font-weight:600;color:var(--slate-700);">'+esc(kv[0])+'</div>' +
+            '<div style="flex:2;font-size:.82rem;color:var(--slate-900);">'+(kv[1]==='[signature]'?'<em>Signed</em>':esc(kv[1]))+'</div>' +
+        '</div>';
+    }).join('');
+    var sigHtml = s.signatureDataUrl ? '<div style="margin-top:14px;"><div style="font-size:.78rem;font-weight:600;color:var(--slate-700);margin-bottom:6px;">Signature</div><div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);background:var(--slate-50);padding:4px;display:inline-block;"><img src="'+s.signatureDataUrl+'" style="max-width:300px;height:auto;display:block;"></div></div>' : '';
+    var html = '<div style="font-size:.85rem;font-weight:700;margin-bottom:10px;color:var(--slate-900);">'+esc(s.formName)+' — '+esc(s.camper)+'</div>' +
+               '<div style="font-size:.74rem;color:var(--text-muted);margin-bottom:12px;">Submitted '+esc(s.date)+(s.grade?' &nbsp;·&nbsp; '+esc(s.grade):'')+(s.bunk?' &nbsp;·&nbsp; '+esc(s.bunk):'')+'</div>' +
+               rows + sigHtml;
+    // Simple modal via overlay
+    var el = document.createElement('div');
+    el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.4);z-index:9100;display:flex;align-items:center;justify-content:center;padding:20px;';
+    el.innerHTML = '<div style="background:#fff;border-radius:var(--radius-lg);max-width:520px;width:100%;max-height:80vh;overflow-y:auto;box-shadow:0 20px 60px rgba(0,0,0,.2);">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border-light);position:sticky;top:0;background:#fff;">' +
+            '<span style="font-size:.92rem;font-weight:700;">Form Submission</span>' +
+            '<button onclick="this.closest(\'[style*=fixed]\').remove()" style="background:none;border:1px solid var(--border-light);border-radius:6px;padding:4px 10px;cursor:pointer;font-size:.8rem;">Close</button>' +
+        '</div>' +
+        '<div style="padding:18px 20px;">'+html+'</div>' +
+    '</div>';
+    el.addEventListener('click', function(e){ if (e.target === el) el.remove(); });
+    document.body.appendChild(el);
+}
+
+// ─── PHOTOS ───────────────────────────────────────────────────────────────────
+async function buildIndex() {
+    var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
+    var prog = document.getElementById('indexProg');
+    prog.style.display = 'block';
+    prog.innerHTML = '<div style="font-size:.82rem;color:var(--text-muted);">Loading models (~6MB)...</div>';
+    var r = await cp.buildFaceIndex(function(p) {
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round(p.current / p.total * 100) + '%;"></div></div>' + p.current + '/' + p.total + ': <strong>' + esc(p.name) + '</strong></div>';
+    });
+    if (r.error && !r.indexed) prog.innerHTML = '<div style="color:var(--red-500);font-size:.82rem;">Error: ' + esc(r.error) + '</div>';
+    else {
+        prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.indexed + ' faces indexed</div>';
+        document.getElementById('indexBadge').textContent = r.indexed + ' faces';
+        document.getElementById('indexBadge').className = 'badge badge-ok';
+    }
+    updatePhotoStats();
+}
+async function handlePhotos(files) {
+    if (!files || !files.length) return;
+    var cp = CP(); if (!cp) { toast('Photo engine not loaded'); return; }
+    if (!cp.isIndexBuilt()) { toast('Build face index first'); return; }
+    var prog = document.getElementById('uploadProg');
+    prog.style.display = 'block';
+    var r = await cp.batchUploadAndScan(files, function(p) {
+        prog.innerHTML = '<div style="font-size:.82rem;"><div class="progress" style="height:6px;margin-bottom:6px;"><div class="progress-fill" style="width:' + Math.round(p.current / p.total * 100) + '%;"></div></div>Scanning ' + p.current + '/' + p.total + '</div>';
+    });
+    prog.innerHTML = '<div style="color:var(--green-600);font-size:.82rem;">' + r.processed + ' done, ' + r.tagged + ' tagged</div>';
+    document.getElementById('photoInput').value = '';
+    refreshPhotos(); updatePhotoStats();
+}
+function refreshPhotos() {
+    var cp = CP(); if (!cp) return;
+    var photos = cp.getPhotos(cp.getCurrentWeek());
+    var grid = document.getElementById('photoGrid');
+    var empty = document.getElementById('photoEmpty');
+    if (!photos.length) { grid.innerHTML = ''; empty.style.display = ''; return; }
+    empty.style.display = 'none';
+    grid.innerHTML = photos.slice(-40).reverse().map(function(p) {
+        var tags = (p.tags || []).concat(p.manualTags || []);
+        var tagStr = tags.length ? tags.map(function(t) { return '<span class="badge badge-ok" style="font-size:.58rem;margin:1px;">' + esc(t.camperName.split(' ')[0]) + ' ' + Math.round(t.confidence * 100) + '%</span>'; }).join(' ') : '<span class="badge badge-warn" style="font-size:.58rem;">No match</span>';
+        var camSvg = '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="opacity:.35"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+        var thumb = p.dataUrl ? '<img src="' + p.dataUrl + '" style="width:100%;height:120px;object-fit:cover;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">' : '<div style="height:120px;background:var(--slate-100);display:flex;align-items:center;justify-content:center;border-radius:var(--radius-sm) var(--radius-sm) 0 0;">' + camSvg + '</div>';
+        return '<div style="border:1px solid var(--border-light);border-radius:var(--radius-sm);overflow:hidden;background:#fff;">' + thumb + '<div style="padding:6px;font-size:.72rem;"><div style="display:flex;flex-wrap:wrap;gap:2px;">' + tagStr + '</div></div></div>';
+    }).join('');
+}
+function updatePhotoStats() {
+    var cp = CP(); if (!cp) return;
+    var s = cp.getDistributionSummary();
+    var camSvg   = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>';
+    var checkSvg = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>';
+    var personSvg= '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>';
+    var searchSvg= '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
+    document.getElementById('photoStats').innerHTML =
+        stat('blue',  camSvg,    s.totalPhotos,         'This Week')  +
+        stat('green', checkSvg,  s.taggedPhotos,        'Tagged')     +
+        stat('amber', personSvg, s.uniqueCampers,       'Identified') +
+        stat('rose',  searchSvg, cp.getIndexSize() || Object.keys(cp.getStore().faceIndex).length, 'Index');
+}
+function sendPhotos() {
+    var cp = CP(); if (!cp) return;
+    var r = cp.sendPhotoRoundup(channels);
+    if (r.success) toast('Sent to ' + r.sent + ' parents!');
+    else toast(r.error || 'No photos');
+}
+function previewPhotos() {
+    var cp = CP(); if (!cp) return;
+    var s = cp.getDistributionSummary();
+    var box = document.getElementById('photoPreview');
+    if (!s.totalPhotos) { box.innerHTML = '<div style="padding:12px;text-align:center;color:var(--text-muted);font-size:.82rem;">No photos this week.</div>'; box.style.display = 'block'; return; }
+    var entries = Object.entries(s.camperCounts).sort(function(a, b) { return b[1].count - a[1].count; });
+    var h = '<div style="border:1px solid var(--border-light);border-radius:var(--radius-md);max-height:200px;overflow-y:auto;"><div style="padding:8px 14px;background:var(--slate-50);font-size:.76rem;font-weight:700;color:var(--text-muted);position:sticky;top:0;">' + s.totalPhotos + ' photos · ' + s.uniqueCampers + ' campers</div>';
+    entries.forEach(function(e) { h += '<div style="padding:6px 14px;border-bottom:1px solid var(--border-light);font-size:.8rem;display:flex;justify-content:space-between;"><span>' + esc(e[0]) + '</span><span class="badge badge-ok">' + e[1].count + '</span></div>'; });
+    h += '</div>';
+    box.innerHTML = h; box.style.display = 'block';
+}
+
+// ─── BOOT ─────────────────────────────────────────────────────────────────────
+function boot() {
+    renderDash();
+    renderAdminMsgs('all');
+    _loadFormSubmissions();
+
+    window.addEventListener('campistry-cloud-hydrated', function() {
+        console.log('[Link Admin] Cloud hydrated — refreshing');
+        if (window.CampistryLink) window.CampistryLink.refresh();
+        // Re-render whichever page is currently active
+        var active = document.querySelector('.lk-page.active');
+        var pageId = active ? active.id.replace('page-', '') : 'dashboard';
+        if (pageId === 'dashboard') renderDash();
+        else if (pageId === 'directory') renderDir('');
+        else if (pageId === 'campers') renderCampers('');
+        else renderDash();
+    });
+
+    // Photo index restore
+    var cp = CP();
+    if (cp && Object.keys(cp.getStore().faceIndex).length) {
+        cp.loadModels().then(function() {
+            if (cp.restoreIndex()) {
+                document.getElementById('indexBadge').textContent = cp.getIndexSize() + ' faces';
+                document.getElementById('indexBadge').className = 'badge badge-ok';
+                updatePhotoStats();
+            }
+        });
+    }
+
+    window.addEventListener('storage', function(e) {
+        if (e.key === 'campGlobalSettings_v1' || e.key === 'CAMPISTRY_LOCAL_CACHE') {
+            if (window.CampistryLink) window.CampistryLink.refresh();
+            renderDash();
+        }
+        // Parent sent a message — refresh admin inbox in real time
+        if (e.key === 'campistry_link_v1') {
+            if (window.CampistryLink) window.CampistryLink.refresh();
+            if (currentMsgTab === 'inbox') renderAdminMsgs('all');
+        }
+        // Parent submitted a form — refresh submissions
+        if (e.key === FORM_SUB_KEY) {
+            _loadFormSubmissions();
+            if (currentMsgTab === 'forms') renderDocSubmissions(currentDocFilter, document.getElementById('docSearch') ? document.getElementById('docSearch').value : '');
+        }
+        // Admin saved form templates in Me page — refresh manage tab
+        if (e.key === 'campGlobalSettings_v1' && currentMsgTab === 'forms') {
+            renderFormTemplatesAdmin();
+        }
+    });
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+</script>
+<script src="campistry_notes_quick.js"></script>
+</body>
+</html>

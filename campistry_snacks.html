@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en" data-product="snacks">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Campistry Snacks — Manager Dashboard</title>
+<link rel="icon" type="image/png" href="Campistry_logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="campistry-unified.css">
+<link rel="stylesheet" href="campistry_snacks.css">
+<!-- Splash screen — inline so it appears before any external CSS -->
+<style>
+    #snacks-splash {
+        position: fixed; inset: 0; z-index: 9999999;
+        background: #fff;
+        display: flex; align-items: center; justify-content: center;
+        transition: opacity 0.55s ease;
+    }
+    #snacks-splash.hide { opacity: 0; pointer-events: none; }
+    #snacks-splash-wrap {
+        position: relative;
+        width: 220px; height: 72px;
+        flex-shrink: 0;
+        overflow: hidden;
+    }
+    #snacks-splash-logo {
+        position: absolute; top: 0; left: 0;
+        width: 220px; height: auto;
+        opacity: 0;
+        animation: logo-rise 0.85s cubic-bezier(0.16,1,0.3,1) 0.15s forwards;
+    }
+    @keyframes logo-rise {
+        0%   { transform: translateY(30px); opacity: 0; }
+        100% { transform: translateY(0);    opacity: 1; }
+    }
+    .shimmer {
+        position: absolute;
+        top: 0; left: 0;
+        width: 220px; height: 72px;
+        background: linear-gradient(
+            108deg,
+            transparent 15%,
+            rgba(255,235,170,0.7) 50%,
+            transparent 85%
+        );
+        mix-blend-mode: screen;
+        pointer-events: none;
+        animation: shimmer-sweep 0.75s ease-in-out 1.1s both;
+    }
+    @keyframes shimmer-sweep {
+        0%   { transform: translateX(-250px); }
+        100% { transform: translateX(250px);  }
+    }
+</style>
+</head>
+<body>
+
+<!-- SPLASH -->
+<div id="snacks-splash">
+    <div id="snacks-splash-wrap">
+        <img id="snacks-splash-logo" src="Snacks_clean.png" alt="">
+        <div class="shimmer"></div>
+    </div>
+    <script>
+    (function() {
+        var ov = document.getElementById('snacks-splash');
+        setTimeout(function() {
+            ov.classList.add('hide');
+            setTimeout(function() { if (ov) ov.style.display = 'none'; }, 500);
+        }, 2200);
+    })();
+    </script>
+</div>
+
+<!-- HEADER -->
+<header class="app-header">
+    <div class="header-left">
+        <a href="dashboard.html" class="snacks-back-btn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="15 18 9 12 15 6"/></svg>
+            Dashboard
+        </a>
+        <button class="hamburger-btn" id="hamburgerBtn" aria-label="Toggle Navigation"><span></span><span></span><span></span></button>
+        <a href="campistry_snacks.html" class="snacks-logo-link">
+            <img src="Snacks_clean.png" alt="Campistry Snacks" style="height:40px;width:auto;object-fit:contain;display:block;">
+        </a>
+        <a href="campistry_me.html" class="header-app-switch" title="Campistry Me"><img src="Me_clean.png" alt="Me" style="height:38px;width:auto;object-fit:contain;"></a>
+        <a href="flow.html" class="header-app-switch" title="Campistry Flow"><img src="Flow_clean.png" alt="Flow" style="height:36px;width:auto;object-fit:contain;"></a>
+        <a href="campistry_go.html" class="header-app-switch" title="Campistry Go"><img src="Go_clean.png" alt="Go" style="height:38px;width:auto;object-fit:contain;"></a>
+        <a href="campistry_health.html" class="header-app-switch" title="Campistry Health"><img src="Health_clean.png" alt="Health" style="height:36px;width:auto;object-fit:contain;"></a>
+        <a href="campistry_link_admin.html" class="header-app-switch" title="Campistry Link"><img src="Link_clean.png" alt="Link" style="height:36px;width:auto;object-fit:contain;"></a>
+    </div>
+    <div class="header-right">
+        <div class="sync-badge"><div class="sync-dot"></div><span>Synced</span></div>
+        <span class="snacks-user-name" id="snacksUserName"></span>
+        <div class="snacks-avatar" id="snacksAvatar">MG</div>
+    </div>
+</header>
+
+<!-- SIDEBAR BACKDROP -->
+<div id="sidebarBackdrop" class="sidebar-backdrop"></div>
+
+<!-- SIDEBAR -->
+<aside id="sidebar" class="sidebar">
+    <div class="sidebar-label">Canteen</div>
+    <button class="sidebar-item active" data-page="dashboard"><span class="sidebar-dot"></span> Dashboard</button>
+    <button class="sidebar-item" data-page="transactions"><span class="sidebar-dot"></span> Transactions</button>
+    <button class="sidebar-item" data-page="accounts"><span class="sidebar-dot"></span> Accounts</button>
+    <div class="sidebar-label">Management</div>
+    <button class="sidebar-item" data-page="menu"><span class="sidebar-dot"></span> Menu Items</button>
+    <button class="sidebar-item" data-page="settings"><span class="sidebar-dot"></span> Settings</button>
+    <div class="sidebar-label">Operations</div>
+    <a href="campistry_snacks_pos.html" class="sidebar-item sidebar-item-link">
+        <span class="sidebar-dot"></span> POS Terminal
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-left:auto;opacity:.4"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+    </a>
+</aside>
+
+<!-- MAIN CONTENT -->
+<div class="app-content">
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  DASHBOARD PAGE                                     -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-dashboard" class="snacks-page active">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+        </div>
+        <div>
+            <h1>Canteen Manager</h1>
+            <p>Accounts, inventory, and analytics</p>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg></div><div><div class="stat-value" id="sA">0</div><div class="stat-label">Accounts</div></div></div>
+        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg></div><div><div class="stat-value" id="sB">$0</div><div class="stat-label">Total Balance</div></div></div>
+        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div><div><div class="stat-value" id="sI">0</div><div class="stat-label">Items in Stock</div></div></div>
+        <div class="stat-card"><div class="stat-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></div><div><div class="stat-value" id="sS">$0</div><div class="stat-label">Sales Today</div></div></div>
+    </div>
+
+    <div class="metric-row">
+        <div class="metric-card"><div class="metric-card-label">Revenue Today</div><div class="metric-card-value" id="mRev">$0</div><div class="metric-card-sub" id="mTxn">0 txns</div></div>
+        <div class="metric-card"><div class="metric-card-label">Top Seller</div><div class="metric-card-value" id="mTop">—</div><div class="metric-card-sub" id="mTopN"></div></div>
+        <div class="metric-card"><div class="metric-card-label">Avg Transaction</div><div class="metric-card-value" id="mAvg">$0</div></div>
+        <div class="metric-card"><div class="metric-card-label">Units Sold</div><div class="metric-card-value" id="mUnits">0</div></div>
+        <div class="metric-card"><div class="metric-card-label">Low Stock</div><div class="metric-card-value" id="mLow" style="color:var(--amber-600)">0</div></div>
+        <div class="metric-card"><div class="metric-card-label">Sell-Through</div><div class="metric-card-value" id="mST">0%</div></div>
+    </div>
+
+    <div class="analytics-grid">
+        <div class="card"><div class="card-header"><h2>Item Popularity</h2></div><div class="card-body" id="popList"></div></div>
+        <div class="card"><div class="card-header"><h2>Revenue by Category</h2></div><div class="card-body" id="catBrk"></div></div>
+    </div>
+    <div class="analytics-grid">
+        <div class="card"><div class="card-header"><h2>Sales This Week</h2></div><div class="card-body"><div class="bar-chart" id="wChart"></div></div></div>
+        <div class="card"><div class="card-header"><h2>Top Spenders</h2></div><div class="card-body" id="spList"></div></div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  TRANSACTIONS PAGE                                  -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-transactions" class="snacks-page">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+        </div>
+        <div>
+            <h1>Transactions</h1>
+            <p>Full transaction log for today and historical data</p>
+        </div>
+    </div>
+
+    <div class="analytics-grid">
+        <div class="card"><div class="card-header"><h2>Hourly Heatmap</h2></div><div class="card-body" id="heatmap"></div></div>
+        <div class="card"><div class="card-header"><h2>Recent Transactions</h2><span class="card-count" id="txC">0</span></div>
+            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Time</th><th>Camper</th><th>Items</th><th>Amount</th></tr></thead><tbody id="txBody"></tbody></table></div>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  ACCOUNTS PAGE                                      -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-accounts" class="snacks-page">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+        </div>
+        <div>
+            <h1>Camper Accounts</h1>
+            <p>Manage balances, deposits, and daily spending limits</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h2>All Accounts</h2>
+            <div style="display:flex;gap:.5rem;align-items:center">
+                <div class="search-bar" style="width:220px">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                    <input type="text" placeholder="Search…" id="aSearch" oninput="rAccounts()">
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="openM('dep')">+ Add Deposit</button>
+                <button class="btn btn-secondary btn-sm" onclick="openM('limit')">Set Limits</button>
+            </div>
+        </div>
+        <div class="table-wrapper">
+            <table class="data-table">
+                <thead><tr><th>Camper</th><th>Division</th><th>Bunk</th><th>Balance</th><th>Daily Limit</th><th>Spent Today</th><th>Status</th><th></th></tr></thead>
+                <tbody id="aBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  MENU ITEMS PAGE                                    -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-menu" class="snacks-page">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        </div>
+        <div>
+            <h1>Menu Items</h1>
+            <p>Canteen inventory — items, pricing, and stock levels</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header">
+            <h2>Canteen Items</h2>
+            <div style="display:flex;gap:.5rem;align-items:center">
+                <span class="card-count" id="iCount">0</span>
+                <button class="btn btn-primary btn-sm" onclick="openM('item')">+ Add Item</button>
+                <button class="btn btn-secondary btn-sm" onclick="openM('restock')">Restock</button>
+            </div>
+        </div>
+        <div class="table-wrapper">
+            <table class="data-table">
+                <thead><tr><th></th><th>Item</th><th>Category</th><th>Price</th><th>Stock</th><th>Sold Today</th><th>All-Time</th><th>Status</th><th></th></tr></thead>
+                <tbody id="iBody"></tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  SETTINGS PAGE                                      -->
+<!-- ═══════════════════════════════════════════════════ -->
+<div id="page-settings" class="snacks-page">
+    <div class="snacks-page-hero">
+        <div class="snacks-page-hero-icon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="22" height="22"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </div>
+        <div>
+            <h1>Settings</h1>
+            <p>Canteen configuration and preferences</p>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><h2>Canteen Settings</h2></div>
+        <div class="card-body" style="color:var(--text-muted);font-size:.875rem;text-align:center;padding:2.5rem 1rem;">
+            Settings configuration coming soon.
+        </div>
+    </div>
+</div>
+
+</div><!-- /app-content -->
+
+<!-- BOTTOM NAV (mobile) -->
+<div class="snacks-bnav">
+    <div class="snacks-bnav-inner">
+        <button class="snacks-bnav-item active" data-page="dashboard" onclick="snacksNav('dashboard',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+            Dashboard
+        </button>
+        <button class="snacks-bnav-item" data-page="transactions" onclick="snacksNav('transactions',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+            Txns
+        </button>
+        <button class="snacks-bnav-item" data-page="accounts" onclick="snacksNav('accounts',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>
+            Accounts
+        </button>
+        <button class="snacks-bnav-item" data-page="menu" onclick="snacksNav('menu',this)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/></svg>
+            Menu
+        </button>
+        <a href="campistry_snacks_pos.html" class="snacks-bnav-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="20" height="20"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+            POS
+        </a>
+    </div>
+</div>
+
+<!-- MODALS -->
+<div class="modal-overlay" id="m-dep"><div class="modal"><div class="modal-header"><h2>Add Deposit</h2><button class="modal-close" onclick="closeM('dep')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="depCamper"></select></div><div class="form-group"><label class="form-label">Amount ($)</label><input type="number" class="form-input" id="depAmt" min="1" step="0.01" placeholder="25.00"></div><div class="form-group"><label class="form-label">Note</label><input type="text" class="form-input" id="depNote" placeholder="e.g. Week 3 deposit"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('dep')">Cancel</button><button class="btn btn-primary" onclick="addDep()">Add Deposit</button></div></div></div>
+<div class="modal-overlay" id="m-item"><div class="modal"><div class="modal-header"><h2>Add Item</h2><button class="modal-close" onclick="closeM('item')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr 1fr"><div class="form-group" style="grid-column:1/-1"><label class="form-label">Name</label><input type="text" class="form-input" id="niName" placeholder="e.g. Gatorade"></div><div class="form-group"><label class="form-label">Category</label><select class="form-select" id="niCat"><option value="drink">Drink</option><option value="snack">Snack</option><option value="treat">Treat</option></select></div><div class="form-group"><label class="form-label">Emoji</label><input type="text" class="form-input" id="niEmoji" placeholder="🥤" maxlength="4" style="font-size:1.5rem;text-align:center"></div><div class="form-group"><label class="form-label">Price ($)</label><input type="number" class="form-input" id="niPrice" min=".25" step=".25" placeholder="2.00"></div><div class="form-group"><label class="form-label">Stock</label><input type="number" class="form-input" id="niStock" min="0" placeholder="100"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('item')">Cancel</button><button class="btn btn-primary" onclick="addItem()">Add Item</button></div></div></div>
+<div class="modal-overlay" id="m-limit"><div class="modal"><div class="modal-header"><h2>Set Daily Limits</h2><button class="modal-close" onclick="closeM('limit')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Camper</label><select class="form-select" id="limCamper"></select></div><div class="form-group"><label class="form-label">New Daily Limit ($)</label><input type="number" class="form-input" id="limAmt" min="1" step="1" placeholder="10"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('limit')">Cancel</button><button class="btn btn-primary" onclick="setLimit()">Save</button></div></div></div>
+<div class="modal-overlay" id="m-restock"><div class="modal"><div class="modal-header"><h2>Restock Item</h2><button class="modal-close" onclick="closeM('restock')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></div><div class="modal-body"><div class="form-grid" style="grid-template-columns:1fr"><div class="form-group"><label class="form-label">Item</label><select class="form-select" id="rItem"></select></div><div class="form-group"><label class="form-label">Add Quantity</label><input type="number" class="form-input" id="rQty" min="1" placeholder="50"></div></div></div><div class="modal-footer"><button class="btn btn-secondary" onclick="closeM('restock')">Cancel</button><button class="btn btn-primary" onclick="restock()">Restock</button></div></div></div>
+
+<div class="toast" id="toast"></div>
+
+<!-- Sidebar & page navigation -->
+<script>
+(function(){
+    var h=document.getElementById('hamburgerBtn'),sb=document.getElementById('sidebar'),bd=document.getElementById('sidebarBackdrop'),sy=0;
+    function open(){sy=window.scrollY;document.body.style.top=-sy+'px';document.body.classList.add('sidebar-open');}
+    function close(){document.body.classList.remove('sidebar-open');document.body.style.top='';window.scrollTo(0,sy);}
+    if(h){h.addEventListener('click',function(){document.body.classList.contains('sidebar-open')?close():open();});}
+    if(bd){bd.addEventListener('click',close);}
+    if(sb){sb.querySelectorAll('.sidebar-item[data-page]').forEach(function(b){
+        b.addEventListener('click',function(){
+            var p=b.dataset.page;
+            sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active');});
+            b.classList.add('active');
+            document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
+            var t=document.getElementById('page-'+p);if(t)t.classList.add('active');
+            close();
+        });
+    });}
+})();
+
+function snacksNav(page, btn) {
+    document.querySelectorAll('.snacks-page').forEach(function(x){x.classList.remove('active');});
+    var t = document.getElementById('page-' + page);
+    if (t) t.classList.add('active');
+    document.querySelectorAll('.snacks-bnav-item').forEach(function(x){x.classList.remove('active');});
+    if (btn) btn.classList.add('active');
+    // sync sidebar
+    var sb = document.getElementById('sidebar');
+    if (sb) {
+        sb.querySelectorAll('.sidebar-item').forEach(function(x){x.classList.remove('active');});
+        var si = sb.querySelector('.sidebar-item[data-page="'+page+'"]');
+        if (si) si.classList.add('active');
+    }
+    window.scrollTo(0,0);
+}
+</script>
+
+<script src="config.js"></script>
+<script src="supabase-js@2.js"></script>
+<script src="supabase_client.js"></script>
+<script src="campistry_cloud_bootstrap.js"></script>
+<script src="campistry_snacks.js"></script>
+<script>
+// Re-render Snacks when cloud data arrives
+window.addEventListener('campistry-cloud-hydrated', function(){
+    if (typeof init === 'function') init();
+});
+</script>
+<script src="campistry_notes_quick.js"></script>
+</body>
+</html>
