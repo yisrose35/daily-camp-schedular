@@ -602,8 +602,8 @@ function renderDetailPane() {
 
     // ── WHO ───────────────────────────────────────────────────────────────────
     detailPaneEl.appendChild(sectionGroup('Who', [
-        section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
         section('Instructor', summaryInstructor(item), () => renderInstructor(item)),
+        section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
         section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
