@@ -23584,6 +23584,26 @@
             } catch (_eSF) { try { warn('[STEP 6.8 SHARE-FILL] error: ' + (_eSF && _eSF.message)); } catch (_x) {} }
         })();
 
+        // ★ STEP 6.85 — SPACING-RULE ENFORCEMENT SWEEP (FINAL, runs LAST among placement
+        //   passes). The main solver path gates spacing via isCandidateAllowed({mode:'auto'}),
+        //   but coverage/recapture fill passes (phase4.9-recapture, the 4.97b / FN-22 /
+        //   STEP 6.8 free-fills) place activities WITHOUT that gate — so a rare special/sport
+        //   can land inside a spacing rule's forbidden window. This sweep runs after EVERY
+        //   fill pass and demotes any spacing-violating block → Free, guaranteeing 0
+        //   violations regardless of which pass placed it. Demote-only → no field-share risk.
+        //   Must precede STEP 6.9 so the rotation count + saved grid reflect the demotions.
+        try {
+            if (window.SchedulingRules && typeof window.SchedulingRules.enforceSpacingSweep === 'function') {
+                var _spSweep = window.SchedulingRules.enforceSpacingSweep(window.scheduleAssignments || {}, { mode: 'auto' });
+                if (_spSweep && (_spSweep.demoted || _spSweep.unresolved)) {
+                    log('[STEP 6.85 SPACING SWEEP] demoted ' + _spSweep.demoted + ' spacing-violating block(s) → Free' + (_spSweep.unresolved ? ', ' + _spSweep.unresolved + ' unresolved (user-locked)' : ''));
+                    try { if (_spSweep.demoted) warnings.push({ type: 'spacing_demotions', count: _spSweep.demoted }); } catch (_ew) {}
+                } else {
+                    log('[STEP 6.85 SPACING SWEEP] ✅ no spacing violations');
+                }
+            }
+        } catch (_e685) { try { warn('[STEP 6.85 SPACING SWEEP] error: ' + (_e685 && _e685.message)); } catch (_x) {} }
+
         // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
         //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
         //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes

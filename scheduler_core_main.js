@@ -3933,6 +3933,29 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         }
 
         // =========================================================================
+        // STEP 7.7: Spacing-rule enforcement sweep (manual analog of the auto gate).
+        // The manual builder never gated spacing rules at placement time, so a
+        // generated manual schedule could place e.g. a Special right after Lunch in
+        // violation of a "no Special within N min of Lunch" rule. This FINAL sweep
+        // (after every fill/refill above) demotes any spacing-violating block → Free,
+        // mode 'manual' (applies rules whose mode is 'manual' or 'both'). Demote-only,
+        // so it cannot create a field-sharing conflict. Mirrors how the auto path
+        // simply refuses to place a violating candidate.
+        // =========================================================================
+        try {
+            if (window.SchedulingRules && typeof window.SchedulingRules.enforceSpacingSweep === 'function') {
+                const _sp = window.SchedulingRules.enforceSpacingSweep(window.scheduleAssignments || {}, { mode: 'manual' });
+                if (_sp && (_sp.demoted || _sp.unresolved)) {
+                    console.log('[STEP 7.7] spacing sweep: demoted ' + _sp.demoted + ' → Free' + (_sp.unresolved ? ', ' + _sp.unresolved + ' unresolved (user-locked)' : ''));
+                } else {
+                    console.log('[STEP 7.7] spacing sweep: ✅ no spacing violations');
+                }
+            }
+        } catch (_e77) {
+            console.warn('[STEP 7.7] spacing sweep failed:', _e77);
+        }
+
+        // =========================================================================
         // STEP 8: Update History
         // =========================================================================
 

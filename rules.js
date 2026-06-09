@@ -1052,6 +1052,113 @@ function initRulesTab() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+// SPACING ENFORCEMENT SWEEP — post-generation, BOTH builders
+// ──────────────────────────────────────────────────────────────────────────
+// The main auto path gates placement via isCandidateAllowed({mode:'auto'}), but
+// coverage / recapture fill passes (e.g. phase4.9-recapture, the final free-fill
+// sweeps) place activities WITHOUT that gate, and the manual builder never gated
+// spacing at all. This sweep runs as the FINAL pass on the assembled per-bunk
+// schedule and demotes any block that violates a spacing rule (target within N
+// minutes of reference) to Free — guaranteeing 0 violations regardless of which
+// placement path created them.
+//
+// Design:
+//   • Demote the movable TARGET only; the (usually pinned) REFERENCE is left intact.
+//   • DEMOTE-ONLY — never moves an activity to a new field/time, so it cannot
+//     introduce a field-sharing / capacity conflict (unlike a swap-based repair).
+//   • User-locked blocks (_league / _postEdit / _pinned) are never demoted; if a
+//     locked block is the violating target, it's left + counted as unresolved.
+//   • Times come from each entry's own _startMin/_endMin (both builders stamp
+//     these), so it needs no external geometry and works identically in both.
+//   • Mode-filtered: a rule applies when its mode is 'both' or matches opts.mode.
+// Must run LAST (after every fill/refill pass) or a later fill can re-violate.
+function enforceSpacingSweep(scheduleAssignments, opts) {
+    const mode = (opts && opts.mode) || 'auto';
+    const rules = getCooldownRules().filter(function (r) {
+        const rm = r.mode || 'both';
+        return (rm === 'both' || rm === mode) && r.target && r.reference && (parseInt(r.minutes) || 0) > 0;
+    });
+    const report = { mode: mode, rulesApplied: rules.length, demoted: 0, unresolved: 0, details: [] };
+    if (!rules.length || !scheduleAssignments) return report;
+
+    function blocksOf(slots) {
+        const out = [];
+        for (let i = 0; i < slots.length; i++) {
+            const e = slots[i];
+            if (!e || e.continuation) continue;
+            const act = e._activity || e.sport || e.event;
+            if (!act) continue;
+            const sm = (e._startMin != null) ? e._startMin : null;
+            let em = (e._endMin != null) ? e._endMin : null;
+            if (sm == null || em == null) continue;
+            for (let k = i + 1; k < slots.length; k++) { // extend end across continuation slots
+                if (slots[k] && slots[k].continuation) { if (slots[k]._endMin != null) em = slots[k]._endMin; }
+                else break;
+            }
+            out.push({
+                idx: i, event: act, type: inferTypeFromActivity(act),
+                field: e.field || e._specialLocation || e.location || null,
+                startMin: sm, endMin: em,
+                prot: !!(e._league || e._postEdit || e._pinned)
+            });
+        }
+        return out;
+    }
+    function demote(slots, idx) {
+        const e = slots[idx]; if (!e) return false;
+        const sm = e._startMin, em = e._endMin;
+        slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: sm, _endMin: em, _fixed: true, _constraintDemoted: true, _demotedReason: 'spacing', continuation: false };
+        for (let k = idx + 1; k < slots.length; k++) {
+            if (slots[k] && slots[k].continuation) slots[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false };
+            else break;
+        }
+        return true;
+    }
+    Object.keys(scheduleAssignments).forEach(function (bunk) {
+        const slots = scheduleAssignments[bunk];
+        if (!Array.isArray(slots)) return;
+        for (let round = 0; round < 8; round++) { // bounded: each demote may clear cascading violations
+            const blocks = blocksOf(slots);
+            let didDemote = false;
+            for (let a = 0; a < blocks.length && !didDemote; a++) {
+                const T = blocks[a];
+                for (let ri = 0; ri < rules.length && !didDemote; ri++) {
+                    const r = rules[ri];
+                    if (!blockMatchesDescriptor(T, r.target)) continue;
+                    const minutes = parseInt(r.minutes) || 0;
+                    const timing = r.timing || 'both';
+                    for (let b = 0; b < blocks.length; b++) {
+                        if (b === a) continue;
+                        const R = blocks[b];
+                        if (!blockMatchesDescriptor(R, r.reference)) continue;
+                        const gapBefore = R.startMin - T.endMin;
+                        const gapAfter = T.startMin - R.endMin;
+                        let viol = false;
+                        if ((timing === 'before' || timing === 'both') && gapBefore >= 0 && gapBefore < minutes) viol = true;
+                        if ((timing === 'after' || timing === 'both') && gapAfter >= 0 && gapAfter < minutes) viol = true;
+                        if (!viol) continue;
+                        if (T.prot) {
+                            if (round === 0) { report.unresolved++; report.details.push({ bunk: bunk, unresolved: T.event, near: R.event }); }
+                        } else {
+                            demote(slots, T.idx);
+                            report.demoted++;
+                            report.details.push({ bunk: bunk, demoted: T.event, near: R.event });
+                            didDemote = true;
+                        }
+                        break;
+                    }
+                }
+            }
+            if (!didDemote) break;
+        }
+    });
+    if (report.demoted || report.unresolved) {
+        console.log('[SPACING] enforceSpacingSweep (' + mode + '): demoted ' + report.demoted + ' violating block(s) → Free' + (report.unresolved ? ', ' + report.unresolved + ' unresolved (user-locked)' : ''));
+    }
+    return report;
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 // EXPORTS
 // ──────────────────────────────────────────────────────────────────────────
 window.initRulesTab = initRulesTab;
