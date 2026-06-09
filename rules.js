@@ -1175,6 +1175,7 @@ window.SchedulingRules = {
     applyFieldGroupUpdates: applyFieldGroupUpdates,
     inferTypeFromActivity: inferTypeFromActivity,
     buildTemplateFromBunkSlots: buildTemplateFromBunkSlots,
+    enforceSpacingSweep: enforceSpacingSweep,
     describeRule: describeRule
 };
 
