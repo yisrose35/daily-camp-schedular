@@ -191,6 +191,11 @@ function validateSpecialActivity(activity, activityName) {
         ...(activity.rainyDayAvailableAllDay === true ? { rainyDayAvailableAllDay: true } : {}),
        fullGrade: activity.fullGrade === true,
         fullGradePerGrade: (activity.fullGradePerGrade && typeof activity.fullGradePerGrade === 'object') ? activity.fullGradePerGrade : undefined,
+        // ★ consecutiveBunks: auto-only. When ON, the auto solver schedules each
+        //   bunk in the grade sequentially (one slot after another). Per-bunk
+        //   duration = the activity's `duration`; capacity-aware sharing groups
+        //   bunks into the same slot when sharableWith.capacity > 1.
+        consecutiveBunks: activity.consecutiveBunks === true,
         // ★ v3.7: Multi-Part Special support (simple N parts)
 
 
@@ -251,7 +256,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', subcategory: '', instructor: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name, type: 'Special', subcategory: '', instructor: '', consecutiveBunks: false, available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,

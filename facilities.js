@@ -389,6 +389,7 @@ function createDefaultSpecialActivity(name) {
         name: name,
         type: 'Special',
         instructor: '',
+        consecutiveBunks: false,
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
@@ -2336,11 +2337,12 @@ function summarySpecialWeather(s) {
 }
 function summarySpecialSchedulingMode(s) {
     if (s.fullGrade) return "Full Grade — entire grade together";
+    const consec = s.consecutiveBunks === true ? 'Consecutive · ' : '';
     const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "Individual bunks — no sharing";
+    if (!rules || rules.type === 'not_sharable') return consec + "Individual bunks — no sharing";
     const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
     const cap = parseInt(rules.capacity) || 2;
-    return 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
+    return consec + 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
 }
 function summarySpecialUsage(s) {
     var parts = [];
@@ -2961,6 +2963,34 @@ function renderSpecialSchedulingMode(saData) {
                 '</div>';
             container.appendChild(infoBox);
             return;
+        }
+
+        // ── Step 1.5 (AUTO ONLY): Consecutive Bunks ──────────────
+        // Hidden in manual mode — the manual builder doesn't support
+        // multi-slot per-grade allocation. Auto mode reserves N consecutive
+        // slots and assigns bunks round-robin (sharing-capacity-aware).
+        const _isAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        if (_isAutoMode) {
+            const consecWrap = document.createElement('div');
+            consecWrap.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px; margin-bottom:14px;';
+            const consecCheck = document.createElement('input');
+            consecCheck.type = 'checkbox';
+            consecCheck.checked = saData.consecutiveBunks === true;
+            consecCheck.id = 'sa-consec-' + String(saData.name || '').replace(/[^a-z0-9]/gi, '_');
+            consecCheck.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+            const consecLabel = document.createElement('label');
+            consecLabel.htmlFor = consecCheck.id;
+            consecLabel.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+            consecLabel.innerHTML = '<strong>Schedule bunks consecutively</strong><div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">Each bunk in the grade goes one after the next, using this activity\'s duration as the per-bunk slot. If sharing is on, bunks share each slot up to capacity (e.g. 6 bunks at capacity 2 = 3 consecutive slots).</div>';
+            consecCheck.addEventListener('change', () => {
+                saData.consecutiveBunks = consecCheck.checked;
+                saveSpecialData(saData);
+                renderContent();
+                updateSummary();
+            });
+            consecWrap.appendChild(consecCheck);
+            consecWrap.appendChild(consecLabel);
+            container.appendChild(consecWrap);
         }
 
         // ── Step 2: Allow sharing? ────────────────────────────────
