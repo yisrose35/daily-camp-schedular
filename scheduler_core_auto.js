@@ -1062,6 +1062,29 @@
                 return _restrictionWidth(a) - _restrictionWidth(b);
             });
         } catch (_) {}
+        // ★ CONSECUTIVE-BUNK SPECIALS (auto-only feature):
+        //   A special flagged consecutiveBunks runs the whole grade through it
+        //   ONE BUNK AT A TIME, back-to-back (e.g. VR: bunk1 10:40-11:00,
+        //   bunk2 11:00-11:20, ...). These are RESERVED by Phase 2.35 as
+        //   staggered walls (the same machinery staggered swim uses) and the
+        //   rest of each bunk's day is filled around them. They are removed
+        //   from `todaysSpecials` here so the normal per-bunk special
+        //   distribution (shopping lists / planner / gap filler) never
+        //   double-places them. No-op when none are configured.
+        function _isConsecutiveSpecial(s) {
+            if (!s) return false;
+            if (s.consecutiveBunks === true) return true;
+            try { const c = getSpecialConfig(s.name, globalSettings); return !!(c && c.consecutiveBunks === true); } catch (_e) { return false; }
+        }
+        const consecutiveBunkSpecials = todaysSpecials.filter(_isConsecutiveSpecial);
+        if (consecutiveBunkSpecials.length > 0) {
+            for (let _ci = todaysSpecials.length - 1; _ci >= 0; _ci--) {
+                if (_isConsecutiveSpecial(todaysSpecials[_ci])) todaysSpecials.splice(_ci, 1);
+            }
+            log('[STEP 1] Consecutive-bunk specials (reserved by Phase 2.35, excluded from normal pool): ' +
+                consecutiveBunkSpecials.map(s => s.name).join(', '));
+        }
+
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
@@ -13559,6 +13582,172 @@
                         getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
                     });
                 }
+            }
+
+            // ── Phase 2.35: Reserve consecutive-bunk specials (one bunk at a time) ──
+            // For a special flagged consecutiveBunks (e.g. VR), the whole grade
+            // cycles through it back-to-back: bunk1 [T, T+dur], bunk2 [T+dur,
+            // T+2dur], … grouped by sharing capacity. We RESERVE those slices as
+            // fixed walls now — exactly like staggered swim above — so the fill
+            // phases pack the rest of each bunk's day around them. These specials
+            // were removed from the normal pool at STEP 1, so no double-placement.
+            // Whole pass is a hard no-op when none are configured.
+            if (consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+              try {
+                var _p235Count = 0;
+                consecutiveBunkSpecials.forEach(function(_spCfg) {
+                    var _sName = _spCfg.name;
+                    var _sDur = getSpecialDuration(_sName, activityProperties, globalSettings)
+                                || parseInt(_spCfg.duration) || parseInt(_spCfg.defaultDuration) || 30;
+                    if (_sDur < 5) return;
+                    var _sCap = getSpecialCapacity(_sName, activityProperties, globalSettings) || 1;
+                    if (_sCap < 1) _sCap = 1;
+                    var _sField = getLocationForSpecial(_sName, activityProperties, globalSettings) || null;
+
+                    // Station busy-check across ALL already-placed bunks (any grade),
+                    // so two grades can't both claim a single station at once.
+                    function _stationBusy(s, e) {
+                        if (!_sField) return false;
+                        var _fLow = String(_sField).toLowerCase().trim();
+                        for (var _bk in bunkTimelines) {
+                            var _tl = bunkTimelines[_bk] || [];
+                            for (var _i = 0; _i < _tl.length; _i++) {
+                                var _b = _tl[_i];
+                                if (!_b) continue;
+                                var _loc = _b._specialLocation || _b.field || null;
+                                if (!_loc || String(_loc).toLowerCase().trim() !== _fLow) continue;
+                                if (_b.startMin < e && _b.endMin > s) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    // Bunk free-check: no pinned/locked block overlaps [s,e].
+                    function _bunkFree(bunk, s, e) {
+                        var _tl = bunkTimelines[bunk] || [];
+                        for (var _i = 0; _i < _tl.length; _i++) {
+                            var _b = _tl[_i];
+                            if (!_b) continue;
+                            if (!(_b._activityLocked || _b._fixed || _b._classification === 'pinned')) continue;
+                            var _bt = (_b.type || '').toLowerCase();
+                            if (_bt === 'pre-change' || _bt === 'post-change') continue;
+                            if (_b.startMin < e && _b.endMin > s) return false;
+                        }
+                        return true;
+                    }
+
+                    allGrades.forEach(function(grade) {
+                        if (allowedSet && !allowedSet.has(String(grade))) return;
+                        if (!isSpecialAvailableForDivision(_sName, grade, globalSettings)) return;
+                        // Grade must be configured to receive this special: either a
+                        // normal 'special' rotation layer, or a custom layer naming it.
+                        var _gLayers = layersByGrade[grade] || [];
+                        var _hasSpecialSlot = _gLayers.some(function(l) {
+                            var _lt = (l.type || '').toLowerCase();
+                            if (_lt === 'special') return true;
+                            return _lt === 'custom' && (l.event === _sName || l.name === _sName);
+                        });
+                        if (!_hasSpecialSlot) return;
+
+                        var _bunks = getBunksForGrade(grade, divisions).filter(function(b) {
+                            if (!isSpecialAvailableForBunk(_sName, grade, b, globalSettings)) return false;
+                            return !(bunkTimelines[b] || []).some(function(x) {
+                                return x && (x._assignedSpecial === _sName || x.event === _sName);
+                            });
+                        });
+                        if (_bunks.length === 0) return;
+
+                        var _gObj = divisions[grade] || divisions[String(grade)];
+                        var _gStart = parseTimeToMinutes(_gObj && _gObj.startTime) || 540;
+                        var _gEnd   = parseTimeToMinutes(_gObj && _gObj.endTime)   || 960;
+                        var _band = staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
+
+                        // Candidate anchors = period starts in the grade day (plus the
+                        // special band start). We pick the anchor that fits the most bunks.
+                        var _periods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                            : [{ startMin: _gStart, endMin: _gEnd }];
+                        var _anchors = [];
+                        _periods.forEach(function(p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
+                        if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                        if (_anchors.length === 0) _anchors.push(_gStart);
+                        if (_band) {
+                            _anchors.sort(function(a, b) {
+                                var _da = a >= _band.start ? a - _band.start : 100000 + (_band.start - a);
+                                var _db = b >= _band.start ? b - _band.start : 100000 + (_band.start - b);
+                                return _da - _db;
+                            });
+                        }
+
+                        // Group bunks by sharing capacity → one consecutive slot per group.
+                        var _groups = [];
+                        for (var _gi = 0; _gi < _bunks.length; _gi += _sCap) _groups.push(_bunks.slice(_gi, _gi + _sCap));
+                        var _needSpan = _groups.length * _sDur;
+
+                        var _bestAnchor = null, _bestPlaced = -1, _bestPlan = null;
+                        for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                            var _t0 = _anchors[_ai];
+                            if (_t0 + _needSpan > _gEnd) continue;
+                            var _plan = [], _placed = 0;
+                            for (var _gj = 0; _gj < _groups.length; _gj++) {
+                                var _s = _t0 + _gj * _sDur, _e = _s + _sDur;
+                                if (_stationBusy(_s, _e)) { _plan.push(null); continue; }
+                                var _grpOk = _groups[_gj].filter(function(b) { return _bunkFree(b, _s, _e); });
+                                _plan.push({ start: _s, end: _e, bunks: _grpOk });
+                                _placed += _grpOk.length;
+                            }
+                            if (_placed > _bestPlaced) { _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan; }
+                            if (_placed === _bunks.length) break;
+                        }
+                        if (!_bestPlan || _bestPlaced <= 0) {
+                            log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — no anchor fits the run (bunks=' + _bunks.length + ', dur=' + _sDur + ', span=' + _needSpan + ')');
+                            return;
+                        }
+
+                        _bestPlan.forEach(function(slot) {
+                            if (!slot || !slot.bunks || slot.bunks.length === 0) return;
+                            slot.bunks.forEach(function(bunk) {
+                                // Match the canonical special-wall shape (see Phase 2.4
+                                // day-packer push) so downstream passes treat it
+                                // identically to any other pre-placed special.
+                                bunkTimelines[bunk].push({
+                                    startMin: slot.start, endMin: slot.end,
+                                    type: 'special', event: _sName, layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                                    _assignedSpecial: _sName,
+                                    _specialLocation: _sField,
+                                    _specialDuration: _sDur,
+                                    _isSpecialLocation: !!_sField,
+                                    _consecutiveBunk: true, _source: 'phase2.35'
+                                });
+                                _p235Count++;
+                                // Claim the station so Phase 3 sports + other specials
+                                // can't grab it during this bunk's slice.
+                                try { registerSpecialUsage(_sName, grade, slot.start, slot.end); } catch (_e1) {}
+                                try { registerCrossGrade(grade, 'special', slot.start, slot.end, _sName); } catch (_e2) {}
+                                try {
+                                    if (_sField && fieldLedger && fieldLedger[_sField]) {
+                                        fieldLedger[_sField].claims.push({ bunk: bunk, grade: grade, activity: _sName, startMin: slot.start, endMin: slot.end });
+                                    }
+                                } catch (_e3) {}
+                            });
+                        });
+                        if (_bestPlaced < _bunks.length) {
+                            log('[Phase2.35] ⚠ ' + grade + '/' + _sName + ' partial: ' + _bestPlaced + '/' + _bunks.length + ' consecutive from ' + minutesToTimeLabel(_bestAnchor) + ' (rest fall through to normal fill)');
+                        } else {
+                            log('[Phase2.35] ✓ ' + grade + '/' + _sName + ' — whole grade (' + _bunks.length + ' bunks) consecutive from ' + minutesToTimeLabel(_bestAnchor) + ', ' + _sDur + 'min each, cap ' + _sCap);
+                        }
+                    });
+                });
+                if (_p235Count > 0) {
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                    log('[Phase2.35] ★ RESERVED ' + _p235Count + ' consecutive-bunk special block(s) as walls');
+                }
+              } catch (_e235) {
+                warn('[Phase2.35] error (skipped, non-fatal): ' + (_e235 && _e235.message));
+              }
             }
 
             // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
