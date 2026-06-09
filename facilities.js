@@ -388,6 +388,7 @@ function createDefaultSpecialActivity(name) {
     return {
         name: name,
         type: 'Special',
+        instructor: '',
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
@@ -1075,6 +1076,12 @@ function renderSpecialConfig(container, fac) {
         // Special activity config sections
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
+
+        // ★ INSTRUCTOR — first config. Names the person who runs this special
+        //   and lets the user link other activities the same person also runs
+        //   via the Connected to subsection.
+        saBody.appendChild(section("Instructor", summarySpecialInstructor(saData),
+            () => renderSpecialInstructor(saData, fac)));
 
         saBody.appendChild(section("Subcategory", summarySpecialSubcategory(saData),
             () => renderSpecialSubcategory(saData)));
@@ -2398,6 +2405,79 @@ function summarySpecialMultiPart(s) {
 function summarySpecialSubcategory(s) {
     var v = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
     return v ? v : 'Uncategorized';
+}
+
+function summarySpecialInstructor(s) {
+    var v = (typeof s.instructor === 'string') ? s.instructor.trim() : '';
+    return v ? v : 'No instructor set';
+}
+
+// Renders the Instructor section for a special activity inside the facility
+// view (the renderSpecialConfig card). saData is the special's record;
+// `fac` is the hosting facility (used to exclude self from the connections
+// picker).
+function renderSpecialInstructor(saData, fac) {
+    const container = document.createElement('div');
+    container.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280;';
+    desc.textContent = 'Name the person who runs this special. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    container.appendChild(desc);
+
+    // Shared datalist (existing instructor names across specials + general).
+    const dlId = 'sa-fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+
+    const inputRow = document.createElement('div');
+    inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+    label.textContent = 'Instructor:';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'No instructor';
+    input.value = (typeof saData.instructor === 'string') ? saData.instructor : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((saData.instructor || '') === v) return;
+        saData.instructor = v;
+        saveSpecialData(saData);
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    });
+    inputRow.appendChild(label);
+    inputRow.appendChild(input);
+    container.appendChild(inputRow);
+
+    // "Connected to" subsection — pick other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(saData.instructor, { specialName: saData.name });
+    if (aBlock) container.appendChild(aBlock);
+
+    return container;
 }
 
 function saveSpecialData(saData) {

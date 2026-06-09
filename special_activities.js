@@ -877,15 +877,23 @@ window.setSpecialInstructor = function(activityName, instructor) {
     return touched;
 };
 
-// Render an "Also runs" interactive checklist for the given instructor.
-// `exclude` filters out self: { specialName?: string, facilityName?: string }.
-// Returns a DOM node. If currentInstructor is empty, shows a hint instead.
+// Render a "Connected to" subsection — declare what other activities this
+//   instructor also runs. Returns a DOM node.
+//   - Empty instructor → hint message.
+//   - Otherwise: list of current connections (each removable) + a single
+//     dropdown to add a new one. Cross-writes via the public setters.
+// `exclude` filters out self so an activity doesn't link to itself.
+//   { specialName?: string, facilityName?: string, generalName?: string }
 window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
     exclude = exclude || {};
-    const escape = (s) => (window.CampUtils && window.CampUtils.escapeHtml) ? window.CampUtils.escapeHtml(s) : String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'display:flex; flex-direction:column; gap:6px; margin-top:10px; padding-top:10px; border-top:1px dashed #E5E7EB;';
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px; margin-top:12px; padding-top:10px; border-top:1px dashed #E5E7EB;';
+
+    const heading = document.createElement('div');
+    heading.style.cssText = 'font-size:0.85rem; font-weight:600; color:#374151;';
+    heading.textContent = 'Connected to:';
+    wrap.appendChild(heading);
 
     const raw = (typeof currentInstructor === 'string') ? currentInstructor.trim() : '';
     if (!raw) {
@@ -897,16 +905,8 @@ window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
     }
     const curLower = raw.toLowerCase();
 
-    const heading = document.createElement('div');
-    heading.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
-    heading.innerHTML = escape(raw) + ' also runs:';
-    wrap.appendChild(heading);
-
-    const list = document.createElement('div');
-    list.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
-
+    // Collect every activity across the camp (other than self).
     const candidates = [];
-    // Specials (both regular + rainy-day)
     const allSpecials = (window.getAllSpecialActivities && window.getAllSpecialActivities()) || [];
     allSpecials.forEach(sp => {
         if (!sp || !sp.name) return;
@@ -918,14 +918,18 @@ window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
             currentInstructor: (typeof sp.instructor === 'string' ? sp.instructor : '').trim()
         });
     });
-    // General activities (across all facilities; skip the calling facility)
     try {
         const settings = window.loadGlobalSettings?.() || {};
         (settings.facilities || []).forEach(f => {
             if (!f || !f.name) return;
-            if (exclude.facilityName && f.name === exclude.facilityName) return;
             (f.generalActivities || []).forEach(ga => {
                 if (!ga || !ga.name) return;
+                // Skip self when called from the same general activity edit.
+                if (exclude.facilityName && f.name === exclude.facilityName
+                    && exclude.generalName && ga.name === exclude.generalName) return;
+                // When called from a facility-level edit with no specific general
+                // activity, exclude all general activities at that facility.
+                if (exclude.facilityName && !exclude.generalName && f.name === exclude.facilityName) return;
                 candidates.push({
                     label: ga.name + ' @ ' + f.name,
                     name: ga.name,
@@ -936,44 +940,82 @@ window.buildAlsoRunsChecklist = function(currentInstructor, exclude) {
         });
     } catch {}
 
-    if (candidates.length === 0) {
-        const empty = document.createElement('div');
-        empty.style.cssText = 'font-size:0.78rem; color:#9CA3AF;';
-        empty.textContent = 'No other activities to link.';
-        wrap.appendChild(empty);
+    const connected = candidates.filter(c => c.currentInstructor.toLowerCase() === curLower);
+    const available = candidates.filter(c => c.currentInstructor.toLowerCase() !== curLower);
+
+    // Render current connections.
+    if (connected.length === 0) {
+        const none = document.createElement('div');
+        none.style.cssText = 'font-size:0.78rem; color:#9CA3AF;';
+        none.textContent = 'No other activities linked yet.';
+        wrap.appendChild(none);
+    } else {
+        const list = document.createElement('div');
+        list.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+        connected.forEach(c => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; background:#e6f4f7; border:1px solid #147D91; border-radius:6px;';
+            const txt = document.createElement('span');
+            txt.style.cssText = 'flex:1; font-size:0.85rem; font-weight:500; color:#0A4A56;';
+            txt.textContent = c.label;
+            row.appendChild(txt);
+            const rm = document.createElement('button');
+            rm.type = 'button';
+            rm.textContent = '✕';
+            rm.title = 'Unlink (clears the instructor on this activity)';
+            rm.style.cssText = 'background:none; border:none; color:#DC2626; cursor:pointer; font-size:1rem; padding:0 4px;';
+            rm.addEventListener('click', () => {
+                if (c.isSpecial) window.setSpecialInstructor?.(c.name, '');
+                else window.setGeneralActivityInstructor?.(c.name, '');
+            });
+            row.appendChild(rm);
+            list.appendChild(row);
+        });
+        wrap.appendChild(list);
+    }
+
+    // Add-connection dropdown (skipped if nothing left to link).
+    if (available.length === 0) {
+        if (connected.length > 0) {
+            const allLinked = document.createElement('div');
+            allLinked.style.cssText = 'font-size:0.78rem; color:#9CA3AF; font-style:italic;';
+            allLinked.textContent = 'All other activities are already linked.';
+            wrap.appendChild(allLinked);
+        }
         return wrap;
     }
 
-    candidates.forEach(c => {
-        const item = document.createElement('label');
-        const isOn = c.currentInstructor.toLowerCase() === curLower;
-        item.style.cssText = 'display:flex; align-items:center; gap:8px; padding:6px 10px; background:' + (isOn ? '#e6f4f7' : '#fff') + '; border:1px solid ' + (isOn ? '#147D91' : '#E5E7EB') + '; border-radius:6px; cursor:pointer;';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = isOn;
-        cb.addEventListener('change', () => {
-            const newInstr = cb.checked ? raw : '';
-            if (c.isSpecial) {
-                window.setSpecialInstructor?.(c.name, newInstr);
-            } else {
-                window.setGeneralActivityInstructor?.(c.name, newInstr);
-            }
-        });
-        item.appendChild(cb);
-        const txt = document.createElement('span');
-        txt.style.cssText = 'font-size:0.85rem; flex:1;' + (isOn ? ' font-weight:500;' : '');
-        txt.textContent = c.label;
-        item.appendChild(txt);
-        if (c.currentInstructor && c.currentInstructor.toLowerCase() !== curLower) {
-            const conflict = document.createElement('span');
-            conflict.style.cssText = 'margin-left:auto; font-size:0.72rem; color:#92400E; background:#FEF3C7; padding:2px 6px; border-radius:10px;';
-            conflict.textContent = 'currently: ' + c.currentInstructor;
-            item.appendChild(conflict);
-        }
-        list.appendChild(item);
+    const addRow = document.createElement('div');
+    addRow.style.cssText = 'display:flex; align-items:center; gap:8px;';
+    const select = document.createElement('select');
+    select.style.cssText = 'flex:1; padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; background:#fff;';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = '+ Add connection — pick an activity…';
+    select.appendChild(defaultOpt);
+    available.forEach((c, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = c.label + (c.currentInstructor ? ' — currently: ' + c.currentInstructor : '');
+        select.appendChild(opt);
     });
+    select.addEventListener('change', () => {
+        const idx = parseInt(select.value, 10);
+        if (isNaN(idx)) return;
+        const c = available[idx];
+        if (!c) return;
+        if (c.currentInstructor && c.currentInstructor.toLowerCase() !== curLower) {
+            if (!confirm(`"${c.label}" is currently tagged "${c.currentInstructor}". Overwrite with "${raw}"?`)) {
+                select.value = '';
+                return;
+            }
+        }
+        if (c.isSpecial) window.setSpecialInstructor?.(c.name, raw);
+        else window.setGeneralActivityInstructor?.(c.name, raw);
+    });
+    addRow.appendChild(select);
+    wrap.appendChild(addRow);
 
-    wrap.appendChild(list);
     return wrap;
 };
 
