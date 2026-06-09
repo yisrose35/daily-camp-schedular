@@ -166,9 +166,16 @@ function validateSpecialActivity(activity, activityName) {
     //   Trimmed; canonical case preserved as the user typed it.
     const _subcategoryRaw = (typeof activity.subcategory === 'string') ? activity.subcategory.trim() : '';
 
+    // ★ Instructor: the person who runs this activity. Two activities tagged
+    //   with the same instructor (across specials + general activities) are
+    //   mutex at any slot — the same person can't be in two places at once.
+    //   Empty = no instructor tag = no constraint.
+    const _instructorRaw = (typeof activity.instructor === 'string') ? activity.instructor.trim() : '';
+
     return {
         name: activity.name || activityName || 'Unknown', type: 'Special', available: activity.available !== false,
         subcategory: _subcategoryRaw,
+        instructor: _instructorRaw,
         sharableWith, accessRestrictions, timeRules,
         maxUsage: (() => { if (activity.maxUsage == null || activity.maxUsage === "") return null; const p = parseInt(activity.maxUsage, 10); return (!isNaN(p) && p > 0) ? p : null; })(),
         maxUsagePeriod: activity.maxUsagePeriod || 'half',
@@ -244,7 +251,7 @@ function validateSpecialActivity(activity, activityName) {
 }
 
 function createDefaultActivity(name) {
-    return { name, type: 'Special', subcategory: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
+    return { name, type: 'Special', subcategory: '', instructor: '', available: true, sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false }, timeRules: [],
         maxUsage: null, maxUsagePeriod: 'half', frequencyDays: 0, rainyDayExclusive: false, prepDuration: 0, prepConfig: { timing: 'attached', location: '', sync: 'staggered' },
         location: null, isIndoor: true, rainyDayAvailable: true, availableOnRainyDay: true,
@@ -596,6 +603,7 @@ function renderDetailPane() {
     // ── WHO ───────────────────────────────────────────────────────────────────
     detailPaneEl.appendChild(sectionGroup('Who', [
         section('Subcategory', summarySubcategory(item), () => renderSubcategory(item)),
+        section('Instructor', summaryInstructor(item), () => renderInstructor(item)),
         section('Grade Access', summaryAccess(item), () => renderAccess(item))
     ]));
 
@@ -757,6 +765,109 @@ function renderSubcategory(item) {
             chips.appendChild(chip);
         });
         wrap.appendChild(chips);
+    }
+
+    return wrap;
+}
+
+// =========================================================================
+// INSTRUCTOR HELPERS
+// =========================================================================
+// "Instructor" is a free-text tag on each activity (special or general)
+// naming the person who runs it. The solver treats two activities sharing
+// the same instructor (case-insensitive) as mutex at any slot — the same
+// person can't be in two places at once. Empty = no constraint.
+
+function getAllInstructors() {
+    const seen = new Set();
+    const out = [];
+    const push = (s) => {
+        const v = (typeof s === 'string') ? s.trim() : '';
+        if (!v) return;
+        const key = v.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        out.push(v);
+    };
+    (specialActivities || []).forEach(a => push(a?.instructor));
+    (rainyDayActivities || []).forEach(a => push(a?.instructor));
+    // Also pull from general activities configured in facilities.
+    try {
+        const settings = window.loadGlobalSettings?.() || {};
+        (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => push(ga?.instructor)));
+    } catch {}
+    return out.sort((a, b) => a.localeCompare(b));
+}
+window.getSpecialInstructors = getAllInstructors;
+
+function summaryInstructor(item) {
+    const v = (typeof item.instructor === 'string') ? item.instructor.trim() : '';
+    return v ? v : 'No instructor set';
+}
+
+function renderInstructor(item) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:8px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Name the person who runs this activity. If the same instructor also runs another activity (special or general), the scheduler will keep them from being placed at the same time.';
+    wrap.appendChild(desc);
+
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; gap:8px; align-items:center; flex-wrap:wrap;';
+
+    const dl = document.createElement('datalist');
+    const dlId = 'sa-instructor-list';
+    dl.id = dlId;
+    getAllInstructors().forEach(name => {
+        const opt = document.createElement('option');
+        opt.value = name;
+        dl.appendChild(opt);
+    });
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'No instructor set';
+    input.value = (typeof item.instructor === 'string') ? item.instructor : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((item.instructor || '') === v) return;
+        item.instructor = v;
+        saveData();
+        renderDetailPane();
+    });
+
+    row.appendChild(input);
+    row.appendChild(dl);
+    wrap.appendChild(row);
+
+    // Also-runs preview: other activities tagged with the same instructor.
+    const cur = (item.instructor || '').trim().toLowerCase();
+    if (cur) {
+        const others = [];
+        (specialActivities || []).concat(rainyDayActivities || []).forEach(a => {
+            if (!a || a === item || !a.instructor) return;
+            if (String(a.instructor).trim().toLowerCase() === cur) others.push(a.name + ' (Special)');
+        });
+        try {
+            const settings = window.loadGlobalSettings?.() || {};
+            (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => {
+                if (ga && ga.name && ga.instructor && String(ga.instructor).trim().toLowerCase() === cur) {
+                    others.push(ga.name + ' @ ' + f.name);
+                }
+            }));
+        } catch {}
+        const info = document.createElement('div');
+        info.style.cssText = 'font-size:0.78rem; color:#374151; background:#F3F4F6; padding:8px 10px; border-radius:6px; margin-top:4px;';
+        if (others.length > 0) {
+            info.innerHTML = '<strong>Also runs:</strong> ' + others.map(o => '<span style="display:inline-block;background:#fff;border:1px solid #D1D5DB;border-radius:10px;padding:1px 8px;margin:2px 4px 2px 0;">' + window.CampUtils.escapeHtml(o) + '</span>').join('');
+        } else {
+            info.textContent = 'No other activity is tagged with this instructor yet.';
+        }
+        wrap.appendChild(info);
     }
 
     return wrap;

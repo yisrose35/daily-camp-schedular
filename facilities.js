@@ -1196,7 +1196,7 @@ function renderGeneralConfig(container, fac) {
 
         fac.generalActivities.forEach(ga => {
             const row = document.createElement("div");
-            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px;";
+            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px; gap:10px;";
 
             const info = document.createElement("div");
             const gaLabel = document.createElement("strong");
@@ -1225,6 +1225,58 @@ function renderGeneralConfig(container, fac) {
                 renderDetailPane();
             });
 
+            // ★ INSTRUCTOR input — names the person who runs this activity.
+            //   Two activities sharing the same instructor (across specials +
+            //   general activities) are mutex at any slot. Empty = no constraint.
+            //   The datalist pulls existing instructors from BOTH specials and
+            //   general activities so the user can pick or type a new name.
+            const instructorWrap = document.createElement("div");
+            instructorWrap.style.cssText = "display:flex; align-items:center; gap:6px; margin-left:auto;";
+            const instructorLabel = document.createElement("span");
+            instructorLabel.textContent = "Instructor:";
+            instructorLabel.style.cssText = "font-size:0.78rem; color:#6B7280;";
+            const instructorInput = document.createElement("input");
+            instructorInput.type = "text";
+            instructorInput.placeholder = "—";
+            instructorInput.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+            instructorInput.title = "Same instructor on two activities → they can't be scheduled at the same time";
+            const dlId = "ga-instructor-list-" + (fac.name || 'x').replace(/[^a-z0-9]/gi, '_');
+            instructorInput.setAttribute('list', dlId);
+            instructorInput.style.cssText = "padding:4px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.82rem; width:140px; background:#fff;";
+            instructorInput.addEventListener('change', () => {
+                const v = (instructorInput.value || '').trim();
+                if ((ga.instructor || '') === v) return;
+                ga.instructor = v;
+                saveData();
+                renderDetailPane();
+            });
+            // Datalist sourcing existing instructors from specials + general activities.
+            let dl = document.getElementById(dlId);
+            if (!dl) {
+                dl = document.createElement('datalist');
+                dl.id = dlId;
+                document.body.appendChild(dl);
+            }
+            dl.innerHTML = '';
+            const _seenInstr = new Set();
+            const _pushInstr = (n) => {
+                const v = (typeof n === 'string') ? n.trim() : '';
+                if (!v) return;
+                const k = v.toLowerCase();
+                if (_seenInstr.has(k)) return;
+                _seenInstr.add(k);
+                const opt = document.createElement('option');
+                opt.value = v;
+                dl.appendChild(opt);
+            };
+            try {
+                (window.getSpecialInstructors?.() || []).forEach(_pushInstr);
+                const _settings = window.loadGlobalSettings?.() || {};
+                (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => _pushInstr(g?.instructor)));
+            } catch {}
+            instructorWrap.appendChild(instructorLabel);
+            instructorWrap.appendChild(instructorInput);
+
             const removeBtn = document.createElement("button");
             removeBtn.textContent = "✕";
             removeBtn.style.cssText = "border:none; background:transparent; color:#9CA3AF; cursor:pointer; font-size:1rem;";
@@ -1237,6 +1289,7 @@ function renderGeneralConfig(container, fac) {
             };
 
             row.appendChild(info);
+            row.appendChild(instructorWrap);
             row.appendChild(removeBtn);
             container.appendChild(row);
         });

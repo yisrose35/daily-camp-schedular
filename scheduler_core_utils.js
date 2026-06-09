@@ -916,6 +916,59 @@
         }
 
         // =================================================================
+        // ★ INSTRUCTOR (RUN-BY) CONFLICT
+        // Two activities tagged with the same `instructor` cannot occupy the
+        // same slot — the same person can't be in two places at once.
+        // Same-activity at the same slot for two bunks is NOT a conflict
+        // (that's capacity sharing of one class by the same instructor).
+        // =================================================================
+        {
+            const _normInstr = (s) => (s == null ? '' : String(s)).toLowerCase().trim();
+            const _candAct   = _normInstr(actName || effectiveProps?._activityName || '');
+            const _instrMap  = Utils._buildInstructorMap ? Utils._buildInstructorMap() : (function () {
+                const map = {};
+                try {
+                    const settings = window.loadGlobalSettings?.() || {};
+                    [
+                        ...((settings.app1 && settings.app1.specialActivities) || []),
+                        ...(settings.specialActivities || [])
+                    ].forEach(s => {
+                        if (s && s.name && typeof s.instructor === 'string' && s.instructor.trim()) {
+                            map[s.name.toLowerCase().trim()] = s.instructor.trim().toLowerCase();
+                        }
+                    });
+                    (settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(ga => {
+                        if (ga && ga.name && typeof ga.instructor === 'string' && ga.instructor.trim()) {
+                            map[ga.name.toLowerCase().trim()] = ga.instructor.trim().toLowerCase();
+                        }
+                    }));
+                } catch {}
+                return map;
+            })();
+            const _myInstr = _candAct ? _instrMap[_candAct] : null;
+            if (_myInstr) {
+                const _sched = window.scheduleAssignments || {};
+                for (const idx of uniqueSlots) {
+                    for (const otherBunk in _sched) {
+                        if (otherBunk === block.bunk) continue;
+                        const slots = _sched[otherBunk];
+                        const e = slots && slots[idx];
+                        if (!e) continue;
+                        const otherAct = e._activity || e._assignedSpecial || (typeof e.activity === 'string' ? e.activity : null) || (typeof e.sport === 'string' ? e.sport : null);
+                        if (!otherAct) continue;
+                        const _otherActNorm = _normInstr(otherAct);
+                        if (_otherActNorm === _candAct) continue; // same activity = capacity-share, not a conflict
+                        const _otherInstr = _instrMap[_otherActNorm];
+                        if (_otherInstr && _otherInstr === _myInstr) {
+                            if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName} (${actName}): REJECTED - instructor "${_myInstr}" already running "${otherAct}" for ${otherBunk} at slot ${idx}`);
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+
+        // =================================================================
         // CHECK EACH SLOT FOR CAPACITY AND ACTIVITY MATCHING
         // =================================================================
         const bunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || Utils._bunkMetaData || {};
