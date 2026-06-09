@@ -1081,33 +1081,50 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
     const report = { mode: mode, rulesApplied: rules.length, demoted: 0, unresolved: 0, details: [] };
     if (!rules.length || !scheduleAssignments) return report;
 
-    function blocksOf(slots) {
+    // Time resolution mirrors the room-capacity sweep's _rtime: manual block-A entries
+    // do NOT carry _startMin/_endMin (their geometry lives in _perBunkSlots / divisionTimes
+    // by slot index), so reading only the entry would make this sweep BLIND to them. Resolve
+    // per-bunk geometry first, then the entry's own stamp, then division-level period times.
+    const _divs = (opts && opts.divisions) || window.divisions || {};
+    const _b2g = {};
+    Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
+    const _dt = window.divisionTimes || {};
+    function slotTime(bunk, idx, e) {
+        const g = _b2g[String(bunk)];
+        const pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][bunk])
+                 || (_dt[g] && _dt[g]._perBunkSlots && _dt[g]._perBunkSlots[bunk]);
+        if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+        if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+        const ds = _dt[g];
+        if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+        return null;
+    }
+    function blocksOf(bunk, slots) {
         const out = [];
         for (let i = 0; i < slots.length; i++) {
             const e = slots[i];
             if (!e || e.continuation) continue;
             const act = e._activity || e.sport || e.event;
             if (!act) continue;
-            const sm = (e._startMin != null) ? e._startMin : null;
-            let em = (e._endMin != null) ? e._endMin : null;
-            if (sm == null || em == null) continue;
+            const t = slotTime(bunk, i, e);
+            if (!t || t.s == null || t.e == null) continue;
+            let em = t.e;
             for (let k = i + 1; k < slots.length; k++) { // extend end across continuation slots
-                if (slots[k] && slots[k].continuation) { if (slots[k]._endMin != null) em = slots[k]._endMin; }
+                if (slots[k] && slots[k].continuation) { const ct = slotTime(bunk, k, slots[k]); if (ct && ct.e != null) em = ct.e; }
                 else break;
             }
             out.push({
                 idx: i, event: act, type: inferTypeFromActivity(act),
                 field: e.field || e._specialLocation || e.location || null,
-                startMin: sm, endMin: em,
+                startMin: t.s, endMin: em,
                 prot: !!(e._league || e._postEdit || e._pinned)
             });
         }
         return out;
     }
-    function demote(slots, idx) {
-        const e = slots[idx]; if (!e) return false;
-        const sm = e._startMin, em = e._endMin;
-        slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: sm, _endMin: em, _fixed: true, _constraintDemoted: true, _demotedReason: 'spacing', continuation: false };
+    function demote(slots, idx, s, e) {
+        if (!slots[idx]) return false;
+        slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: s, _endMin: e, _fixed: true, _constraintDemoted: true, _demotedReason: 'spacing', continuation: false };
         for (let k = idx + 1; k < slots.length; k++) {
             if (slots[k] && slots[k].continuation) slots[k] = { field: 'Free', sport: null, _activity: 'Free', _fixed: true, _constraintDemoted: true, continuation: false };
             else break;
@@ -1118,7 +1135,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
         const slots = scheduleAssignments[bunk];
         if (!Array.isArray(slots)) return;
         for (let round = 0; round < 8; round++) { // bounded: each demote may clear cascading violations
-            const blocks = blocksOf(slots);
+            const blocks = blocksOf(bunk, slots);
             let didDemote = false;
             for (let a = 0; a < blocks.length && !didDemote; a++) {
                 const T = blocks[a];
@@ -1140,7 +1157,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                         if (T.prot) {
                             if (round === 0) { report.unresolved++; report.details.push({ bunk: bunk, unresolved: T.event, near: R.event }); }
                         } else {
-                            demote(slots, T.idx);
+                            demote(slots, T.idx, T.startMin, T.endMin);
                             report.demoted++;
                             report.details.push({ bunk: bunk, demoted: T.event, near: R.event });
                             didDemote = true;
