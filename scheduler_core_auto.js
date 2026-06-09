@@ -23156,7 +23156,14 @@
                 var _sa = window.scheduleAssignments || {};
                 var _divs = window.divisions || {};
                 var _b2g = {}; Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
-                var _gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+                // ★ FN-25c: source field config from the DURABLE app1. loadGlobalSettings()
+                //   (=== getGlobalSettings) returns {} mid/post-gen (the FN-24 disease), which
+                //   would empty _fields → _fcfg → and make this FINAL sharing-guarantee sweep
+                //   VACUOUS (every field hits `if (!_fcfg[fl]) return`) exactly when a stray
+                //   over-cap / cross-division placement most needs demoting. _fn24DurableApp1()
+                //   prefers live getGlobalSettings when populated (identical) and falls back to
+                //   the durable localStorage config otherwise.
+                var _gs = { app1: _fn24DurableApp1() };
                 var _fields = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                 var _fcfg = {};
                 _fields.forEach(function (f) {
@@ -23238,7 +23245,10 @@
                 var _sa = window.scheduleAssignments || {};
                 var _divs = window.divisions || {};
                 var _b2g = {}; Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
-                var _gs = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+                // ★ FN-25c: durable config (see FN-15 sweep) — loadGlobalSettings() is {} mid/post-gen,
+                //   which would empty both the field and special-room config below and make this
+                //   capacity/anti-stagger sweep VACUOUS. Read from the durable app1 instead.
+                var _gs = { app1: _fn24DurableApp1() };
                 var _cfg = {};
                 ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).forEach(function (f) {
                     if (!f || !f.name) return;
