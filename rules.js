@@ -1090,11 +1090,17 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
     Object.keys(_divs).forEach(function (g) { ((_divs[g] && _divs[g].bunks) || []).forEach(function (b) { _b2g[String(b)] = g; }); });
     const _dt = window.divisionTimes || {};
     function slotTime(bunk, idx, e) {
+        // ENTRY stamp first: it is the activity's ACTUAL placement time, set by the
+        // placing pass. _perBunkSlots is the render grid, but mid-gen (auto STEP 6.85)
+        // it isn't settled yet — preferring it made the sweep fall through to the coarse
+        // division-period time and miss a block whose entry already held the real
+        // (violating) time. Geometry is the fallback for manual block-A entries that
+        // carry no _startMin (their time lives only in _perBunkSlots / divisionTimes).
+        if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
         const g = _b2g[String(bunk)];
         const pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][bunk])
                  || (_dt[g] && _dt[g]._perBunkSlots && _dt[g]._perBunkSlots[bunk]);
         if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
-        if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
         const ds = _dt[g];
         if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
         return null;
