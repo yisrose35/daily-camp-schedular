@@ -16618,6 +16618,118 @@
         }
         } // end if (false) — post-pass disabled; see JointLeagueSlot pre-pass
 
+        // =====================================================================
+        // ★ CONSECUTIVE-BUNK SPECIAL ALIGNMENT (final, runs last)
+        // Phase 2.35 reserves consecutive-bunk specials early, but the many
+        // bunk-timeline packing passes between then and here can scatter those
+        // walls (and a scattered not_sharable special then self-overlaps and
+        // gets culled in materialization). This pass runs on the FINAL skeleton,
+        // right before the per-bunk grid is built, and re-snaps each grade's
+        // consecutive-special blocks into a clean back-to-back, non-overlapping
+        // run so they survive and display one-after-the-next. Field-safe: a
+        // displaced block is only swapped into the special's vacated slot when
+        // that move introduces no same-field clash for another bunk.
+        // No-op when no consecutive-bunk special is configured.
+        try {
+          if (consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+            const _HARDA = new Set(['swim','lunch','snacks','dismissal','change','pre-change','post-change','league','specialty_league']);
+            const _consecNames = new Set(consecutiveBunkSpecials.map(s => s.name));
+            // Resolve a skeleton block's occupied field (for clash checks).
+            const _blkField = (b) => {
+                if (!b) return null;
+                if (b._specialLocation) return String(b._specialLocation).toLowerCase().trim();
+                // sport/general: best-effort via activityProperties location, else the event name
+                const ap = (window.activityProperties || {})[b.event];
+                if (ap && ap.location) return String(ap.location).toLowerCase().trim();
+                return b.event ? String(b.event).toLowerCase().trim() : null;
+            };
+            // Is `field` used by any OTHER bunk over [s,e] in the skeleton?
+            const _fieldBusyElsewhere = (field, s, e, exceptBunk, exceptBlk) => {
+                if (!field) return false;
+                for (let i = 0; i < autoSkeleton.length; i++) {
+                    const x = autoSkeleton[i];
+                    if (!x || x === exceptBlk) continue;
+                    if (String(x._bunk) === String(exceptBunk)) continue;
+                    if (x.startMin < e && x.endMin > s && _blkField(x) === field) return true;
+                }
+                return false;
+            };
+            let _alignedTotal = 0;
+            consecutiveBunkSpecials.forEach((spCfg) => {
+                const sName = spCfg.name;
+                const sDur = getSpecialDuration(sName, window.activityProperties, globalSettings) || parseInt(spCfg.duration) || 30;
+                let sCap = getSpecialCapacity(sName, window.activityProperties, globalSettings) || 1;
+                if (sCap < 1) sCap = 1;
+                allGrades.forEach((grade) => {
+                    // one block per bunk for this special
+                    const byBunk = {};
+                    autoSkeleton.forEach((b) => {
+                        if (b && b.division === grade && (b.event === sName || b._suggestedActivity === sName) && !byBunk[b._bunk]) byBunk[b._bunk] = b;
+                    });
+                    // order bunks by the grade's natural bunk order
+                    const order = getBunksForGrade(grade, divisions).map(String);
+                    const bunks = Object.keys(byBunk).sort((a, b) => {
+                        const ia = order.indexOf(String(a)), ib = order.indexOf(String(b));
+                        return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                    });
+                    if (bunks.length < 2) return; // nothing to make consecutive
+                    const gObj = divisions[grade] || divisions[String(grade)];
+                    const gEnd = parseTimeToMinutes(gObj && gObj.endTime) || 960;
+                    let anchor = Math.min.apply(null, bunks.map((bk) => byBunk[bk].startMin));
+                    // group by capacity
+                    const groups = [];
+                    for (let i = 0; i < bunks.length; i += sCap) groups.push(bunks.slice(i, i + sCap));
+                    let t = anchor;
+                    groups.forEach((grp) => {
+                        // advance t past any grade-wide HARD block (e.g. snacks) that
+                        // overlaps the slot for any bunk in this group
+                        let guard = 0;
+                        while (guard++ < 80) {
+                            const tEnd = t + sDur;
+                            if (tEnd > gEnd) return;
+                            const clash = grp.some((bk) => autoSkeleton.some((x) =>
+                                x && String(x._bunk) === String(bk) && x !== byBunk[bk] &&
+                                _HARDA.has(String(x.type || '').toLowerCase()) &&
+                                x.startMin < tEnd && x.endMin > t));
+                            if (!clash) break;
+                            t += 5;
+                        }
+                        const tEnd = t + sDur;
+                        if (tEnd > gEnd) return;
+                        grp.forEach((bk) => {
+                            const vb = byBunk[bk];
+                            if (vb.startMin === t && vb.endMin === tEnd) return; // already aligned
+                            // occupant currently at [t,tEnd] for this bunk (movable only)
+                            const oldS = vb.startMin, oldE = vb.endMin;
+                            // occupants overlapping the target for this bunk (movable only)
+                            const occs = autoSkeleton.filter((x) => x && String(x._bunk) === String(bk) && x !== vb &&
+                                x.startMin < tEnd && x.endMin > t &&
+                                !_HARDA.has(String(x.type || '').toLowerCase()) && !_consecNames.has(x.event));
+                            // Safe swap only when exactly ONE same-duration occupant sits at the
+                            // target (a clean 1:1 slot exchange) and moving it to the special's
+                            // vacated slot causes no same-field clash for another bunk. Otherwise
+                            // leave this bunk's block where it is (no corruption).
+                            if (occs.length === 1) {
+                                const occ = occs[0];
+                                if ((occ.endMin - occ.startMin) !== (tEnd - t)) return;
+                                if (_fieldBusyElsewhere(_blkField(occ), oldS, oldE, bk, occ)) return;
+                                occ.startMin = oldS; occ.endMin = oldE;
+                                occ.startTime = minutesToTimeLabel(oldS); occ.endTime = minutesToTimeLabel(oldE);
+                            } else if (occs.length > 1) {
+                                return; // messy target — don't disturb
+                            }
+                            vb.startMin = t; vb.endMin = tEnd;
+                            vb.startTime = minutesToTimeLabel(t); vb.endTime = minutesToTimeLabel(tEnd);
+                            _alignedTotal++;
+                        });
+                        t = tEnd; // next group back-to-back
+                    });
+                });
+            });
+            if (_alignedTotal > 0) log('[ConsecAlign] ★ snapped ' + _alignedTotal + ' consecutive-bunk special block(s) into clean runs');
+          }
+        } catch (_eCA) { warn('[ConsecAlign] error (skipped, non-fatal): ' + (_eCA && _eCA.message)); }
+
         // Build divisionTimes
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(autoSkeleton, divisions);
