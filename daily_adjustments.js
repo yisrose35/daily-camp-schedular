@@ -4683,15 +4683,30 @@ function _boToggleView() {
   const msGridWrapper = document.querySelector('.ms-grid-wrapper');
   const autoView = document.getElementById('da-view-auto-layers');
 
+  // ★ BO-v2 SCROLL ROOT CAUSE: the hosting DA pane (.da-pane) has
+  //   overflow hidden — its content is TALLER than the pane and the user
+  //   simply cannot scroll it (this clipped every earlier in-grid scroll
+  //   fix). While the bunk-override view is active, let the pane scroll;
+  //   restore the original overflow when leaving the view.
+  const _boPane = boContainer ? boContainer.closest('.da-pane') : null;
+
   if (_boBunkViewActive) {
     if (msGridWrapper) msGridWrapper.style.display = 'none';
     if (gridWrapper) gridWrapper.style.display = 'none';
     if (autoView) autoView.style.display = 'none';
+    if (_boPane) {
+      if (_boPane.dataset.boPrevOverflowY == null) _boPane.dataset.boPrevOverflowY = _boPane.style.overflowY || '';
+      _boPane.style.overflowY = 'auto';
+    }
     if (boContainer) { boContainer.style.display = ''; renderBunkOverridesUI(); }
   } else {
     if (msGridWrapper) msGridWrapper.style.display = '';
     if (gridWrapper) gridWrapper.style.display = '';
     if (autoView) autoView.style.display = '';
+    if (_boPane && _boPane.dataset.boPrevOverflowY != null) {
+      _boPane.style.overflowY = _boPane.dataset.boPrevOverflowY;
+      delete _boPane.dataset.boPrevOverflowY;
+    }
     if (boContainer) boContainer.style.display = 'none';
     renderGrid();
   }
