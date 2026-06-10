@@ -5851,6 +5851,11 @@ function _boRenderAutoBunkGrid(wrap, divName) {
                   swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal',
                   custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League',
                   elective: 'Elective' };
+    // ★ FN-37: custom pinned layers carry their real activity name
+    //   (customActivity — same field the generator pins, see
+    //   scheduler_core_auto eventName resolution). The generic "Custom
+    //   Pinned" label made every custom band look identical.
+    if (t === 'custom' && (l.customActivity || l.name)) return l.customActivity || l.name;
     return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
   };
 
@@ -5969,7 +5974,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
         const _vE = (mode === 'resize' && override.endMin != null) ? override.endMin : em;
         const vTop = (_vS - earliestMin) * PX;
         const vHeight = (_vE - _vS) * PX;
-        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-layer-name="${_escHtml(String(layer.customActivity || layer.name || ''))}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
           title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(_vS)}-${minutesToTime(_vE)}) — Click body to edit, drag edges to resize"
           style="top:${vTop}px;height:${vHeight}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
           <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
@@ -5989,7 +5994,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
         const _handlesBottom = _canResize
           ? `<div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
           : '';
-        html += `<div class="ms-daw-band bo-block bo-skeleton${_canResize ? ' bo-resizable' : ''}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+        html += `<div class="ms-daw-band bo-block bo-skeleton${_canResize ? ' bo-resizable' : ''}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-layer-name="${_escHtml(String(layer.customActivity || layer.name || ''))}" data-type="${_escHtml(_ltKey)}"
           title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}${_canResize ? ', drag edges to resize for this bunk' : ''}"
           style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
           ${_handles}
@@ -6276,11 +6281,15 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
   const labelMap = { sport: 'Sport', special: 'Special Activity', activity: 'Activity', swim: 'Swim', lunch: 'Lunch', snacks: 'Snacks', dismissal: 'Dismissal', custom: 'Custom Pinned', league: 'League Game', specialty_league: 'Specialty League', elective: 'Elective' };
   const layerLabel = labelMap[(layerType || '').toLowerCase()] || (layerType || 'Layer');
+  // ★ FN-37: the band stamps the layer's real activity name (custom layers) so
+  //   the popover can show it instead of the generic type label.
+  const layerName = (anchorEl?.dataset?.layerName || '').trim();
+  const headerLabel = layerName ? (layerName + ' · ' + layerLabel) : (layerLabel + ' Layer');
 
   function render() {
     pop.innerHTML = `
       <div style="padding:12px 14px;border-bottom:1px solid #e5e7eb;background:linear-gradient(180deg,#f8fafc,#fff);">
-        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(layerLabel)} Layer</div>
+        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${_escHtml(bunk)} · ${_escHtml(headerLabel)}</div>
         <div style="font-size:12px;color:#475569;margin-top:2px;">${minutesToTime(curStart)} – ${minutesToTime(curEnd)}</div>
       </div>
       <div style="padding:10px 14px;border-bottom:1px solid #f1f5f9;display:flex;gap:8px;align-items:center;">
@@ -6344,11 +6353,29 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       const cats = opts.cats || [];
       const desc = opts.desc || ('Replace ' + layerLabel + ' for ' + bunk + ' with');
       const icon = opts.icon || '🎯';
-      body.innerHTML = `
+      // ★ FN-37: custom layers (and added bands) accept a typed activity name —
+      //   same as typing a custom pinned layer's name in the Master Scheduler.
+      const freeHtml = opts.freeText ? `
+        <div style="margin-bottom:10px;">
+          <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:4px;">✏️ Type any activity name:</div>
+          <input id="bo-pop-freename" type="text" value="${_escHtml(pickedActivity?.name || '')}"
+            placeholder="${_escHtml(opts.freePlaceholder || 'e.g. Learning, Rest Hour, Carnival')}"
+            style="width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;" />
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;">…or pick from the lists below:</div>
+        </div>` : '';
+      body.innerHTML = `${freeHtml}
         <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:6px;">
           ${icon} ${_escHtml(desc)}:
         </div>
         <div id="bo-pop-options"></div>`;
+      const freeInput = body.querySelector('#bo-pop-freename');
+      if (freeInput) {
+        // No re-render on input — rebuilding the body would steal focus per keystroke.
+        freeInput.oninput = () => {
+          const v = freeInput.value.trim();
+          pickedActivity = v ? { name: v, location: null, type: 'custom' } : null;
+        };
+      }
       const root = body.querySelector('#bo-pop-options');
       cats.forEach(cat => {
         if (!cat.items?.length) return;
@@ -6375,6 +6402,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       renderSinglePick({
         icon: '➕',
         desc: 'Pick the activity to ADD for ' + bunk + ' at this time',
+        freeText: true,
         cats: [
           { label: '📌 Pinned Activities', items: groups.pinned },
           { label: '🏢 Facilities', items: groups.facilities },
@@ -6443,7 +6471,11 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       default:
         renderSinglePick({
           icon: '📌',
-          desc: 'Replace this ' + layerLabel + ' for ' + bunk + ' with',
+          desc: 'Replace ' + (layerName || ('this ' + layerLabel)) + ' for ' + bunk + ' with',
+          freeText: true,
+          freePlaceholder: layerName
+            ? 'e.g. a replacement for ' + layerName
+            : 'e.g. Learning, Rest Hour, Carnival',
           cats: [
             { label: '📌 Pinned Activities', items: groups.pinned },
             { label: '🏢 Facilities', items: groups.facilities },
@@ -6537,7 +6569,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
           location: null, type: 'sportPool'
         });
       } else {
-        if (!pickedActivity) { alert('Pick an option or click Cancel.'); return; }
+        if (!pickedActivity || !String(pickedActivity.name || '').trim()) { alert('Type or pick an activity, or click Cancel.'); return; }
+        // Reserved UI placeholder strings must never become a real pin.
+        if (PLACEHOLDER_ACTS[pickedActivity.name]) { alert('That name is reserved — type the real activity name.'); return; }
         list.push({
           id: uid(), bunk,
           startMin: curStart, endMin: curEnd,
