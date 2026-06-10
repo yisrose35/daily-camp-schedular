@@ -1325,6 +1325,85 @@ function renderGeneralConfig(container, fac) {
 
     container.appendChild(section("Sharing Rules", summaryGeneralSharing(fieldData),
         () => renderGeneralSharing(fieldData)));
+
+    // ★ FN-39: CONSECUTIVE BUNKS (auto-only) — the same option special
+    //   activities offer, for this facility's general activities: the whole
+    //   grade cycles through the facility back-to-back, one batch of bunks
+    //   after the next (batched by the sharing capacity above). Hidden in
+    //   manual mode, same as the special-activity version.
+    const _gaIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+    if (_gaIsAutoMode) {
+        container.appendChild(section("Consecutive Bunks", summaryGeneralConsec(fieldData),
+            () => renderGeneralConsec(fieldData, fac, app1)));
+    }
+}
+
+// =========================================================================
+// GENERAL ACTIVITY — CONSECUTIVE BUNKS (auto-only, FN-39)
+// =========================================================================
+function summaryGeneralConsec(f) {
+    return f.consecutiveBunks === true
+        ? ('On · ' + (parseInt(f.consecutiveDuration) || 30) + ' min per bunk slot')
+        : 'Off';
+}
+
+function renderGeneralConsec(fieldData, fac, app1) {
+    const wrap = document.createElement('div');
+
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = fieldData.consecutiveBunks === true;
+    check.id = 'ga-consec-' + String(fieldData.name || '').replace(/[^a-z0-9]/gi, '_');
+    check.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+    const label = document.createElement('label');
+    label.htmlFor = check.id;
+    label.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+    label.innerHTML = '<strong>Schedule bunks consecutively</strong>'
+        + '<div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">'
+        + 'Each bunk in the grade comes through this facility one after the next. '
+        + 'If sharing is on, bunks share each slot up to capacity '
+        + '(e.g. 6 bunks at capacity 2 = 3 consecutive slots).</div>';
+    box.appendChild(check);
+    box.appendChild(label);
+    wrap.appendChild(box);
+
+    const durRow = document.createElement('div');
+    durRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-top:12px;'
+        + (fieldData.consecutiveBunks === true ? '' : ' opacity:0.45;');
+    const durLabel = document.createElement('span');
+    durLabel.textContent = 'Minutes per bunk slot';
+    durLabel.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:600;';
+    const dur = document.createElement('input');
+    dur.type = 'number';
+    dur.min = '5';
+    dur.placeholder = '30';
+    dur.value = fieldData.consecutiveDuration || '';
+    dur.style.cssText = 'width:90px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;';
+    durRow.appendChild(durLabel);
+    durRow.appendChild(dur);
+    wrap.appendChild(durRow);
+
+    const persist = () => {
+        // Snapshot the general-activity names onto the field entry — the auto
+        // solver reads app1.fields and needs to know what runs at this station.
+        fieldData.consecutiveGeneralNames = (fac.generalActivities || [])
+            .map(g => g && g.name).filter(Boolean);
+        window.saveGlobalSettings?.('app1', app1);
+        window.saveGlobalSettings?.('fields', app1.fields);
+    };
+    check.addEventListener('change', () => {
+        fieldData.consecutiveBunks = check.checked;
+        durRow.style.opacity = check.checked ? '' : '0.45';
+        persist();
+    });
+    dur.addEventListener('change', () => {
+        fieldData.consecutiveDuration = parseInt(dur.value) || null;
+        persist();
+    });
+
+    return wrap;
 }
 
 // =========================================================================

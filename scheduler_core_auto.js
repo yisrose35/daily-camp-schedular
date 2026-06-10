@@ -1104,29 +1104,27 @@
         }
 
         // ★ FN-39: CONSECUTIVE-BUNK GENERAL ACTIVITIES (auto-only) — the same
-        //   whole-grade back-to-back treatment for FIELD-HOSTED activities,
-        //   flagged per activity in the Rules tab (sportMetaData[name]
-        //   .consecutiveBunks; slice length .consecutiveDuration, default 30).
-        //   Reserved by Phase 2.35's general walk below; normal rotation never
-        //   re-places them for walled bunks (intra-day no-repeat). No-op when
-        //   none are flagged.
+        //   whole-grade back-to-back treatment specials get, for a facility's
+        //   GENERAL activities. Configured in the facility editor (General
+        //   Activities → Consecutive Bunks, right under Sharing Rules):
+        //   fields[i].consecutiveBunks + .consecutiveDuration (default 30) +
+        //   .consecutiveGeneralNames (snapshot of the facility's generals).
+        //   Reserved by Phase 2.35's general walk below; bunks that already
+        //   carry the activity (e.g. via a custom layer) are skipped.
         const consecutiveBunkSports = [];
         try {
-            const _smdCB = window.sportMetaData || {};
             const _fldsCB = (globalSettings.app1 && globalSettings.app1.fields) || globalSettings.fields || [];
-            Object.keys(_smdCB).forEach(function (nm) {
-                const m = _smdCB[nm];
-                if (!m || m.consecutiveBunks !== true) return;
-                const hosts = _fldsCB.filter(function (f) {
-                    return f && f.name && Array.isArray(f.activities) &&
-                        f.activities.some(function (a) { return String(a).toLowerCase().trim() === String(nm).toLowerCase().trim(); });
-                });
-                if (!hosts.length) return; // not field-hosted (a special handles its own flag)
-                consecutiveBunkSports.push({ name: nm, duration: parseInt(m.consecutiveDuration) || 30, hosts: hosts });
+            _fldsCB.forEach(function (f) {
+                if (!f || !f.name || f.consecutiveBunks !== true) return;
+                var _names = Array.isArray(f.consecutiveGeneralNames) ? f.consecutiveGeneralNames.filter(Boolean) : [];
+                var _gaName = _names[0] || null;
+                if (!_gaName) return; // no general activity recorded at this facility
+                if (_names.length > 1) log('[STEP 1] Consecutive facility "' + f.name + '" hosts ' + _names.length + ' generals — using "' + _gaName + '" for the run');
+                consecutiveBunkSports.push({ name: _gaName, duration: parseInt(f.consecutiveDuration) || 30, hosts: [f] });
             });
             if (consecutiveBunkSports.length) {
                 log('[STEP 1] Consecutive-bunk general activities (reserved by Phase 2.35): ' +
-                    consecutiveBunkSports.map(function (s) { return s.name + ' (' + s.duration + 'm)'; }).join(', '));
+                    consecutiveBunkSports.map(function (s) { return s.name + ' @ ' + s.hosts[0].name + ' (' + s.duration + 'm)'; }).join(', '));
             }
         } catch (_eCBS) {}
 
