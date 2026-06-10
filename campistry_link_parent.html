@@ -1115,7 +1115,6 @@ window.addEventListener('storage', function(e) {
     }
 });
 </script>
-<script src="campistry_notes_quick.js"></script>
 <script src="supabase-js@2.js"></script>
 <script src="config.js"></script>
 <script>
@@ -1595,15 +1594,32 @@ function openFillOnline(formIdx, camperName, camperId){
     var fields = formDef.fields || [];
     fields.forEach(function(field, i){
         var fid = 'foF_' + i;
+        if (field.type === 'heading') {
+            body += '<div style="font-size:1rem;font-weight:800;color:#0F172A;margin:18px 0 4px;padding-bottom:6px;border-bottom:2px solid #E2E8F0;">' + _foEsc(field.label||'') + '</div>';
+            return;
+        }
+        if (field.type === 'paragraph') {
+            body += '<p style="font-size:.84rem;color:#475569;line-height:1.6;margin:0 0 12px;">' + _foEsc(field.text||'') + '</p>';
+            return;
+        }
         var req = field.required ? '<span class="req">*</span>' : '';
         body += '<div class="fo-field">';
         body += '<label class="fo-label" for="'+fid+'">' + _foEsc(field.label||'') + req + '</label>';
         if (field.type === 'text' || field.type === 'email' || field.type === 'phone') {
             body += '<input type="'+(field.type==='phone'?'tel':field.type)+'" id="'+fid+'" class="lk-input" placeholder="'+_foEsc(field.label)+'">';
+        } else if (field.type === 'number') {
+            body += '<input type="number" id="'+fid+'" class="lk-input" placeholder="'+_foEsc(field.label)+'">';
         } else if (field.type === 'date') {
             body += '<input type="date" id="'+fid+'" class="lk-input">';
         } else if (field.type === 'textarea') {
             body += '<textarea id="'+fid+'" class="lk-textarea" rows="3" placeholder="'+_foEsc(field.label)+'"></textarea>';
+        } else if (field.type === 'dropdown') {
+            body += '<select id="'+fid+'" class="lk-input"><option value="">Select...</option>' + (field.options||[]).map(function(o){ return '<option value="'+_foEsc(o)+'">'+_foEsc(o)+'</option>'; }).join('') + '</select>';
+        } else if (field.type === 'radio' || field.type === 'yesno') {
+            var radioOpts = field.type === 'yesno' ? ['Yes','No'] : (field.options||[]);
+            body += '<div id="'+fid+'">' + radioOpts.map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;padding:3px 0;"><input type="radio" name="'+fid+'" value="'+_foEsc(o)+'" style="width:15px;height:15px;flex-shrink:0;"> '+_foEsc(o)+'</label>'; }).join('') + '</div>';
+        } else if (field.type === 'checkboxes') {
+            body += '<div id="'+fid+'">' + (field.options||[]).map(function(o){ return '<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;padding:3px 0;"><input type="checkbox" value="'+_foEsc(o)+'" style="width:15px;height:15px;flex-shrink:0;"> '+_foEsc(o)+'</label>'; }).join('') + '</div>';
         } else if (field.type === 'checkbox') {
             body += '<label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:.85rem;color:#475569;line-height:1.4;">';
             body += '<input type="checkbox" id="'+fid+'" style="width:15px;height:15px;flex-shrink:0;margin-top:2px;">';
@@ -1675,7 +1691,18 @@ function submitFillOnline(){
 
     for (var i=0; i<fields.length; i++){
         var field = fields[i], fid = 'foF_'+i;
-        if (field.type === 'signature'){
+        if (field.type === 'heading' || field.type === 'paragraph'){
+            continue;
+        } else if (field.type === 'radio' || field.type === 'yesno'){
+            var selRadio = document.querySelector('input[name="'+fid+'"]:checked');
+            if (field.required && !selRadio){ _foToast(field.label+' is required'); return; }
+            values[field.label] = selRadio ? selRadio.value : '';
+        } else if (field.type === 'checkboxes'){
+            var checkedVals = [];
+            document.querySelectorAll('#'+fid+' input[type="checkbox"]:checked').forEach(function(c){ checkedVals.push(c.value); });
+            if (field.required && !checkedVals.length){ _foToast(field.label+' is required'); return; }
+            values[field.label] = checkedVals.join(', ');
+        } else if (field.type === 'signature'){
             if (field.required && _foSigEmpty(fid+'_c')){ _foToast('Please sign: '+field.label); return; }
             sigDataUrl = document.getElementById(fid+'_c').toDataURL('image/png');
             values[field.label] = '[signature]';

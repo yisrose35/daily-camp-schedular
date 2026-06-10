@@ -328,208 +328,30 @@
     <div id="msgTabForms" style="display:none;">
         <!-- Forms subtabs -->
         <div class="lk-tabs" style="margin-bottom:16px;">
-            <button class="lk-tab active" data-formtab="received" onclick="switchFormsTab('received',this)">Received</button>
-            <button class="lk-tab" data-formtab="sendout" onclick="switchFormsTab('sendout',this)">Send Out</button>
-            <button class="lk-tab" data-formtab="manage" onclick="switchFormsTab('manage',this)">Manage Forms</button>
+            <button class="lk-tab active" data-formtab="sent" onclick="switchFormsTab('sent',this)">Sent</button>
+            <button class="lk-tab" data-formtab="received" onclick="switchFormsTab('received',this)">Received</button>
+        </div>
+
+        <!-- SENT -->
+        <div id="formsTabSent">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:14px;">
+                <p style="font-size:.82rem;color:var(--text-muted);margin:0;">Send a form to parents — upload one from your computer or build one online.</p>
+                <button class="btn btn-primary btn-sm" onclick="openFormCompose()" style="flex-shrink:0;">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                    Compose
+                </button>
+            </div>
+            <div id="sentFormsList"></div>
         </div>
 
         <!-- RECEIVED -->
-        <div id="formsTabReceived">
-        <div id="docFolderListView">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
-                <div class="lk-tabs" style="margin:0;border:none;">
-                    <button class="lk-tab active" onclick="filterDocSubmissions('all',this)">All Submissions</button>
-                    <button class="lk-tab" onclick="filterDocSubmissions('unfiled',this)">Unfiled</button>
-                    <button class="lk-tab" onclick="filterDocSubmissions('folders',this)">Folders</button>
-                </div>
-                <button class="btn btn-primary btn-sm" onclick="showCreateFolder()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                    New Folder
-                </button>
+        <div id="formsTabReceived" style="display:none;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
+                <div id="recvBreadcrumbs" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:.8rem;"></div>
+                <input type="text" class="lk-input" placeholder="Search submissions..." id="recvSearch" oninput="renderReceivedTree()" style="max-width:200px;font-size:.8rem;padding:5px 10px;height:auto;">
             </div>
-            <div id="createFolderForm" style="display:none;">
-                <div class="lk-card" style="border-left:4px solid var(--link-color);margin-bottom:0;">
-                    <div class="lk-card-head"><h2>Create Folder</h2><button class="btn btn-ghost btn-sm" onclick="hideCreateFolder()">Cancel</button></div>
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-                        <div class="lk-field" style="grid-column:1/-1;"><label>Folder Name</label><input type="text" class="lk-input" id="folderName" placeholder='e.g. "Grade 1 Waivers", "Seniors Trip Slips"'></div>
-                        <div class="lk-field"><label>Document Type <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                            <select class="lk-select" id="folderDocType">
-                                <option value="">Any document type</option>
-                                <option value="waiver">Waiver</option>
-                                <option value="medical">Medical Form</option>
-                                <option value="permission">Permission Slip</option>
-                                <option value="consent">Consent Form</option>
-                                <option value="other">Other</option>
-                            </select>
-                        </div>
-                        <div class="lk-field"><label>Grade <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                            <select class="lk-select" id="folderGrade">
-                                <option value="">Any grade</option>
-                                <option>1st Grade</option><option>2nd Grade</option><option>3rd Grade</option>
-                                <option>4th Grade</option><option>5th Grade</option><option>6th Grade</option>
-                                <option>7th Grade</option><option>8th Grade</option>
-                            </select>
-                        </div>
-                        <div class="lk-field"><label>Division <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                            <select class="lk-select" id="folderDivision">
-                                <option value="">Any division</option>
-                                <option>Juniors</option><option>Seniors</option><option>CITs</option>
-                            </select>
-                        </div>
-                        <div class="lk-field"><label>Bunk <span style="font-weight:400;color:var(--text-muted);">(optional)</span></label>
-                            <input type="text" class="lk-input" id="folderBunk" placeholder='e.g. "Bunk 4" or leave blank'>
-                        </div>
-                    </div>
-                    <p style="font-size:.76rem;color:var(--slate-400);margin:8px 0 12px;">All rules are optional — the more you fill in, the more specific the auto-filing. Leave all blank to manually file.</p>
-                    <button class="btn btn-primary btn-sm" onclick="createFolder()">Create Folder</button>
-                </div>
-            </div>
-            <div id="foldersGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;margin-bottom:16px;"></div>
-            <div class="lk-card" id="docSubmissionsCard">
-                <div class="lk-card-head">
-                    <h2 id="docSubmissionsTitle">All Submissions</h2>
-                    <input type="text" class="lk-input" placeholder="Search..." id="docSearch" oninput="renderDocSubmissions(currentDocFilter,this.value)" style="max-width:180px;font-size:.8rem;padding:5px 10px;height:auto;">
-                </div>
-                <div id="docSubmissionsList"></div>
-            </div>
+            <div id="recvList"></div>
         </div>
-        <div id="docFolderDetailView" style="display:none;">
-            <button class="btn btn-ghost btn-sm" onclick="closeFolderDetail()" style="margin-bottom:12px;">&larr; All Folders</button>
-            <div class="lk-card">
-                <div class="lk-card-head">
-                    <div>
-                        <h2 id="folderDetailName">Folder</h2>
-                        <div id="folderDetailRules" style="font-size:.74rem;color:var(--slate-400);margin-top:2px;"></div>
-                    </div>
-                    <div style="display:flex;gap:6px;">
-                        <button class="btn btn-secondary btn-sm" onclick="printFolderDocs()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg> Print All</button>
-                        <button class="btn btn-ghost btn-sm" onclick="deleteFolderPrompt()"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg></button>
-                    </div>
-                </div>
-                <div id="folderDetailList"></div>
-            </div>
-        </div>
-        </div><!-- /formsTabReceived -->
-
-        <!-- SEND OUT -->
-        <div id="formsTabSendout" style="display:none;">
-            <div class="lk-card">
-                <div class="lk-card-head"><h2>Send a Form Request</h2></div>
-                <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:16px;">Each parent receives a personalized message asking them to complete the form for their child.</p>
-
-                <div class="lk-field">
-                    <label>Form type</label>
-                    <select class="lk-input" id="fsFormType" onchange="onFormTypeChange()">
-                        <option value="medical">Medical Form</option>
-                        <option value="waiver">Waiver</option>
-                        <option value="permission">Permission Slip</option>
-                        <option value="emergency">Emergency Contact Form</option>
-                        <option value="dietary">Dietary / Allergy Form</option>
-                        <option value="custom">Custom…</option>
-                    </select>
-                </div>
-                <div class="lk-field" id="fsCustomNameWrap" style="display:none;">
-                    <label>Form name</label>
-                    <input type="text" class="lk-input" id="fsCustomName" placeholder="e.g. Trip Permission Slip — Lake Day">
-                </div>
-
-                <div class="lk-field">
-                    <label>Send to</label>
-                    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
-                        <select class="lk-input" id="fsScope" style="max-width:180px;" onchange="onFsScopeChange()">
-                            <option value="all">Everyone</option>
-                            <option value="division">By Division</option>
-                            <option value="grade">By Grade</option>
-                            <option value="bunk">By Bunk</option>
-                        </select>
-                        <select class="lk-input" id="fsScopeVal" style="max-width:200px;display:none;" onchange="updateFsCount()"></select>
-                        <span id="fsScopeCount" style="font-size:.76rem;color:var(--text-muted);"></span>
-                    </div>
-                </div>
-
-                <div class="lk-field">
-                    <label>Optional note <span style="font-weight:400;color:var(--text-muted);">added after the standard message</span></label>
-                    <textarea class="lk-textarea" id="fsNote" placeholder="e.g. Please complete by Friday, June 20th." style="min-height:60px;"></textarea>
-                </div>
-
-                <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:10px;border-top:1px solid var(--border-light);">
-                    <div class="channel-btns" id="fsChannelBtns">
-                        <button class="channel-btn selected" data-ch="app" onclick="toggleFsCh(this)">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                            In-App
-                        </button>
-                        <button class="channel-btn" data-ch="email" onclick="toggleFsCh(this)">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-                            Email
-                        </button>
-                        <button class="channel-btn" data-ch="sms" onclick="toggleFsCh(this)">
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
-                            SMS
-                        </button>
-                    </div>
-                    <button class="btn btn-primary" onclick="sendFormRequest()">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-                        Send Request
-                    </button>
-                </div>
-            </div>
-
-            <!-- History -->
-            <div class="lk-card" style="margin-top:14px;">
-                <div class="lk-card-head"><h2>Recently Sent</h2></div>
-                <div id="fsSentHistory"></div>
-            </div>
-        </div><!-- /formsTabSendout -->
-
-        <!-- MANAGE FORMS -->
-        <div id="formsTabManage" style="display:none;">
-            <p style="font-size:.82rem;color:var(--text-muted);margin-bottom:18px;">Create and edit the forms that appear in the parent portal. Changes are live immediately.</p>
-
-            <!-- Fill Online -->
-            <div class="lk-card" style="margin-bottom:12px;">
-                <div class="lk-card-head">
-                    <div>
-                        <h2>Fill Online</h2>
-                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents fill these out directly in the portal — no printing needed.</p>
-                    </div>
-                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('digital')">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add Form
-                    </button>
-                </div>
-                <div id="ftDigitalList"></div>
-            </div>
-
-            <!-- Print & Return -->
-            <div class="lk-card" style="margin-bottom:12px;">
-                <div class="lk-card-head">
-                    <div>
-                        <h2>Print &amp; Return</h2>
-                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Parents download the PDF, fill by hand, and upload back.</p>
-                    </div>
-                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('printReturn')">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add Form
-                    </button>
-                </div>
-                <div id="ftPrintList"></div>
-            </div>
-
-            <!-- Camp Documents -->
-            <div class="lk-card">
-                <div class="lk-card-head">
-                    <div>
-                        <h2>Camp Documents</h2>
-                        <p style="font-size:.76rem;color:var(--text-muted);margin:2px 0 0;">Read-only downloads — handbooks, packing lists, calendars.</p>
-                    </div>
-                    <button class="btn btn-primary btn-sm" onclick="openFormDrawer('document')">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                        Add Document
-                    </button>
-                </div>
-                <div id="ftDocsList"></div>
-            </div>
-        </div><!-- /formsTabManage -->
     </div>
 
 </div>
@@ -750,71 +572,120 @@
 <div id="toastBox"></div>
 
 <!-- ═══════════════════════════════════════════════════ -->
-<!--  FORM BUILDER DRAWER                                -->
+<!--  FORM COMPOSE DRAWER (Forms → Sent)                 -->
 <!-- ═══════════════════════════════════════════════════ -->
-<div class="compose-backdrop" id="formTplBackdrop" onclick="closeFormDrawer()"></div>
-<div class="compose-drawer" id="formTplDrawer">
+<div class="compose-backdrop" id="formComposeBackdrop" onclick="closeFormCompose()"></div>
+<div class="compose-drawer" id="formComposeDrawer">
     <div class="compose-drawer-head">
-        <h2 id="formTplDrawerTitle">New Form</h2>
-        <button class="btn btn-ghost btn-sm" onclick="closeFormDrawer()" style="padding:4px 10px;">✕</button>
+        <h2>Send a Form</h2>
+        <button class="btn btn-ghost btn-sm" onclick="closeFormCompose()" style="padding:4px 10px;">✕</button>
     </div>
     <div class="compose-drawer-body">
 
         <div class="lk-field">
-            <label>Form Name</label>
-            <input type="text" class="lk-input" id="ftName" placeholder="e.g. Health Waiver 2026">
+            <label>Form name <span style="font-weight:400;color:var(--text-muted);">replies are auto-foldered under this name</span></label>
+            <input type="text" class="lk-input" id="fcFormName" placeholder='e.g. "Bunk Request Form"'>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
-            <div class="lk-field">
-                <label>Category</label>
-                <select class="lk-select" id="ftCat">
-                    <option value="medical">Medical Form</option>
-                    <option value="waiver">Waiver / Liability</option>
-                    <option value="permission">Permission Slip</option>
-                    <option value="emergency">Emergency Contact</option>
-                    <option value="dietary">Dietary / Allergy</option>
-                    <option value="custom">Other</option>
+        <div class="lk-field">
+            <label>Message to parents</label>
+            <textarea class="lk-textarea" id="fcMessage" placeholder="This message goes out with the form — e.g. Please complete by Friday, June 20th." style="min-height:80px;"></textarea>
+        </div>
+
+        <div class="lk-field">
+            <label>Send to</label>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select class="lk-input" id="fsScope" style="max-width:180px;" onchange="onFsScopeChange()">
+                    <option value="all">Everyone</option>
+                    <option value="division">By Division</option>
+                    <option value="grade">By Grade</option>
+                    <option value="bunk">By Bunk</option>
                 </select>
-            </div>
-            <div class="lk-field" id="ftReqRow">
-                <label>Required?</label>
-                <select class="lk-select" id="ftRequiredSel">
-                    <option value="1">Yes — Required</option>
-                    <option value="0">No — Optional</option>
-                </select>
+                <select class="lk-input" id="fsScopeVal" style="max-width:200px;display:none;" onchange="updateFsCount()"></select>
+                <span id="fsScopeCount" style="font-size:.76rem;color:var(--text-muted);"></span>
             </div>
         </div>
 
         <div class="lk-field">
-            <label>Description <span style="font-weight:400;color:var(--text-muted);">shown to parents</span></label>
-            <input type="text" class="lk-input" id="ftDesc" placeholder="e.g. Annual health clearance form">
-        </div>
-
-        <!-- URL field — for print & return and documents -->
-        <div id="ftUrlSection" style="display:none;" class="lk-field">
-            <label>PDF / Document URL <span style="font-weight:400;color:var(--text-muted);">Google Drive, Dropbox, etc.</span></label>
-            <input type="text" class="lk-input" id="ftUrl" placeholder="https://drive.google.com/...">
-            <p style="font-size:.73rem;color:var(--text-muted);margin-top:4px;">Parents see a "Download" button linking to this URL.</p>
-        </div>
-
-        <!-- Field builder — for digital fill-online forms -->
-        <div id="ftFieldsSection" style="display:none;">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0 8px;border-top:1px solid var(--border-light);margin-top:4px;">
-                <span style="font-size:.78rem;font-weight:700;color:var(--slate-700);text-transform:uppercase;letter-spacing:.04em;">Form Fields</span>
-                <button class="btn btn-ghost btn-sm" onclick="_addFormField()" style="font-size:.77rem;">+ Add Field</button>
+            <label>Attach the form</label>
+            <div id="fcAttachChoices" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+                <div onclick="document.getElementById('fcFileInput').click()" style="border:1.5px dashed var(--border-light);border-radius:var(--radius-md);padding:16px 12px;text-align:center;cursor:pointer;transition:border-color .12s;" onmouseover="this.style.borderColor='var(--link-color)'" onmouseout="this.style.borderColor='var(--border-light)'">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--link-color)" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+                    <div style="font-size:.82rem;font-weight:700;margin-top:6px;">Upload a Form</div>
+                    <div style="font-size:.71rem;color:var(--text-muted);margin-top:2px;">PDF or document from your computer</div>
+                </div>
+                <div onclick="openFormBuilder()" style="border:1.5px dashed var(--border-light);border-radius:var(--radius-md);padding:16px 12px;text-align:center;cursor:pointer;transition:border-color .12s;" onmouseover="this.style.borderColor='var(--link-color)'" onmouseout="this.style.borderColor='var(--border-light)'">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--link-color)" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                    <div style="font-size:.82rem;font-weight:700;margin-top:6px;">Build a Form</div>
+                    <div style="font-size:.71rem;color:var(--text-muted);margin-top:2px;">Parents fill it online — no printing</div>
+                </div>
             </div>
-            <div id="ftFieldsList"></div>
-            <p style="font-size:.73rem;color:var(--text-muted);margin-top:8px;">Parents fill in these fields when they tap "Complete" in the portal.</p>
+            <input type="file" id="fcFileInput" accept=".pdf,.doc,.docx,.png,.jpg,.jpeg" style="display:none;" onchange="fcFileChosen(this)">
+            <div id="fcAttachInfo" style="display:none;align-items:center;gap:10px;border:1px solid var(--border-light);border-radius:var(--radius-md);padding:10px 12px;background:var(--slate-50);"></div>
         </div>
 
-        <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:16px;border-top:1px solid var(--border-light);margin-top:12px;">
-            <button class="btn btn-ghost" onclick="closeFormDrawer()">Cancel</button>
-            <button class="btn btn-primary" onclick="_saveFormDrawer()">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
-                Save Form
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;padding-top:14px;border-top:1px solid var(--border-light);margin-top:6px;">
+            <div class="channel-btns" id="fsChannelBtns">
+                <button class="channel-btn selected" data-ch="app" onclick="toggleFsCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    In-App
+                </button>
+                <button class="channel-btn" data-ch="email" onclick="toggleFsCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                    Email
+                </button>
+                <button class="channel-btn" data-ch="sms" onclick="toggleFsCh(this)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3"/></svg>
+                    SMS
+                </button>
+            </div>
+            <button class="btn btn-primary" onclick="sendFormCompose()">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                Send
             </button>
         </div>
+    </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════ -->
+<!--  BUILD A FORM — full-screen form builder            -->
+<!-- ═══════════════════════════════════════════════════ -->
+<style>
+#formBuilderOverlay{position:fixed;inset:0;z-index:9300;background:var(--slate-50,#F8FAFC);display:none;flex-direction:column;}
+#formBuilderOverlay.open{display:flex;}
+.fb-topbar{display:flex;align-items:center;gap:12px;padding:12px 18px;background:#fff;border-bottom:1px solid var(--border-light);flex-shrink:0;}
+.fb-body{flex:1;display:flex;min-height:0;}
+.fb-palette{width:225px;flex-shrink:0;background:#fff;border-right:1px solid var(--border-light);overflow-y:auto;padding:14px;}
+.fb-pal-btn{display:flex;align-items:center;gap:8px;width:100%;padding:8px 10px;margin-bottom:6px;border:1px solid var(--border-light);border-radius:8px;background:#fff;cursor:pointer;font-size:.79rem;font-weight:600;color:var(--slate-700,#334155);text-align:left;transition:border-color .12s,background .12s;}
+.fb-pal-btn:hover{border-color:var(--link-color,#6366F1);background:var(--link-tint,#EEF2FF);}
+.fb-pal-btn svg{flex-shrink:0;}
+.fb-canvas{flex:1;overflow-y:auto;padding:22px;}
+.fb-field-card{background:#fff;border:1px solid var(--border-light);border-radius:10px;padding:12px 14px;margin:0 auto 10px;max-width:640px;}
+.fb-field-card.fb-static{background:transparent;border-style:dashed;}
+.fb-fc-top{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.fb-type-chip{font-size:.62rem;font-weight:800;letter-spacing:.05em;text-transform:uppercase;background:var(--link-tint,#EEF2FF);color:var(--link-color,#6366F1);padding:3px 8px;border-radius:20px;flex-shrink:0;white-space:nowrap;}
+.fb-icon-btn{background:none;border:1px solid transparent;border-radius:6px;padding:3px 7px;cursor:pointer;color:var(--slate-400,#94A3B8);font-size:.82rem;line-height:1;}
+.fb-icon-btn:hover{background:var(--slate-100,#F1F5F9);color:var(--slate-700,#334155);}
+@media (max-width:720px){.fb-palette{width:62px;padding:8px;}.fb-pal-btn span{display:none;}.fb-pal-btn{justify-content:center;}}
+</style>
+<div id="formBuilderOverlay">
+    <div class="fb-topbar">
+        <button class="btn btn-ghost btn-sm" onclick="closeFormBuilder()">&larr; Back</button>
+        <input type="text" class="lk-input" id="fbName" placeholder="Untitled Form" style="max-width:300px;font-weight:700;" oninput="if(window._fbPreviewOn)renderFbPreview()">
+        <div style="flex:1;"></div>
+        <button class="btn btn-secondary btn-sm" id="fbPreviewBtn" onclick="toggleFbPreview()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Preview
+        </button>
+        <button class="btn btn-primary btn-sm" onclick="useBuiltForm()">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            Use This Form
+        </button>
+    </div>
+    <div class="fb-body">
+        <div class="fb-palette" id="fbPalette"></div>
+        <div class="fb-canvas" id="fbCanvas"></div>
+        <div class="fb-canvas" id="fbPreview" style="display:none;"></div>
     </div>
 </div>
 
@@ -870,7 +741,7 @@ function switchMsgTab(tab, btn) {
     document.getElementById('msgTabForms').style.display  = tab === 'forms'  ? '' : 'none';
     if (tab === 'inbox')  { _populateInboxFilters(); renderAdminMsgs('all'); }
     if (tab === 'outbox') { renderSentList(); }
-    if (tab === 'forms')  { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions('all', ''); updateFsCount(); }
+    if (tab === 'forms')  { _loadFormSubmissions(); switchFormsTab(_currentFormsTab || 'sent'); }
 }
 
 // ─── COMPOSE DRAWER ──────────────────────────────────────────────────────────
@@ -946,24 +817,19 @@ function closeSentDetail() {
     if (card) card.style.display = '';
 }
 
-// ─── FORMS SEND OUT ──────────────────────────────────────────────────────────
+// ─── FORMS — SENT (compose + history with response progress) ─────────────────
 var fsChannels = ['app'];
-var _formSendHistory = [];
+var _currentFormsTab = 'sent';
+var _fcAttach = null; // {type:'upload',fileName,dataUrl} | {type:'built',formId,formName,fields}
 
 function switchFormsTab(tab, btn) {
-    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t) { t.classList.remove('active'); }); btn.classList.add('active'); }
+    _currentFormsTab = tab;
+    document.querySelectorAll('[data-formtab]').forEach(function(t) { t.classList.toggle('active', t.dataset.formtab === tab); });
+    document.getElementById('formsTabSent').style.display     = tab === 'sent'     ? '' : 'none';
     document.getElementById('formsTabReceived').style.display = tab === 'received' ? '' : 'none';
-    document.getElementById('formsTabSendout').style.display  = tab === 'sendout'  ? '' : 'none';
-    document.getElementById('formsTabManage').style.display   = tab === 'manage'   ? '' : 'none';
-    if (tab === 'sendout') { updateFsCount(); renderFsSentHistory(); }
-    if (tab === 'received') { _loadFormSubmissions(); renderFoldersGrid(); renderDocSubmissions(currentDocFilter, ''); }
-    if (tab === 'manage') { renderFormTemplatesAdmin(); }
-}
-
-function onFormTypeChange() {
-    var val = (document.getElementById('fsFormType') || {}).value;
-    var wrap = document.getElementById('fsCustomNameWrap');
-    if (wrap) wrap.style.display = val === 'custom' ? '' : 'none';
+    _loadFormSubmissions();
+    if (tab === 'sent')     renderSentForms();
+    if (tab === 'received') renderReceivedTree();
 }
 
 function onFsScopeChange() {
@@ -1019,46 +885,161 @@ function toggleFsCh(btn) {
     if (!fsChannels.length) { btn.classList.add('selected'); fsChannels = [btn.dataset.ch]; }
 }
 
-function _fsFormLabel() {
-    var type = (document.getElementById('fsFormType') || {}).value || 'medical';
-    if (type === 'custom') return (document.getElementById('fsCustomName') || {}).value.trim() || 'form';
-    var labels = { medical: 'Medical Form', waiver: 'Waiver', permission: 'Permission Slip', emergency: 'Emergency Contact Form', dietary: 'Dietary / Allergy Form' };
-    return labels[type] || type;
+// ── Sent-forms store (cloud-synced via camp_state_kv key 'link_sent_forms') ──
+function _loadSentForms() {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    return s.link_sent_forms || [];
+}
+function _saveSentForms(arr) {
+    var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
+    s.link_sent_forms = arr;
+    localStorage.setItem('campGlobalSettings_v1', JSON.stringify(s));
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+        window.saveGlobalSettings('link_sent_forms', arr);
+    }
 }
 
-function sendFormRequest() {
+// ── Compose drawer ────────────────────────────────────────────────────────────
+function openFormCompose() {
+    _fcAttach = null;
+    _renderFcAttach();
+    document.getElementById('fcFormName').value = '';
+    document.getElementById('fcMessage').value = '';
+    document.getElementById('formComposeBackdrop').classList.add('open');
+    document.getElementById('formComposeDrawer').classList.add('open');
+    onFsScopeChange();
+    setTimeout(function() { document.getElementById('fcFormName').focus(); }, 200);
+}
+function closeFormCompose() {
+    document.getElementById('formComposeBackdrop').classList.remove('open');
+    document.getElementById('formComposeDrawer').classList.remove('open');
+}
+
+function fcFileChosen(input) {
+    var file = input.files && input.files[0]; if (!file) return;
+    if (file.size > 4 * 1024 * 1024) { toast('File too large — keep it under 4 MB'); input.value = ''; return; }
+    var reader = new FileReader();
+    reader.onload = function() {
+        _fcAttach = { type: 'upload', fileName: file.name, dataUrl: reader.result };
+        var fn = document.getElementById('fcFormName');
+        if (fn && !fn.value.trim()) fn.value = file.name.replace(/\.[^.]+$/, '');
+        _renderFcAttach();
+    };
+    reader.readAsDataURL(file);
+    input.value = '';
+}
+
+function _renderFcAttach() {
+    var info = document.getElementById('fcAttachInfo');
+    var choices = document.getElementById('fcAttachChoices');
+    if (!info || !choices) return;
+    if (!_fcAttach) { info.style.display = 'none'; choices.style.display = 'grid'; return; }
+    choices.style.display = 'none';
+    info.style.display = 'flex';
+    var isBuilt = _fcAttach.type === 'built';
+    var nFields = isBuilt ? _fcAttach.fields.filter(function(f) { return f.type !== 'heading' && f.type !== 'paragraph'; }).length : 0;
+    var icon = isBuilt
+        ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--link-color)" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>'
+        : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--link-color)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+    info.innerHTML =
+        icon +
+        '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:.83rem;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(isBuilt ? _fcAttach.formName : _fcAttach.fileName) + '</div>' +
+            '<div style="font-size:.71rem;color:var(--text-muted);">' + (isBuilt ? 'Fill online · ' + nFields + ' field' + (nFields !== 1 ? 's' : '') : 'Uploaded — parents download, fill, and return it') + '</div>' +
+        '</div>' +
+        (isBuilt ? '<button class="btn btn-secondary btn-sm" onclick="fcEditAttach()">Edit</button>' : '') +
+        '<button class="btn btn-ghost btn-sm" onclick="fcRemoveAttach()" style="color:var(--red-500);">✕</button>';
+}
+
+function fcRemoveAttach() { _fcAttach = null; _renderFcAttach(); }
+function fcEditAttach() { if (_fcAttach && _fcAttach.type === 'built') openFormBuilder(_fcAttach); }
+
+function sendFormCompose() {
     var cl = CL(); if (!cl) { toast('Data bridge not loaded'); return; }
-    var formLabel = _fsFormLabel();
-    if (!formLabel) { toast('Enter a form name'); return; }
+    var formName = document.getElementById('fcFormName').value.trim();
+    if (!formName) { toast('Enter a form name'); return; }
+    if (!_fcAttach) { toast('Attach a form — upload one or build one'); return; }
     var targets = _getFsTargets();
     if (!targets.length) { toast('No recipients match'); return; }
-    var note = ((document.getElementById('fsNote') || {}).value || '').trim();
-    var busMap = _buildBusRouteMap();
+    var message = document.getElementById('fcMessage').value.trim();
+    var isBuilt = _fcAttach.type === 'built';
+
+    // Publish the form so parents can act on it in the portal
+    var lf = _loadLinkForms();
+    var formId;
+    if (isBuilt) {
+        formId = _fcAttach.formId;
+        var rec = { id: formId, name: formName, category: 'custom', description: message.slice(0, 120), required: true, fields: _fcAttach.fields, created: Date.now() };
+        var idx = lf.digital.findIndex(function(f) { return f.id === formId; });
+        if (idx >= 0) lf.digital[idx] = rec; else lf.digital.push(rec);
+    } else {
+        formId = 'lfp_' + Date.now();
+        lf.printReturn.push({ id: formId, name: formName, category: 'custom', description: message.slice(0, 120), required: true, downloadUrl: _fcAttach.dataUrl, fileName: _fcAttach.fileName, created: Date.now() });
+    }
+    _saveLinkForms(lf);
+
+    // Personalized message to each matching parent
     var sent = 0;
     targets.forEach(function(t) {
-        var body = 'Hi ' + (t.parentName || 'there') + ',\n\nWe need you to complete the ' + formLabel + ' for ' + t.camperName + ' before camp begins.\n\nPlease log in to the parent portal to submit it.' + (note ? '\n\n' + note : '') + '\n\nThank you!';
-        cl.msg.send({ to: t.parentName, toType: 'individual', subject: formLabel + ' needed for ' + t.camperName, body: body, channels: fsChannels, metadata: { parentEmail: t.parentEmail, camperName: t.camperName, formType: (document.getElementById('fsFormType') || {}).value, isFormRequest: true } });
+        var body = 'Hi ' + (t.parentName || 'there') + ',\n\nPlease complete the ' + formName + ' for ' + t.camperName + '.' +
+            (message ? '\n\n' + message : '') +
+            '\n\n' + (isBuilt ? 'You can fill it out online in the parent portal — no printing needed.' : 'Download it from the parent portal, fill it out, and upload it back.') +
+            '\n\nThank you!';
+        cl.msg.send({ to: t.parentName, toType: 'individual', subject: formName + ' — ' + t.camperName, body: body, channels: fsChannels, metadata: { parentEmail: t.parentEmail, camperName: t.camperName, isFormRequest: true, formId: formId, formName: formName, formMode: isBuilt ? 'digital' : 'upload' } });
         sent++;
     });
-    _formSendHistory.unshift({ formLabel: formLabel, count: sent, date: new Date().toISOString(), scope: (document.getElementById('fsScope') || {}).value });
-    toast(sent + ' form request' + (sent === 1 ? '' : 's') + ' sent!');
-    if (document.getElementById('fsNote')) document.getElementById('fsNote').value = '';
-    renderFsSentHistory();
+
+    var sentForms = _loadSentForms();
+    sentForms.unshift({
+        id: 'sf_' + Date.now(), formName: formName, formId: formId,
+        mode: isBuilt ? 'digital' : 'upload',
+        scope: (document.getElementById('fsScope') || {}).value || 'all',
+        scopeValue: ((document.getElementById('fsScopeVal') || {}).value || '').trim(),
+        recipients: sent, date: new Date().toISOString()
+    });
+    _saveSentForms(sentForms);
+    closeFormCompose();
+    renderSentForms();
+    toast('"' + formName + '" sent to ' + sent + ' parent' + (sent === 1 ? '' : 's'));
 }
 
-function renderFsSentHistory() {
-    var el = document.getElementById('fsSentHistory');
-    if (!el) return;
-    if (!_formSendHistory.length) {
-        el.innerHTML = '<div style="padding:18px;text-align:center;font-size:.82rem;color:var(--text-muted);">No form requests sent yet.</div>';
+function renderSentForms() {
+    var el = document.getElementById('sentFormsList'); if (!el) return;
+    var sentForms = _loadSentForms();
+    if (!sentForms.length) {
+        el.innerHTML = '<div class="lk-card"><div class="lk-empty" style="padding:36px 20px;"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg></div><h3>No forms sent yet</h3><p>Click Compose to send your first form — upload one or build one online.</p></div></div>';
         return;
     }
-    el.innerHTML = _formSendHistory.slice(0, 10).map(function(h) {
-        return '<div style="display:flex;align-items:center;justify-content:space-between;padding:10px 16px;border-bottom:1px solid var(--border-light);font-size:.82rem;">' +
-            '<div><strong>' + esc(h.formLabel) + '</strong><span style="color:var(--text-muted);margin-left:10px;">' + h.count + ' recipients</span></div>' +
-            '<span style="font-size:.74rem;color:var(--text-muted);">' + esc(_fmtMsgTime(h.date)) + '</span>' +
+    el.innerHTML = sentForms.map(function(f) {
+        var received = docSubmissions.filter(function(d) { return (d.name || '') === f.formName; }).length;
+        var pct = f.recipients ? Math.min(100, Math.round(received / f.recipients * 100)) : 0;
+        var scopeLabel = f.scope === 'all' ? 'Everyone' : (f.scopeValue || f.scope);
+        var modeBadge = f.mode === 'digital'
+            ? '<span class="badge badge-ok" style="font-size:.62rem;">Fill Online</span>'
+            : '<span class="badge badge-info" style="font-size:.62rem;">Print &amp; Return</span>';
+        return '<div class="lk-card" style="padding:14px 16px;margin-bottom:10px;">' +
+            '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+                '<div style="flex:1;min-width:180px;">' +
+                    '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+                        '<span style="font-size:.9rem;font-weight:700;color:var(--slate-900);">' + esc(f.formName) + '</span>' + modeBadge +
+                    '</div>' +
+                    '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">To: ' + esc(scopeLabel) + ' &nbsp;·&nbsp; ' + esc(_fmtMsgTime(f.date)) + '</div>' +
+                '</div>' +
+                '<button class="btn btn-secondary btn-sm" onclick="viewFormResponses(\'' + esc(f.formName).replace(/'/g, '&#39;') + '\')">View Responses</button>' +
+            '</div>' +
+            '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;">' +
+                '<div class="progress" style="flex:1;height:7px;"><div class="progress-fill" style="width:' + pct + '%;"></div></div>' +
+                '<span style="font-size:.74rem;font-weight:700;color:var(--slate-700);white-space:nowrap;">' + received + ' / ' + f.recipients + ' returned (' + pct + '%)</span>' +
+            '</div>' +
         '</div>';
     }).join('');
+}
+
+function viewFormResponses(formName) {
+    switchFormsTab('received');
+    _recvPath = [formName];
+    var s = document.getElementById('recvSearch'); if (s) s.value = '';
+    renderReceivedTree();
 }
 
 // ─── TOAST ───────────────────────────────────────────────────────────────────
@@ -1635,226 +1616,132 @@ function closeAdminMsgDetail() {
     renderAdminMsgs('all');
 }
 
-// ─── DOCUMENTS & FOLDER MANAGER ─────────────────────────────────────────────
-var docFolders = [
-];
+// ─── FORMS — RECEIVED (auto-foldered: form → division → grade → bunk) ────────
 var docSubmissions = [];
-// Auto-file new submissions into matching folders on load
-docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
+var _recvPath = [];  // drill-down path: [formName, division, grade, bunk]
+var _recvKeys = [];  // folder keys at the current level (for onclick by index)
 
-var currentDocFilter = 'all';
-var currentFolderId = null;
+var _recvFolderSvg = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 
-function autoFileSubmission(sub) {
-    docFolders.forEach(function(f) {
-        var r = f.rules;
-        var match = true;
-        if (r.docType   && r.docType   !== sub.docType)   match = false;
-        if (r.grade     && r.grade     !== sub.grade)     match = false;
-        if (r.division  && r.division  !== sub.division)  match = false;
-        if (r.bunk      && r.bunk      !== sub.bunk)      match = false;
-        if (match && !f.docs.find(function(d){ return d.id === sub.id; })) {
-            f.docs.push(sub);
-            sub.folderId = f.id;
-        }
+function _recvKeyFor(sub, level) {
+    if (level === 0) return sub.name || 'Untitled Form';
+    if (level === 1) return sub.division || 'Unassigned';
+    if (level === 2) return sub.grade || 'Unassigned';
+    return sub.bunk || 'Unassigned';
+}
+
+function _recvMatchesPath(sub) {
+    for (var i = 0; i < _recvPath.length; i++) {
+        if (_recvKeyFor(sub, i) !== _recvPath[i]) return false;
+    }
+    return true;
+}
+
+function recvDrillIdx(idx) {
+    if (_recvKeys[idx] == null) return;
+    _recvPath.push(_recvKeys[idx]);
+    var s = document.getElementById('recvSearch'); if (s) s.value = '';
+    renderReceivedTree();
+}
+
+function recvJump(depth) {
+    _recvPath = _recvPath.slice(0, depth);
+    renderReceivedTree();
+}
+
+function renderReceivedTree() {
+    var listEl = document.getElementById('recvList');
+    var bcEl = document.getElementById('recvBreadcrumbs');
+    if (!listEl || !bcEl) return;
+    var q = ((document.getElementById('recvSearch') || {}).value || '').trim().toLowerCase();
+
+    // Breadcrumbs
+    var crumbs = [_recvPath.length
+        ? '<a href="#" onclick="recvJump(0);return false;" style="color:var(--link-color);text-decoration:none;font-weight:600;">All Forms</a>'
+        : '<strong style="color:var(--slate-900);">All Forms</strong>'];
+    _recvPath.forEach(function(p, i) {
+        crumbs.push('<span style="color:var(--slate-400);">&rsaquo;</span>');
+        crumbs.push(i === _recvPath.length - 1
+            ? '<strong style="color:var(--slate-900);">' + esc(p) + '</strong>'
+            : '<a href="#" onclick="recvJump(' + (i + 1) + ');return false;" style="color:var(--link-color);text-decoration:none;font-weight:600;">' + esc(p) + '</a>');
     });
-}
+    bcEl.innerHTML = crumbs.join(' ');
 
-function renderFoldersGrid() {
-    var g = document.getElementById('foldersGrid'); if (!g) return;
-    if (!docFolders.length) { g.innerHTML = ''; return; }
-    g.innerHTML = docFolders.map(function(f) {
-        var ruleChips = [];
-        if (f.rules.docType)   ruleChips.push(f.rules.docType);
-        if (f.rules.grade)     ruleChips.push(f.rules.grade);
-        if (f.rules.division)  ruleChips.push(f.rules.division);
-        if (f.rules.bunk)      ruleChips.push(f.rules.bunk);
-        var chips = ruleChips.map(function(r){ return '<span class="badge badge-neutral" style="font-size:.62rem;">'+esc(r)+'</span>'; }).join(' ');
-        return '<div class="lk-card" style="cursor:pointer;padding:14px;" onclick="openFolderDetail('+f.id+')">' +
-            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">' +
-                '<div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">' +
-                    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>' +
-                '</div>' +
-                '<div style="flex:1;min-width:0;">' +
-                    '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);">'+esc(f.name)+'</div>' +
-                    '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">'+f.docs.length+' document'+(f.docs.length!==1?'s':'')+'</div>' +
-                '</div>' +
-            '</div>' +
-            '<div style="display:flex;flex-wrap:wrap;gap:4px;">'+(chips||'<span style="font-size:.72rem;color:var(--slate-400);">No auto-file rules</span>')+'</div>' +
-        '</div>';
-    }).join('');
-}
+    var inScope = docSubmissions.filter(_recvMatchesPath);
 
-function openFolderDetail(fid) {
-    var f = docFolders.find(function(x){ return x.id === fid; }); if (!f) return;
-    currentFolderId = fid;
-    document.getElementById('docFolderListView').style.display = 'none';
-    document.getElementById('docFolderDetailView').style.display = '';
-    document.getElementById('folderDetailName').textContent = f.name;
-    var ruleStr = [];
-    if (f.rules.docType)   ruleStr.push('Type: '+f.rules.docType);
-    if (f.rules.grade)     ruleStr.push('Grade: '+f.rules.grade);
-    if (f.rules.division)  ruleStr.push('Division: '+f.rules.division);
-    if (f.rules.bunk)      ruleStr.push('Bunk: '+f.rules.bunk);
-    document.getElementById('folderDetailRules').textContent = ruleStr.length ? 'Auto-filing: ' + ruleStr.join(' · ') : 'No auto-file rules — manual filing only';
-    renderFolderDocs(f);
-}
-
-function renderFolderDocs(f) {
-    var box = document.getElementById('folderDetailList');
-    if (!f.docs.length) {
-        box.innerHTML = '<div class="lk-empty" style="padding:28px;"><div class="lk-empty-icon"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></div><h3>No documents yet</h3><p>Submissions matching this folder\'s rules will appear here automatically.</p></div>';
+    // Search — flat results within the current scope
+    if (q) {
+        var hits = inScope.filter(function(d) {
+            return ((d.camper || '') + ' ' + (d.name || '') + ' ' + (d.grade || '') + ' ' + (d.division || '') + ' ' + (d.bunk || '')).toLowerCase().indexOf(q) >= 0;
+        });
+        listEl.innerHTML = '<div class="lk-card">' + (hits.length
+            ? hits.map(function(d) { return docRow(d); }).join('')
+            : '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">No submissions match &ldquo;' + esc(q) + '&rdquo;</div>') + '</div>';
         return;
     }
-    box.innerHTML = f.docs.map(function(d){ return docRow(d, true); }).join('');
-}
 
-function closeFolderDetail() {
-    document.getElementById('docFolderDetailView').style.display = 'none';
-    document.getElementById('docFolderListView').style.display = '';
-    currentFolderId = null;
-    renderFoldersGrid();
-}
-
-function filterDocSubmissions(f, btn) {
-    if (btn) { btn.closest('.lk-tabs').querySelectorAll('.lk-tab').forEach(function(t){ t.classList.remove('active'); }); btn.classList.add('active'); }
-    currentDocFilter = f;
-    if (f === 'folders') {
-        document.getElementById('docSubmissionsCard').style.display = 'none';
-    } else {
-        document.getElementById('docSubmissionsCard').style.display = '';
-        var title = f === 'unfiled' ? 'Unfiled Submissions' : 'All Submissions';
-        document.getElementById('docSubmissionsTitle').textContent = title;
-        renderDocSubmissions(f, document.getElementById('docSearch').value);
-    }
-}
-
-function renderDocSubmissions(f, q) {
-    q = (q || '').toLowerCase();
-    var list = docSubmissions.filter(function(d) {
-        if (f === 'unfiled' && d.folderId) return false;
-        if (q && (d.camper+d.name+d.docType+d.grade+d.division).toLowerCase().indexOf(q) < 0) return false;
-        return true;
-    });
-    var box = document.getElementById('docSubmissionsList');
-    if (!list.length) {
-        box.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem);">' + (f==='unfiled'?'All submissions are filed!':'No submissions yet') + '</div>';
+    if (!docSubmissions.length) {
+        listEl.innerHTML = '<div class="lk-card"><div class="lk-empty" style="padding:36px 20px;"><div class="lk-empty-icon">' + _recvFolderSvg + '</div><h3>No submissions yet</h3><p>When parents send forms back, they are filed here automatically — by form, then division, grade, and bunk.</p></div></div>';
         return;
     }
-    box.innerHTML = list.map(function(d){ return docRow(d, false); }).join('');
+
+    var level = _recvPath.length;
+
+    // Leaf level — individual camper submissions in this bunk
+    if (level >= 4) {
+        listEl.innerHTML = '<div class="lk-card">' + (inScope.length
+            ? inScope.map(function(d) { return docRow(d); }).join('')
+            : '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">Nothing here yet</div>') + '</div>';
+        return;
+    }
+
+    // Folder level — group submissions by the next level down
+    var groups = {};
+    inScope.forEach(function(d) {
+        var k = _recvKeyFor(d, level);
+        (groups[k] = groups[k] || []).push(d);
+    });
+    _recvKeys = Object.keys(groups).sort();
+    if (!_recvKeys.length) {
+        listEl.innerHTML = '<div class="lk-card"><div style="padding:20px;text-align:center;color:var(--text-muted);font-size:.85rem;">Nothing here yet</div></div>';
+        return;
+    }
+    listEl.innerHTML = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:10px;">' +
+        _recvKeys.map(function(k, idx) {
+            var n = groups[k].length;
+            return '<div class="lk-card" style="cursor:pointer;padding:14px;margin:0;" onclick="recvDrillIdx(' + idx + ')">' +
+                '<div style="display:flex;align-items:center;gap:10px;">' +
+                    '<div style="width:36px;height:36px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + _recvFolderSvg + '</div>' +
+                    '<div style="flex:1;min-width:0;">' +
+                        '<div style="font-size:.9rem;font-weight:700;color:var(--slate-900);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(k) + '</div>' +
+                        '<div style="font-size:.74rem;color:var(--text-muted);margin-top:1px;">' + n + ' submission' + (n !== 1 ? 's' : '') + '</div>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        }).join('') + '</div>';
 }
 
-function docRow(d, inFolder) {
+function docRow(d) {
     var isDigital = d.mode === 'digital';
-    var ext = isDigital ? 'FORM' : (d.filename||'').split('.').pop().toUpperCase() || 'FILE';
-    var extColor = isDigital ? 'var(--link-color)' : (ext==='PDF' ? 'var(--red-500)' : 'var(--blue-500)');
+    var ext = isDigital ? 'FORM' : ((d.filename || '').split('.').pop().toUpperCase() || 'FILE');
+    var extColor = isDigital ? 'var(--link-color)' : (ext === 'PDF' ? 'var(--red-500)' : 'var(--blue-500)');
     var extBg = isDigital ? 'var(--link-tint)' : 'var(--slate-100)';
-    var folderInfo = !inFolder && d.folderId ? '<span class="badge badge-ok" style="font-size:.62rem;">Filed: '+esc((docFolders.find(function(f){return f.id===d.folderId;})||{name:'—'}).name)+'</span>' : '';
-    var unfiledBadge = !inFolder && !d.folderId ? '<span class="badge badge-warn" style="font-size:.62rem;">Unfiled</span>' : '';
-    var viewBtn = isDigital ? '<button class="btn btn-secondary btn-sm" onclick="viewFormSubmission(\''+esc(d.id)+'\')">View</button>' :
-                              '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading '+esc(d.filename||'file')+'\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>';
+    var where = [d.division, d.grade, d.bunk].filter(Boolean).join(' · ');
+    var viewBtn = isDigital
+        ? '<button class="btn btn-secondary btn-sm" onclick="viewFormSubmission(\'' + esc(d.id) + '\')">View</button>'
+        : '<button class="btn btn-secondary btn-sm" onclick="toast(\'Downloading ' + esc(d.filename || 'file') + '\')"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></button>';
     return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
-        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:'+extBg+';display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:'+extColor+';flex-shrink:0;">'+ext+'</div>' +
+        '<div style="width:34px;height:34px;border-radius:var(--radius-sm);background:' + extBg + ';display:flex;align-items:center;justify-content:center;font-size:.6rem;font-weight:800;color:' + extColor + ';flex-shrink:0;">' + ext + '</div>' +
         '<div style="flex:1;min-width:0;">' +
-            '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(d.name)+'</div>' +
-            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">'+esc(d.camper)+' &nbsp;&middot;&nbsp; '+esc(d.grade||d.division||'—')+' &nbsp;&middot;&nbsp; Submitted '+esc(d.date)+' &nbsp;'+folderInfo+unfiledBadge+'</div>' +
+            '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">' + esc(d.camper || 'Unknown camper') + '</div>' +
+            '<div style="font-size:.73rem;color:var(--text-muted);margin-top:1px;">' + esc(d.name || '') + (where ? ' &nbsp;&middot;&nbsp; ' + esc(where) : '') + ' &nbsp;&middot;&nbsp; Submitted ' + esc(d.date || '') + '</div>' +
         '</div>' +
-        '<div style="display:flex;gap:5px;flex-shrink:0;">' +
-            viewBtn +
-            (!inFolder ? '<button class="btn btn-ghost btn-sm" onclick="moveToFolder(\''+esc(d.id)+'\')" title="File into folder"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></button>' : '') +
-        '</div>' +
+        '<div style="display:flex;gap:5px;flex-shrink:0;">' + viewBtn + '</div>' +
     '</div>';
 }
 
-function moveToFolder(docId) {
-    var d = docSubmissions.find(function(x){ return String(x.id)===String(docId); }); if (!d) return;
-    if (!docFolders.length) { toast('Create a folder first'); return; }
-    var sel = prompt('File into folder:\n' + docFolders.map(function(f,i){ return (i+1)+'. '+f.name; }).join('\n') + '\nEnter number:');
-    var idx = parseInt(sel,10) - 1;
-    if (isNaN(idx) || !docFolders[idx]) return;
-    var f = docFolders[idx];
-    d.folderId = f.id;
-    if (!f.docs.find(function(x){ return x.id===d.id; })) f.docs.push(d);
-    renderDocSubmissions(currentDocFilter, document.getElementById('docSearch').value);
-    renderFoldersGrid();
-    toast(esc(d.camper)+'\'s '+esc(d.name)+' filed into "'+esc(f.name)+'"');
-}
-
-function showCreateFolder() {
-    document.getElementById('createFolderForm').style.display = '';
-    document.getElementById('folderName').focus();
-    _populateFolderDropdowns();
-}
-function hideCreateFolder() { document.getElementById('createFolderForm').style.display = 'none'; }
-function _populateFolderDropdowns() {
-    var cl = CL(); if (!cl) return;
-    var struct = cl.data.getStructure();
-    var divSel = document.getElementById('folderDivision');
-    var gradeSel = document.getElementById('folderGrade');
-    if (!divSel || !gradeSel) return;
-    var divs = Object.keys(struct);
-    divSel.innerHTML = '<option value="">Any division</option>' +
-        divs.map(function(d) { return '<option value="' + esc(d) + '">' + esc(d) + '</option>'; }).join('');
-    var grades = {};
-    divs.forEach(function(d) { Object.keys((struct[d] && struct[d].grades) || {}).forEach(function(g) { grades[g] = 1; }); });
-    gradeSel.innerHTML = '<option value="">Any grade</option>' +
-        Object.keys(grades).sort().map(function(g) { return '<option value="' + esc(g) + '">' + esc(g) + '</option>'; }).join('');
-}
-
-function createFolder() {
-    var name = document.getElementById('folderName').value.trim();
-    if (!name) { toast('Enter a folder name'); return; }
-    var rules = {
-        docType:  document.getElementById('folderDocType').value,
-        grade:    document.getElementById('folderGrade').value,
-        division: document.getElementById('folderDivision').value,
-        bunk:     document.getElementById('folderBunk').value.trim()
-    };
-    var fid = Date.now();
-    var folder = { id:fid, name:name, rules:rules, docs:[] };
-    docFolders.push(folder);
-    // auto-file existing unmatched submissions
-    var newlyFiled = 0;
-    docSubmissions.forEach(function(sub) {
-        if (sub.folderId) return;
-        var r = rules, match = true;
-        if (r.docType  && r.docType  !== sub.docType)   match = false;
-        if (r.grade    && r.grade    !== sub.grade)      match = false;
-        if (r.division && r.division !== sub.division)   match = false;
-        if (r.bunk     && r.bunk     !== sub.bunk)       match = false;
-        if (match) { folder.docs.push(sub); sub.folderId = fid; newlyFiled++; }
-    });
-    hideCreateFolder();
-    document.getElementById('folderName').value = '';
-    document.getElementById('folderDocType').value = '';
-    document.getElementById('folderGrade').value = '';
-    document.getElementById('folderDivision').value = '';
-    document.getElementById('folderBunk').value = '';
-    renderFoldersGrid();
-    renderDocSubmissions(currentDocFilter, '');
-    toast('Folder "'+name+'" created' + (newlyFiled ? ' — '+newlyFiled+' existing submission'+(newlyFiled>1?'s':'')+' auto-filed' : ''));
-}
-
-function printFolderDocs() {
-    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
-    if (!f.docs.length) { toast('No documents in this folder'); return; }
-    toast('Printing '+f.docs.length+' document'+(f.docs.length>1?'s':'')+' from "'+f.name+'"...');
-}
-
-function deleteFolderPrompt() {
-    var f = docFolders.find(function(x){ return x.id===currentFolderId; }); if (!f) return;
-    if (!confirm('Delete folder "'+f.name+'"? Documents will be unfiled (not deleted).')) return;
-    f.docs.forEach(function(d){ if(d.folderId===currentFolderId) d.folderId=null; });
-    docFolders = docFolders.filter(function(x){ return x.id!==currentFolderId; });
-    closeFolderDetail();
-    toast('Folder deleted');
-}
-
-// ─── FORM TEMPLATE MANAGER ───────────────────────────────────────────────────
+// ─── BUILD A FORM — online form builder ──────────────────────────────────────
 var FORM_SUB_KEY = 'campistry_link_form_submissions_v1';
-var _ftMode = 'digital';   // 'digital' | 'printReturn' | 'document'
-var _ftFields = [];         // field list for the open drawer
-var _ftEditId = null;       // null = new, string = editing by id
 
 function _loadLinkForms() {
     var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
@@ -1865,158 +1752,190 @@ function _saveLinkForms(lf) {
     var s = JSON.parse(localStorage.getItem('campGlobalSettings_v1') || '{}');
     s.link_forms = lf;
     localStorage.setItem('campGlobalSettings_v1', JSON.stringify(s));
-}
-
-function renderFormTemplatesAdmin() {
-    var lf = _loadLinkForms();
-    var docSvg = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
-    function tplRow(f, type) {
-        var reqBadge = (type !== 'document' && f.required) ? '<span class="badge badge-warn" style="font-size:.6rem;">Required</span>' : '';
-        var fieldsBadge = (type === 'digital' && f.fields && f.fields.length) ? '<span class="badge badge-neutral" style="font-size:.6rem;">'+f.fields.length+' field'+(f.fields.length!==1?'s':'')+'</span>' : '';
-        var urlBadge = (type !== 'digital') ? (f.downloadUrl ? '<span class="badge badge-ok" style="font-size:.6rem;">URL set</span>' : '<span class="badge badge-warn" style="font-size:.6rem;">No URL</span>') : '';
-        var sub = f.description ? '<div style="font-size:.73rem;color:var(--text-muted);margin-top:2px;">'+esc(f.description)+'</div>' : '';
-        return '<div style="display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--slate-100);">' +
-            '<div style="width:32px;height:32px;border-radius:var(--radius-sm);background:var(--link-tint);color:var(--link-color);display:flex;align-items:center;justify-content:center;flex-shrink:0;">'+docSvg+'</div>' +
-            '<div style="flex:1;min-width:0;">' +
-                '<div style="font-size:.86rem;font-weight:600;color:var(--slate-900);">'+esc(f.name)+'</div>' +
-                '<div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:3px;">'+reqBadge+fieldsBadge+urlBadge+'</div>'+sub+
-            '</div>' +
-            '<button class="btn btn-secondary btn-sm" onclick="_editFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')">Edit</button>' +
-            '<button class="btn btn-ghost btn-sm" onclick="_deleteFormTpl(\''+type+'\',\''+esc(f.id||'')+'\')" style="color:var(--red-500);">' +
-                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>' +
-            '</button>' +
-        '</div>';
+    if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
+        window.saveGlobalSettings('link_forms', lf);
     }
-    var emptyHtml = '<div style="padding:12px 0;font-size:.8rem;color:var(--text-muted);">None added yet.</div>';
-    var dl = document.getElementById('ftDigitalList');
-    var pl = document.getElementById('ftPrintList');
-    var ddl = document.getElementById('ftDocsList');
-    if (dl)  dl.innerHTML  = lf.digital.length    ? lf.digital.map(function(f){ return tplRow(f,'digital'); }).join('')    : emptyHtml;
-    if (pl)  pl.innerHTML  = lf.printReturn.length ? lf.printReturn.map(function(f){ return tplRow(f,'printReturn'); }).join('') : emptyHtml;
-    if (ddl) ddl.innerHTML = lf.documents.length   ? lf.documents.map(function(f){ return tplRow(f,'document'); }).join('')  : emptyHtml;
 }
 
-function openFormDrawer(mode, editId) {
-    _ftMode = mode || 'digital';
-    _ftEditId = editId || null;
-    var lf = _loadLinkForms();
-    var arr = mode === 'digital' ? lf.digital : mode === 'printReturn' ? lf.printReturn : lf.documents;
-    var existing = editId ? (arr.find(function(f){ return f.id === editId; }) || null) : null;
+var FB_TYPES = [
+    { t: 'text',       label: 'Short Text',      icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="14" y2="15"/></svg>' },
+    { t: 'textarea',   label: 'Long Text',       icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="12" y2="18"/></svg>' },
+    { t: 'email',      label: 'Email',           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>' },
+    { t: 'phone',      label: 'Phone',           icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>' },
+    { t: 'number',     label: 'Number',          icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="4" y1="9" x2="20" y2="9"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="10" y1="3" x2="8" y2="21"/><line x1="16" y1="3" x2="14" y2="21"/></svg>' },
+    { t: 'date',       label: 'Date',            icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
+    { t: 'dropdown',   label: 'Dropdown',        icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="9 11 12 14 15 11"/></svg>', opts: true },
+    { t: 'radio',      label: 'Multiple Choice', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="7" cy="7" r="3"/><circle cx="7" cy="7" r="1" fill="currentColor"/><circle cx="7" cy="17" r="3"/><line x1="13" y1="7" x2="21" y2="7"/><line x1="13" y1="17" x2="21" y2="17"/></svg>', opts: true },
+    { t: 'checkboxes', label: 'Checkboxes',      icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="4" width="7" height="7" rx="1.5"/><polyline points="6 7.5 7.2 8.7 9.2 6.3"/><rect x="4" y="14" width="7" height="7" rx="1.5"/><line x1="14" y1="7.5" x2="21" y2="7.5"/><line x1="14" y1="17.5" x2="21" y2="17.5"/></svg>', opts: true },
+    { t: 'yesno',      label: 'Yes / No',        icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 12 8 16 12 9"/><line x1="16" y1="8" x2="21" y2="13"/><line x1="21" y1="8" x2="16" y2="13"/></svg>' },
+    { t: 'signature',  label: 'Signature',       icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>' },
+    { t: 'heading',    label: 'Section Heading', icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M6 4v16M18 4v16M6 12h12"/></svg>', static: true },
+    { t: 'paragraph',  label: 'Paragraph Text',  icon: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 4v16M17 4v16M19 4H9.5a4.5 4.5 0 0 0 0 9H13"/></svg>', static: true }
+];
+var _fbFields = [];
+window._fbPreviewOn = false;
 
-    var titles = { digital: 'Fill-Online Form', printReturn: 'Print & Return Form', document: 'Camp Document' };
-    document.getElementById('formTplDrawerTitle').textContent = (existing ? 'Edit ' : 'New ') + titles[_ftMode];
-    document.getElementById('ftName').value = existing ? (existing.name || '') : '';
-    document.getElementById('ftCat').value  = existing ? (existing.category || 'medical') : 'medical';
-    document.getElementById('ftDesc').value = existing ? (existing.description || '') : '';
-    document.getElementById('ftUrl').value  = existing ? (existing.downloadUrl || '') : '';
-    document.getElementById('ftRequiredSel').value = (existing && !existing.required) ? '0' : '1';
+function _fbId() { return 'f_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+function _fbMeta(t) { return FB_TYPES.find(function(x) { return x.t === t; }) || { t: t, label: t }; }
 
-    document.getElementById('ftFieldsSection').style.display = mode === 'digital'   ? '' : 'none';
-    document.getElementById('ftUrlSection').style.display    = mode !== 'digital'   ? '' : 'none';
-    document.getElementById('ftReqRow').style.display        = mode !== 'document'  ? '' : 'none';
-
-    _ftFields = [];
-    if (mode === 'digital') {
-        if (existing && existing.fields && existing.fields.length) {
-            _ftFields = existing.fields.map(function(f){ return Object.assign({}, f); });
-        } else if (!existing) {
-            _ftFields = [
-                { id: 'f_'+Date.now(),   type: 'text',      label: 'Full Name',       required: true },
-                { id: 'f_'+(Date.now()+1), type: 'date',    label: 'Date',            required: true },
-                { id: 'f_'+(Date.now()+2), type: 'signature', label: 'Parent Signature', required: true }
-            ];
-        }
+function openFormBuilder(existing) {
+    if (existing && existing.type === 'built') {
+        document.getElementById('fbName').value = existing.formName || '';
+        _fbFields = (existing.fields || []).map(function(f) { var c = Object.assign({}, f); if (c.options) c.options = c.options.slice(); return c; });
+    } else {
+        var fn = document.getElementById('fcFormName');
+        document.getElementById('fbName').value = fn ? fn.value.trim() : '';
+        _fbFields = [
+            { id: _fbId(), type: 'text', label: 'Camper Name', required: true },
+            { id: _fbId(), type: 'signature', label: 'Parent Signature', required: true }
+        ];
     }
-    _renderFormFieldsList();
+    _renderFbPalette();
+    renderFbCanvas();
+    _setFbMode(false);
+    document.getElementById('formBuilderOverlay').classList.add('open');
+}
+function closeFormBuilder() { document.getElementById('formBuilderOverlay').classList.remove('open'); }
 
-    document.getElementById('formTplBackdrop').classList.add('open');
-    document.getElementById('formTplDrawer').classList.add('open');
-    setTimeout(function(){ document.getElementById('ftName').focus(); }, 200);
+function _renderFbPalette() {
+    document.getElementById('fbPalette').innerHTML =
+        '<div style="font-size:.66rem;font-weight:800;letter-spacing:.07em;color:var(--text-muted);margin-bottom:10px;">ADD A FIELD</div>' +
+        FB_TYPES.map(function(ft) { return '<button class="fb-pal-btn" onclick="fbAddField(\'' + ft.t + '\')">' + ft.icon + '<span>' + ft.label + '</span></button>'; }).join('');
 }
 
-function closeFormDrawer() {
-    document.getElementById('formTplBackdrop').classList.remove('open');
-    document.getElementById('formTplDrawer').classList.remove('open');
+function fbAddField(t) {
+    var meta = _fbMeta(t);
+    var f = { id: _fbId(), type: t, label: t === 'heading' ? 'Section Title' : (t === 'paragraph' ? '' : meta.label), required: false };
+    if (meta.opts) f.options = ['Option 1', 'Option 2'];
+    if (t === 'paragraph') f.text = '';
+    _fbFields.push(f);
+    if (window._fbPreviewOn) _setFbMode(false);
+    renderFbCanvas();
+    var canvas = document.getElementById('fbCanvas');
+    canvas.scrollTop = canvas.scrollHeight;
+    var cards = canvas.querySelectorAll('.fb-field-card');
+    var last = cards[cards.length - 1];
+    if (last) { var inp = last.querySelector('input[type="text"],textarea'); if (inp) inp.focus(); }
 }
 
-function _renderFormFieldsList() {
-    var list = document.getElementById('ftFieldsList'); if (!list) return;
-    if (!_ftFields.length) {
-        list.innerHTML = '<div style="font-size:.78rem;color:var(--text-muted);padding:8px 0;">No fields yet — click "+ Add Field" above.</div>';
+function renderFbCanvas() {
+    var c = document.getElementById('fbCanvas');
+    if (!_fbFields.length) {
+        c.innerHTML = '<div style="max-width:640px;margin:40px auto;text-align:center;color:var(--text-muted);font-size:.86rem;">Your form is empty — add fields from the panel on the left.</div>';
         return;
     }
-    var typeOptions = ['text','email','phone','date','textarea','checkbox','signature'];
-    list.innerHTML = _ftFields.map(function(f, i) {
-        var opts = typeOptions.map(function(t){
-            return '<option value="'+t+'"'+(f.type===t?' selected':'')+'>'+(t==='textarea'?'Long Text':t.charAt(0).toUpperCase()+t.slice(1))+'</option>';
-        }).join('');
-        return '<div class="ft-field-row" id="ftFRow_'+i+'">' +
-            '<span class="ft-field-drag">&#9776;</span>' +
-            '<select class="lk-input" style="max-width:108px;font-size:.76rem;padding:4px 6px;height:auto;" onchange="_ftFields['+i+'].type=this.value;_renderFormFieldsList()">'+opts+'</select>' +
-            '<input type="text" class="lk-input" style="flex:1;font-size:.81rem;padding:4px 8px;height:auto;" value="'+esc(f.label||'')+'" placeholder="Label" oninput="_ftFields['+i+'].label=this.value">' +
-            '<label style="display:flex;align-items:center;gap:3px;font-size:.72rem;flex-shrink:0;white-space:nowrap;">' +
-                '<input type="checkbox"'+(f.required?' checked':'')+' onchange="_ftFields['+i+'].required=this.checked" style="width:13px;height:13px;"> Req' +
-            '</label>' +
-            '<button class="btn btn-ghost btn-sm" onclick="_removeFormField('+i+')" style="flex-shrink:0;color:var(--red-500);padding:3px 5px;">' +
-                '<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
-            '</button>' +
+    c.innerHTML = _fbFields.map(function(f, i) {
+        var meta = _fbMeta(f.type);
+        var controls =
+            '<button class="fb-icon-btn" onclick="fbMove(' + i + ',-1)" title="Move up">&uarr;</button>' +
+            '<button class="fb-icon-btn" onclick="fbMove(' + i + ',1)" title="Move down">&darr;</button>' +
+            '<button class="fb-icon-btn" onclick="fbDup(' + i + ')" title="Duplicate">&#10697;</button>' +
+            '<button class="fb-icon-btn" onclick="fbDel(' + i + ')" title="Delete" style="color:var(--red-500);">&#10005;</button>';
+        var req = meta.static ? '' :
+            '<label style="display:flex;align-items:center;gap:4px;font-size:.73rem;font-weight:600;color:var(--slate-700);white-space:nowrap;cursor:pointer;"><input type="checkbox" ' + (f.required ? 'checked' : '') + ' onchange="_fbFields[' + i + '].required=this.checked" style="width:13px;height:13px;"> Required</label>';
+        var body;
+        if (f.type === 'paragraph') {
+            body = '<textarea class="lk-textarea" placeholder="Paragraph text shown to parents..." oninput="_fbFields[' + i + '].text=this.value" style="min-height:60px;font-size:.82rem;">' + esc(f.text || '') + '</textarea>';
+        } else {
+            body = '<input type="text" class="lk-input" value="' + esc(f.label || '') + '" placeholder="' + (f.type === 'heading' ? 'Section title' : 'Question / label') + '" oninput="_fbFields[' + i + '].label=this.value" style="font-weight:600;">';
+        }
+        if (f.options) {
+            body += '<div style="margin-top:8px;"><div style="font-size:.66rem;font-weight:800;letter-spacing:.06em;color:var(--text-muted);margin-bottom:4px;">OPTIONS — ONE PER LINE</div>' +
+                '<textarea class="lk-textarea" oninput="_fbFields[' + i + '].options=this.value.split(String.fromCharCode(10))" style="min-height:64px;font-size:.8rem;">' + esc((f.options || []).join('\n')) + '</textarea></div>';
+        }
+        return '<div class="fb-field-card' + (meta.static ? ' fb-static' : '') + '">' +
+            '<div class="fb-fc-top"><span class="fb-type-chip">' + meta.label + '</span><div style="flex:1;"></div>' + req + controls + '</div>' +
+            body +
         '</div>';
     }).join('');
 }
 
-function _addFormField() {
-    _ftFields.push({ id: 'f_'+Date.now(), type: 'text', label: '', required: false });
-    _renderFormFieldsList();
-    var rows = document.querySelectorAll('#ftFieldsList .ft-field-row');
-    var last = rows[rows.length - 1];
-    if (last) { var inp = last.querySelector('input[type="text"]'); if (inp) { inp.focus(); } }
+function fbMove(i, dir) {
+    var j = i + dir;
+    if (j < 0 || j >= _fbFields.length) return;
+    var t = _fbFields[i]; _fbFields[i] = _fbFields[j]; _fbFields[j] = t;
+    renderFbCanvas();
+}
+function fbDup(i) {
+    var c = Object.assign({}, _fbFields[i]);
+    c.id = _fbId();
+    if (c.options) c.options = c.options.slice();
+    _fbFields.splice(i + 1, 0, c);
+    renderFbCanvas();
+}
+function fbDel(i) { _fbFields.splice(i, 1); renderFbCanvas(); }
+
+function toggleFbPreview() { _setFbMode(!window._fbPreviewOn); }
+function _setFbMode(preview) {
+    window._fbPreviewOn = preview;
+    document.getElementById('fbCanvas').style.display = preview ? 'none' : '';
+    document.getElementById('fbPalette').style.display = preview ? 'none' : '';
+    document.getElementById('fbPreview').style.display = preview ? '' : 'none';
+    var btn = document.getElementById('fbPreviewBtn');
+    if (btn) btn.innerHTML = preview
+        ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg> Edit'
+        : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg> Preview';
+    if (preview) renderFbPreview();
 }
 
-function _removeFormField(idx) {
-    _ftFields.splice(idx, 1);
-    _renderFormFieldsList();
-}
-
-function _saveFormDrawer() {
-    var name = (document.getElementById('ftName').value || '').trim();
-    if (!name) { toast('Enter a form name'); return; }
-    var lf = _loadLinkForms();
-    var prefix = _ftMode === 'digital' ? 'lfd_' : _ftMode === 'printReturn' ? 'lfp_' : 'lfdoc_';
-    var item = {
-        id: _ftEditId || (prefix + Date.now()),
-        name: name,
-        category: document.getElementById('ftCat').value,
-        description: (document.getElementById('ftDesc').value || '').trim(),
-        required: document.getElementById('ftRequiredSel').value === '1',
-        created: Date.now()
-    };
-    if (_ftMode !== 'digital') { item.downloadUrl = (document.getElementById('ftUrl').value || '').trim(); }
-    if (_ftMode === 'digital') { item.fields = _ftFields.filter(function(f){ return (f.label||'').trim(); }); }
-
-    var arr = _ftMode === 'digital' ? lf.digital : _ftMode === 'printReturn' ? lf.printReturn : lf.documents;
-    if (_ftEditId) {
-        var idx = arr.findIndex(function(f){ return f.id === _ftEditId; });
-        if (idx >= 0) { item.created = arr[idx].created || Date.now(); arr[idx] = item; } else { arr.push(item); }
-    } else {
-        arr.push(item);
+function renderFbPreview() {
+    var p = document.getElementById('fbPreview');
+    var name = document.getElementById('fbName').value.trim() || 'Untitled Form';
+    function wrap(f, control) {
+        var req = f.required ? ' <span style="color:var(--red-500);">*</span>' : '';
+        return '<div style="margin-bottom:16px;"><label style="display:block;font-size:.82rem;font-weight:600;color:var(--slate-700);margin-bottom:5px;">' + esc(f.label || '') + req + '</label>' + control + '</div>';
     }
-    _saveLinkForms(lf);
-    closeFormDrawer();
-    renderFormTemplatesAdmin();
-    toast(esc(name) + ' saved!');
+    var inner = _fbFields.map(function(f) {
+        var opts = (f.options || []).map(function(o) { return o.trim(); }).filter(Boolean);
+        switch (f.type) {
+            case 'heading':
+                return '<div style="font-size:1.02rem;font-weight:800;color:var(--slate-900);margin:20px 0 6px;padding-bottom:6px;border-bottom:2px solid var(--link-tint);">' + esc(f.label || '') + '</div>';
+            case 'paragraph':
+                return '<p style="font-size:.84rem;color:var(--slate-600);line-height:1.6;margin:0 0 14px;">' + esc(f.text || '') + '</p>';
+            case 'textarea':
+                return wrap(f, '<textarea class="lk-textarea" disabled style="min-height:70px;background:var(--slate-50);"></textarea>');
+            case 'dropdown':
+                return wrap(f, '<select class="lk-select" disabled style="background:var(--slate-50);"><option>Select...</option>' + opts.map(function(o) { return '<option>' + esc(o) + '</option>'; }).join('') + '</select>');
+            case 'radio':
+            case 'checkboxes':
+                var it = f.type === 'radio' ? 'radio' : 'checkbox';
+                return wrap(f, opts.map(function(o) { return '<label style="display:flex;align-items:center;gap:7px;font-size:.84rem;padding:4px 0;color:var(--slate-700);"><input type="' + it + '" disabled> ' + esc(o) + '</label>'; }).join('') || '<span style="font-size:.76rem;color:var(--text-muted);">No options yet</span>');
+            case 'yesno':
+                return wrap(f, '<label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;margin-right:18px;color:var(--slate-700);"><input type="radio" disabled> Yes</label><label style="display:inline-flex;align-items:center;gap:6px;font-size:.84rem;color:var(--slate-700);"><input type="radio" disabled> No</label>');
+            case 'signature':
+                return wrap(f, '<div style="border:1.5px dashed var(--border-light);border-radius:8px;height:64px;display:flex;align-items:center;justify-content:center;font-size:.78rem;color:var(--text-muted);background:var(--slate-50);">Sign here</div>');
+            default:
+                var ht = f.type === 'email' ? 'email' : f.type === 'phone' ? 'tel' : f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text';
+                return wrap(f, '<input type="' + ht + '" class="lk-input" disabled style="background:var(--slate-50);">');
+        }
+    }).join('');
+    p.innerHTML = '<div style="max-width:560px;margin:0 auto;background:#fff;border:1px solid var(--border-light);border-radius:14px;padding:26px 28px;">' +
+        '<div style="font-size:1.2rem;font-weight:800;color:var(--slate-900);">' + esc(name) + '</div>' +
+        '<div style="font-size:.74rem;color:var(--text-muted);margin:4px 0 18px;">Preview — this is what parents will see</div>' +
+        inner +
+        '<button class="btn btn-primary" disabled style="margin-top:8px;opacity:.6;">Submit</button>' +
+    '</div>';
 }
 
-function _editFormTpl(type, id) { openFormDrawer(type, id); }
-
-function _deleteFormTpl(type, id) {
-    if (!confirm('Delete this form?')) return;
-    var lf = _loadLinkForms();
-    var arr = type === 'digital' ? lf.digital : type === 'printReturn' ? lf.printReturn : lf.documents;
-    var idx = arr.findIndex(function(f){ return f.id === id; });
-    if (idx >= 0) arr.splice(idx, 1);
-    _saveLinkForms(lf);
-    renderFormTemplatesAdmin();
-    toast('Deleted');
+function useBuiltForm() {
+    var name = document.getElementById('fbName').value.trim();
+    if (!name) { toast('Give your form a name'); _setFbMode(false); document.getElementById('fbName').focus(); return; }
+    var fields = _fbFields
+        .filter(function(f) { return f.type === 'paragraph' ? (f.text || '').trim() : (f.label || '').trim(); })
+        .map(function(f) {
+            var c = Object.assign({}, f);
+            if (c.options) c.options = c.options.map(function(o) { return o.trim(); }).filter(Boolean);
+            return c;
+        });
+    var hasInput = fields.some(function(f) { return f.type !== 'heading' && f.type !== 'paragraph'; });
+    if (!hasInput) { toast('Add at least one fillable field'); return; }
+    var formId = (_fcAttach && _fcAttach.type === 'built' && _fcAttach.formId) ? _fcAttach.formId : 'lfd_' + Date.now();
+    _fcAttach = { type: 'built', formId: formId, formName: name, fields: fields };
+    var fn = document.getElementById('fcFormName');
+    if (fn && !fn.value.trim()) fn.value = name;
+    _renderFcAttach();
+    closeFormBuilder();
+    toast('"' + name + '" attached');
 }
 
 // ─── FORM SUBMISSION VIEWER ──────────────────────────────────────────────────
@@ -2028,12 +1947,10 @@ function _loadFormSubmissions() {
             camper: s.camper, grade: s.grade, division: s.division, bunk: s.bunk,
             date: s.date, submittedAt: s.submittedAt,
             filename: s.mode === 'digital' ? null : (s.filename || 'upload'),
-            folderId: s.folderId || null,
             values: s.values || {}, signatureDataUrl: s.signatureDataUrl || null,
             mode: s.mode || 'upload'
         };
     });
-    docSubmissions.forEach(function(sub){ autoFileSubmission(sub); });
 }
 
 function viewFormSubmission(subId) {
@@ -2183,16 +2100,11 @@ function boot() {
         // Parent submitted a form — refresh submissions
         if (e.key === FORM_SUB_KEY) {
             _loadFormSubmissions();
-            if (currentMsgTab === 'forms') renderDocSubmissions(currentDocFilter, document.getElementById('docSearch') ? document.getElementById('docSearch').value : '');
-        }
-        // Admin saved form templates in Me page — refresh manage tab
-        if (e.key === 'campGlobalSettings_v1' && currentMsgTab === 'forms') {
-            renderFormTemplatesAdmin();
+            if (currentMsgTab === 'forms') { renderReceivedTree(); renderSentForms(); }
         }
     });
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
 </script>
-<script src="campistry_notes_quick.js"></script>
 </body>
 </html>
