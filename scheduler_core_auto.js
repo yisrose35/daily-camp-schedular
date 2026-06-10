@@ -23380,7 +23380,7 @@
                     return Array.from(acts);
                 }
                 var skipActs = ['swim', 'lunch', 'dismissal', 'snacks', 'snack', 'change', 'free', 'general activity slot'];
-                var scanned = 0, replaced = 0;
+                var scanned = 0, replaced = 0, demotedFree = 0;
                 // ★ Issue-1 parity for the pairing path: load cross-day rotation timestamps
                 //   ONCE so paired-bunk refills prefer the activity done longest ago. A small
                 //   division (e.g. Minors, 2 bunks) that must pair with itself for sport
@@ -23565,10 +23565,44 @@
                             success = true;
                             replaced++;
                         }
-                        if (!success) aSlots[aIdx] = orig;
+                        if (!success) {
+                            // ★ FN-38: an under-min sport may NOT survive to the final
+                            //   schedule (hard rule). When no alternate sport validated,
+                            //   fall back to a sharable filler special; only when even
+                            //   that fails, demote to Free — rules outrank fullness.
+                            var _fnm38 = null;
+                            try {
+                                var _exMap38 = {};
+                                playedToday.forEach(function (n) { _exMap38[String(n).toLowerCase()] = true; });
+                                _fnm38 = (typeof _pickSharableFiller === 'function')
+                                    ? _pickSharableFiller(grade, aBunk, (en - st), _exMap38) : null;
+                            } catch (_eF38) {}
+                            if (_fnm38) {
+                                aSlots[aIdx] = {
+                                    field: null, sport: null, _activity: _fnm38,
+                                    _autoSpecial: true, _fixed: true,
+                                    _autoMode: true, _autoSolved: true,
+                                    _startMin: st, _endMin: en,
+                                    _source: 'under-min-filler',
+                                    continuation: false
+                                };
+                                replaced++;
+                            } else {
+                                aSlots[aIdx] = {
+                                    field: 'Free', sport: null, _activity: 'Free',
+                                    _autoMode: true, _fixed: true,
+                                    _startMin: st, _endMin: en,
+                                    _source: 'under-min-demoted-free',
+                                    continuation: false
+                                };
+                                demotedFree++;
+                            }
+                            warn('[DROP-REFILL] ' + aBunk + ' under-min ' + sport + ' (' + aSize + '<' + reqs.minPlayers + ') @' + st + '-' + en +
+                                 (_fnm38 ? (' → filler "' + _fnm38 + '"') : ' → Free (no valid alternative)'));
+                        }
                     }
                 });
-                try { console.log('[DROP-REFILL] scanned=' + scanned + ', replaced=' + replaced); } catch (_eL) {}
+                try { console.log('[DROP-REFILL] scanned=' + scanned + ', replaced=' + replaced + ', demotedFree=' + (typeof demotedFree !== 'undefined' ? demotedFree : 0)); } catch (_eL) {}
                 if (replaced > 0) log('  🪄 Drop-and-refill: replaced ' + replaced + ' under-min placement(s) with bunk-solo-feasible sport(s).');
             })();
         } catch (_eDR) { try { warn('[DropRefillUnderMin] ' + (_eDR && _eDR.message)); } catch (_e2) {} }
