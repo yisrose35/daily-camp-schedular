@@ -953,7 +953,7 @@ function canEditTemplates() {
 function getStyles() {
     return '<style id="pc-styles">' +
     /* ── Override the global .tab-content chrome so the print center can use the full viewport ── */
-    '#print.tab-content{padding:0!important;margin:0!important;border:none!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;height:calc(100vh - 70px);min-height:600px;}' +
+    '#print.tab-content{padding:0!important;margin:0!important;border:none!important;border-radius:0!important;box-shadow:none!important;background:transparent!important;height:calc(100vh - 84px);min-height:600px;}' +
     '#print-content{height:100%;}' +
     /* ── Container ── */
     '.pc3{font-family:"DM Sans",system-ui,sans-serif;font-size:13px;color:#0f172a;display:flex;flex-direction:column;height:100%;min-height:0;background:#fafaf9;position:relative;}' +
