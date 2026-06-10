@@ -85,13 +85,13 @@ function initFacilitiesTab() {
                   <button id="facilities-search-clear" style="display:none; background:none; border:none; cursor:pointer; color:#9CA3AF; font-size:1rem; line-height:1; padding:0;">✕</button>
                 </div>
 
-                <div id="facilities-master-list" style="max-height:600px; overflow-y:auto;"></div>
+                <div id="facilities-master-list" style="max-height:max(360px, calc(100vh - 341px)); overflow-y:auto;"></div>
               </div>
 
               <!-- RIGHT SIDE: DETAIL PANE -->
               <div style="flex:1.4; min-width:340px; position:sticky; top:0; align-self:flex-start;">
                 <div class="setup-subtitle">Facility Configuration</div>
-                <div id="facilities-detail-pane" style="margin-top:8px; max-height:calc(100vh - 120px); overflow-y:auto; padding-right:4px;"></div>
+                <div id="facilities-detail-pane" style="margin-top:8px; max-height:calc(100vh - 228px); overflow-y:auto; padding-right:4px;"></div>
               </div>
             </div>
           </section>

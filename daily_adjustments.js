@@ -7206,7 +7206,7 @@ function getStyles() {
       --da-danger: #ef4444;
     }
     
-    .da-container { display:flex; gap:0; height:calc(100vh - 78px); min-height:300px; background:var(--da-bg); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
+    .da-container { display:flex; gap:0; height:calc(100vh - 84px); min-height:300px; background:var(--da-bg); border-radius:12px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.06),0 0 0 1px rgba(0,0,0,0.05); }
 
     /* Sidebar */
     .da-sidebar { width:172px; min-width:172px; background:#fff; border-right:1px solid #eef0f3; display:flex; flex-direction:column; }

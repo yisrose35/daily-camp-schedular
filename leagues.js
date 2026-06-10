@@ -712,7 +712,7 @@
                       <button id="league-add-btn" style="background:#111; color:white; border:none; border-radius:6px; padding:6px 12px; font-size:0.8rem; cursor:pointer;">Add</button>
                     </div>
 
-                    <div id="leagues-master-list" class="master-list" style="max-height:600px; overflow-y:auto;"></div>
+                    <div id="leagues-master-list" class="master-list" style="max-height:max(360px, calc(100vh - 297px)); overflow-y:auto;"></div>
                   </div>
 
                   <!-- RIGHT SIDE: DETAIL PANE -->
