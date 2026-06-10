@@ -268,6 +268,30 @@ function saveFacilitiesMetadata() {
     window.saveGlobalSettings?.("facilities", facilities);
 }
 
+// ★ FN-40: CUSTOM general activities as layer-palette tiles. Every custom
+//   general activity configured on a facility (e.g. "Main activity" at the
+//   Auditorium) becomes its own pinned tile in the Master Scheduler / Daily
+//   Adjustments layer palettes — dropping one creates a custom layer pre-
+//   bound to the activity + its facility (customActivity/customField), the
+//   same lane hand-made Custom Pinned layers use. Built-in generals (swim/
+//   lunch/snacks/dismissal quickTypes) are excluded — they have native tiles.
+window.getGeneralActivityPaletteItems = function () {
+    try {
+        const out = [], seen = {};
+        const _builtin = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+        (facilities || []).forEach(f => {
+            if (!f || !f.name) return;
+            (f.generalActivities || []).forEach(ga => {
+                if (!ga || !ga.name) return;
+                if (_builtin[String(ga.quickType || '').toLowerCase()]) return;
+                const k = String(ga.name).toLowerCase() + '|' + String(f.name).toLowerCase();
+                if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name }); }
+            });
+        });
+        return out;
+    } catch (e) { return []; }
+};
+
 function saveData() {
     if (!window.AccessControl?.canEditSetup?.()) {
         console.warn('[FACILITIES] Save blocked - insufficient permissions');

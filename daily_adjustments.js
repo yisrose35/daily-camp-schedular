@@ -1989,13 +1989,28 @@ function renderPalette() {
       const dotColor = getDotColor(t.style);
       html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
-    
+
+    // ★ FN-40: custom general activities as pinned tiles, pre-bound to their
+    //   facility (mirrors the Master Scheduler palette).
+    const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+    if (_gaItems.length) {
+      html += '<div class="da-tile-divider"></div>';
+      html += '<div class="da-tile-label">General Activities</div>';
+      _gaItems.forEach(ga => {
+        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
+      });
+    }
+
     paletteEl.innerHTML = html;
-    
+
     // Wire up drag from palette — uses same data format the DAW grid expects
     paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
       tile.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+        // ★ FN-40: carry the general-activity binding (read by the shared DAW drop)
+        if (tile.dataset.gaName) {
+          e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '' }));
+        }
         e.dataTransfer.effectAllowed = 'copy';
       });
     });

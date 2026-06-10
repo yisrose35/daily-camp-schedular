@@ -1456,14 +1456,35 @@ function renderDAWPalette() {
     </div>`;
   });
 
+  // ★ FN-40: each custom GENERAL ACTIVITY (facility editor → General
+  //   Activities) gets its own pinned tile, pre-bound to its facility —
+  //   dropping it creates a custom layer with customActivity/customField set
+  //   ("Main activity" happens at the Auditorium, like Swim at the Pool).
+  const _esc = window.CampUtils?.escapeHtml || (s => String(s));
+  const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItems.length) {
+    html += '<div class="ms-daw-tile-divider"></div><div class="ms-daw-tile-label">General Activities</div>';
+    _gaItems.forEach(ga => {
+      html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
+        <span class="ms-daw-tile-dot" style="background:#d97706;"></span>
+        <span class="ms-daw-tile-name">${_esc(ga.name)}</span>
+        <span class="ms-daw-tile-badge">PIN</span>
+      </div>`;
+    });
+  }
+
   html += '<div class="ms-daw-tile-footer"><div class="ms-daw-tile-hint">Drag a layer onto a grade row to place it. Click a band to edit.</div></div>';
   pal.innerHTML = html;
 
   // Drag from palette
   pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      dawDragData = { source: 'palette', type: tile.dataset.type };
+      dawDragData = { source: 'palette', type: tile.dataset.type, gaName: tile.dataset.gaName || null, gaFacility: tile.dataset.gaFacility || null };
       e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
+      // ★ FN-40: carry the general-activity binding alongside the layer type
+      if (tile.dataset.gaName) {
+        e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '' }));
+      }
       e.dataTransfer.effectAllowed = 'copy';
       tile.classList.add('ms-daw-tile-dragging');
     });
@@ -1986,7 +2007,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
-        <span class="band-label">${layer.leagueName || typeDef?.name || layer.type}</span>
+        <span class="band-label">${layer.customActivity || layer.leagueName || typeDef?.name || layer.type}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         ${_ovDots}
         <div class="band-resize band-resize-bottom"></div>
@@ -2075,7 +2096,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         document.body.appendChild(ghost);
       }
       const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
-      ghost.innerHTML = '<div>' + (typeDef?.name || layer.type) + '</div>'
+      ghost.innerHTML = '<div>' + (layer.customActivity || typeDef?.name || layer.type) + '</div>'
         + '<div id="daw-drag-ghost-time" style="font-weight:400;color:#94a3b8;margin-top:2px;">'
         + minutesToTime(layer.startMin) + ' – ' + minutesToTime(layer.endMin) + '</div>';
       ghost.style.display = 'block';
@@ -2316,6 +2337,18 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         };
 
         if (_pickedLeague) _newLayer.leagueName = _pickedLeague;
+
+        // ★ FN-40: a general-activity tile drop binds the custom layer to its
+        //   activity + facility (the proven customActivity/customField lane).
+        if (type === 'custom' && e.dataTransfer.types.includes('text/daw-ga')) {
+          try {
+            const _ga = JSON.parse(e.dataTransfer.getData('text/daw-ga') || '{}');
+            if (_ga && _ga.name) {
+              _newLayer.customActivity = _ga.name;
+              if (_ga.facility) _newLayer.customField = _ga.facility;
+            }
+          } catch (_eGa) {}
+        }
 
         layerSource[grade].push(_newLayer);
 
