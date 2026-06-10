@@ -280,7 +280,15 @@ window.getGeneralActivityPaletteItems = function () {
     try {
         const out = [], seen = {};
         const _builtin = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
-        (facilities || []).forEach(f => {
+        // The module-local `facilities` array only populates when the
+        // Facilities tab initializes — fall back to the persisted registry so
+        // the palettes work on a fresh page load too.
+        let _src = facilities;
+        if (!Array.isArray(_src) || _src.length === 0) {
+            const _gs = window.loadGlobalSettings?.() || {};
+            _src = _gs.facilities || [];
+        }
+        (_src || []).forEach(f => {
             if (!f || !f.name) return;
             (f.generalActivities || []).forEach(ga => {
                 if (!ga || !ga.name) return;
