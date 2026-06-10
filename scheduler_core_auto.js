@@ -14223,22 +14223,28 @@
                         _best.plan.forEach(function (slot) {
                             if (!slot || !slot.bunks || slot.bunks.length === 0) return;
                             slot.bunks.forEach(function (bunk) {
-                                // Same protected custom-lane wall shape as the special walk
-                                // (see the type:'custom' rationale above) — sport-flavored.
+                                // ★ FN-39d: IDENTICAL wall shape to the consecutive-SPECIAL
+                                //   walk above (name/location/duration from the facility
+                                //   config). The first attempt used a sport-flavored shape
+                                //   (_assignedSport + field) and the sport rebalancer family
+                                //   shredded the walls (23 reserved → 5 mangled survivors).
+                                //   The special shape provably rides every pass untouched.
                                 bunkTimelines[bunk].push({
                                     startMin: slot.start, endMin: slot.end,
                                     type: 'custom', event: _aName, layer: null,
                                     _classification: 'pinned', _committed: true, _fixed: true,
                                     _gradeWide: false, _activityLocked: true, _noBacktrack: true,
-                                    _assignedSport: _aName,
-                                    field: _best.station,
-                                    _customField: _best.station,
-                                    _customActivity: _aName,
+                                    _assignedSpecial: _aName,
+                                    _specialLocation: _best.station,
+                                    _specialDuration: _aDur,
+                                    _isSpecialLocation: true,
                                     dMin: _aDur, dMax: _aDur,
                                     _cbResStart: slot.start, _cbResEnd: slot.end,
                                     _consecutiveBunk: true, _source: 'phase2.35-general'
                                 });
                                 _p235SCount++;
+                                try { registerSpecialUsage(_aName, grade, slot.start, slot.end); } catch (_e1) {}
+                                try { registerCrossGrade(grade, 'special', slot.start, slot.end, _aName); } catch (_e2) {}
                                 try {
                                     if (fieldLedger && fieldLedger[_best.station]) {
                                         fieldLedger[_best.station].claims.push({ bunk: bunk, grade: grade, activity: _aName, startMin: slot.start, endMin: slot.end });
