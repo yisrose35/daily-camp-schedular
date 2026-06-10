@@ -14226,23 +14226,35 @@
                     var _aLowCB = String(_aName).toLowerCase().trim();
                     allGrades.forEach(function (grade) {
                         if (allowedSet && !allowedSet.has(String(grade))) return;
-                        // ★ FN-41: bands captured in Phase 0 — custom layers for this
-                        //   activity whose grade-wide placement was suppressed so the
-                        //   walk owns the window. A band counts as the grade's slot.
-                        var _bandsCB = (_cbS._bands && _cbS._bands[grade]) || [];
-                        // ★ FN-42: the LAYER's length IS each bunk's slot duration —
-                        //   a 20-min "Main" band = 20 minutes per bunk, walked from
-                        //   the band's start. The facility no longer carries a
-                        //   minutes setting (legacy consecutiveDuration only backs
-                        //   up band-less grades).
+                        var _gLayers2 = layersByGrade[grade] || [];
+                        // ★ FN-43: bands come straight from the LAYER CONFIG (the
+                        //   same name-match Phase 0 uses to suppress placement) — not
+                        //   from the Phase-0 capture, which could miss a grade and
+                        //   silently fall back to the wrong duration. Bunk-scoped
+                        //   bands stay in their own lane.
+                        var _bandsCB = [];
+                        _gLayers2.forEach(function (l) {
+                            if ((l.type || '').toLowerCase() !== 'custom') return;
+                            if (l.customBunks && l.customBunks.length > 0) return;
+                            if (String(l.customActivity || l.event || '').toLowerCase().trim() !== _aLowCB) return;
+                            if (l.startMin == null || l.endMin == null || l.endMin <= l.startMin) return;
+                            _bandsCB.push({ start: l.startMin, end: l.endMin, layer: l });
+                        });
+                        // ★ FN-42/43: each bunk's slot duration — the layer's own
+                        //   duration when explicitly shorter than the band (the
+                        //   "activity duration" knob), else the band's full length.
+                        //   The facility carries no minutes setting; the stored
+                        //   legacy consecutiveDuration only backs up band-less grades.
                         var _gDurCB = _aDur;
                         if (_bandsCB.length) {
                             var _bd0 = _bandsCB[0];
-                            if (_bd0 && _bd0.end > _bd0.start) _gDurCB = _bd0.end - _bd0.start;
+                            var _bandLen = _bd0.end - _bd0.start;
+                            _gDurCB = _bandLen;
+                            var _ldur = parseInt(_bd0.layer && (_bd0.layer.durationMin || _bd0.layer.periodMin)) || 0;
+                            if (_ldur >= 5 && _ldur < _bandLen) _gDurCB = _ldur;
                             if (_bandsCB.length > 1) log('[Phase2.35] ' + grade + '/' + _aName + ' has ' + _bandsCB.length + ' layer bands — slot length from the first (' + _gDurCB + 'm)');
                         }
                         if (_gDurCB < 5) return;
-                        var _gLayers2 = layersByGrade[grade] || [];
                         var _hasSlot = _bandsCB.length > 0 || _gLayers2.some(function (l) {
                             var _lt = (l.type || '').toLowerCase();
                             return _lt === 'sport' || _lt === 'activity';
@@ -14269,20 +14281,25 @@
                             ? window.campPeriods[grade].slice().sort(function (a, b) { return a.startMin - b.startMin; })
                             : [{ startMin: _gStart, endMin: _gEnd }];
                         var _anchors = [];
-                        _periods.forEach(function (p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
-                        if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
-                        // ★ FN-41: the user's custom band starts are the PREFERRED
-                        //   anchors — tried first and favored on ties so the walk
-                        //   runs where the layer was drawn.
                         var _bandStartsCB = {};
-                        _bandsCB.forEach(function (bd) {
-                            if (!bd || bd.start == null) return;
-                            _bandStartsCB[bd.start] = 1;
-                            var _ix = _anchors.indexOf(bd.start);
-                            if (_ix >= 0) _anchors.splice(_ix, 1);
-                            _anchors.unshift(bd.start);
-                        });
-                        if (_anchors.length === 0) _anchors.push(_gStart);
+                        if (_bandsCB.length) {
+                            // ★ FN-43: the layer band is WHERE the activity happens —
+                            //   banded grades anchor at the band ONLY. When the station
+                            //   is contested the run queues just after it (the cursor
+                            //   skips busy slices); it never relocates to a random free
+                            //   window elsewhere in the day (live repro: a 1:30pm layer
+                            //   generated at 11am because a morning anchor placed more
+                            //   bunks).
+                            _bandsCB.forEach(function (bd) {
+                                if (!bd || bd.start == null) return;
+                                _bandStartsCB[bd.start] = 1;
+                                if (_anchors.indexOf(bd.start) === -1) _anchors.push(bd.start);
+                            });
+                        } else {
+                            _periods.forEach(function (p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
+                            if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                            if (_anchors.length === 0) _anchors.push(_gStart);
+                        }
                         var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
                         if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
 
@@ -14299,10 +14316,18 @@
                                 var _cursor = _t0, _guard = 0;
                                 while (_placed < _bunks.length && _guard++ < 300) {
                                     var _per = null, _s = null;
-                                    for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
-                                        var _p3 = _walkPeriods[_wp];
-                                        var _cand = Math.max(_cursor, _p3.startMin);
-                                        if (_cand + _gDurCB <= _p3.endMin && _cand + _gDurCB <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                    if (_bandsCB.length) {
+                                        // ★ FN-43: banded walks run on the continuous day —
+                                        //   the band may straddle period boundaries, and the
+                                        //   pinned walls span them fine (like swim does).
+                                        var _candB = Math.max(_cursor, _gStart);
+                                        if (_candB + _gDurCB <= _gEnd) { _per = true; _s = _candB; }
+                                    } else {
+                                        for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                            var _p3 = _walkPeriods[_wp];
+                                            var _cand = Math.max(_cursor, _p3.startMin);
+                                            if (_cand + _gDurCB <= _p3.endMin && _cand + _gDurCB <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                        }
                                     }
                                     if (!_per) break;
                                     var _e = _s + _gDurCB;
@@ -14343,17 +14368,24 @@
                                 var _stnFB = (_cbS.hosts && _cbS.hosts[0] && _cbS.hosts[0].name) || null;
                                 _bandsCB.forEach(function (bd) {
                                     if (!bd || bd.start == null || bd.end == null || bd.end <= bd.start) return;
-                                    var _lyrFB = bd.layer || null;
-                                    var _evFB = (_lyrFB && (_lyrFB.customActivity || _lyrFB.event)) || _aName;
                                     getBunksForGrade(grade, divisions).forEach(function (bunk) {
                                         if (!bunkTimelines[bunk]) return;
+                                        // SPECIAL wall shape — the custom shape
+                                        // (_customField) gets stripped + re-timed by the
+                                        // Phase-2.x rebuild (live repro: restored 855-895
+                                        // walls came out 905-945 with the activity name
+                                        // as the field); only this shape rides through.
                                         bunkTimelines[bunk].push({
                                             startMin: bd.start, endMin: bd.end,
-                                            type: 'custom', event: _evFB, layer: _lyrFB,
+                                            type: 'custom', event: _aName, layer: null,
                                             _classification: 'pinned', _committed: true, _fixed: true,
-                                            _gradeWide: false, _activityLocked: true, _noBacktrack: false,
-                                            _customActivity: _evFB,
-                                            _customField: (_lyrFB && _lyrFB.customField) || _stnFB,
+                                            _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                            _assignedSpecial: _aName,
+                                            _specialLocation: _stnFB,
+                                            _specialDuration: bd.end - bd.start,
+                                            _isSpecialLocation: true,
+                                            dMin: bd.end - bd.start, dMax: bd.end - bd.start,
+                                            _cbResStart: bd.start, _cbResEnd: bd.end,
                                             _source: 'phase2.35-general-band-restore'
                                         });
                                     });

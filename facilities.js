@@ -1324,26 +1324,12 @@ function renderGeneralConfig(container, fac) {
         app1.fields.push(fieldData);
         window.saveGlobalSettings?.("app1", app1);
         window.saveGlobalSettings?.("fields", app1.fields);
-    } else {
-        // Migrate existing General-Activity fieldData that has the old
-        // 'not_sharable' default to the new sharing-on default. Only touch
-        // facilities that the user has not explicitly customized (i.e.,
-        // still showing the legacy default).
-        if (fieldData._generalOnly && fieldData.sharableWith?.type === 'not_sharable' && fieldData.sharableWith?.capacity === 1) {
-            const _defaultPairs = {};
-            _allDivsForDefault.forEach(g => {
-                _defaultPairs[_pkDefault(g, g)] = true;
-            });
-            fieldData.sharableWith = {
-                type: 'cross_division',
-                divisions: [],
-                capacity: 20,
-                allowedPairs: _defaultPairs
-            };
-            window.saveGlobalSettings?.("app1", app1);
-            window.saveGlobalSettings?.("fields", app1.fields);
-        }
     }
+    // (A one-shot 'not_sharable → sharing-on' migration used to live here.
+    //  REMOVED: 'not_sharable + capacity 1' is exactly what an explicit
+    //  "sharing off" writes, so the migration resurrected sharing on every
+    //  pane render — the user's off-switch never stuck. Explicit user state
+    //  is never rewritten; only brand-new entries get the default above.)
 
     const divider = document.createElement("div");
     divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
