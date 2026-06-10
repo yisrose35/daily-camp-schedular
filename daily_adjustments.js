@@ -5715,6 +5715,8 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     return;
   }
 
+  const overrides = currentOverrides.bunkActivityOverrides || [];
+
   // Compute time range from layers + grade window
   const divStart = parseTimeToMinutes(div.startTime) || Math.min(...layers.map(l => l.startMin));
   const divEnd   = parseTimeToMinutes(div.endTime)   || Math.max(...layers.map(l => l.endMin));
@@ -5723,12 +5725,29 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     if (l.startMin < earliestMin) earliestMin = l.startMin;
     if (l.endMin > latestMin) latestMin = l.endMin;
   });
+  // ★ BO-fix: the range above only spanned the LAYERS, so (a) the grid often
+  //   ended before the grade's real end-of-day (couldn't scroll further down),
+  //   and (b) an added/resized override band outside the layer span rendered
+  //   below the track bottom and was clipped. Fold in the grade's true period
+  //   window (divisionTimes) and every override band for this grade's bunks.
+  try {
+    const _dtg = (window.divisionTimes || {})[divName];
+    if (Array.isArray(_dtg)) _dtg.forEach(p => {
+      if (p && p.startMin != null && p.startMin < earliestMin) earliestMin = p.startMin;
+      if (p && p.endMin != null && p.endMin > latestMin) latestMin = p.endMin;
+    });
+  } catch (_e) {}
+  const _bunkSet = new Set(bunks.map(String));
+  overrides.forEach(o => {
+    if (!_bunkSet.has(String(o.bunk))) return;
+    if (o.startMin != null && o.startMin < earliestMin) earliestMin = o.startMin;
+    if (o.endMin != null && o.endMin > latestMin) latestMin = o.endMin;
+  });
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
 
   const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
   const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
   const totalHeight = (latestMin - earliestMin) * PX;
-  const overrides = currentOverrides.bunkActivityOverrides || [];
   const color = div.color || '#64748b';
 
   // Layer-type → tile background colour (matches the auto builder palette)
@@ -5754,7 +5773,19 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const BAND_PAD   = 4;
   const GRADE_COL_MIN = 120;
   const layerCount = Math.max(1, layers.length);
-  const colWidth   = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
+  // ★ BO-fix: extra bands (added layers / orphaned overrides) render to the
+  //   RIGHT of the grade-layer bands, but the column width only accounted for
+  //   the grade layers — so a freshly added band landed past the column's
+  //   right edge, clipped under the next bunk's column ("blocked"-looking).
+  //   Width every column for the widest bunk (layers + its extra bands).
+  const _layerKeyset = new Set(layers.map(l => `${l.startMin}|${l.endMin}|${String(l.type || 'custom')}`));
+  let _maxExtraBands = 0;
+  bunks.forEach(b => {
+    const n = overrides.filter(o => String(o.bunk) === String(b)
+      && !_layerKeyset.has(`${o.startMin}|${o.endMin}|${String(o.layerType || 'custom')}`)).length;
+    if (n > _maxExtraBands) _maxExtraBands = n;
+  });
+  const colWidth   = Math.max(GRADE_COL_MIN, (layerCount + _maxExtraBands) * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
   // Outer wrap with horizontal scroll
   let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
@@ -5861,23 +5892,57 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       }
     });
 
-    // ★ Day 24: render added-layer overrides as extra bands after the grade
-    //   layers (positioned to the right of the last grade band).
-    const addedForBunk = overrides.filter(o => o.bunk === bunk && o.overrideMode === 'addLayer');
-    addedForBunk.forEach((ov, addIdx) => {
+    // ★ Day 24 / BO-fix: render EVERY override that doesn't sit on a grade-layer
+    //   band as an extra band after the grade layers. Previously only
+    //   overrideMode:'addLayer' rendered here — so once an added band was
+    //   configured (becoming 'force'/'sportPool' at its own window) it matched
+    //   no grade band and silently VANISHED from the UI while still affecting
+    //   generation. Now force/sportPool/resize/delete orphans all stay visible.
+    const extrasForBunk = overrides.filter(o => o.bunk === bunk
+      && !_layerKeyset.has(`${o.startMin}|${o.endMin}|${String(o.layerType || 'custom')}`));
+    extrasForBunk.forEach((ov, addIdx) => {
       const sm = ov.startMin, em = ov.endMin;
       if (sm == null || em == null || em <= sm) return;
       const top = (sm - earliestMin) * PX;
       const height = (em - sm) * PX;
       const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
-      const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
-      const evName = _typeLabel({ type: ov.layerType });
-      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="addLayer"
-        title="Added layer: ${_escHtml(evName)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to edit, drag edges to resize"
-        style="background:${bg};color:#1e293b;box-shadow:0 0 0 2px #6366f1;top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+      const mode = ov.overrideMode || 'force';
+      let bandStyle, mainLabel, subLabel, titleTxt;
+      if (mode === 'addLayer') {
+        // Unconfigured added band — make "needs configuring" unmistakable.
+        const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+        bandStyle = `background:${bg};color:#3730a3;box-shadow:0 0 0 2px #6366f1;`;
+        mainLabel = '+ Pick activity';
+        subLabel  = 'click to set';
+        titleTxt  = 'Added slot (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — click to pick the activity. Unconfigured slots are IGNORED at generation.';
+      } else if (mode === 'sportPool') {
+        const poolCount = (ov.sportPool || []).length;
+        bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+        mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+        subLabel  = (ov.sportPool || []).join(' / ').slice(0, 28);
+        titleTxt  = 'OVERRIDE (sportPool): ' + (ov.sportPool || []).join(', ') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit';
+      } else if (mode === 'delete') {
+        bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+        mainLabel = '— deleted —';
+        subLabel  = 'skipped for this bunk';
+        titleTxt  = 'OVERRIDE (delete) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
+      } else if (mode === 'resize') {
+        bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+        mainLabel = '⇕ resized';
+        subLabel  = minutesToTime(sm) + '–' + minutesToTime(em);
+        titleTxt  = 'OVERRIDE (resize) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
+      } else {
+        bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+        mainLabel = ov.activity || 'override';
+        subLabel  = 'added · pinned';
+        titleTxt  = 'OVERRIDE (force): ' + (ov.activity || '') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit, drag edges to resize';
+      }
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="${_escHtml(mode)}" data-added="1"
+        title="${_escHtml(titleTxt)}"
+        style="${bandStyle}top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
         <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
-        <span class="band-label">+ ${_escHtml(evName)}</span>
-        <span class="band-qty">added</span>
+        <span class="band-label">${_escHtml(mainLabel)}</span>
+        <span class="band-qty">${_escHtml(subLabel)}</span>
         <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
         <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
       </div>`;
@@ -6064,10 +6129,20 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
   const groups = _boGetActivityGroups();
   const _lt = String(layerType || 'custom').toLowerCase();
+  // ★ BO-fix: bands the user ADDED (palette drop) carry data-added="1". They
+  //   have no underlying grade layer, so pool-restriction semantics make no
+  //   sense for them (a sportPool override in a window with no layer silently
+  //   restricts the floaters AND vanishes from the UI). Added bands are always
+  //   single-pick → saved as a 'force' pin of one concrete activity.
+  const isAdded = anchorEl?.dataset?.added === '1' || anchorEl?.dataset?.mode === 'addLayer';
+  // Placeholder activity strings written by the drop / resize handlers — never
+  // treat them as a real picked activity (previously "+ added layer" could be
+  // force-pinned verbatim if the user hit Save without picking).
+  const PLACEHOLDER_ACTS = { '+ added layer': 1, '⇕ resized': 1, '— deleted —': 1 };
   // Layer types that use a multi-select POOL pattern (pick which items from
   // the pool the bunk can rotate through). Single-pick types use a different UI.
   const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
-  const isPoolType = !!POOL_TYPES[_lt];
+  const isPoolType = !isAdded && !!POOL_TYPES[_lt];
 
   // Find existing override for this band (if any)
   const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
@@ -6080,7 +6155,8 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   let selectedSports = new Set(initPool); // reused for any pool-type override
   let curStart = existing?.startMin ?? startMin;
   let curEnd   = existing?.endMin   ?? endMin;
-  let pickedActivity = existing && !isPoolType ? { name: existing.activity, location: existing.location, type: existing.type } : null;
+  let pickedActivity = (existing && !isPoolType && existing.activity && !PLACEHOLDER_ACTS[existing.activity])
+    ? { name: existing.activity, location: existing.location, type: existing.type } : null;
 
   const pop = document.createElement('div');
   pop.id = 'bo-auto-popover';
@@ -6107,8 +6183,8 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       </div>
       <div id="bo-pop-body" style="flex:1;overflow:auto;padding:8px 14px;"></div>
       <div style="padding:10px 14px;border-top:1px solid #e5e7eb;background:#f8fafc;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
-        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="Skip this layer for ${_escHtml(bunk)} only — other bunks keep it">🗑 For ${_escHtml(bunk)}</button>
-        <button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>
+        <button id="bo-pop-delete" type="button" style="padding:6px 10px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;border-radius:6px;cursor:pointer;font-weight:600;" title="${isAdded ? 'Remove this added slot' : 'Skip this layer for ' + _escHtml(bunk) + ' only — other bunks keep it'}">${isAdded ? '🗑 Remove' : '🗑 For ' + _escHtml(bunk)}</button>
+        ${isAdded ? '' : '<button id="bo-pop-delete-layer" type="button" style="padding:6px 10px;font-size:11px;background:#7f1d1d;color:#fff;border:1px solid #7f1d1d;border-radius:6px;cursor:pointer;font-weight:600;" title="Delete this layer from the entire grade (affects every bunk)">🗑 Delete Layer</button>'}
         <div style="flex:1;"></div>
         <button id="bo-pop-cancel" type="button" style="padding:6px 12px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Cancel</button>
         <button id="bo-pop-save" type="button" style="padding:6px 14px;font-size:12px;background:#f59e0b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>
@@ -6186,7 +6262,20 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     }
 
     // Per-layer-type body
-    switch (_lt) {
+    if (isAdded) {
+      // Added band → pick ONE concrete activity to pin for this bunk at this time.
+      renderSinglePick({
+        icon: '➕',
+        desc: 'Pick the activity to ADD for ' + bunk + ' at this time',
+        cats: [
+          { label: '📌 Pinned Activities', items: groups.pinned },
+          { label: '🏢 Facilities', items: groups.facilities },
+          { label: '🏟️ Fields', items: groups.fields },
+          { label: '🎨 Special Activities', items: groups.specials },
+          { label: '⚽ Sports', items: groups.sports }
+        ]
+      });
+    } else switch (_lt) {
       case 'sport':
         renderPool({ items: groups.sports, icon: '🏈', label: 'Sports', desc: 'Allowed sports for this bunk (program rotates only through these)' });
         break;
@@ -6264,17 +6353,21 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
     pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
     pop.querySelector('#bo-pop-delete').onclick = () => {
-      // Delete-layer override for this bunk
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
         !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
       );
-      list.push({
-        id: uid(), bunk, startMin, endMin,
-        startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
-        layerType: layerType || 'custom',
-        overrideMode: 'delete',
-        activity: '— deleted —', location: null, type: 'delete'
-      });
+      // ★ BO-fix: deleting an ADDED band just removes the override — pushing a
+      //   'delete' override here would leave a confusing orphan "deleted" badge
+      //   for a slot that never existed in the grade skeleton.
+      if (!isAdded) {
+        list.push({
+          id: uid(), bunk, startMin, endMin,
+          startTime: minutesToTime(startMin), endTime: minutesToTime(endMin),
+          layerType: layerType || 'custom',
+          overrideMode: 'delete',
+          activity: '— deleted —', location: null, type: 'delete'
+        });
+      }
       _boSaveOverrides(list);
       pop.remove();
       renderBunkOverridesUI();

@@ -13221,8 +13221,24 @@
                     return;
                 }
 
+                // ── addLayer (unconfigured) / resize: UI-only states — never pin. ──
+                //   An added band becomes overrideMode:'force' once the user picks
+                //   its activity in the override popover; until then its activity is
+                //   the literal placeholder "+ added layer". 'resize' marks a band's
+                //   custom window in the override UI; the solver has no per-bunk
+                //   layer-window concept, so it must stay inert at generation.
+                //   Previously BOTH fell through to the force branch below and pinned
+                //   literal "+ added layer" / "⇕ resized" custom blocks into the
+                //   schedule (the "random things appear at generation" bug).
+                if (mode === 'addLayer' || mode === 'resize') {
+                    if (totalIters < 1) log('[P0] Override mode "' + mode + '" for ' + bunk + ' is UI-only — skipped at generation');
+                    return;
+                }
+
                 // ── force (legacy / default): pin as a single activity block ──
                 if (!ov.activity) return;
+                // Defense-in-depth: never pin a UI placeholder string as an activity.
+                if (ov.activity === '+ added layer' || ov.activity === '⇕ resized' || ov.activity === '— deleted —') return;
                 // ★ v7.0: Auto-detect type from field ledger — don't rely on UI type tag
                 const bunkGrade = Object.keys(divisions).find(g =>
                     getBunksForGrade(g, divisions).map(String).includes(bunk)
