@@ -14386,6 +14386,11 @@
                                             _isSpecialLocation: true,
                                             dMin: bd.end - bd.start, dMax: bd.end - bd.start,
                                             _cbResStart: bd.start, _cbResEnd: bd.end,
+                                            // _consecutiveBunk is the stamp the rebuild keys
+                                            // on to preserve _specialLocation — without it the
+                                            // restored walls got re-timed + the location
+                                            // stripped (field showed the activity name)
+                                            _consecutiveBunk: true,
                                             _source: 'phase2.35-general-band-restore'
                                         });
                                     });
