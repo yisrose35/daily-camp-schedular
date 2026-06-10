@@ -5726,50 +5726,6 @@ function renderBunkOverridesUI() {
 //   column + per-bunk columns with full-width tiles, in-page) but reads from
 //   `dawLayers[grade]` instead of `dailyOverrideSkeleton`. Each layer becomes
 //   a full-width tile in each bunk's column. Click a tile to override.
-// ★ BO-v2: one-time stylesheet for the bunk-override grid. Self-contained —
-//   no dependence on the Master Scheduler's ms-daw-* styles (those are tuned
-//   for a different context and left the grid cramped/unreadable here).
-function _boEnsureGridCss() {
-  if (document.getElementById('bo2-css')) return;
-  const st = document.createElement('style');
-  st.id = 'bo2-css';
-  st.textContent = `
-.bo2-scroll{overflow:auto;max-width:100%;max-height:calc(100vh - 150px);min-height:340px;border:1px solid #e2e8f0;border-radius:10px;background:#fff;position:relative;overscroll-behavior:contain;}
-.bo2-grid{position:relative;min-width:max-content;}
-.bo2-headrow{display:flex;position:sticky;top:0;z-index:40;background:#f8fafc;border-bottom:2px solid #e2e8f0;}
-.bo2-corner{position:sticky;left:0;z-index:41;width:64px;min-width:64px;background:#f8fafc;font-size:10px;color:#64748b;display:flex;align-items:center;justify-content:center;font-weight:700;border-right:1px solid #e2e8f0;box-sizing:border-box;}
-.bo2-bunkhead{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:7px 10px;border-right:1px solid #eef2f7;box-sizing:border-box;background:#f8fafc;}
-.bo2-bunktag{color:#fff;font-weight:700;font-size:12.5px;padding:3px 10px;border-radius:99px;white-space:nowrap;}
-.bo2-count{background:#ef4444;color:#fff;border-radius:99px;padding:0 5px;font-size:9px;font-weight:700;margin-left:5px;}
-.bo2-add{font-family:inherit;font-size:11px;font-weight:600;background:#fff;border:1.5px dashed #94a3b8;border-radius:7px;color:#475569;cursor:pointer;padding:3px 9px;white-space:nowrap;}
-.bo2-add:hover{border-color:#f59e0b;color:#b45309;background:#fffbeb;}
-.bo2-bodyrow{display:flex;}
-.bo2-ruler{position:sticky;left:0;z-index:30;width:64px;min-width:64px;background:#fbfcfe;border-right:1px solid #e2e8f0;box-sizing:border-box;}
-.bo2-tick{position:absolute;right:6px;transform:translateY(-50%);font-size:9.5px;color:#b6c2d4;white-space:nowrap;}
-.bo2-tick.hour{font-weight:700;color:#475569;font-size:11px;}
-.bo2-col{position:relative;border-right:1px solid #eef2f7;box-sizing:border-box;}
-.bo2-track{position:relative;width:100%;}
-.bo2-gridline{position:absolute;left:0;right:0;height:0;border-top:1px solid #f3f6fa;pointer-events:none;}
-.bo2-gridline.hour{border-top:1px solid #e5eaf1;}
-.bo2-strip{position:absolute;border-radius:6px;box-sizing:border-box;cursor:pointer;overflow:hidden;opacity:.95;}
-.bo2-strip:hover{filter:brightness(.95);outline:2px solid rgba(99,102,241,.4);}
-.bo2-vlabel{writing-mode:vertical-rl;text-orientation:mixed;font-size:9.5px;font-weight:700;color:rgba(15,23,42,.55);display:block;padding-top:6px;margin:0 auto;white-space:nowrap;letter-spacing:.4px;}
-.bo2-tile{position:absolute;border-radius:8px;box-sizing:border-box;cursor:pointer;padding:3px 9px;font-size:11.5px;overflow:hidden;box-shadow:0 1px 2px rgba(15,23,42,.08);border:1px solid rgba(15,23,42,.07);}
-.bo2-tile:hover{filter:brightness(.97);}
-.bo2-tile .t1{font-weight:700;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:12px;}
-.bo2-tile .t2{font-size:10px;opacity:.75;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.bo2-tile .bo-revert-btn{position:absolute;top:2px;right:5px;font-size:11px;font-weight:800;cursor:pointer;opacity:.6;}
-.bo2-tile .bo-revert-btn:hover{opacity:1;}
-.bo2-tile .band-resize{position:absolute;left:0;right:0;height:7px;cursor:ns-resize;z-index:5;}
-.bo2-tile .band-resize-top{top:0;}
-.bo2-tile .band-resize-bottom{bottom:0;}
-.bo2-legend{display:flex;gap:14px;align-items:center;padding:8px 4px 0;font-size:11px;color:#64748b;flex-wrap:wrap;}
-.bo2-key{display:inline-flex;align-items:center;gap:5px;}
-.bo2-swatch{width:12px;height:12px;border-radius:4px;display:inline-block;border:1px solid rgba(15,23,42,.12);}
-`;
-  document.head.appendChild(st);
-}
-
 function _boRenderAutoBunkGrid(wrap, divName) {
   if (!wrap) return;
   const divisions = masterSettings.app1?.divisions || {};
@@ -5849,16 +5805,9 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   });
   if (latestMin <= earliestMin) latestMin = earliestMin + 60;
 
-  // ★ BO-v2: viewport-fitted vertical scale — size the day to the available
-  //   height so the whole timeline is visible with little/no vertical scroll,
-  //   and cap the grid box to the viewport so BOTH of its scrollbars are
-  //   always on-screen (the page-flow layout pushed the horizontal scrollbar
-  //   below the fold; the old 70vh nested box hid its own bottom).
-  const totalMin = Math.max(60, latestMin - earliestMin);
-  const _availH = Math.max(380, (window.innerHeight || 800) - 250);
-  const PX = Math.max(1.2, Math.min(2.4, _availH / totalMin));
-  const incMins = 30;
-  const totalHeight = Math.round(totalMin * PX);
+  const PX = (typeof PIXELS_PER_MINUTE !== 'undefined') ? PIXELS_PER_MINUTE : 1.4;
+  const incMins = (typeof INCREMENT_MINS !== 'undefined') ? INCREMENT_MINS : 30;
+  const totalHeight = (latestMin - earliestMin) * PX;
   const color = div.color || '#64748b';
 
   // Layer-type → tile background colour (matches the auto builder palette)
@@ -5877,196 +5826,207 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     return l.leagueName || map[t] || (t.charAt(0).toUpperCase() + t.slice(1));
   };
 
-  // ★ BO-v2 layout: rotating/windowed layers (sport/special/swim/league/…)
-  //   render as compact vertical STRIPS on the left of each bunk column;
-  //   fixed-time layers (lunch/snacks/dismissal/custom) and EVERY override
-  //   render as full-width readable TILES to their right.
-  const FIXED_TILE_TYPES = { lunch: 1, snacks: 1, dismissal: 1, custom: 1 };
-  const stripLayers = layers.filter(l => !FIXED_TILE_TYPES[String(l.type || 'custom').toLowerCase()]);
-  const tileLayers  = layers.filter(l =>  FIXED_TILE_TYPES[String(l.type || 'custom').toLowerCase()]);
-  const STRIP_W = 24, STRIP_GAP = 3, STRIP_PAD = 4;
-  const stripAreaW = stripLayers.length ? (STRIP_PAD + stripLayers.length * (STRIP_W + STRIP_GAP)) : 4;
-  const TILE_AREA_W = 178;
-  const colWidth = stripAreaW + TILE_AREA_W + 10;
+  // Each bunk column mirrors the master scheduler grade column EXACTLY —
+  // reuse the ms-daw-* CSS classes so the bands look pixel-identical.
+  const BAND_WIDTH = (typeof window.DAW_BAND_WIDTH === 'number') ? window.DAW_BAND_WIDTH : 40;
+  const BAND_GAP   = 4;
+  const BAND_PAD   = 4;
+  const GRADE_COL_MIN = 120;
+  const layerCount = Math.max(1, layers.length);
+  // ★ BO-fix: extra bands (added layers / orphaned overrides) render to the
+  //   RIGHT of the grade-layer bands, but the column width only accounted for
+  //   the grade layers — so a freshly added band landed past the column's
+  //   right edge, clipped under the next bunk's column ("blocked"-looking).
+  //   Width every column for the widest bunk (layers + its extra bands).
   const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, String(l.type || 'custom')));
-
-  _boEnsureGridCss();
-
-  let html = `<div class="bo-auto-scroll bo2-scroll">`;
-  html += `<div class="bo2-grid">`;
-
-  // Sticky header row: corner (date) + one head cell per bunk with "+ Add"
-  html += `<div class="bo2-headrow">`;
-  html += `<div class="bo2-corner">${_escHtml(_date.slice(5))}</div>`;
-  bunks.forEach(bunk => {
-    const n = overrides.filter(o => o.bunk === bunk).length;
-    html += `<div class="bo2-bunkhead" style="width:${colWidth}px;">
-      <span class="bo2-bunktag" style="background:${color};">${_escHtml(bunk)}${n ? `<span class="bo2-count">${n}</span>` : ''}</span>
-      <button type="button" class="bo2-add" data-bunk="${_escHtml(bunk)}" title="Add a one-off activity for ${_escHtml(bunk)} on this day">+ Add</button>
-    </div>`;
+  let _maxExtraBands = 0;
+  bunks.forEach(b => {
+    const n = overrides.filter(o => String(o.bunk) === String(b) && !_ovOnAnyLayer(o)).length;
+    if (n > _maxExtraBands) _maxExtraBands = n;
   });
-  html += `</div>`;
+  const colWidth   = Math.max(GRADE_COL_MIN, (layerCount + _maxExtraBands) * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-  // Body row: sticky time ruler + bunk columns
-  html += `<div class="bo2-bodyrow">`;
-  html += `<div class="bo2-ruler" style="height:${totalHeight}px;">`;
+  // Outer wrap — horizontal scroll only. ★ BO-fix: the old max-height:70vh made
+  // this a NESTED vertical scrollbox whose bottom sat below the page fold —
+  // wheel-scrolling the page never reached the grid's lower half ("can't scroll
+  // all the way down"). Let the grid take its full height; the page scrolls it.
+  let html = `<div class="bo-auto-scroll" style="overflow-x:auto;overflow-y:visible;max-width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
+
+  // Time ruler column (sticky left)
+  html += `<div class="ms-daw-ruler-col">`;
+  html += `<div class="ms-daw-ruler-header-spacer"></div>`;
+  html += `<div class="ms-daw-ruler-vertical" style="height:${totalHeight}px;">`;
   for (let m = earliestMin; m < latestMin; m += incMins) {
     const top = (m - earliestMin) * PX;
-    html += `<div class="bo2-tick${(m % 60) === 0 ? ' hour' : ''}" style="top:${top}px;">${minutesToTime(m)}</div>`;
+    const major = (m - earliestMin) % 60 === 0;
+    html += `<div class="ms-daw-ruler-tick${major ? ' major-tick' : ''}" style="position:absolute;top:${top}px;">${minutesToTime(m)}</div>`;
   }
-  html += `</div>`;
+  html += `</div></div>`;
 
-  // Bunk columns — strips (rotating layers) + tiles (fixed layers & overrides)
+  // Bunk columns — one per bunk, styled like a grade column
   bunks.forEach(bunk => {
-    html += `<div class="ms-daw-grade-col bo2-col" data-bunk="${_escHtml(bunk)}" style="width:${colWidth}px;">`;
-    html += `<div class="ms-daw-track bo2-track" data-earliest="${earliestMin}" style="height:${totalHeight}px;">`;
+    const bunkOverrides = overrides.filter(o => o.bunk === bunk);
+    const badge = bunkOverrides.length > 0
+      ? ` <span style="background:#ef4444;color:#fff;border-radius:99px;padding:1px 5px;font-size:9px;font-weight:700;margin-left:4px;">${bunkOverrides.length}</span>`
+      : '';
+
+    html += `<div class="ms-daw-grade-col" data-bunk="${_escHtml(bunk)}" style="width:${colWidth}px;">`;
+    // Bunk header (re-uses .ms-daw-grade-header look but coloured by division)
+    html += `<div class="ms-daw-grade-header">
+      <span class="ms-daw-grade-tag" style="background:${color};">${_escHtml(bunk)}${badge}</span>
+    </div>`;
+    // Bunk track — earliest min stored on dataset for drag-drop time math
+    html += `<div class="ms-daw-track" data-earliest="${earliestMin}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+
+    // Horizontal gridlines (30-min increments)
     for (let m = earliestMin; m < latestMin; m += incMins) {
       const top = (m - earliestMin) * PX;
-      html += `<div class="bo2-gridline${(m % 60) === 0 ? ' hour' : ''}" style="top:${top}px;"></div>`;
+      const cls = (m - earliestMin) % 60 === 0 ? 'major' : '';
+      html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
     }
 
-    // ── STRIPS: rotating/windowed layers (click → pool/override picker) ──
-    stripLayers.forEach((layer, idx) => {
+    // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
+    layers.forEach((layer, idx) => {
       const sm = layer.startMin, em = layer.endMin;
       if (sm == null || em == null || em <= sm) return;
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
+
       const _ltKey = (layer.type || 'custom');
       const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
-      const top = (sm - earliestMin) * PX, height = (em - sm) * PX;
-      const left = STRIP_PAD + idx * (STRIP_W + STRIP_GAP);
-      const bg = TYPE_BG[String(_ltKey).toLowerCase()] || '#e2e8f0';
-      let ring = '', label = _typeLabel(layer), title;
+
+      const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
+      const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
+      const _dMax = Math.max(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMax;
+      const durLabel = _dMin && _dMax && _dMin !== _dMax
+        ? `${_dMin}-${_dMax}m`
+        : `${_dMin || layer.periodMin || (em - sm)}m`;
+      const evName = _typeLabel(layer);
+
       if (override) {
+        // Three override modes get different visual treatments:
+        //   • sportPool → green "pool of N sports" band
+        //   • delete   → grey hatched "deleted" band
+        //   • force / default → amber single-activity band
         const mode = override.overrideMode || 'force';
-        ring = mode === 'sportPool' ? 'box-shadow:0 0 0 2px #10b981;'
-             : mode === 'delete'    ? 'box-shadow:0 0 0 2px #94a3b8;opacity:.55;'
-             : 'box-shadow:0 0 0 2px #f59e0b;';
-        label = mode === 'sportPool' ? ((override.sportPool || []).length + ' picked')
-              : mode === 'delete'    ? 'deleted'
-              : (override.activity || label);
-        title = 'OVERRIDE (' + mode + '): ' + label + ' — click to edit';
+        let bandStyle, mainLabel, subLabel;
+        if (mode === 'sportPool') {
+          const poolCount = (override.sportPool || []).length;
+          bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+          mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+          subLabel  = (override.sportPool || []).join(' / ').slice(0, 28);
+        } else if (mode === 'delete') {
+          bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+          mainLabel = '— deleted —';
+          subLabel  = 'skipped for this bunk';
+        } else if (mode === 'resize') {
+          bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+          mainLabel = '⇕ resized';
+          subLabel  = minutesToTime(override.startMin) + '–' + minutesToTime(override.endMin);
+        } else {
+          bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+          mainLabel = override.activity;
+          subLabel  = 'override';
+        }
+        // ★ FN-33: a resize override renders at its NEW window so the band
+        //   visually sits where the bunk's block will actually be placed.
+        const _vS = (mode === 'resize' && override.startMin != null) ? override.startMin : sm;
+        const _vE = (mode === 'resize' && override.endMin != null) ? override.endMin : em;
+        const vTop = (_vS - earliestMin) * PX;
+        const vHeight = (_vE - _vS) * PX;
+        html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(_vS)}-${minutesToTime(_vE)}) — Click body to edit, drag edges to resize"
+          style="top:${vTop}px;height:${vHeight}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          <span class="band-label">${_escHtml(mainLabel)}</span>
+          <span class="band-qty">${_escHtml(subLabel)}</span>
+          <div class="bo-revert-btn" title="Revert" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        </div>`;
       } else {
-        title = label + ' layer (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — click to restrict/override for ' + bunk;
+        // ★ FN-33: drag-to-resize only for layer types the solver can honor
+        //   per-bunk (lunch/snacks/dismissal/custom). Floaters/swim/leagues
+        //   keep click-to-override but no resize handles.
+        const _canResize = !!_BO_RESIZABLE_TYPES[String(_ltKey).toLowerCase()];
+        const _handles = _canResize
+          ? `<div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        const _handlesBottom = _canResize
+          ? `<div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        html += `<div class="ms-daw-band bo-block bo-skeleton${_canResize ? ' bo-resizable' : ''}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}${_canResize ? ', drag edges to resize for this bunk' : ''}"
+          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+          ${_handles}
+          <span class="band-label">${_escHtml(evName)}</span>
+          <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
+          ${_handlesBottom}
+        </div>`;
       }
-      html += `<div class="bo-block bo2-strip${override ? ' bo-override' : ' bo-skeleton'}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}"${override ? ` data-ov-id="${_escHtml(override.id)}" data-mode="${_escHtml(override.overrideMode || 'force')}"` : ''}
-        title="${_escHtml(title)}" style="top:${top}px;height:${height}px;left:${left}px;width:${STRIP_W}px;background:${bg};${ring}">
-        <span class="bo2-vlabel">${_escHtml(label)}</span>
-      </div>`;
     });
 
-    // ── TILES: fixed layers (with their overrides) + added/orphan overrides ──
-    const tileItems = [];
-    tileLayers.forEach(layer => {
-      const sm = layer.startMin, em = layer.endMin;
+    // ★ Day 24 / BO-fix: render EVERY override that doesn't sit on a grade-layer
+    //   band as an extra band after the grade layers. Previously only
+    //   overrideMode:'addLayer' rendered here — so once an added band was
+    //   configured (becoming 'force'/'sportPool' at its own window) it matched
+    //   no grade band and silently VANISHED from the UI while still affecting
+    //   generation. Now force/sportPool/resize/delete orphans all stay visible.
+    const extrasForBunk = overrides.filter(o => o.bunk === bunk && !_ovOnAnyLayer(o));
+    extrasForBunk.forEach((ov, addIdx) => {
+      const sm = ov.startMin, em = ov.endMin;
       if (sm == null || em == null || em <= sm) return;
-      const _ltKey = (layer.type || 'custom');
-      const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
-      tileItems.push({ layer, override, sm, em, lt: _ltKey, added: false });
-    });
-    overrides.filter(o => o.bunk === bunk && !_ovOnAnyLayer(o)).forEach(ov => {
-      if (ov.startMin == null || ov.endMin == null || ov.endMin <= ov.startMin) return;
-      tileItems.push({ layer: null, override: ov, sm: ov.startMin, em: ov.endMin, lt: (ov.layerType || 'custom'), added: true });
-    });
-    // Visual window (resize overrides draw at their NEW window) + overlap cascade
-    tileItems.forEach(it => {
-      const ov = it.override;
-      const isRz = ov && ov.overrideMode === 'resize' && !it.added;
-      it.vS = (isRz && ov.startMin != null) ? ov.startMin : it.sm;
-      it.vE = (isRz && ov.endMin != null) ? ov.endMin : it.em;
-    });
-    tileItems.sort((a, b) => a.vS - b.vS || a.vE - b.vE);
-    tileItems.forEach((it, i) => {
-      let depth = 0;
-      for (let j = 0; j < i; j++) if (tileItems[j].vS < it.vE && tileItems[j].vE > it.vS) depth++;
-      it.depth = Math.min(depth, 3);
-    });
-    tileItems.forEach(it => {
-      const top = (it.vS - earliestMin) * PX, height = Math.max(18, (it.vE - it.vS) * PX);
-      const left = stripAreaW + 5 + it.depth * 12;
-      const width = TILE_AREA_W - it.depth * 12;
-      const ov = it.override;
-      let style, t1, t2, title, classes = 'bo-block bo2-tile', extraAttr = '';
-      if (ov) {
-        const mode = ov.overrideMode || 'force';
-        classes += ' bo-override bo-resizable';
-        extraAttr = ` data-ov-id="${_escHtml(ov.id)}" data-mode="${_escHtml(mode)}"${it.added ? ' data-added="1"' : ''}`;
-        if (mode === 'addLayer') {
-          style = `background:${TYPE_BG[String(it.lt).toLowerCase()] || '#e2e8f0'};box-shadow:0 0 0 2px #6366f1;color:#3730a3;`;
-          t1 = '+ Pick activity'; t2 = minutesToTime(it.vS) + '–' + minutesToTime(it.vE) + ' · click to set';
-          title = 'Added slot — click to pick the activity. Unconfigured slots are ignored at generation.';
-        } else if (mode === 'sportPool') {
-          style = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
-          const pc = (ov.sportPool || []).length;
-          t1 = pc + ' sport' + (pc === 1 ? '' : 's'); t2 = (ov.sportPool || []).join(' / ').slice(0, 34);
-          title = 'OVERRIDE (pool): ' + (ov.sportPool || []).join(', ') + ' — click to edit';
-        } else if (mode === 'delete') {
-          style = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
-          t1 = '— deleted —'; t2 = 'skipped for this bunk';
-          title = 'OVERRIDE (delete) — click to edit';
-        } else if (mode === 'resize') {
-          style = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
-          t1 = '⇕ ' + (it.layer ? _typeLabel(it.layer) : 'resized'); t2 = minutesToTime(it.vS) + '–' + minutesToTime(it.vE);
-          title = 'OVERRIDE (resize) — click to edit';
-        } else {
-          style = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
-          t1 = ov.activity || 'override'; t2 = minutesToTime(it.vS) + '–' + minutesToTime(it.vE) + ' · pinned';
-          title = 'OVERRIDE: ' + (ov.activity || '') + ' — click to edit, drag edges to resize';
-        }
+      const top = (sm - earliestMin) * PX;
+      const height = (em - sm) * PX;
+      const left = BAND_PAD + (layers.length + addIdx) * (BAND_WIDTH + BAND_GAP);
+      const mode = ov.overrideMode || 'force';
+      let bandStyle, mainLabel, subLabel, titleTxt;
+      if (mode === 'addLayer') {
+        // Unconfigured added band — make "needs configuring" unmistakable.
+        const bg = TYPE_BG[String(ov.layerType || 'custom').toLowerCase()] || '#e2e8f0';
+        bandStyle = `background:${bg};color:#3730a3;box-shadow:0 0 0 2px #6366f1;`;
+        mainLabel = '+ Pick activity';
+        subLabel  = 'click to set';
+        titleTxt  = 'Added slot (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — click to pick the activity. Unconfigured slots are IGNORED at generation.';
+      } else if (mode === 'sportPool') {
+        const poolCount = (ov.sportPool || []).length;
+        bandStyle = 'background:linear-gradient(180deg,#bbf7d0,#34d399);color:#064e3b;box-shadow:0 0 0 2px #10b981;';
+        mainLabel = poolCount + ' sport' + (poolCount === 1 ? '' : 's');
+        subLabel  = (ov.sportPool || []).join(' / ').slice(0, 28);
+        titleTxt  = 'OVERRIDE (sportPool): ' + (ov.sportPool || []).join(', ') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit';
+      } else if (mode === 'delete') {
+        bandStyle = 'background:repeating-linear-gradient(45deg,#e5e7eb,#e5e7eb 6px,#cbd5e1 6px,#cbd5e1 12px);color:#475569;box-shadow:0 0 0 2px #94a3b8;';
+        mainLabel = '— deleted —';
+        subLabel  = 'skipped for this bunk';
+        titleTxt  = 'OVERRIDE (delete) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
+      } else if (mode === 'resize') {
+        bandStyle = 'background:linear-gradient(180deg,#bfdbfe,#60a5fa);color:#1e3a5f;box-shadow:0 0 0 2px #3b82f6;';
+        mainLabel = '⇕ resized';
+        subLabel  = minutesToTime(sm) + '–' + minutesToTime(em);
+        titleTxt  = 'OVERRIDE (resize) ' + minutesToTime(sm) + '-' + minutesToTime(em) + ' — Click to edit';
       } else {
-        classes += ' bo-skeleton';
-        style = `background:${TYPE_BG[String(it.lt).toLowerCase()] || '#e2e8f0'};color:#1e293b;`;
-        t1 = (it.lt === 'custom' && (it.layer.customActivity || it.layer.event)) ? (it.layer.customActivity || it.layer.event) : _typeLabel(it.layer);
-        t2 = minutesToTime(it.sm) + '–' + minutesToTime(it.em);
-        title = t1 + ' (' + t2 + ') — click to override for ' + bunk;
+        bandStyle = 'background:linear-gradient(180deg,#fde68a,#fbbf24);color:#7c2d12;box-shadow:0 0 0 2px #f59e0b;';
+        mainLabel = ov.activity || 'override';
+        subLabel  = 'added · pinned';
+        titleTxt  = 'OVERRIDE (force): ' + (ov.activity || '') + ' (' + minutesToTime(sm) + '-' + minutesToTime(em) + ') — Click to edit, drag edges to resize';
       }
-      const handles = ov
-        ? `<div class="band-resize band-resize-top" data-edge="top"></div><div class="band-resize band-resize-bottom" data-edge="bottom"></div>`
-        : '';
-      const revert = ov ? `<div class="bo-revert-btn" title="Remove override">✕</div>` : '';
-      html += `<div class="${classes}" data-bunk="${_escHtml(bunk)}" data-start="${it.sm}" data-end="${it.em}" data-layer-type="${_escHtml(it.lt)}"${extraAttr}
-        title="${_escHtml(title)}" style="top:${top}px;height:${height}px;left:${left}px;width:${width}px;${style}">
-        ${handles}<div class="t1">${_escHtml(t1)}</div><div class="t2">${_escHtml(t2)}</div>${revert}
+      html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(ov.layerType || 'custom')}" data-ov-id="${_escHtml(ov.id)}" data-type="${_escHtml(ov.layerType || 'custom')}" data-mode="${_escHtml(mode)}" data-added="1"
+        title="${_escHtml(titleTxt)}"
+        style="${bandStyle}top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
+        <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+        <span class="band-label">${_escHtml(mainLabel)}</span>
+        <span class="band-qty">${_escHtml(subLabel)}</span>
+        <div class="bo-revert-btn" title="Remove" style="position:absolute;top:2px;right:3px;font-size:10px;cursor:pointer;font-weight:700;">✕</div>
+        <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
       </div>`;
     });
 
     html += `</div></div>`; // /track /col
   });
 
-  html += `</div>`;       // /bodyrow
-  html += `</div></div>`; // /grid /scroll
-  html += `<div class="bo2-legend">
-      <span class="bo2-key"><span class="bo2-swatch" style="background:#bbf7d0;"></span>strips = rotating layers · click to restrict</span>
-      <span class="bo2-key"><span class="bo2-swatch" style="background:#fecaca;"></span>tiles = fixed blocks · click to override</span>
-      <span class="bo2-key"><span class="bo2-swatch" style="background:#fbbf24;"></span>colored ring = override active · ✕ removes it</span>
-      <span class="bo2-key" style="color:#94a3b8;">use “+ Add” (or drag a palette tile onto a column) to give one bunk an extra activity</span>
-    </div>`;
+  html += '</div></div>'; // /columns-wrap /scroll
   wrap.innerHTML = html;
-
-  // “+ Add” → create an unconfigured slot + open its picker immediately.
-  wrap.querySelectorAll('.bo2-add').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const bunk = btn.dataset.bunk;
-      const startMin = Math.round((earliestMin + 60) / 5) * 5;
-      const endMin = startMin + 40;
-      const id = uid();
-      const list = (currentOverrides.bunkActivityOverrides || []).slice();
-      list.push({ id, bunk, startMin, endMin, startTime: minutesToTime(startMin), endTime: minutesToTime(endMin), layerType: 'custom', overrideMode: 'addLayer', activity: '+ added layer', location: null, type: 'addLayer' });
-      _boSaveOverrides(list);
-      renderBunkOverridesUI();
-      setTimeout(() => {
-        const c2 = document.getElementById('da-bunk-overrides-container');
-        const tile = c2 && c2.querySelector(`.bo-block[data-ov-id="${id}"]`);
-        if (tile) _boShowAutoLayerPopover(tile, bunk, startMin, endMin, 'custom');
-      }, 80);
-    };
-  });
-
-  // Bring the grid fully into view when the user switches divisions (not on
-  // every re-render — saves/edits would jump the page around otherwise).
-  if (window._boLastGridDiv !== divName) {
-    window._boLastGridDiv = divName;
-    try { wrap.scrollIntoView({ block: 'start', behavior: 'smooth' }); } catch (_e) {}
-  }
 
   // Auto-mode bands → rich popover. Manual mode keeps the simple picker.
   // Edge handles trigger drag-to-resize; clicking the body opens the popover.
@@ -6564,14 +6524,6 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
 
   document.body.appendChild(pop);
   render();
-
-  // ★ BO-v2: clamp the popover fully inside the viewport (it could open with
-  //   its lower half off-screen near the bottom of the grid).
-  try {
-    const _pr = pop.getBoundingClientRect();
-    pop.style.top  = Math.max(8, Math.min(_pr.top,  window.innerHeight - _pr.height - 8)) + 'px';
-    pop.style.left = Math.max(8, Math.min(_pr.left, window.innerWidth  - _pr.width  - 8)) + 'px';
-  } catch (_e) {}
 
   // Close on outside click (skip clicks on the anchor itself)
   setTimeout(() => {
