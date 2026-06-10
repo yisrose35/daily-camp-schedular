@@ -13794,8 +13794,14 @@
                                 _placed += _take.length;
                                 _cursor = _e;
                             }
-                            if (_placed > _bestPlaced) { _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan; }
-                            if (_placed === _bunks.length) break;
+                            // Prefer: most bunks placed, then the TIGHTEST run (smallest
+                            // span from first to last slice) so the chain is as close to
+                            // literally back-to-back as the day's geometry allows.
+                            var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                            var _bestSpan = _bestPlan && _bestPlan.length > 0 ? (_bestPlan[_bestPlan.length - 1].end - _bestPlan[0].start) : Infinity;
+                            if (_placed > _bestPlaced || (_placed === _bestPlaced && _span < _bestSpan)) {
+                                _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan;
+                            }
                         }
                         var _needSpan = Math.ceil(_bunks.length / _sCap) * _sDur; // for the ✗ log only
                         if (!_bestPlan || _bestPlaced <= 0) {
