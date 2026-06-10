@@ -3063,38 +3063,6 @@
             //   wet-bundle event. Standalone Phase-0 placement (the old code here) could
             //   not produce that structure, so it is skipped (early-return below).
 
-            // ★ FN-33: per-bunk layer RESIZE map. A bunk-override with
-            //   overrideMode:'resize' (drag-resized skeleton band in the DA Bunk
-            //   Overrides view) means: THIS bunk runs the layer on a custom window.
-            //   Keyed bunk → [{origStart, origEnd, layerType, newStart, newEnd}].
-            //   Consumed below in the per-bunk pinned push (fixed-type layers only —
-            //   lunch/snacks/dismissal/custom; swim is owned by the bundle machinery
-            //   and grade-wide walls stay synchronized).
-            window._bunkResizedLayers = {};
-            try {
-                const _rzDd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
-                let _rzOvs = _rzDd?.bunkActivityOverrides || [];
-                if (_rzOvs.length === 0) {
-                    try {
-                        const _rzStored = localStorage.getItem('campBunkOverrides_' + (window.currentScheduleDate || ''));
-                        if (_rzStored) { const _p = JSON.parse(_rzStored); if (Array.isArray(_p)) _rzOvs = _p; }
-                    } catch (_e) {}
-                }
-                _rzOvs.forEach(ov => {
-                    if (!ov || ov.overrideMode !== 'resize' || !ov.bunk) return;
-                    if (ov.originalStartMin == null || ov.originalEndMin == null) return;
-                    if (ov.startMin == null || ov.endMin == null || ov.endMin <= ov.startMin) return;
-                    const bk = String(ov.bunk);
-                    (window._bunkResizedLayers[bk] = window._bunkResizedLayers[bk] || []).push({
-                        origStart: ov.originalStartMin, origEnd: ov.originalEndMin,
-                        layerType: String(ov.layerType || 'custom').toLowerCase(),
-                        newStart: ov.startMin, newEnd: ov.endMin
-                    });
-                });
-                const _rzN = Object.values(window._bunkResizedLayers).reduce((s, a) => s + a.length, 0);
-                if (_rzN) log('[Phase0] ' + _rzN + ' per-bunk layer resize override(s) loaded');
-            } catch (_eRz) {}
-
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -3827,31 +3795,18 @@
                             });
                         }
                     } else {
-                        // ★ FN-33: per-bunk resize — if this bunk drag-resized THIS layer
-                        //   in the Bunk Overrides view, place its block on the custom
-                        //   window instead of the grade window. Fixed types only.
-                        //   NOTE: lunch/snacks naturally carry fullGrade (isGradeWide), but
-                        //   an explicit per-bunk resize override WINS over grade-wideness —
-                        //   only league walls must stay synchronized (shared games).
-                        let _pbS = blockStart, _pbE = blockEnd;
-                        if (t === 'lunch' || t === 'snacks' || t === 'dismissal' || t === 'custom') {
-                            const _rzList = (window._bunkResizedLayers && window._bunkResizedLayers[String(bunk)]) || [];
-                            const _rzHit = _rzList.find(r => r.layerType === t && r.origStart === layer.startMin && r.origEnd === layer.endMin);
-                            if (_rzHit) {
-                                _pbS = _rzHit.newStart; _pbE = _rzHit.newEnd;
-                                log('[Phase0] resize override: ' + bunk + ' ' + t + ' ' + layer.startMin + '-' + layer.endMin + ' → ' + _pbS + '-' + _pbE);
-                            }
-                        }
+                        // (★ FN-33 note: per-bunk resize is applied LATER, at the override
+                        //  injection point, by removing this wall and re-pinning it at the
+                        //  custom window as a _bunkOverride block — the lane the pipeline
+                        //  provably never rebuilds. Substituting the window HERE got reverted
+                        //  by downstream wall-rebuild passes.)
                         bunkTimelines[bunk].push({
-                            startMin: _pbS, endMin: _pbE,
+                            startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
                             event: eventName, layer,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
-                            // ★ FN-33: user-resized window — downstream period-containment
-                            //   snapping must leave it exactly where the user put it.
-                            _bunkResized: (_pbS !== blockStart || _pbE !== blockEnd),
                             _customActivity: isCustom ? layer.customActivity : null,
                             _customField: isCustom ? layer.customField : null,
                             _customBunks: isCustom ? layer.customBunks : null
@@ -13274,17 +13229,51 @@
                     return;
                 }
 
-                // ── addLayer (unconfigured) / resize: UI-only states — never pin. ──
+                // ── addLayer (unconfigured): UI-only — never pin. ──
                 //   An added band becomes overrideMode:'force' once the user picks
                 //   its activity in the override popover; until then its activity is
-                //   the literal placeholder "+ added layer". 'resize' marks a band's
-                //   custom window in the override UI; the solver has no per-bunk
-                //   layer-window concept, so it must stay inert at generation.
-                //   Previously BOTH fell through to the force branch below and pinned
-                //   literal "+ added layer" / "⇕ resized" custom blocks into the
-                //   schedule (the "random things appear at generation" bug).
-                if (mode === 'addLayer' || mode === 'resize') {
-                    if (totalIters < 1) log('[P0] Override mode "' + mode + '" for ' + bunk + ' is UI-only — skipped at generation');
+                //   the literal placeholder "+ added layer". Previously it fell through
+                //   to the force branch below and pinned a literal "+ added layer"
+                //   custom block (the "random things appear at generation" bug).
+                if (mode === 'addLayer') {
+                    if (totalIters < 1) log('[P0] Override mode "addLayer" for ' + bunk + ' is unconfigured — skipped at generation');
+                    return;
+                }
+
+                // ── resize (★ FN-33): re-pin the bunk's wall on its custom window. ──
+                //   The user drag-resized a fixed-type layer band for THIS bunk in the
+                //   Bunk Overrides view. Find the wall Phase 0 placed from the ORIGINAL
+                //   layer window, remove it, and re-pin the same block at the custom
+                //   window with the _bunkOverride armor (the lane downstream passes
+                //   provably never rebuild — substituting the window inside Phase 0's
+                //   own push got reverted by wall-rebuild passes). _bunkResized also
+                //   exempts it from the period-containment snap in the wall copy.
+                if (mode === 'resize') {
+                    const _rzLt = String(ov.layerType || 'custom').toLowerCase();
+                    const _rzOS = ov.originalStartMin, _rzOE = ov.originalEndMin;
+                    if (_rzOS == null || _rzOE == null) return;
+                    if (!(_rzLt === 'lunch' || _rzLt === 'snacks' || _rzLt === 'dismissal' || _rzLt === 'custom')) {
+                        if (totalIters < 1) log('[P0] resize on layer type "' + _rzLt + '" not supported — skipped');
+                        return;
+                    }
+                    const _rzTl = bunkTimelines[bunk];
+                    const _rzIdx = _rzTl.findIndex(b => b && !b._bunkOverride
+                        && String(b.type || '').toLowerCase() === _rzLt
+                        && b.startMin === _rzOS && b.endMin === _rzOE);
+                    if (_rzIdx < 0) {
+                        if (totalIters < 1) log('[P0] resize: no ' + _rzLt + ' wall at ' + _rzOS + '-' + _rzOE + ' for ' + bunk + ' — skipped');
+                        return;
+                    }
+                    const _rzOrig = _rzTl[_rzIdx];
+                    _rzTl.splice(_rzIdx, 1);
+                    _rzTl.push(Object.assign({}, _rzOrig, {
+                        startMin: tStart, endMin: tEnd,
+                        _bunkOverride: true, _activityLocked: true, _noBacktrack: true,
+                        _fixed: true, _bunkResized: true, _gradeWide: false,
+                        _source: 'capacity_checked'
+                    }));
+                    if (totalIters < 1) log('[P0] resize re-pin: ' + bunk + ' ' + _rzLt + ' ' + _rzOS + '-' + _rzOE + ' → ' + tStart + '-' + tEnd);
+                    overrideBlockCount++;
                     return;
                 }
 
