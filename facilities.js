@@ -388,6 +388,8 @@ function createDefaultSpecialActivity(name) {
     return {
         name: name,
         type: 'Special',
+        instructor: '',
+        consecutiveBunks: false,
         available: true,
         sharableWith: { type: 'not_sharable', divisions: [], capacity: 2 },
         accessRestrictions: { enabled: false, divisions: {}, priorityList: [], usePriority: false },
@@ -1076,6 +1078,12 @@ function renderSpecialConfig(container, fac) {
         const saBody = document.createElement("div");
         saBody.style.cssText = "padding:12px;";
 
+        // ★ INSTRUCTOR — first config. Names the person who runs this special
+        //   and lets the user link other activities the same person also runs
+        //   via the Connected to subsection.
+        saBody.appendChild(section("Instructor", summarySpecialInstructor(saData),
+            () => renderSpecialInstructor(saData, fac)));
+
         saBody.appendChild(section("Subcategory", summarySpecialSubcategory(saData),
             () => renderSpecialSubcategory(saData)));
 
@@ -1308,9 +1316,158 @@ function renderGeneralConfig(container, fac) {
     divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
     container.appendChild(divider);
 
+    // ★ INSTRUCTOR — names the person who runs each general activity at this
+    //   facility. Two activities tagged with the same instructor (specials +
+    //   general) are mutex at any slot (canBlockFit gate). Listed FIRST per
+    //   user preference, before Sharing Rules.
+    container.appendChild(section("Instructor", summaryFacilityInstructors(fac),
+        () => renderFacilityInstructors(fac)));
+
     container.appendChild(section("Sharing Rules", summaryGeneralSharing(fieldData),
         () => renderGeneralSharing(fieldData)));
 }
+
+// =========================================================================
+// FACILITY INSTRUCTOR — per-activity tag, section pattern (like Sharing Rules)
+// =========================================================================
+function summaryFacilityInstructors(fac) {
+    const acts = fac.generalActivities || [];
+    if (acts.length === 0) return 'No activities to tag';
+    // Distinct, non-empty instructor names across activities at this facility.
+    const set = new Set();
+    acts.forEach(a => {
+        if (a && typeof a.instructor === 'string' && a.instructor.trim()) set.add(a.instructor.trim());
+    });
+    if (set.size === 0) return 'No instructor set';
+    if (set.size === 1) return [...set][0];
+    return [...set].join(', ');
+}
+
+function renderFacilityInstructors(fac) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const acts = fac.generalActivities || [];
+    if (acts.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-size:0.85rem; color:#6B7280;';
+        empty.textContent = 'Add a general activity to this facility first.';
+        wrap.appendChild(empty);
+        return wrap;
+    }
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280; margin-bottom:4px;';
+    desc.textContent = 'Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    wrap.appendChild(desc);
+
+    // Shared datalist of existing instructor names (specials + all general).
+    const dlId = 'fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+
+    let primaryInstructor = '';
+    if (acts.length === 1) {
+        // Single activity — no name label (it's already shown above in Configured Activities).
+        const ga = acts[0];
+        primaryInstructor = (typeof ga.instructor === 'string' ? ga.instructor : '').trim();
+        const inputRow = document.createElement('div');
+        inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+        const label = document.createElement('span');
+        label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+        label.textContent = 'Instructor:';
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = 'No instructor';
+        input.value = ga.instructor || '';
+        input.setAttribute('list', dlId);
+        input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
+        input.addEventListener('change', () => {
+            const v = (input.value || '').trim();
+            if ((ga.instructor || '') === v) return;
+            ga.instructor = v;
+            saveData();
+            renderDetailPane();
+        });
+        inputRow.appendChild(label);
+        inputRow.appendChild(input);
+        wrap.appendChild(inputRow);
+    } else {
+        // 2+ activities — keep per-activity labels so each input is unambiguous.
+        primaryInstructor = (typeof acts[0].instructor === 'string' ? acts[0].instructor : '').trim();
+        acts.forEach(ga => {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex; align-items:center; gap:12px; padding:8px 10px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:6px;';
+            const nameEl = document.createElement('div');
+            nameEl.style.cssText = 'flex:1; font-weight:600; font-size:0.88rem; color:#1F2937;';
+            nameEl.textContent = ga.name;
+            row.appendChild(nameEl);
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.placeholder = 'No instructor';
+            input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+            input.setAttribute('list', dlId);
+            input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:200px; background:#fff;';
+            input.addEventListener('change', () => {
+                const v = (input.value || '').trim();
+                if ((ga.instructor || '') === v) return;
+                ga.instructor = v;
+                saveData();
+                renderDetailPane();
+            });
+            row.appendChild(input);
+            wrap.appendChild(row);
+        });
+    }
+
+    // Also-runs picker — declare other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(primaryInstructor, { facilityName: fac.name });
+    if (aBlock) wrap.appendChild(aBlock);
+
+    return wrap;
+}
+
+// Cross-write helper — called from window.buildAlsoRunsChecklist when the
+// user toggles an "also runs" checkbox that targets a general activity.
+// Updates the in-memory facilities array, persists, and re-renders.
+window.setGeneralActivityInstructor = function(activityName, instructor) {
+    if (!activityName) return false;
+    let touched = false;
+    (facilities || []).forEach(f => {
+        (f.generalActivities || []).forEach(ga => {
+            if (ga && ga.name === activityName) {
+                ga.instructor = String(instructor || '');
+                touched = true;
+            }
+        });
+    });
+    if (touched) {
+        saveData();
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    }
+    return touched;
+};
 
 // =========================================================================
 // GENERAL ACTIVITY SHARING — Pair-based UI mirroring Specials
@@ -2180,11 +2337,12 @@ function summarySpecialWeather(s) {
 }
 function summarySpecialSchedulingMode(s) {
     if (s.fullGrade) return "Full Grade — entire grade together";
+    const consec = s.consecutiveBunks === true ? 'Consecutive · ' : '';
     const rules = s.sharableWith;
-    if (!rules || rules.type === 'not_sharable') return "Individual bunks — no sharing";
+    if (!rules || rules.type === 'not_sharable') return consec + "Individual bunks — no sharing";
     const pc = Object.keys(rules.allowedPairs || {}).filter(k => rules.allowedPairs[k]).length;
     const cap = parseInt(rules.capacity) || 2;
-    return 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
+    return consec + 'Individual bunks — sharing on' + (pc > 0 ? ', ' + pc + ' pair' + (pc !== 1 ? 's' : '') : ', no pairs set') + ', max ' + cap;
 }
 function summarySpecialUsage(s) {
     var parts = [];
@@ -2249,6 +2407,79 @@ function summarySpecialMultiPart(s) {
 function summarySpecialSubcategory(s) {
     var v = (typeof s.subcategory === 'string') ? s.subcategory.trim() : '';
     return v ? v : 'Uncategorized';
+}
+
+function summarySpecialInstructor(s) {
+    var v = (typeof s.instructor === 'string') ? s.instructor.trim() : '';
+    return v ? v : 'No instructor set';
+}
+
+// Renders the Instructor section for a special activity inside the facility
+// view (the renderSpecialConfig card). saData is the special's record;
+// `fac` is the hosting facility (used to exclude self from the connections
+// picker).
+function renderSpecialInstructor(saData, fac) {
+    const container = document.createElement('div');
+    container.style.cssText = 'display:flex; flex-direction:column; gap:10px;';
+
+    const desc = document.createElement('div');
+    desc.style.cssText = 'font-size:0.78rem; color:#6B7280;';
+    desc.textContent = 'Name the person who runs this special. Two activities sharing the same instructor — across specials and general — can\'t be scheduled at the same time.';
+    container.appendChild(desc);
+
+    // Shared datalist (existing instructor names across specials + general).
+    const dlId = 'sa-fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+
+    const inputRow = document.createElement('div');
+    inputRow.style.cssText = 'display:flex; align-items:center; gap:10px;';
+    const label = document.createElement('span');
+    label.style.cssText = 'font-size:0.85rem; font-weight:500; color:#374151;';
+    label.textContent = 'Instructor:';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.placeholder = 'No instructor';
+    input.value = (typeof saData.instructor === 'string') ? saData.instructor : '';
+    input.setAttribute('list', dlId);
+    input.style.cssText = 'padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.9rem; flex:1; min-width:200px;';
+    input.addEventListener('change', () => {
+        const v = (input.value || '').trim();
+        if ((saData.instructor || '') === v) return;
+        saData.instructor = v;
+        saveSpecialData(saData);
+        if (typeof renderDetailPane === 'function') renderDetailPane();
+    });
+    inputRow.appendChild(label);
+    inputRow.appendChild(input);
+    container.appendChild(inputRow);
+
+    // "Connected to" subsection — pick other activities the same instructor runs.
+    const aBlock = window.buildAlsoRunsChecklist?.(saData.instructor, { specialName: saData.name });
+    if (aBlock) container.appendChild(aBlock);
+
+    return container;
 }
 
 function saveSpecialData(saData) {
@@ -2732,6 +2963,34 @@ function renderSpecialSchedulingMode(saData) {
                 '</div>';
             container.appendChild(infoBox);
             return;
+        }
+
+        // ── Step 1.5 (AUTO ONLY): Consecutive Bunks ──────────────
+        // Hidden in manual mode — the manual builder doesn't support
+        // multi-slot per-grade allocation. Auto mode reserves N consecutive
+        // slots and assigns bunks round-robin (sharing-capacity-aware).
+        const _isAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        if (_isAutoMode) {
+            const consecWrap = document.createElement('div');
+            consecWrap.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px; margin-bottom:14px;';
+            const consecCheck = document.createElement('input');
+            consecCheck.type = 'checkbox';
+            consecCheck.checked = saData.consecutiveBunks === true;
+            consecCheck.id = 'sa-consec-' + String(saData.name || '').replace(/[^a-z0-9]/gi, '_');
+            consecCheck.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+            const consecLabel = document.createElement('label');
+            consecLabel.htmlFor = consecCheck.id;
+            consecLabel.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+            consecLabel.innerHTML = '<strong>Schedule bunks consecutively</strong><div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">Each bunk in the grade goes one after the next, using this activity\'s duration as the per-bunk slot. If sharing is on, bunks share each slot up to capacity (e.g. 6 bunks at capacity 2 = 3 consecutive slots).</div>';
+            consecCheck.addEventListener('change', () => {
+                saData.consecutiveBunks = consecCheck.checked;
+                saveSpecialData(saData);
+                renderContent();
+                updateSummary();
+            });
+            consecWrap.appendChild(consecCheck);
+            consecWrap.appendChild(consecLabel);
+            container.appendChild(consecWrap);
         }
 
         // ── Step 2: Allow sharing? ────────────────────────────────

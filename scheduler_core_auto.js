@@ -1062,13 +1062,36 @@
                 return _restrictionWidth(a) - _restrictionWidth(b);
             });
         } catch (_) {}
+        // ★ CONSECUTIVE-BUNK SPECIALS (auto-only feature):
+        //   A special flagged consecutiveBunks runs the whole grade through it
+        //   ONE BUNK AT A TIME, back-to-back (e.g. VR: bunk1 10:40-11:00,
+        //   bunk2 11:00-11:20, ...). These are RESERVED by Phase 2.35 as
+        //   staggered walls (the same machinery staggered swim uses) and the
+        //   rest of each bunk's day is filled around them. They are removed
+        //   from `todaysSpecials` here so the normal per-bunk special
+        //   distribution (shopping lists / planner / gap filler) never
+        //   double-places them. No-op when none are configured.
+        function _isConsecutiveSpecial(s) {
+            if (!s) return false;
+            if (s.consecutiveBunks === true) return true;
+            try { const c = getSpecialConfig(s.name, globalSettings); return !!(c && c.consecutiveBunks === true); } catch (_e) { return false; }
+        }
+        const consecutiveBunkSpecials = todaysSpecials.filter(_isConsecutiveSpecial);
+        if (consecutiveBunkSpecials.length > 0) {
+            for (let _ci = todaysSpecials.length - 1; _ci >= 0; _ci--) {
+                if (_isConsecutiveSpecial(todaysSpecials[_ci])) todaysSpecials.splice(_ci, 1);
+            }
+            log('[STEP 1] Consecutive-bunk specials (reserved by Phase 2.35, excluded from normal pool): ' +
+                consecutiveBunkSpecials.map(s => s.name).join(', '));
+        }
+
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
         // ★ pickFillActivity — choose the longest real special that fits inside a gap.
         // Used everywhere "General Activity Slot" was previously hard-coded.
         // Returns the special's name, or null if nothing fits (caller falls back gracefully).
-        function pickFillActivity(gapDur, grade, bunk) {
+        function pickFillActivity(gapDur, grade, bunk, fillStartMin, fillEndMin) {
             var best = null, bestDur = 0;
             for (var _pfi = 0; _pfi < todaysSpecials.length; _pfi++) {
                 var _s = todaysSpecials[_pfi];
@@ -1080,6 +1103,10 @@
                 var _dur = getSpecialDuration(_s.name, activityProperties, globalSettings) ||
                            _s.defaultDuration || _s.duration || _s.durationMin || _s.periodMin || 0;
                 if (_dur <= 0 || _dur > gapDur) continue;
+                // ★ Instructor mutex: when the caller supplies the slot's absolute
+                //   time, skip specials whose instructor is busy elsewhere then.
+                if (fillStartMin != null && fillEndMin != null &&
+                    instructorConflictAt(_s.name, fillStartMin, fillEndMin, bunk)) continue;
                 if (_dur > bestDur) { best = _s.name; bestDur = _dur; }
             }
             return best;
@@ -1568,11 +1595,60 @@
 
         // ── Convenience wrappers ─────────────────────────────────────
 
+        // ═══ INSTRUCTOR MUTEX (auto-mode) ═══════════════════════════════════
+        // Two activities tagged with the same `instructor` (on specials or on
+        // facilities' general activities) can't run at overlapping times — the
+        // same person can't be in two places at once. Manual mode enforces this
+        // in canBlockFit (scheduler_core_utils.js); this is the auto-mode
+        // equivalent, consulted by every special-placement gate. Same activity
+        // at the same time is NOT a conflict (one class, capacity-shared).
+        // Camps with no instructor tags pay one map lookup → ~zero cost.
+        var _instrMapAuto = null;
+        function _getInstructorMap() {
+            if (_instrMapAuto) return _instrMapAuto;
+            _instrMapAuto = {};
+            try {
+                var _imPush = function (n, i) {
+                    if (n && typeof i === 'string' && i.trim()) {
+                        _instrMapAuto[String(n).toLowerCase().trim()] = i.trim().toLowerCase();
+                    }
+                };
+                ((globalSettings.app1 && globalSettings.app1.specialActivities) || []).forEach(function (s) { if (s) _imPush(s.name, s.instructor); });
+                (globalSettings.specialActivities || []).forEach(function (s) { if (s) _imPush(s.name, s.instructor); });
+                (globalSettings.facilities || []).forEach(function (f) {
+                    ((f && f.generalActivities) || []).forEach(function (g) { if (g) _imPush(g.name, g.instructor); });
+                });
+            } catch (_eIM) {}
+            return _instrMapAuto;
+        }
+        function instructorConflictAt(actName, startMin, endMin, excludeBunk) {
+            var map = _getInstructorMap();
+            var meKey = String(actName || '').toLowerCase().trim();
+            var me = map[meKey];
+            if (!me) return false;
+            for (var bk in bunkTimelines) {
+                if (excludeBunk != null && String(bk) === String(excludeBunk)) continue;
+                var tl = bunkTimelines[bk] || [];
+                for (var i = 0; i < tl.length; i++) {
+                    var b = tl[i];
+                    if (!b || b.startMin == null || b.endMin == null) continue;
+                    if (b.startMin >= endMin || b.endMin <= startMin) continue;
+                    var other = b._assignedSpecial || b.event;
+                    if (!other) continue;
+                    var ok = String(other).toLowerCase().trim();
+                    if (ok === meKey) continue; // same activity = same class, allowed
+                    if (map[ok] === me) return true;
+                }
+            }
+            return false;
+        }
+
         function registerSpecialUsage(specialName, grade, startMin, endMin) {
             rtRegister('special', specialName, grade, startMin, endMin);
         }
 
         function canUseSpecialAtTime(specialName, grade, startMin, endMin) {
+            if (instructorConflictAt(specialName, startMin, endMin)) return false;
             const info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
             return rtCanUse('special', specialName, grade, startMin, endMin,
                 info.shareType, info.capacity, info.allowedDivisions, info.allowedPairs);
@@ -4606,6 +4682,7 @@
             const globalFieldClaims = [];
 
             function canAssignSpecialToGrade(specialName, grade, startMin, endMin) {
+                if (instructorConflictAt(specialName, startMin, endMin)) return false;
                 var info = getSpecialSharingInfo(specialName, activityProperties, globalSettings);
                 var existing = globalSpecialUsage[specialName] || [];
                 // cross_division: pair-check ALL overlapping entries (incl same-grade)
@@ -6595,6 +6672,22 @@
             var tl = bunkTimelines[bunk];
             if (!tl || tl.length === 0) return;
 
+            // ★ Pass 0: CONSECUTIVE-BUNK SNAP-BACK.
+            //   Phase 2.35 reserves consecutive-bunk specials at exact intervals
+            //   (stamped _cbResStart/_cbResEnd). The many later mutation passes
+            //   (rebalancers, POST-GAP absorbers, LNS) can nudge even _fixed
+            //   blocks; this rights the wall every time integrity runs, and the
+            //   overlap pass below trims whatever drifted into its place (the
+            //   wall is _fixed, the intruder isn't). No-op for normal blocks.
+            for (var _cb0 = 0; _cb0 < tl.length; _cb0++) {
+                var _cbB = tl[_cb0];
+                if (_cbB && _cbB._consecutiveBunk && _cbB._cbResStart != null &&
+                    (_cbB.startMin !== _cbB._cbResStart || _cbB.endMin !== _cbB._cbResEnd)) {
+                    _cbB.startMin = _cbB._cbResStart;
+                    _cbB.endMin = _cbB._cbResEnd;
+                }
+            }
+
             // Pass 1: Sort and fix overlaps
             tl.sort(function(a, b) { return a.startMin - b.startMin; });
             for (var i = 0; i < tl.length - 1; i++) {
@@ -6610,11 +6703,14 @@
                         if (dur1 >= dur2) tl[i+1].startMin = tl[i].endMin;
                         else tl[i].endMin = tl[i+1].startMin;
                     } else {
-                        // Both fixed — Change blocks win; trim the non-change block.
-                        // If neither or both are change, force trim the later one.
+                        // Both fixed — consecutive-bunk walls win first (their exact
+                        // interval IS the feature; trim the other fixed block), then
+                        // Change blocks win; otherwise force trim the later one.
                         var _iIsChg = ['pre-change','post-change','change'].includes((tl[i].type||'').toLowerCase());
                         var _i1IsChg = ['pre-change','post-change','change'].includes((tl[i+1].type||'').toLowerCase());
-                        if (_i1IsChg && !_iIsChg) tl[i].endMin = tl[i+1].startMin;
+                        if (tl[i]._consecutiveBunk && !tl[i+1]._consecutiveBunk) tl[i+1].startMin = tl[i].endMin;
+                        else if (tl[i+1]._consecutiveBunk && !tl[i]._consecutiveBunk) tl[i].endMin = tl[i+1].startMin;
+                        else if (_i1IsChg && !_iIsChg) tl[i].endMin = tl[i+1].startMin;
                         else tl[i+1].startMin = tl[i].endMin;
                     }
                 }
@@ -6649,7 +6745,8 @@
                 //   declared dMin (= their actual duration) so integrity never drops them.
                 var _exactFitSource = blk._source === 'post-gap-forced' ||
                     blk._source === 'perfection-fill' ||
-                    blk._source === 'sport-fill-negotiated';
+                    blk._source === 'sport-fill-negotiated' ||
+                    blk._consecutiveBunk === true;
                 if (_exactFitSource && blk.dMin != null) {
                     dMin = blk.dMin;
                     dMax = Math.max(dMin, blk.dMax != null ? blk.dMax : dMax);
@@ -13561,6 +13658,217 @@
                 }
             }
 
+            // ── Phase 2.35: Reserve consecutive-bunk specials (one bunk at a time) ──
+            // For a special flagged consecutiveBunks (e.g. VR), the whole grade
+            // cycles through it back-to-back: bunk1 [T, T+dur], bunk2 [T+dur,
+            // T+2dur], … grouped by sharing capacity. We RESERVE those slices as
+            // fixed walls now — exactly like staggered swim above — so the fill
+            // phases pack the rest of each bunk's day around them. These specials
+            // were removed from the normal pool at STEP 1, so no double-placement.
+            // Whole pass is a hard no-op when none are configured.
+            if (consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+              try {
+                var _p235Count = 0;
+                consecutiveBunkSpecials.forEach(function(_spCfg) {
+                    var _sName = _spCfg.name;
+                    var _sDur = getSpecialDuration(_sName, activityProperties, globalSettings)
+                                || parseInt(_spCfg.duration) || parseInt(_spCfg.defaultDuration) || 30;
+                    if (_sDur < 5) return;
+                    var _sCap = getSpecialCapacity(_sName, activityProperties, globalSettings) || 1;
+                    if (_sCap < 1) _sCap = 1;
+                    var _sField = getLocationForSpecial(_sName, activityProperties, globalSettings) || null;
+
+                    // Station busy-check across ALL already-placed bunks (any grade),
+                    // so two grades can't both claim a single station at once.
+                    function _stationBusy(s, e) {
+                        if (!_sField) return false;
+                        var _fLow = String(_sField).toLowerCase().trim();
+                        for (var _bk in bunkTimelines) {
+                            var _tl = bunkTimelines[_bk] || [];
+                            for (var _i = 0; _i < _tl.length; _i++) {
+                                var _b = _tl[_i];
+                                if (!_b) continue;
+                                var _loc = _b._specialLocation || _b.field || null;
+                                if (!_loc || String(_loc).toLowerCase().trim() !== _fLow) continue;
+                                if (_b.startMin < e && _b.endMin > s) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    // Bunk free-check: no pinned/locked block overlaps [s,e].
+                    function _bunkFree(bunk, s, e) {
+                        var _tl = bunkTimelines[bunk] || [];
+                        for (var _i = 0; _i < _tl.length; _i++) {
+                            var _b = _tl[_i];
+                            if (!_b) continue;
+                            if (!(_b._activityLocked || _b._fixed || _b._classification === 'pinned')) continue;
+                            var _bt = (_b.type || '').toLowerCase();
+                            if (_bt === 'pre-change' || _bt === 'post-change') continue;
+                            if (_b.startMin < e && _b.endMin > s) return false;
+                        }
+                        return true;
+                    }
+
+                    allGrades.forEach(function(grade) {
+                        if (allowedSet && !allowedSet.has(String(grade))) return;
+                        if (!isSpecialAvailableForDivision(_sName, grade, globalSettings)) return;
+                        // Grade must be configured to receive this special: either a
+                        // normal 'special' rotation layer, or a custom layer naming it.
+                        var _gLayers = layersByGrade[grade] || [];
+                        var _hasSpecialSlot = _gLayers.some(function(l) {
+                            var _lt = (l.type || '').toLowerCase();
+                            if (_lt === 'special') return true;
+                            return _lt === 'custom' && (l.event === _sName || l.name === _sName);
+                        });
+                        if (!_hasSpecialSlot) return;
+
+                        var _bunks = getBunksForGrade(grade, divisions).filter(function(b) {
+                            if (!isSpecialAvailableForBunk(_sName, grade, b, globalSettings)) return false;
+                            return !(bunkTimelines[b] || []).some(function(x) {
+                                return x && (x._assignedSpecial === _sName || x.event === _sName);
+                            });
+                        });
+                        if (_bunks.length === 0) return;
+
+                        var _gObj = divisions[grade] || divisions[String(grade)];
+                        var _gStart = parseTimeToMinutes(_gObj && _gObj.startTime) || 540;
+                        var _gEnd   = parseTimeToMinutes(_gObj && _gObj.endTime)   || 960;
+                        var _band = staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.special;
+
+                        // Candidate anchors = period starts in the grade day (plus the
+                        // special band start). We pick the anchor that fits the most bunks.
+                        var _periods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
+                            : [{ startMin: _gStart, endMin: _gEnd }];
+                        var _anchors = [];
+                        _periods.forEach(function(p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
+                        if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                        if (_anchors.length === 0) _anchors.push(_gStart);
+                        if (_band) {
+                            _anchors.sort(function(a, b) {
+                                var _da = a >= _band.start ? a - _band.start : 100000 + (_band.start - a);
+                                var _db = b >= _band.start ? b - _band.start : 100000 + (_band.start - b);
+                                return _da - _db;
+                            });
+                        }
+
+                        // PERIOD-AWARE CURSOR WALK. Naive anchor + j*dur slicing can
+                        // straddle a bell-period boundary (e.g. 12:10-12:30 across the
+                        // 12:10|12:15 break) — such a block maps to no slot at
+                        // materialization and is dropped. Instead, walk a cursor through
+                        // the bell periods: each slice must fit ENTIRELY inside one
+                        // period; when it can't, jump to the next period start. Slices
+                        // also skip past station-busy / instructor-busy / all-bunks-busy
+                        // stretches in 5-min steps — the run flows around lunch and
+                        // other grade-wide anchors exactly like a human would lay it.
+                        var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
+                        if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
+
+                        var _bestAnchor = null, _bestPlaced = -1, _bestPlan = null;
+                        for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                            var _t0 = _anchors[_ai];
+                            var _plan = [], _placed = 0;
+                            var _pool = _bunks.slice();
+                            var _cursor = _t0;
+                            var _guard = 0;
+                            while (_placed < _bunks.length && _guard++ < 300) {
+                                // find the first period that can contain a full slice at/after cursor
+                                var _per = null, _s = null;
+                                for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                    var _p3 = _walkPeriods[_wp];
+                                    var _cand = Math.max(_cursor, _p3.startMin);
+                                    if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                }
+                                if (!_per) break;
+                                var _e = _s + _sDur;
+                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)) { _cursor = _s + 5; continue; }
+                                var _take = [];
+                                for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
+                                    if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
+                                }
+                                if (_take.length === 0) { _cursor = _s + 5; continue; }
+                                for (var _tk = 0; _tk < _take.length; _tk++) {
+                                    _pool.splice(_pool.indexOf(_take[_tk]), 1);
+                                }
+                                _plan.push({ start: _s, end: _e, bunks: _take });
+                                _placed += _take.length;
+                                _cursor = _e;
+                            }
+                            // Prefer: most bunks placed, then the TIGHTEST run (smallest
+                            // span from first to last slice) so the chain is as close to
+                            // literally back-to-back as the day's geometry allows.
+                            var _span = _plan.length > 0 ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                            var _bestSpan = _bestPlan && _bestPlan.length > 0 ? (_bestPlan[_bestPlan.length - 1].end - _bestPlan[0].start) : Infinity;
+                            if (_placed > _bestPlaced || (_placed === _bestPlaced && _span < _bestSpan)) {
+                                _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan;
+                            }
+                        }
+                        var _needSpan = Math.ceil(_bunks.length / _sCap) * _sDur; // for the ✗ log only
+                        if (!_bestPlan || _bestPlaced <= 0) {
+                            log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — no anchor fits the run (bunks=' + _bunks.length + ', dur=' + _sDur + ', span=' + _needSpan + ')');
+                            return;
+                        }
+
+                        _bestPlan.forEach(function(slot) {
+                            if (!slot || !slot.bunks || slot.bunks.length === 0) return;
+                            slot.bunks.forEach(function(bunk) {
+                                // Match the canonical special-wall shape (see Phase 2.4
+                                // day-packer push) so downstream passes treat it
+                                // identically to any other pre-placed special.
+                                // ★ type:'custom' — NOT 'special'. Phase 3's template pipeline
+                                //   REBUILDS each bunk's day and re-times type-'special' walls
+                                //   (live evidence: walls re-emerged without _consecutiveBunk
+                                //   or their reservation stamps, scattered). Type-'custom'
+                                //   pinned blocks ride the protected lane every pass honors
+                                //   (same as user custom layers like "Main activity"), so the
+                                //   reserved interval survives to materialization untouched.
+                                bunkTimelines[bunk].push({
+                                    startMin: slot.start, endMin: slot.end,
+                                    type: 'custom', event: _sName, layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                    _assignedSpecial: _sName,
+                                    _specialLocation: _sField,
+                                    _specialDuration: _sDur,
+                                    _isSpecialLocation: !!_sField,
+                                    // ★ Reserved geometry — ensureTimelineIntegrity's Pass-0
+                                    //   snap-back restores the wall to exactly this interval
+                                    //   if any later pass nudges it. Exact-fit dMin/dMax stop
+                                    //   the duration enforcer from stretching it.
+                                    dMin: _sDur, dMax: _sDur,
+                                    _cbResStart: slot.start, _cbResEnd: slot.end,
+                                    _consecutiveBunk: true, _source: 'phase2.35'
+                                });
+                                _p235Count++;
+                                // Claim the station so Phase 3 sports + other specials
+                                // can't grab it during this bunk's slice.
+                                try { registerSpecialUsage(_sName, grade, slot.start, slot.end); } catch (_e1) {}
+                                try { registerCrossGrade(grade, 'special', slot.start, slot.end, _sName); } catch (_e2) {}
+                                try {
+                                    if (_sField && fieldLedger && fieldLedger[_sField]) {
+                                        fieldLedger[_sField].claims.push({ bunk: bunk, grade: grade, activity: _sName, startMin: slot.start, endMin: slot.end });
+                                    }
+                                } catch (_e3) {}
+                            });
+                        });
+                        if (_bestPlaced < _bunks.length) {
+                            log('[Phase2.35] ⚠ ' + grade + '/' + _sName + ' partial: ' + _bestPlaced + '/' + _bunks.length + ' consecutive from ' + minutesToTimeLabel(_bestAnchor) + ' (rest fall through to normal fill)');
+                        } else {
+                            log('[Phase2.35] ✓ ' + grade + '/' + _sName + ' — whole grade (' + _bunks.length + ' bunks) consecutive from ' + minutesToTimeLabel(_bestAnchor) + ', ' + _sDur + 'min each, cap ' + _sCap);
+                        }
+                    });
+                });
+                if (_p235Count > 0) {
+                    allGrades.forEach(function(grade) {
+                        getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                    log('[Phase2.35] ★ RESERVED ' + _p235Count + ' consecutive-bunk special block(s) as walls');
+                }
+              } catch (_e235) {
+                warn('[Phase2.35] error (skipped, non-fatal): ' + (_e235 && _e235.message));
+              }
+            }
+
             // ── Phase 2.4: Pre-place rotation events as walls (STRICT whole-grade) ──
             // Rotation events (Scheduled Activities) are camp-wide — every bunk in
             // the date range must pass through. Runs AFTER Phase 2.3 (swim placement)
@@ -16266,6 +16574,17 @@
         // STEP 2.7 — FORMALIZE
         // =====================================================================
         log('\n[STEP 2.7] Formalizing...');
+        // ★ Final consecutive-bunk snap sweep — the restored best timelines may
+        //   carry wall drift introduced after a pass's last integrity call;
+        //   one more integrity run rights every wall (Pass-0 snap-back) and
+        //   resolves any resulting overlap before the skeleton is formalized.
+        if (typeof consecutiveBunkSpecials !== 'undefined' && consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+            try {
+                allGrades.forEach(function (grade) {
+                    getBunksForGrade(grade, divisions).forEach(function (bunk) { ensureTimelineIntegrity(bunk); });
+                });
+            } catch (_eFS) { warn('[Phase2.35] final snap sweep error (non-fatal): ' + (_eFS && _eFS.message)); }
+        }
         const autoSkeleton = [];
         allGrades.forEach(grade => {
             getBunksForGrade(grade, divisions).forEach(bunk => {
@@ -16276,7 +16595,7 @@
                         startMin: block.startMin, endMin: block.endMin,
                         event: (block.event && block.event !== 'General Activity Slot')
                             ? block.event
-                            : (pickFillActivity(block.endMin - block.startMin, grade, bunk) || 'Free'),
+                            : (pickFillActivity(block.endMin - block.startMin, grade, bunk, block.startMin, block.endMin) || 'Free'),
                         type: block.type || 'slot',
                         _autoGenerated: true, _classification: block._classification,
                         _suggestedActivity: block._assignedSpecial || block._assignedSport || null,
@@ -16284,6 +16603,7 @@
                         _durationStrict: block._activityLocked || false,
                         _fixed: block._fixed || false, _pinned: block._classification === 'pinned',
                         _specialLocation: block._specialLocation || null,
+                        _consecutiveBunk: block._consecutiveBunk || false,
                         _draftActivity: block._draftActivity || null, _draftField: block._draftField || null,
                         _preChangeMin: block._preChangeMin != null ? block._preChangeMin : null,
                         _postChangeMin: block._postChangeMin != null ? block._postChangeMin : null,
@@ -16429,6 +16749,162 @@
         }
         } // end if (false) — post-pass disabled; see JointLeagueSlot pre-pass
 
+        // =====================================================================
+        // ★ CONSECUTIVE-BUNK SPECIAL ALIGNMENT (final, runs last)
+        // Phase 2.35 reserves consecutive-bunk specials early, but the many
+        // bunk-timeline packing passes between then and here can scatter those
+        // walls (and a scattered not_sharable special then self-overlaps and
+        // gets culled in materialization). This pass runs on the FINAL skeleton,
+        // right before the per-bunk grid is built, and re-snaps each grade's
+        // consecutive-special blocks into a clean back-to-back, non-overlapping
+        // run so they survive and display one-after-the-next. Field-safe: a
+        // displaced block is only swapped into the special's vacated slot when
+        // that move introduces no same-field clash for another bunk.
+        // No-op when no consecutive-bunk special is configured.
+        //
+        // ★ SUPERSEDED by the Pass-0 snap-back inside ensureTimelineIntegrity
+        //   plus the final snap sweep at STEP 2.7 — walls arrive here already
+        //   at their reserved intervals. The mutation body below is DISABLED
+        //   (if (false)): with greedy bunk↔slice matching, its division-order
+        //   re-sort could double-book the station. A verify-only diagnostic
+        //   replaces it so the console always shows the final run layout.
+        try {
+          if (consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+            try {
+                consecutiveBunkSpecials.forEach(function (spCfg) {
+                    var vName = spCfg.name;
+                    var byGrade = {};
+                    autoSkeleton.forEach(function (b) {
+                        if (b && (b.event === vName || b._suggestedActivity === vName)) {
+                            (byGrade[b.division] = byGrade[b.division] || []).push(b);
+                        }
+                    });
+                    Object.keys(byGrade).forEach(function (g) {
+                        var arr = byGrade[g].slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                        var runs = [];
+                        for (var i = 0; i < arr.length; i++) {
+                            runs.push(arr[i]._bunk + '@' + minutesToTimeLabel(arr[i].startMin) + '-' + minutesToTimeLabel(arr[i].endMin));
+                        }
+                        // Sequential = sorted, never overlapping (capacity groups share
+                        // identical intervals — those count as one slice). A gap between
+                        // slices is EXPECTED when it crosses a bell-period boundary
+                        // (the cursor walk only breaks runs there / at busy stretches).
+                        var overlap = false, unexpectedGap = false;
+                        var _vPeriods = (window.campPeriods && window.campPeriods[g]) || [];
+                        for (var j = 0; j < arr.length - 1; j++) {
+                            var a2 = arr[j], b2 = arr[j + 1];
+                            if (b2.startMin < a2.endMin && !(b2.startMin === a2.startMin && b2.endMin === a2.endMin)) { overlap = true; break; }
+                            var gapS = a2.endMin, gapE = b2.startMin;
+                            if (gapE > gapS) {
+                                var insideOnePeriod = _vPeriods.some(function (p) { return p.startMin <= gapS && p.endMin >= gapE; });
+                                if (insideOnePeriod) unexpectedGap = true;
+                            }
+                        }
+                        var verdict = overlap ? ' ⚠ OVERLAP: ' : (unexpectedGap ? ' ⚠ mid-period gap: ' : ' ✓ sequential: ');
+                        log('[ConsecVerify] ' + g + '/' + vName + ' ×' + arr.length + verdict + runs.join(', '));
+                    });
+                });
+            } catch (_eCV) {}
+          }
+          if (false && consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+            const _HARDA = new Set(['swim','lunch','snacks','dismissal','change','pre-change','post-change','league','specialty_league']);
+            const _consecNames = new Set(consecutiveBunkSpecials.map(s => s.name));
+            // Resolve a skeleton block's occupied field (for clash checks).
+            const _blkField = (b) => {
+                if (!b) return null;
+                if (b._specialLocation) return String(b._specialLocation).toLowerCase().trim();
+                // sport/general: best-effort via activityProperties location, else the event name
+                const ap = (window.activityProperties || {})[b.event];
+                if (ap && ap.location) return String(ap.location).toLowerCase().trim();
+                return b.event ? String(b.event).toLowerCase().trim() : null;
+            };
+            // Is `field` used by any OTHER bunk over [s,e] in the skeleton?
+            const _fieldBusyElsewhere = (field, s, e, exceptBunk, exceptBlk) => {
+                if (!field) return false;
+                for (let i = 0; i < autoSkeleton.length; i++) {
+                    const x = autoSkeleton[i];
+                    if (!x || x === exceptBlk) continue;
+                    if (String(x._bunk) === String(exceptBunk)) continue;
+                    if (x.startMin < e && x.endMin > s && _blkField(x) === field) return true;
+                }
+                return false;
+            };
+            let _alignedTotal = 0;
+            consecutiveBunkSpecials.forEach((spCfg) => {
+                const sName = spCfg.name;
+                const sDur = getSpecialDuration(sName, window.activityProperties, globalSettings) || parseInt(spCfg.duration) || 30;
+                let sCap = getSpecialCapacity(sName, window.activityProperties, globalSettings) || 1;
+                if (sCap < 1) sCap = 1;
+                allGrades.forEach((grade) => {
+                    // one block per bunk for this special
+                    const byBunk = {};
+                    autoSkeleton.forEach((b) => {
+                        if (b && b.division === grade && (b.event === sName || b._suggestedActivity === sName) && !byBunk[b._bunk]) byBunk[b._bunk] = b;
+                    });
+                    // order bunks by the grade's natural bunk order
+                    const order = getBunksForGrade(grade, divisions).map(String);
+                    const bunks = Object.keys(byBunk).sort((a, b) => {
+                        const ia = order.indexOf(String(a)), ib = order.indexOf(String(b));
+                        return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib);
+                    });
+                    if (bunks.length < 2) return; // nothing to make consecutive
+                    const gObj = divisions[grade] || divisions[String(grade)];
+                    const gEnd = parseTimeToMinutes(gObj && gObj.endTime) || 960;
+                    let anchor = Math.min.apply(null, bunks.map((bk) => byBunk[bk].startMin));
+                    // group by capacity
+                    const groups = [];
+                    for (let i = 0; i < bunks.length; i += sCap) groups.push(bunks.slice(i, i + sCap));
+                    let t = anchor;
+                    groups.forEach((grp) => {
+                        // advance t past any grade-wide HARD block (e.g. snacks) that
+                        // overlaps the slot for any bunk in this group
+                        let guard = 0;
+                        while (guard++ < 80) {
+                            const tEnd = t + sDur;
+                            if (tEnd > gEnd) return;
+                            const clash = grp.some((bk) => autoSkeleton.some((x) =>
+                                x && String(x._bunk) === String(bk) && x !== byBunk[bk] &&
+                                _HARDA.has(String(x.type || '').toLowerCase()) &&
+                                x.startMin < tEnd && x.endMin > t));
+                            if (!clash) break;
+                            t += 5;
+                        }
+                        const tEnd = t + sDur;
+                        if (tEnd > gEnd) return;
+                        grp.forEach((bk) => {
+                            const vb = byBunk[bk];
+                            if (vb.startMin === t && vb.endMin === tEnd) return; // already aligned
+                            // occupant currently at [t,tEnd] for this bunk (movable only)
+                            const oldS = vb.startMin, oldE = vb.endMin;
+                            // occupants overlapping the target for this bunk (movable only)
+                            const occs = autoSkeleton.filter((x) => x && String(x._bunk) === String(bk) && x !== vb &&
+                                x.startMin < tEnd && x.endMin > t &&
+                                !_HARDA.has(String(x.type || '').toLowerCase()) && !_consecNames.has(x.event));
+                            // Safe swap only when exactly ONE same-duration occupant sits at the
+                            // target (a clean 1:1 slot exchange) and moving it to the special's
+                            // vacated slot causes no same-field clash for another bunk. Otherwise
+                            // leave this bunk's block where it is (no corruption).
+                            if (occs.length === 1) {
+                                const occ = occs[0];
+                                if ((occ.endMin - occ.startMin) !== (tEnd - t)) return;
+                                if (_fieldBusyElsewhere(_blkField(occ), oldS, oldE, bk, occ)) return;
+                                occ.startMin = oldS; occ.endMin = oldE;
+                                occ.startTime = minutesToTimeLabel(oldS); occ.endTime = minutesToTimeLabel(oldE);
+                            } else if (occs.length > 1) {
+                                return; // messy target — don't disturb
+                            }
+                            vb.startMin = t; vb.endMin = tEnd;
+                            vb.startTime = minutesToTimeLabel(t); vb.endTime = minutesToTimeLabel(tEnd);
+                            _alignedTotal++;
+                        });
+                        t = tEnd; // next group back-to-back
+                    });
+                });
+            });
+            if (_alignedTotal > 0) log('[ConsecAlign] ★ snapped ' + _alignedTotal + ' consecutive-bunk special block(s) into clean runs');
+          }
+        } catch (_eCA) { warn('[ConsecAlign] error (skipped, non-fatal): ' + (_eCA && _eCA.message)); }
+
         // Build divisionTimes
         if (window.DivisionTimesSystem) {
             window.divisionTimes = window.DivisionTimesSystem.buildFromSkeleton(autoSkeleton, divisions);
@@ -16439,7 +16915,7 @@
                 getBunksForGrade(grade, divisions).forEach(bunk => {
                     pbs[String(bunk)] = autoSkeleton.filter(b => b.division === grade && String(b._bunk) === String(bunk))
                         .sort((a, b) => a.startMin - b.startMin)
-                        .map((b, i) => ({ startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true }));
+                        .map((b, i) => ({ startMin: b.startMin, endMin: b.endMin, startTime: b.startTime, endTime: b.endTime, type: b.type, event: b.event, slotIndex: i, _bunk: bunk, _autoGenerated: true, _consecutiveBunk: b._consecutiveBunk || false }));
                 });
                 window.divisionTimes[grade]._perBunkSlots = pbs;
             });
@@ -17221,7 +17697,7 @@
                             if (postEnd278 <= _schedEnd278 && noOverlap) {
                                 anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: postEnd278 } };
                             }
-                        } else if (nxt && TRIMMABLE_TYPES.has(nxtType)) {
+                        } else if (nxt && TRIMMABLE_TYPES.has(nxtType) && !nxt._consecutiveBunk) {
                             const nxtDur = nxt.endMin - nxt.startMin;
                             const nxtDMin = nxt.dMin || GAP_MIN_DUR;
                             // If the gap [bundleEnd, nxt.startMin] is an inter-period gap,
@@ -17262,10 +17738,12 @@
                                 anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: _fitEndPW } };
                                 log('[2.78] Post-change fit to ' + (nxt.startMin - bundleEnd) + 'm gap [' + bundleEnd + ',' + _fitEndPW + '] before fixed "' + (nxt.event || nxt.type) + '" at ' + bunk);
                             }
-                        } else if (nxt && nxt._fixed) {
+                        } else if (nxt && nxt._fixed && !nxt._consecutiveBunk) {
                             // Swim + Change is one atomic unit. A fixed special (or other pinned
                             // block) is occupying the post-change window — relocate it so Change
                             // can be placed immediately after swim.
+                            // (Consecutive-bunk walls are exempt — their exact interval IS the
+                            // feature; relocating one breaks the grade's back-to-back run.)
                             const specialDur = nxt.endMin - nxt.startMin;
                             const _gapIsIPGS = alreadyFreePost > 0 && _gp278.some((p, pi) =>
                                 pi < _gp278.length - 1 &&
