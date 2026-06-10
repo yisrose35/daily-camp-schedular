@@ -14393,6 +14393,18 @@
                                             _consecutiveBunk: true,
                                             _source: 'phase2.35-general-band-restore'
                                         });
+                                        // The same side-registrations the walk walls get —
+                                        // unregistered special-shaped walls get downgraded to
+                                        // plain pinned customs by the pipeline (live: restores
+                                        // wrote the activity name as the field; walk walls,
+                                        // registered, wrote the station).
+                                        try { registerSpecialUsage(_aName, grade, bd.start, bd.end); } catch (_eR1) {}
+                                        try { registerCrossGrade(grade, 'special', bd.start, bd.end, _aName); } catch (_eR2) {}
+                                        try {
+                                            if (_stnFB && fieldLedger && fieldLedger[_stnFB]) {
+                                                fieldLedger[_stnFB].claims.push({ bunk: bunk, grade: grade, activity: _aName, startMin: bd.start, endMin: bd.end });
+                                            }
+                                        } catch (_eR3) {}
                                     });
                                 });
                                 log('[Phase2.35] ↩ ' + grade + '/' + _aName + ' — suppressed band(s) restored grade-wide (no consecutive walk fit)');
