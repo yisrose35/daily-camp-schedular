@@ -5723,16 +5723,40 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   });
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
-  // Pull the active auto layers for this grade for the current date.
-  // Storage: globalSettings.app1.dailyAutoLayers[YYYY-MM-DD][gradeName] = layers[]
-  const _gs = window.loadGlobalSettings?.() || {};
-  const _dal = _gs.app1?.dailyAutoLayers || {};
+  // Pull the active auto layers for this grade for the current date — using the
+  // SAME 3-step resolution the GENERATION path uses (see the optimizer's
+  // daAutoLayers load): a date with no per-date entry still generates from its
+  // weekday template, so the override grid must show those template layers too
+  // (previously it read only dailyAutoLayers[date] → "No layers configured" on
+  // any template-driven day).
   const _date = (window.currentScheduleDate || window.currentDate
     || document.querySelector('input[type=date]')?.value || '').trim();
-  const _byGrade = (_dal[_date] || {});
+  const _byGrade = (function _boResolveAutoLayers(dateKey) {
+    // 1) per-date local cache (what the DA layer editor saves)
+    try {
+      const stored = localStorage.getItem('campAutoLayers_' + dateKey);
+      if (stored) { const p = JSON.parse(stored); if (p && Object.keys(p).length) return p; }
+    } catch (e) {}
+    const g = window.loadGlobalSettings?.() || {};
+    // 2) per-date cloud config
+    const cloudLayers = g.app1?.dailyAutoLayers?.[dateKey];
+    if (cloudLayers && Object.keys(cloudLayers).length) return cloudLayers;
+    // 3) weekday template (skeletonAssignments → autoLayerTemplates, then _current)
+    try {
+      const autoTemplates = g.app1?.autoLayerTemplates || {};
+      const assignments = g.app1?.skeletonAssignments || {};
+      const [Y, M, D] = String(dateKey).split('-').map(Number);
+      const dow = (Y && M && D) ? new Date(Y, M - 1, D).getDay() : 0;
+      const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+      const tmpl = assignments[dayNames[dow]] || assignments['Default'];
+      if (tmpl && autoTemplates[tmpl]) return autoTemplates[tmpl];
+      if (autoTemplates['_current']) return autoTemplates['_current'];
+    } catch (e) {}
+    return {};
+  })(_date);
   const layers = ((_byGrade[divName] || []).slice()).sort((a, b) => a.startMin - b.startMin);
   if (layers.length === 0) {
-    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers configured for this grade. Use the Master Scheduler to add layers first.</p>';
+    wrap.innerHTML = '<p style="color:#94a3b8;padding:12px;">No layers found for this grade on ' + _escHtml(_date) + ' — neither a per-date layer set nor a weekday template covers it. Use the Master Scheduler to add layers.</p>';
     return;
   }
 
