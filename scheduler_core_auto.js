@@ -24728,7 +24728,17 @@
                                     const fields2 = gs2.app1?.fields || gs2.fields || [];
                                     const fObj = fields2.find(f => f && f.name === fld);
                                     const acts = (fObj && Array.isArray(fObj.activities)) ? fObj.activities : [];
-                                    const chosenAct = acts[0] || null;
+                                    // ★ FN-38: the null-sweep filler must respect sport min/max
+                                    //   players — pick the first activity this bunk's size can
+                                    //   legally field instead of blindly taking acts[0].
+                                    const _nsSize = ((window.bunkMetaData || {})[String(bunk)] || {}).size || 0;
+                                    const chosenAct = acts.find(a => {
+                                        const _r = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(a);
+                                        if (!_r) return true;
+                                        if (_r.minPlayers && _nsSize && _nsSize < _r.minPlayers) return false;
+                                        if (_r.maxPlayers && _nsSize && _nsSize > _r.maxPlayers) return false;
+                                        return true;
+                                    }) || null;
                                     if (chosenAct && !_validateWritePlacement(fld, chosenAct, grade, bunk, bucket.startMin, bucket.endMin)) {
                                         placed = {
                                             field: fld, sport: chosenAct, _activity: chosenAct,
