@@ -13752,35 +13752,52 @@
                             });
                         }
 
-                        // Slices = ceil(N / capacity) consecutive duration-sized slots.
-                        // Bunks are matched to slices GREEDILY (any bunk free at a slice
-                        // can take it) instead of fixed order — raises full-placement
-                        // odds when one bunk has a pinned conflict at its natural slice.
-                        var _sliceCount = Math.ceil(_bunks.length / _sCap);
-                        var _needSpan = _sliceCount * _sDur;
+                        // PERIOD-AWARE CURSOR WALK. Naive anchor + j*dur slicing can
+                        // straddle a bell-period boundary (e.g. 12:10-12:30 across the
+                        // 12:10|12:15 break) — such a block maps to no slot at
+                        // materialization and is dropped. Instead, walk a cursor through
+                        // the bell periods: each slice must fit ENTIRELY inside one
+                        // period; when it can't, jump to the next period start. Slices
+                        // also skip past station-busy / instructor-busy / all-bunks-busy
+                        // stretches in 5-min steps — the run flows around lunch and
+                        // other grade-wide anchors exactly like a human would lay it.
+                        var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
+                        if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
 
                         var _bestAnchor = null, _bestPlaced = -1, _bestPlan = null;
                         for (var _ai = 0; _ai < _anchors.length; _ai++) {
                             var _t0 = _anchors[_ai];
-                            if (_t0 + _needSpan > _gEnd) continue;
                             var _plan = [], _placed = 0;
                             var _pool = _bunks.slice();
-                            for (var _gj = 0; _gj < _sliceCount; _gj++) {
-                                var _s = _t0 + _gj * _sDur, _e = _s + _sDur;
-                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)) { _plan.push(null); continue; }
+                            var _cursor = _t0;
+                            var _guard = 0;
+                            while (_placed < _bunks.length && _guard++ < 300) {
+                                // find the first period that can contain a full slice at/after cursor
+                                var _per = null, _s = null;
+                                for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                    var _p3 = _walkPeriods[_wp];
+                                    var _cand = Math.max(_cursor, _p3.startMin);
+                                    if (_cand + _sDur <= _p3.endMin && _cand + _sDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                }
+                                if (!_per) break;
+                                var _e = _s + _sDur;
+                                if (_stationBusy(_s, _e) || instructorConflictAt(_sName, _s, _e)) { _cursor = _s + 5; continue; }
                                 var _take = [];
                                 for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
                                     if (_bunkFree(_pool[_pk], _s, _e)) _take.push(_pool[_pk]);
                                 }
+                                if (_take.length === 0) { _cursor = _s + 5; continue; }
                                 for (var _tk = 0; _tk < _take.length; _tk++) {
                                     _pool.splice(_pool.indexOf(_take[_tk]), 1);
                                 }
                                 _plan.push({ start: _s, end: _e, bunks: _take });
                                 _placed += _take.length;
+                                _cursor = _e;
                             }
                             if (_placed > _bestPlaced) { _bestPlaced = _placed; _bestAnchor = _t0; _bestPlan = _plan; }
                             if (_placed === _bunks.length) break;
                         }
+                        var _needSpan = Math.ceil(_bunks.length / _sCap) * _sDur; // for the ✗ log only
                         if (!_bestPlan || _bestPlaced <= 0) {
                             log('[Phase2.35] ✗ ' + grade + '/' + _sName + ' — no anchor fits the run (bunks=' + _bunks.length + ', dur=' + _sDur + ', span=' + _needSpan + ')');
                             return;
@@ -16755,11 +16772,23 @@
                         for (var i = 0; i < arr.length; i++) {
                             runs.push(arr[i]._bunk + '@' + minutesToTimeLabel(arr[i].startMin) + '-' + minutesToTimeLabel(arr[i].endMin));
                         }
-                        var consecutive = true;
+                        // Sequential = sorted, never overlapping (capacity groups share
+                        // identical intervals — those count as one slice). A gap between
+                        // slices is EXPECTED when it crosses a bell-period boundary
+                        // (the cursor walk only breaks runs there / at busy stretches).
+                        var overlap = false, unexpectedGap = false;
+                        var _vPeriods = (window.campPeriods && window.campPeriods[g]) || [];
                         for (var j = 0; j < arr.length - 1; j++) {
-                            if (arr[j].endMin !== arr[j + 1].startMin) { consecutive = false; break; }
+                            var a2 = arr[j], b2 = arr[j + 1];
+                            if (b2.startMin < a2.endMin && !(b2.startMin === a2.startMin && b2.endMin === a2.endMin)) { overlap = true; break; }
+                            var gapS = a2.endMin, gapE = b2.startMin;
+                            if (gapE > gapS) {
+                                var insideOnePeriod = _vPeriods.some(function (p) { return p.startMin <= gapS && p.endMin >= gapE; });
+                                if (insideOnePeriod) unexpectedGap = true;
+                            }
                         }
-                        log('[ConsecVerify] ' + g + '/' + vName + ' ×' + arr.length + (consecutive ? ' ✓ back-to-back: ' : ' ⚠ NOT contiguous: ') + runs.join(', '));
+                        var verdict = overlap ? ' ⚠ OVERLAP: ' : (unexpectedGap ? ' ⚠ mid-period gap: ' : ' ✓ sequential: ');
+                        log('[ConsecVerify] ' + g + '/' + vName + ' ×' + arr.length + verdict + runs.join(', '));
                     });
                 });
             } catch (_eCV) {}
