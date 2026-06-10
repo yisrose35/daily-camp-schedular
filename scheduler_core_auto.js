@@ -461,6 +461,24 @@
         log('AUTO SCHEDULER v' + VERSION + ' — WHAT→WHEN→WHERE Engine');
         log('═══════════════════════════════════════════════════════════');
 
+        // ★ FN-38: hydrate sport/bunk metadata globals ONCE per run. The hot-path
+        //   maxPlayers check in isFieldAvailable reads window.sportMetaData
+        //   directly (it must not call the getter per-call), but that global is
+        //   only populated when the Rules tab has been opened — on a fresh page
+        //   it's {} and every min/max player rule silently no-ops at generation.
+        try {
+            if (typeof window.getSportMetaData === 'function') {
+                var _smdHyd = window.getSportMetaData();
+                if (_smdHyd && Object.keys(_smdHyd).length) window.sportMetaData = _smdHyd;
+            }
+            if (typeof window.getBunkMetaData === 'function') {
+                var _bmdHyd = window.getBunkMetaData();
+                if (_bmdHyd && Object.keys(_bmdHyd).length) window.bunkMetaData = _bmdHyd;
+            }
+            log('[FN-38] sportMetaData hydrated: ' + Object.keys(window.sportMetaData || {}).length +
+                ' sports, bunkMetaData: ' + Object.keys(window.bunkMetaData || {}).length + ' bunks');
+        } catch (_eHyd) {}
+
         // ★★★ STARTER PLAN: Check schedule day limit BEFORE generating ★★★
         try {
             var _client = window.CampistryDB?.getClient?.() || window.supabase;
@@ -18287,6 +18305,36 @@
                     return 'DA Resources: sport disabled on this field today';
                 }
             }
+            // ★ FN-38: sport maxPlayers combined-headcount gate. Every mutation
+            //   path (FQ-reopt, pairing, time-reloc, drop-refill, final writes)
+            //   flows through this validator, so an over-max share is blocked
+            //   everywhere. minPlayers is intentionally NOT checked here — pair
+            //   halves write sequentially, so a solo-at-validate-time min check
+            //   would reject the first half of every legal pairing.
+            if (activityName && startMin != null && endMin != null) {
+                const _smv = (window.sportMetaData || {})[activityName];
+                if (_smv && _smv.maxPlayers) {
+                    const _bmv = window.bunkMetaData || {};
+                    const _actLower = String(activityName).toLowerCase().trim();
+                    let _totHC = (_bmv[bunk] && _bmv[bunk].size) || 0;
+                    const _saV = window.scheduleAssignments || {};
+                    for (const _ob of Object.keys(_saV)) {
+                        if (String(_ob) === String(bunk)) continue;
+                        const _arr = _saV[_ob];
+                        if (!Array.isArray(_arr)) continue;
+                        for (let _i = 0; _i < _arr.length; _i++) {
+                            const _e = _arr[_i];
+                            if (!_e || _e.continuation || _e.field !== fieldName) continue;
+                            const _es = _e._startMin != null ? _e._startMin : _e.startMin;
+                            const _ee = _e._endMin != null ? _e._endMin : _e.endMin;
+                            if (_es == null || _ee == null || _es >= endMin || _ee <= startMin) continue;
+                            const _ea = String(_e._activity || _e.sport || '').toLowerCase().trim();
+                            if (_ea === _actLower) { _totHC += (_bmv[_ob] && _bmv[_ob].size) || 0; break; }
+                        }
+                    }
+                    if (_totHC > _smv.maxPlayers) return 'sport maxPlayers: combined ' + _totHC + ' > ' + _smv.maxPlayers;
+                }
+            }
             if (fld?.accessRestrictions?.enabled
                 && fld.accessRestrictions.divisions
                 && Object.keys(fld.accessRestrictions.divisions).length > 0) {
@@ -22766,18 +22814,32 @@
                 });
                 function canUse(field, s, e, exclBunk, myGrade, myAct) {
                     const list = occ[field] || []; let n = 0, ok = true;
+                    const coBunks = [];
                     for (let i = 0; i < list.length; i++) {
                         const iv = list[i];
                         if (iv.bunk === exclBunk) continue;
                         if (iv.s >= e || iv.e <= s) continue;
                         n++;
+                        coBunks.push(iv.bunk);
                         // To share a field, every co-occupant must be the SAME activity AND
                         // same grade (a field hosts one activity at a time; same_division
                         // shares by grade). Mixing activities/grades is not a valid share.
                         if (bunkGrade[iv.bunk] !== myGrade || iv.act !== myAct) ok = false;
                     }
                     if (n === 0) return true;                                   // empty → safe
-                    return ok && n < (capMap[field] || 2);
+                    if (!(ok && n < (capMap[field] || 2))) return false;
+                    // ★ FN-38: sport maxPlayers combined-headcount guard — moving a bunk
+                    //   onto an occupied field must not push the share past the sport's
+                    //   max (live repro: FQ moved Quints 1(7) onto Quints 4(16)'s
+                    //   Kickball share = 23 players vs maxPlayers 16).
+                    const _sm = (window.sportMetaData || {})[myAct];
+                    if (_sm && _sm.maxPlayers) {
+                        const _bm = window.bunkMetaData || {};
+                        let _tot = (_bm[exclBunk] && _bm[exclBunk].size) || 0;
+                        for (let i = 0; i < coBunks.length; i++) _tot += (_bm[coBunks[i]] && _bm[coBunks[i]].size) || 0;
+                        if (_tot > _sm.maxPlayers) return false;
+                    }
+                    return true;
                 }
 
                 // Seniority from camp-structure age order (manualColumnOrder + direction):
@@ -22852,6 +22914,24 @@
                         const tgt = fieldsByRank[i], p = bySen[i];
                         if ((hostsBySport[p.s._activity] || []).indexOf(tgt) < 0) ok = false;
                         if (p.s.field !== tgt) { anyChange = true; if (_validateWritePlacement(tgt, p.s._activity, p.grade, p.bunk, p.st, p.en)) ok = false; }
+                    }
+                    // ★ FN-38: the re-pair changes WHO shares a field — verify every
+                    //   resulting share's combined headcount respects the sport's max.
+                    if (anyChange && ok) {
+                        const _bm = window.bunkMetaData || {};
+                        const _byTgt = {};
+                        for (let i = 0; i < bySen.length; i++) {
+                            (_byTgt[fieldsByRank[i]] = _byTgt[fieldsByRank[i]] || []).push(bySen[i]);
+                        }
+                        Object.keys(_byTgt).forEach(function (tf) {
+                            const grp = _byTgt[tf];
+                            if (grp.length < 2) return;
+                            const _sm = (window.sportMetaData || {})[grp[0].s._activity];
+                            if (!(_sm && _sm.maxPlayers)) return;
+                            let _tot = 0;
+                            grp.forEach(function (p) { _tot += (_bm[p.bunk] && _bm[p.bunk].size) || 0; });
+                            if (_tot > _sm.maxPlayers) ok = false;
+                        });
                     }
                     if (!anyChange || !ok) return;
                     for (let j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
