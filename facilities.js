@@ -1421,8 +1421,22 @@ function renderGeneralConsec(fieldData, fac, app1) {
     const persist = () => {
         // Snapshot the general-activity names onto the field entry — the auto
         // solver reads app1.fields and needs to know what runs at this station.
-        fieldData.consecutiveGeneralNames = (fac.generalActivities || [])
-            .map(g => g && g.name).filter(Boolean);
+        // FN-41: `fac` can be stale or not yet hydrated when the toggle fires
+        // (live repro: snapshot saved []) — fall back to the persisted registry,
+        // excluding built-in generals. The solver also re-resolves at gen time.
+        const _builtin = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+        let _names = (fac.generalActivities || [])
+            .filter(g => g && g.name && !_builtin[String(g.quickType || '').toLowerCase()])
+            .map(g => g.name);
+        if (!_names.length) {
+            const _reg = (window.loadGlobalSettings?.() || {}).facilities || [];
+            const _low = String(fieldData.name || '').toLowerCase().trim();
+            const _hit = _reg.find(x => x && x.name && String(x.name).toLowerCase().trim() === _low);
+            _names = ((_hit && _hit.generalActivities) || [])
+                .filter(g => g && g.name && !_builtin[String(g.quickType || '').toLowerCase()])
+                .map(g => g.name);
+        }
+        fieldData.consecutiveGeneralNames = _names;
         window.saveGlobalSettings?.('app1', app1);
         window.saveGlobalSettings?.('fields', app1.fields);
     };

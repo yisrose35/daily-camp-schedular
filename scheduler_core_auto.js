@@ -1116,6 +1116,25 @@
             _fldsCB.forEach(function (f) {
                 if (!f || !f.name || f.consecutiveBunks !== true) return;
                 var _names = Array.isArray(f.consecutiveGeneralNames) ? f.consecutiveGeneralNames.filter(Boolean) : [];
+                // ★ FN-41: the snapshot can be empty (general activity added after
+                //   the toggle, or the pane saved before the registry hydrated) —
+                //   resolve live from the facilities metadata registry so the
+                //   config never silently disengages. Live repro: Auditorium had
+                //   consecutiveBunks:true + duration 20 but names [] → the walk
+                //   never ran and the user got band-length blocks instead.
+                if (!_names.length) {
+                    try {
+                        var _fNameLow = String(f.name).toLowerCase().trim();
+                        var _facReg = (globalSettings.facilities || []).find(function (x) {
+                            return x && x.name && String(x.name).toLowerCase().trim() === _fNameLow;
+                        });
+                        var _builtinQT = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+                        _names = ((_facReg && _facReg.generalActivities) || [])
+                            .filter(function (g) { return g && g.name && !_builtinQT[String(g.quickType || '').toLowerCase()]; })
+                            .map(function (g) { return g.name; });
+                        if (_names.length) log('[STEP 1] Consecutive facility "' + f.name + '" — general names resolved from the facilities registry (saved snapshot was empty): ' + _names.join(', '));
+                    } catch (_eFRr) {}
+                }
                 var _gaName = _names[0] || null;
                 if (!_gaName) return; // no general activity recorded at this facility
                 if (_names.length > 1) log('[STEP 1] Consecutive facility "' + f.name + '" hosts ' + _names.length + ' generals — using "' + _gaName + '" for the run');
@@ -3149,6 +3168,25 @@
                     });
                 } catch (_eF) {}
             }
+            // ★ FN-41: general-activity name → host facility, from the facilities
+            //   metadata registry. A hand-typed custom layer naming a registry
+            //   general (e.g. "Main activity" @ the Auditorium) gets the facility
+            //   bound as its _customField so the writer outputs a real location
+            //   instead of the activity-name-as-field artifact. Built-in generals
+            //   (swim/lunch/snacks/dismissal) excluded — they have native lanes.
+            var _p0GAFieldMap = {};
+            try {
+                var _builtinGA = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+                ((globalSettings && globalSettings.facilities) || []).forEach(function (fac) {
+                    if (!fac || !fac.name) return;
+                    (fac.generalActivities || []).forEach(function (ga) {
+                        if (!ga || !ga.name) return;
+                        if (_builtinGA[String(ga.quickType || '').toLowerCase()]) return;
+                        var gk = String(ga.name).toLowerCase().trim();
+                        if (!_p0GAFieldMap[gk]) _p0GAFieldMap[gk] = fac.name;
+                    });
+                });
+            } catch (_eGA) {}
 
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
@@ -3176,6 +3214,28 @@
                     log('[Phase0] Custom "' + eventName + '" connect-to ' + String(layer.adjacentTo).toLowerCase() +
                         ' → routed through wet-bundle engine (Phase 2.4); skipping fixed-band placement');
                     return;
+                }
+
+                // ★ FN-41: a custom layer naming a CONSECUTIVE-BUNKS general activity
+                //   is the user saying WHEN — the facility config says HOW (n minutes
+                //   per batch). Skip the grade-wide band here and hand the window to
+                //   the Phase 2.35 walk, which chunks it into consecutive batches at
+                //   the host facility (and restores the band untouched if no walk
+                //   fits). Bunk-scoped bands (customBunks) keep their original
+                //   placement — the walk is whole-grade.
+                if (isCustom && typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports.length &&
+                    !(layer.customBunks && layer.customBunks.length > 0)) {
+                    const _evLowCB = String(eventName).toLowerCase().trim();
+                    const _cbHit = consecutiveBunkSports.find(s => s && String(s.name).toLowerCase().trim() === _evLowCB);
+                    if (_cbHit && layer.startMin != null && layer.endMin != null) {
+                        if (!_cbHit._bands) _cbHit._bands = {};
+                        if (!_cbHit._bands[grade]) _cbHit._bands[grade] = [];
+                        _cbHit._bands[grade].push({ start: layer.startMin, end: layer.endMin, layer: layer });
+                        log('[Phase0] Custom "' + eventName + '" (' + grade + ' ' + layer.startMin + '-' + layer.endMin +
+                            ') hosts consecutive bunks @ ' + ((_cbHit.hosts && _cbHit.hosts[0] && _cbHit.hosts[0].name) || '?') +
+                            ' → band handed to the Phase 2.35 walk; grade-wide placement skipped');
+                        return;
+                    }
                 }
 
                 // ── Pre-detect linked rotation event duration for period scoring ──
@@ -3891,7 +3951,11 @@
                         //   wall block (name-only — the window stays the layer's, which is
                         //   why this sticks where the FN-33 window substitution didn't).
                         let _evBunk = eventName;
-                        let _fldBunk = isCustom ? layer.customField : null;
+                        // ★ FN-41: no explicit location on a custom layer → if the name
+                        //   matches a registry general activity, bind its host facility.
+                        let _fldBunk = isCustom
+                            ? (layer.customField || _p0GAFieldMap[String(eventName).toLowerCase().trim()] || null)
+                            : null;
                         if (isCustom && _p0CustomForceOvs.length) {
                             const _co = _p0CustomForceOvs.find(o => {
                                 if (String(o.bunk) !== String(bunk)) return false;
@@ -14140,10 +14204,15 @@
                         return false;
                     }
 
+                    var _aLowCB = String(_aName).toLowerCase().trim();
                     allGrades.forEach(function (grade) {
                         if (allowedSet && !allowedSet.has(String(grade))) return;
+                        // ★ FN-41: bands captured in Phase 0 — custom layers for this
+                        //   activity whose grade-wide placement was suppressed so the
+                        //   walk owns the window. A band counts as the grade's slot.
+                        var _bandsCB = (_cbS._bands && _cbS._bands[grade]) || [];
                         var _gLayers2 = layersByGrade[grade] || [];
-                        var _hasSlot = _gLayers2.some(function (l) {
+                        var _hasSlot = _bandsCB.length > 0 || _gLayers2.some(function (l) {
                             var _lt = (l.type || '').toLowerCase();
                             return _lt === 'sport' || _lt === 'activity';
                         });
@@ -14151,7 +14220,11 @@
 
                         var _bunks = getBunksForGrade(grade, divisions).filter(function (b) {
                             return !(bunkTimelines[b] || []).some(function (x) {
-                                return x && (x._assignedSport === _aName || x.event === _aName);
+                                // case-insensitive: the layer name and the registry
+                                // name can differ in casing ("Main activity" vs
+                                // "Main Activity") — exact compare double-placed
+                                return x && (String(x._assignedSport || '').toLowerCase().trim() === _aLowCB ||
+                                             String(x.event || '').toLowerCase().trim() === _aLowCB);
                             });
                         });
                         if (_bunks.length === 0) return;
@@ -14167,6 +14240,17 @@
                         var _anchors = [];
                         _periods.forEach(function (p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
                         if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                        // ★ FN-41: the user's custom band starts are the PREFERRED
+                        //   anchors — tried first and favored on ties so the walk
+                        //   runs where the layer was drawn.
+                        var _bandStartsCB = {};
+                        _bandsCB.forEach(function (bd) {
+                            if (!bd || bd.start == null) return;
+                            _bandStartsCB[bd.start] = 1;
+                            var _ix = _anchors.indexOf(bd.start);
+                            if (_ix >= 0) _anchors.splice(_ix, 1);
+                            _anchors.unshift(bd.start);
+                        });
                         if (_anchors.length === 0) _anchors.push(_gStart);
                         var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
                         if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
@@ -14210,13 +14294,41 @@
                                     _cursor = _e;
                                 }
                                 var _span = _plan.length ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
-                                if (!_best || _placed > _best.placed || (_placed === _best.placed && _span < _best.span)) {
-                                    _best = { plan: _plan, placed: _placed, station: _station, anchor: _t0, span: _span };
+                                var _isBandA = _bandStartsCB[_t0] === 1 ? 1 : 0;
+                                if (!_best || _placed > _best.placed ||
+                                    (_placed === _best.placed && _isBandA > _best.isBand) ||
+                                    (_placed === _best.placed && _isBandA === _best.isBand && _span < _best.span)) {
+                                    _best = { plan: _plan, placed: _placed, station: _station, anchor: _t0, span: _span, isBand: _isBandA };
                                 }
                             }
                         });
                         if (!_best || _best.placed <= 0) {
                             log('[Phase2.35] ✗ ' + grade + '/' + _aName + ' (general) — no station/anchor fits the run (bunks=' + _bunks.length + ', dur=' + _aDur + ')');
+                            // ★ FN-41: a band was suppressed in Phase 0 on the promise the
+                            //   walk would own it — no walk fits, so restore the original
+                            //   grade-wide band (custom-lane shape, facility bound) so the
+                            //   activity isn't silently lost.
+                            if (_bandsCB.length) {
+                                var _stnFB = (_cbS.hosts && _cbS.hosts[0] && _cbS.hosts[0].name) || null;
+                                _bandsCB.forEach(function (bd) {
+                                    if (!bd || bd.start == null || bd.end == null || bd.end <= bd.start) return;
+                                    var _lyrFB = bd.layer || null;
+                                    var _evFB = (_lyrFB && (_lyrFB.customActivity || _lyrFB.event)) || _aName;
+                                    getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                                        if (!bunkTimelines[bunk]) return;
+                                        bunkTimelines[bunk].push({
+                                            startMin: bd.start, endMin: bd.end,
+                                            type: 'custom', event: _evFB, layer: _lyrFB,
+                                            _classification: 'pinned', _committed: true, _fixed: true,
+                                            _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                                            _customActivity: _evFB,
+                                            _customField: (_lyrFB && _lyrFB.customField) || _stnFB,
+                                            _source: 'phase2.35-general-band-restore'
+                                        });
+                                    });
+                                });
+                                log('[Phase2.35] ↩ ' + grade + '/' + _aName + ' — suppressed band(s) restored grade-wide (no consecutive walk fit)');
+                            }
                             return;
                         }
                         _best.plan.forEach(function (slot) {
