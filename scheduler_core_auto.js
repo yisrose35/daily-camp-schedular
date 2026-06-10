@@ -3063,6 +3063,30 @@
             //   wet-bundle event. Standalone Phase-0 placement (the old code here) could
             //   not produce that structure, so it is skipped (early-return below).
 
+            // ★ FN-37b: force bunk-overrides on CUSTOM layers replace the pinned
+            //   activity NAME for that bunk, applied AT THE SOURCE (the wall push
+            //   below). Injecting a competing fixed block instead provably loses:
+            //   both blocks are _fixed, the wall sorts first, and integrity
+            //   zero-trims the later one (same failure family as FN-33). With the
+            //   substitution inside the derivation, every wall rebuild re-applies
+            //   the override instead of fighting it. Window stays the wall's own.
+            var _p0CustomForceOvs = [];
+            try {
+                var _fddOv = (typeof loadCurrentDailyData === 'function' ? loadCurrentDailyData() : null) || {};
+                _p0CustomForceOvs = _fddOv.bunkActivityOverrides || [];
+                if (!_p0CustomForceOvs.length) {
+                    var _sOv = localStorage.getItem('campBunkOverrides_' + (window.currentScheduleDate || ''));
+                    if (_sOv) { var _pOv = JSON.parse(_sOv); if (Array.isArray(_pOv)) _p0CustomForceOvs = _pOv; }
+                }
+            } catch (_eOv) { _p0CustomForceOvs = []; }
+            _p0CustomForceOvs = _p0CustomForceOvs.filter(function (o) {
+                if (!o || !o.bunk || !o.activity) return false;
+                if ((o.overrideMode || 'force') !== 'force') return false;
+                if (String(o.layerType || '').toLowerCase() !== 'custom') return false;
+                if (o.activity === '+ added layer' || o.activity === '⇕ resized' || o.activity === '— deleted —') return false;
+                return true;
+            });
+
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -3800,15 +3824,35 @@
                         //  custom window as a _bunkOverride block — the lane the pipeline
                         //  provably never rebuilds. Substituting the window HERE got reverted
                         //  by downstream wall-rebuild passes.)
+                        // ★ FN-37b: a force override on a CUSTOM layer renames this bunk's
+                        //   wall block (name-only — the window stays the layer's, which is
+                        //   why this sticks where the FN-33 window substitution didn't).
+                        let _evBunk = eventName;
+                        let _fldBunk = isCustom ? layer.customField : null;
+                        if (isCustom && _p0CustomForceOvs.length) {
+                            const _co = _p0CustomForceOvs.find(o => {
+                                if (String(o.bunk) !== String(bunk)) return false;
+                                const os = o.startMin != null ? o.startMin : parseTimeToMinutes(o.startTime);
+                                const oe = o.endMin != null ? o.endMin : parseTimeToMinutes(o.endTime);
+                                return (os === layer.startMin && oe === layer.endMin) ||
+                                       (os === blockStart && oe === blockEnd);
+                            });
+                            if (_co) {
+                                _evBunk = _co.activity;
+                                if (_co.location) _fldBunk = _co.location;
+                                log('[Phase0] Custom wall "' + eventName + '" → "' + _evBunk + '" for ' + bunk + ' (bunk override)');
+                            }
+                        }
                         bunkTimelines[bunk].push({
                             startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
-                            event: eventName, layer,
+                            event: _evBunk, layer,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
-                            _customActivity: isCustom ? layer.customActivity : null,
-                            _customField: isCustom ? layer.customField : null,
+                            _bunkOverride: _evBunk !== eventName ? true : undefined,
+                            _customActivity: isCustom ? (_evBunk !== eventName ? _evBunk : layer.customActivity) : null,
+                            _customField: isCustom ? _fldBunk : null,
                             _customBunks: isCustom ? layer.customBunks : null
                         });
                     }
@@ -13266,6 +13310,20 @@
                 if (!ov.activity) return;
                 // Defense-in-depth: never pin a UI placeholder string as an activity.
                 if (ov.activity === '+ added layer' || ov.activity === '⇕ resized' || ov.activity === '— deleted —') return;
+                // ★ FN-37b: custom-layer force overrides are applied at the SOURCE —
+                //   the Phase-0 wall push substitutes the bunk's activity name. If
+                //   that wall exists, don't inject a competing fixed block here
+                //   (the duplicate just gets zero-trimmed by integrity anyway).
+                if (String(ov.layerType || '').toLowerCase() === 'custom') {
+                    const _wall = bunkTimelines[bunk].find(b =>
+                        b && (b.type || '').toLowerCase() === 'custom' &&
+                        b.startMin === tStart && b.endMin === tEnd &&
+                        b.event === ov.activity);
+                    if (_wall) {
+                        if (totalIters < 1) log('[P0] Custom-layer override for ' + bunk + ' already applied at the wall ("' + ov.activity + '") — injection skipped');
+                        return;
+                    }
+                }
                 // ★ v7.0: Auto-detect type from field ledger — don't rely on UI type tag
                 const bunkGrade = Object.keys(divisions).find(g =>
                     getBunksForGrade(g, divisions).map(String).includes(bunk)
