@@ -3086,6 +3086,27 @@
                 if (o.activity === '+ added layer' || o.activity === '⇕ resized' || o.activity === '— deleted —') return false;
                 return true;
             });
+            // ★ FN-37c: activity-name → hosting-fields map from the fields CONFIG
+            //   (the fieldLedger is rebuilt AFTER Phase 0, so it can't be trusted
+            //   here). When a custom-layer override picks/types a SPORT, the wall
+            //   push below auto-assigns one of its fields; Phase 3's pre-register
+            //   pass then claims block.field in the rebuilt ledger, keeping other
+            //   bunks off it.
+            var _p0SportFieldMap = {};
+            if (_p0CustomForceOvs.length) {
+                try {
+                    var _gsF = (typeof window.loadGlobalSettings === 'function' ? window.loadGlobalSettings() : {}) || {};
+                    var _fldList = (_gsF.app1 && _gsF.app1.fields) || _gsF.fields || [];
+                    _fldList.forEach(function (f) {
+                        if (!f || !f.name || !Array.isArray(f.activities)) return;
+                        f.activities.forEach(function (a) {
+                            var k = String(a).toLowerCase().trim();
+                            if (!_p0SportFieldMap[k]) _p0SportFieldMap[k] = [];
+                            _p0SportFieldMap[k].push(f.name);
+                        });
+                    });
+                } catch (_eF) {}
+            }
 
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
@@ -3839,19 +3860,42 @@
                             });
                             if (_co) {
                                 _evBunk = _co.activity;
-                                if (_co.location) _fldBunk = _co.location;
-                                log('[Phase0] Custom wall "' + eventName + '" → "' + _evBunk + '" for ' + bunk + ' (bunk override)');
+                                if (_co.location) {
+                                    _fldBunk = _co.location;
+                                } else {
+                                    // ★ FN-37c: override is a SPORT (a configured field hosts
+                                    //   it) → auto-assign a field. Prefer one that's free at
+                                    //   this window; fall back to the first hosting field.
+                                    const _cands = _p0SportFieldMap[String(_co.activity).toLowerCase().trim()];
+                                    if (_cands && _cands.length) {
+                                        let _pick = null;
+                                        for (let _ci = 0; _ci < _cands.length; _ci++) {
+                                            try {
+                                                if (typeof isFieldAvailable === 'function' &&
+                                                    isFieldAvailable(_cands[_ci], blockStart, blockEnd, bunk, grade, _co.activity)) { _pick = _cands[_ci]; break; }
+                                            } catch (_eA) {}
+                                        }
+                                        _fldBunk = _pick || _cands[0];
+                                    }
+                                }
+                                log('[Phase0] Custom wall "' + eventName + '" → "' + _evBunk + '" for ' + bunk +
+                                    (_fldBunk && _fldBunk !== layer.customField ? ' @ ' + _fldBunk : '') + ' (bunk override)');
                             }
                         }
+                        const _isOvWall = _evBunk !== eventName;
                         bunkTimelines[bunk].push({
                             startMin: blockStart, endMin: blockEnd,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
                             event: _evBunk, layer,
+                            // ★ FN-37c: block.field is the durable claim carrier — Phase 3's
+                            //   pre-register pass claims it in the rebuilt fieldLedger, which
+                            //   keeps other bunks off the auto-assigned field at this window.
+                            field: (isCustom && _isOvWall && _fldBunk) ? _fldBunk : undefined,
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
-                            _bunkOverride: _evBunk !== eventName ? true : undefined,
-                            _customActivity: isCustom ? (_evBunk !== eventName ? _evBunk : layer.customActivity) : null,
+                            _bunkOverride: _isOvWall ? true : undefined,
+                            _customActivity: isCustom ? (_isOvWall ? _evBunk : layer.customActivity) : null,
                             _customField: isCustom ? _fldBunk : null,
                             _customBunks: isCustom ? layer.customBunks : null
                         });
