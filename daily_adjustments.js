@@ -5810,6 +5810,34 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const totalHeight = (latestMin - earliestMin) * PX;
   const color = div.color || '#64748b';
 
+  // ★ Bell Schedule parity (auto mode): the grade-level DAW grid draws the
+  //   grade's bell-schedule period boundaries as dashed .ms-daw-period-line
+  //   rows — mirror them on every bunk track here, with the SAME merge rule
+  //   (boundaries within 10 min collapse to the latest one).
+  const _boPeriodsSrc = (window.campPeriods && Object.keys(window.campPeriods).length)
+    ? window.campPeriods
+    : ((window.loadGlobalSettings?.() || {}).campPeriods || {});
+  const _boPeriods = (_boPeriodsSrc[divName] || []).slice().sort((a, b) => (a.startMin || 0) - (b.startMin || 0));
+  const _boPeriodBoundaries = (() => {
+    const px = [];
+    _boPeriods.forEach(p => {
+      if (!p || p.startMin == null || p.endMin == null) return;
+      const sPx = (p.startMin - earliestMin) * PX;
+      const ePx = (p.endMin - earliestMin) * PX;
+      if (sPx > 0 && sPx < totalHeight) px.push(sPx);
+      if (ePx > 0 && ePx < totalHeight) px.push(ePx);
+    });
+    const raw = [...new Set(px)].sort((a, b) => a - b);
+    const MERGE = 10 * PX;
+    const out = [];
+    for (let i = 0; i < raw.length; i++) {
+      let latest = raw[i];
+      while (i + 1 < raw.length && raw[i + 1] - raw[i] <= MERGE) latest = raw[++i];
+      out.push(latest);
+    }
+    return out;
+  })();
+
   // Layer-type → tile background colour (matches the auto builder palette)
   const TYPE_BG = {
     sport: '#bbf7d0', special: '#e9d5ff', activity: '#dbeafe',
@@ -5885,6 +5913,11 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const cls = (m - earliestMin) % 60 === 0 ? 'major' : '';
       html += `<div class="ms-daw-gridline ${cls}" style="top:${top}px;"></div>`;
     }
+
+    // Bell-schedule period boundary lines (same look as the grade-level grid)
+    _boPeriodBoundaries.forEach(py => {
+      html += `<div class="ms-daw-period-line" style="top:${py}px;"></div>`;
+    });
 
     // Narrow vertical bands — one per layer (uses ms-daw-band CSS)
     layers.forEach((layer, idx) => {
