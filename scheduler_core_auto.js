@@ -19050,8 +19050,12 @@
                 //   the full special path (validation, F2, room locks, multi-slot
                 //   spanning) instead of falling to the generic pinned writer, which
                 //   writes field = activity name.
+                //   Filter keys on _specialLocation (not _consecutiveBunk) — the
+                //   Phase-2.x rebuild strips the reservation stamps off the walls
+                //   but provably preserves _assignedSpecial + _specialLocation
+                //   (live trace: 24 rebuilt walls all kept their station).
                 (bunkTimelines[bunk] || []).filter(b => b._assignedSpecial &&
-                    (b.type === 'special' || (b.type === 'custom' && b._consecutiveBunk === true))).forEach(block => {
+                    (b.type === 'special' || (b.type === 'custom' && b._specialLocation))).forEach(block => {
                     let idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     // ★ Day 19: multi-period special spanning. When no single grid slot
                     // matches the special's [start,end] exactly — because the special
