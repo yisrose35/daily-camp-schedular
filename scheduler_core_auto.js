@@ -14230,6 +14230,18 @@
                         //   activity whose grade-wide placement was suppressed so the
                         //   walk owns the window. A band counts as the grade's slot.
                         var _bandsCB = (_cbS._bands && _cbS._bands[grade]) || [];
+                        // ★ FN-42: the LAYER's length IS each bunk's slot duration —
+                        //   a 20-min "Main" band = 20 minutes per bunk, walked from
+                        //   the band's start. The facility no longer carries a
+                        //   minutes setting (legacy consecutiveDuration only backs
+                        //   up band-less grades).
+                        var _gDurCB = _aDur;
+                        if (_bandsCB.length) {
+                            var _bd0 = _bandsCB[0];
+                            if (_bd0 && _bd0.end > _bd0.start) _gDurCB = _bd0.end - _bd0.start;
+                            if (_bandsCB.length > 1) log('[Phase2.35] ' + grade + '/' + _aName + ' has ' + _bandsCB.length + ' layer bands — slot length from the first (' + _gDurCB + 'm)');
+                        }
+                        if (_gDurCB < 5) return;
                         var _gLayers2 = layersByGrade[grade] || [];
                         var _hasSlot = _bandsCB.length > 0 || _gLayers2.some(function (l) {
                             var _lt = (l.type || '').toLowerCase();
@@ -14290,10 +14302,10 @@
                                     for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
                                         var _p3 = _walkPeriods[_wp];
                                         var _cand = Math.max(_cursor, _p3.startMin);
-                                        if (_cand + _aDur <= _p3.endMin && _cand + _aDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                        if (_cand + _gDurCB <= _p3.endMin && _cand + _gDurCB <= _gEnd) { _per = _p3; _s = _cand; break; }
                                     }
                                     if (!_per) break;
-                                    var _e = _s + _aDur;
+                                    var _e = _s + _gDurCB;
                                     if (_stationBusyS(_station, _s, _e) || _stationTimeBlocked(fHost, grade, _s, _e)) { _cursor = _s + 5; continue; }
                                     var _take = [], _takeSize = 0;
                                     for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
@@ -14322,7 +14334,7 @@
                             }
                         });
                         if (!_best || _best.placed <= 0) {
-                            log('[Phase2.35] ✗ ' + grade + '/' + _aName + ' (general) — no station/anchor fits the run (bunks=' + _bunks.length + ', dur=' + _aDur + ')');
+                            log('[Phase2.35] ✗ ' + grade + '/' + _aName + ' (general) — no station/anchor fits the run (bunks=' + _bunks.length + ', dur=' + _gDurCB + ')');
                             // ★ FN-41: a band was suppressed in Phase 0 on the promise the
                             //   walk would own it — no walk fits, so restore the original
                             //   grade-wide band (custom-lane shape, facility bound) so the
@@ -14366,9 +14378,9 @@
                                     _gradeWide: false, _activityLocked: true, _noBacktrack: true,
                                     _assignedSpecial: _aName,
                                     _specialLocation: _best.station,
-                                    _specialDuration: _aDur,
+                                    _specialDuration: _gDurCB,
                                     _isSpecialLocation: true,
-                                    dMin: _aDur, dMax: _aDur,
+                                    dMin: _gDurCB, dMax: _gDurCB,
                                     _cbResStart: slot.start, _cbResEnd: slot.end,
                                     _consecutiveBunk: true, _source: 'phase2.35-general'
                                 });
@@ -14384,7 +14396,7 @@
                         });
                         log('[Phase2.35] ' + (_best.placed < _bunks.length ? '⚠' : '✓') + ' ' + grade + '/' + _aName + ' (general) — ' +
                             _best.placed + '/' + _bunks.length + ' bunks consecutive @ ' + _best.station +
-                            ' from ' + minutesToTimeLabel(_best.anchor) + ', ' + _aDur + 'min each');
+                            ' from ' + minutesToTimeLabel(_best.anchor) + ', ' + _gDurCB + 'min each');
                     });
                 });
                 if (_p235SCount > 0) {

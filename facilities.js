@@ -1376,7 +1376,7 @@ function renderGeneralConfig(container, fac) {
 // =========================================================================
 function summaryGeneralConsec(f) {
     return f.consecutiveBunks === true
-        ? ('On · ' + (parseInt(f.consecutiveDuration) || 30) + ' min per bunk slot')
+        ? 'On · slot length set by the layer'
         : 'Off';
 }
 
@@ -1393,30 +1393,20 @@ function renderGeneralConsec(fieldData, fac, app1) {
     const label = document.createElement('label');
     label.htmlFor = check.id;
     label.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+    // ★ FN-42: no duration here — each bunk's slot length comes from the
+    //   activity's LAYER (the band you drop in Master Builder / Daily
+    //   Adjustments). A 20-min layer = 20 minutes per bunk, walked
+    //   back-to-back from the layer's start time.
     label.innerHTML = '<strong>Schedule bunks consecutively</strong>'
         + '<div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">'
-        + 'Each bunk in the grade comes through this facility one after the next. '
-        + 'If sharing is on, bunks share each slot up to capacity '
-        + '(e.g. 6 bunks at capacity 2 = 3 consecutive slots).</div>';
+        + 'Each bunk in the grade comes through this facility one after the next, '
+        + 'starting at the activity\'s layer. The layer\'s length sets each bunk\'s '
+        + 'slot (a 20-min layer = 20 minutes per bunk). If sharing is on, bunks '
+        + 'share each slot up to capacity (e.g. 6 bunks at capacity 2 = 3 '
+        + 'consecutive slots).</div>';
     box.appendChild(check);
     box.appendChild(label);
     wrap.appendChild(box);
-
-    const durRow = document.createElement('div');
-    durRow.style.cssText = 'display:flex; align-items:center; gap:10px; margin-top:12px;'
-        + (fieldData.consecutiveBunks === true ? '' : ' opacity:0.45;');
-    const durLabel = document.createElement('span');
-    durLabel.textContent = 'Minutes per bunk slot';
-    durLabel.style.cssText = 'font-size:0.82rem; color:#374151; font-weight:600;';
-    const dur = document.createElement('input');
-    dur.type = 'number';
-    dur.min = '5';
-    dur.placeholder = '30';
-    dur.value = fieldData.consecutiveDuration || '';
-    dur.style.cssText = 'width:90px; padding:6px 8px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem;';
-    durRow.appendChild(durLabel);
-    durRow.appendChild(dur);
-    wrap.appendChild(durRow);
 
     const persist = () => {
         // Snapshot the general-activity names onto the field entry — the auto
@@ -1442,11 +1432,6 @@ function renderGeneralConsec(fieldData, fac, app1) {
     };
     check.addEventListener('change', () => {
         fieldData.consecutiveBunks = check.checked;
-        durRow.style.opacity = check.checked ? '' : '0.45';
-        persist();
-    });
-    dur.addEventListener('change', () => {
-        fieldData.consecutiveDuration = parseInt(dur.value) || null;
         persist();
     });
 
