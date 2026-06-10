@@ -1,3 +1,4 @@
+
 /**
  * period_tiler.js — Phase −0.5 PeriodTiler (P1: pure function only)
  * =================================================================
