@@ -14238,10 +14238,6 @@
               try {
                 var _p235SCount = 0;
                 consecutiveBunkSports.forEach(function (_cbS) {
-                    // ★ FN-46: activities with custom-layer bands are placed by
-                    //   Phase 0's chunked pinned placement — the walk only serves
-                    //   pure band-less (autonomous) configs.
-                    if (_cbS._phase0Owned) return;
                     var _aName = _cbS.name;
                     var _aDur = _cbS.duration || 30;
                     if (_aDur < 5) return;
@@ -14347,11 +14343,13 @@
                             if (_bandsCB.length > 1) log('[Phase2.35] ' + grade + '/' + _aName + ' has ' + _bandsCB.length + ' layer bands — slot length from the first (' + _gDurCB + 'm)');
                         }
                         if (_gDurCB < 5) return;
-                        var _hasSlot = _bandsCB.length > 0 || _gLayers2.some(function (l) {
-                            var _lt = (l.type || '').toLowerCase();
-                            return _lt === 'sport' || _lt === 'activity';
-                        });
-                        if (!_hasSlot) return;
+                        // ★ FN-47: generals are LAYER-DRIVEN — the layer says which
+                        //   grades get the activity and when. A grade without a band
+                        //   never gets walked (live repro: Soloists/Quartet got
+                        //   30-min autonomous Jump sprays with no Jump layer). The
+                        //   already-carries filter above also keeps the walk off
+                        //   bunks Phase 0's chunked placement seated (pinned bands).
+                        if (_bandsCB.length === 0) return;
 
                         var _bunks = getBunksForGrade(grade, divisions).filter(function (b) {
                             return !(bunkTimelines[b] || []).some(function (x) {
