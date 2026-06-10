@@ -72,9 +72,25 @@ function saveSnacksData(data) {
         localStorage.setItem('CAMPISTRY_LOCAL_CACHE', JSON.stringify(g));
     } catch (e) { console.warn('[Snacks POS] Global save failed:', e); }
     try { localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(data)); } catch (_) {}
+    cloudSaveSnacks(data);
+}
+
+// Cloud write — prefer the full hooks bridge when present, otherwise upsert
+// the campistrySnacks key into camp_state_kv directly via the Supabase client.
+function cloudSaveSnacks(data) {
     if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
         window.saveGlobalSettings('campistrySnacks', data);
+        return;
     }
+    try {
+        const db = window.CampistryDB;
+        if (!db || !db.client) return;
+        const campId = db.getCampId && db.getCampId();
+        if (!campId) return;
+        db.client.from('camp_state_kv')
+            .upsert({ camp_id: campId, key: 'campistrySnacks', value: data, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
+            .then(res => { if (res.error) console.warn('[Snacks POS] Cloud save failed:', res.error.message); });
+    } catch (e) { console.warn('[Snacks POS] Cloud save error:', e); }
 }
 
 function todayStr() {
@@ -95,7 +111,10 @@ let cat = 'all';
 function getAccount(name) {
     if (!snacks.accounts) snacks.accounts = {};
     if (!snacks.accounts[name]) snacks.accounts[name] = { balance: 0, dailyLimit: 10, spentToday: 0 };
-    return snacks.accounts[name];
+    const a = snacks.accounts[name];
+    // Daily spend resets at midnight
+    if (a.lastSpendDate !== todayStr()) { a.spentToday = 0; a.lastSpendDate = todayStr(); }
+    return a;
 }
 
 // ==========================================================================
@@ -282,7 +301,9 @@ window.charge = function() {
     }, 0);
     const rem = a.dailyLimit - a.spentToday;
     if (total > rem) { toast('Exceeds daily limit ($' + rem.toFixed(2) + ' left)', true); return; }
-    if (total > a.balance) { toast('Insufficient balance ($' + a.balance.toFixed(2) + ')', true); return; }
+    // Parents can set a balance floor (stop before $0) and a credit limit (spend past $0)
+    const spendable = a.balance - (a.balanceFloor || 0) + (a.creditLimit || 0);
+    if (total > spendable) { toast('Insufficient balance ($' + spendable.toFixed(2) + ' spendable)', true); return; }
 
     // Process
     a.balance -= total;
@@ -341,4 +362,15 @@ function toast(msg, err) {
 }
 
 document.addEventListener('DOMContentLoaded', init);
+
+// Re-init after cloud hydration or when another tab (admin / parent portal) writes
+window.CampistrySnacksPOS = {
+    reinit: function() { snacks = loadSnacksData(); init(); }
+};
+window.addEventListener('storage', function(e) {
+    if (e.key === STORE_KEY || e.key === 'CAMPISTRY_LOCAL_CACHE') {
+        snacks = loadSnacksData();
+        renderCampers(); renderItems(); renderCart();
+    }
+});
 })();
