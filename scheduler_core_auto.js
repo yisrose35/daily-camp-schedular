@@ -14446,6 +14446,84 @@
                         log('[Phase2.35] ' + (_best.placed < _bunks.length ? '⚠' : '✓') + ' ' + grade + '/' + _aName + ' (general) — ' +
                             _best.placed + '/' + _bunks.length + ' bunks consecutive @ ' + _best.station +
                             ' from ' + minutesToTimeLabel(_best.anchor) + ', ' + _gDurCB + 'min each');
+
+                        // ★ FN-44: WHOLE-GRADE GUARANTEE — a consecutive general is
+                        //   like swim/lunch: every bunk must get it. Bunks the
+                        //   band-anchored walk couldn't seat (station contested,
+                        //   bunk busy) get a leftover sweep across the rest of the
+                        //   day — coverage beats band fidelity for the stragglers
+                        //   (live repro: Minors 1 got Jump, Minors 2 didn't).
+                        if (_best.placed < _bunks.length) {
+                            var _seated44 = {};
+                            _best.plan.forEach(function (s2) { (s2.bunks || []).forEach(function (b2) { _seated44[b2] = 1; }); });
+                            var _left44 = _bunks.filter(function (b2) { return !_seated44[b2]; });
+                            var _lAnchors = [];
+                            _periods.forEach(function (p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _lAnchors.push(p.startMin); });
+                            if (_lAnchors.length === 0) _lAnchors.push(_gStart);
+                            var _lBest = null;
+                            _cbS.hosts.forEach(function (fHost) {
+                                if (_lBest && _lBest.placed >= _left44.length) return;
+                                if (!_gradeAllowedOnField(fHost, grade)) return;
+                                var _stn2 = fHost.name, _cap2 = _capOfField(fHost);
+                                for (var _la = 0; _la < _lAnchors.length; _la++) {
+                                    var _plan2 = [], _placed2 = 0, _pool2 = _left44.slice(), _cur2 = _lAnchors[_la], _g2 = 0;
+                                    while (_placed2 < _left44.length && _g2++ < 300) {
+                                        var _c2 = Math.max(_cur2, _gStart);
+                                        if (_c2 + _gDurCB > _gEnd) break;
+                                        var _e2 = _c2 + _gDurCB;
+                                        if (_stationBusyS(_stn2, _c2, _e2) || _stationTimeBlocked(fHost, grade, _c2, _e2)) { _cur2 = _c2 + 5; continue; }
+                                        var _take2 = [], _ts2 = 0;
+                                        for (var _pk2 = 0; _pk2 < _pool2.length && _take2.length < _cap2; _pk2++) {
+                                            var _b3 = _pool2[_pk2];
+                                            if (!_bunkFreeS(_b3, _c2, _e2)) continue;
+                                            var _bs3 = (_bmCB[_b3] && _bmCB[_b3].size) || 0;
+                                            if (_maxP && _bs3 && _bs3 > _maxP) continue;
+                                            if (_maxP && _ts2 && _ts2 + _bs3 > _maxP) continue;
+                                            _take2.push(_b3); _ts2 += _bs3;
+                                        }
+                                        if (_take2.length === 0) { _cur2 = _c2 + 5; continue; }
+                                        if (_minP && _ts2 && _ts2 < _minP) { _cur2 = _c2 + 5; continue; }
+                                        for (var _tk2 = 0; _tk2 < _take2.length; _tk2++) _pool2.splice(_pool2.indexOf(_take2[_tk2]), 1);
+                                        _plan2.push({ start: _c2, end: _e2, bunks: _take2 });
+                                        _placed2 += _take2.length;
+                                        _cur2 = _e2;
+                                    }
+                                    if (!_lBest || _placed2 > _lBest.placed) _lBest = { plan: _plan2, placed: _placed2, station: _stn2 };
+                                    if (_lBest.placed >= _left44.length) break;
+                                }
+                            });
+                            if (_lBest && _lBest.placed > 0) {
+                                _lBest.plan.forEach(function (slot) {
+                                    slot.bunks.forEach(function (bunk) {
+                                        bunkTimelines[bunk].push({
+                                            startMin: slot.start, endMin: slot.end,
+                                            type: 'custom', event: _aName, layer: null,
+                                            _classification: 'pinned', _committed: true, _fixed: true,
+                                            _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                            _assignedSpecial: _aName,
+                                            _specialLocation: _lBest.station,
+                                            _specialDuration: _gDurCB,
+                                            _isSpecialLocation: true,
+                                            dMin: _gDurCB, dMax: _gDurCB,
+                                            _cbResStart: slot.start, _cbResEnd: slot.end,
+                                            _consecutiveBunk: true, _source: 'phase2.35-general-leftover'
+                                        });
+                                        _p235SCount++;
+                                        try { registerSpecialUsage(_aName, grade, slot.start, slot.end); } catch (_eL1) {}
+                                        try { registerCrossGrade(grade, 'special', slot.start, slot.end, _aName); } catch (_eL2) {}
+                                        try {
+                                            if (fieldLedger && fieldLedger[_lBest.station]) {
+                                                fieldLedger[_lBest.station].claims.push({ bunk: bunk, grade: grade, activity: _aName, startMin: slot.start, endMin: slot.end });
+                                            }
+                                        } catch (_eL3) {}
+                                    });
+                                });
+                                log('[Phase2.35] ⚠ ' + grade + '/' + _aName + ' — coverage sweep seated ' + _lBest.placed + '/' + _left44.length + ' leftover bunk(s) off-band @ ' + _lBest.station);
+                            }
+                            if (!_lBest || _lBest.placed < _left44.length) {
+                                log('[Phase2.35] ✗ ' + grade + '/' + _aName + ' — ' + (_left44.length - (_lBest ? _lBest.placed : 0)) + ' bunk(s) could not be seated anywhere (day genuinely full)');
+                            }
+                        }
                     });
                 });
                 if (_p235SCount > 0) {

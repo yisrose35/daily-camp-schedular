@@ -3427,6 +3427,32 @@ function renderDAW() {
   renderDAWExpandSection();
   renderDAWGrid();
 }
+
+// ★ FN-45: remote layer-template changes (another device or tab) re-hydrate
+//   storage — reload + re-render the DAW so this editor doesn't save a stale
+//   template wholesale over the other writer's layers. Skipped mid-drag and
+//   while the local editor holds unsaved changes (last-writer-wins on save).
+(function () {
+  let _dawRefreshTimer = null;
+  function _refreshDAWFromStorage() {
+    if (_dawRefreshTimer) clearTimeout(_dawRefreshTimer);
+    _dawRefreshTimer = setTimeout(() => {
+      _dawRefreshTimer = null;
+      try {
+        if (dawDragData) return;
+        if (typeof hasUnsavedChanges !== 'undefined' && hasUnsavedChanges) return;
+        const pal = document.getElementById('daw-palette');
+        if (pal && pal.offsetParent !== null) renderDAW();
+        // Not visible: nothing cached to refresh — renderDAW() re-runs
+        // loadDAWLayers() the next time the auto view opens.
+      } catch (e) { console.warn('[MS] hydrate refresh failed:', e); }
+    }, 250);
+  }
+  window.addEventListener('campistry-cloud-hydrated', _refreshDAWFromStorage);
+  window.addEventListener('storage', (e) => {
+    if (e && e.key === 'CAMPISTRY_LOCAL_CACHE') _refreshDAWFromStorage();
+  });
+})();
 function updateToolbarStatus() {
   const statusGroup = document.querySelector('.ms-toolbar-group.status');
   if (statusGroup) {

@@ -4933,6 +4933,37 @@ function parseTimeToMinutes(str) { return window.CampUtils.parseTimeToMinutes(st
 // EXPORTS
 // =========================================================================
 window.initFacilitiesTab = initFacilitiesTab;
+
+// ★ FN-45: remote config changes (another device or tab) re-hydrate storage —
+//   refresh the module state + visible UI so this tab doesn't keep editing,
+//   and later SAVE, a stale copy: saveFacilitiesMetadata pushes the whole
+//   array, so a stale tab wholesale-erases the other writer's general
+//   activities / sharing / consecutive settings. The detail pane re-resolves
+//   the selected facility by name, so an open editor refreshes onto the
+//   fresh objects (or empties if the facility was deleted remotely).
+(function () {
+    let _facRefreshTimer = null;
+    function _refreshFacilitiesFromStorage() {
+        if (_facRefreshTimer) clearTimeout(_facRefreshTimer);
+        _facRefreshTimer = setTimeout(() => {
+            _facRefreshTimer = null;
+            try {
+                const settings = window.loadGlobalSettings?.() || {};
+                if (!Array.isArray(settings.facilities) || settings.facilities.length === 0) return;
+                loadData();
+                const tab = document.getElementById('facilities');
+                if (tab && tab.offsetParent !== null && facilitiesListEl) {
+                    renderMasterList();
+                    renderDetailPane();
+                }
+            } catch (e) { console.warn('[FACILITIES] hydrate refresh failed:', e); }
+        }, 250);
+    }
+    window.addEventListener('campistry-cloud-hydrated', _refreshFacilitiesFromStorage);
+    window.addEventListener('storage', (e) => {
+        if (e && e.key === 'CAMPISTRY_LOCAL_CACHE') _refreshFacilitiesFromStorage();
+    });
+})();
 window.getFacilities = function () {
     const settings = window.loadGlobalSettings?.() || {};
     return settings.facilities || [];
