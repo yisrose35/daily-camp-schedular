@@ -14116,6 +14116,32 @@
                         if (!ar || !ar.enabled || !ar.divisions || Object.keys(ar.divisions).length === 0) return true;
                         return (String(grade) in ar.divisions) || (grade in ar.divisions);
                     }
+                    // ★ FN-39b: the station's TIME RULES must shape the plan — without
+                    //   this the planner reserves slices the write guard then kills
+                    //   (live repro: Gaga unavailable 650-900 → a 10:50am run planned,
+                    //   only the 3:05pm slice survived). Mirrors the writer's semantics:
+                    //   'unavailable/blocked' windows exclude overlap; 'available/only'
+                    //   windows require containment. divisions:[] = applies to all.
+                    function _stationTimeBlocked(f, grade, s, e) {
+                        var trs = (f && f.timeRules) || [];
+                        for (var i = 0; i < trs.length; i++) {
+                            var r = trs[i];
+                            if (!r) continue;
+                            var rs = r.startMin != null ? r.startMin : parseTimeToMinutes(r.startTime);
+                            var re = r.endMin != null ? r.endMin : parseTimeToMinutes(r.endTime);
+                            if (rs == null || re == null) continue;
+                            var divs = Array.isArray(r.divisions) ? r.divisions : [];
+                            var applies = divs.length === 0 || divs.indexOf(grade) >= 0 || divs.indexOf(String(grade)) >= 0;
+                            if (!applies) continue;
+                            var t = String(r.type || 'unavailable').toLowerCase();
+                            if (t === 'available' || t === 'only') {
+                                if (!(s >= rs && e <= re)) return true;
+                            } else {
+                                if (rs < e && re > s) return true;
+                            }
+                        }
+                        return false;
+                    }
 
                     allGrades.forEach(function (grade) {
                         if (allowedSet && !allowedSet.has(String(grade))) return;
@@ -14168,7 +14194,7 @@
                                     }
                                     if (!_per) break;
                                     var _e = _s + _aDur;
-                                    if (_stationBusyS(_station, _s, _e)) { _cursor = _s + 5; continue; }
+                                    if (_stationBusyS(_station, _s, _e) || _stationTimeBlocked(fHost, grade, _s, _e)) { _cursor = _s + 5; continue; }
                                     var _take = [], _takeSize = 0;
                                     for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
                                         var _cbBunk = _pool[_pk];
