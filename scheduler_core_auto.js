@@ -16977,7 +16977,8 @@
         //   carry wall drift introduced after a pass's last integrity call;
         //   one more integrity run rights every wall (Pass-0 snap-back) and
         //   resolves any resulting overlap before the skeleton is formalized.
-        if (typeof consecutiveBunkSpecials !== 'undefined' && consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+        if ((typeof consecutiveBunkSpecials !== 'undefined' && consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) ||
+            (typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports && consecutiveBunkSports.length > 0)) {
             try {
                 allGrades.forEach(function (grade) {
                     getBunksForGrade(grade, divisions).forEach(function (bunk) { ensureTimelineIntegrity(bunk); });
@@ -17168,9 +17169,11 @@
         //   re-sort could double-book the station. A verify-only diagnostic
         //   replaces it so the console always shows the final run layout.
         try {
-          if (consecutiveBunkSpecials && consecutiveBunkSpecials.length > 0) {
+          var _allConsecVerifyCfgs = (consecutiveBunkSpecials || []).concat(
+              (typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports) || []);
+          if (_allConsecVerifyCfgs.length > 0) {
             try {
-                consecutiveBunkSpecials.forEach(function (spCfg) {
+                _allConsecVerifyCfgs.forEach(function (spCfg) {
                     var vName = spCfg.name;
                     var byGrade = {};
                     autoSkeleton.forEach(function (b) {
@@ -19041,7 +19044,14 @@
             if (!pbs) return;
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 const arr = pbs[String(bunk)] || [];
-                (bunkTimelines[bunk] || []).filter(b => b.type === 'special' && b._assignedSpecial).forEach(block => {
+                // ★ FN-39d: consecutive-bunk walls (specials AND general activities)
+                //   are type:'custom' (the protected lane) but carry _assignedSpecial
+                //   + _specialLocation — route them through this writer so they get
+                //   the full special path (validation, F2, room locks, multi-slot
+                //   spanning) instead of falling to the generic pinned writer, which
+                //   writes field = activity name.
+                (bunkTimelines[bunk] || []).filter(b => b._assignedSpecial &&
+                    (b.type === 'special' || (b.type === 'custom' && b._consecutiveBunk === true))).forEach(block => {
                     let idx = arr.findIndex(s => s.startMin === block.startMin && s.endMin === block.endMin);
                     // ★ Day 19: multi-period special spanning. When no single grid slot
                     // matches the special's [start,end] exactly — because the special
