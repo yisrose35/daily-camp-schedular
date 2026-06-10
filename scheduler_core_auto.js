@@ -3063,6 +3063,38 @@
             //   wet-bundle event. Standalone Phase-0 placement (the old code here) could
             //   not produce that structure, so it is skipped (early-return below).
 
+            // ★ FN-33: per-bunk layer RESIZE map. A bunk-override with
+            //   overrideMode:'resize' (drag-resized skeleton band in the DA Bunk
+            //   Overrides view) means: THIS bunk runs the layer on a custom window.
+            //   Keyed bunk → [{origStart, origEnd, layerType, newStart, newEnd}].
+            //   Consumed below in the per-bunk pinned push (fixed-type layers only —
+            //   lunch/snacks/dismissal/custom; swim is owned by the bundle machinery
+            //   and grade-wide walls stay synchronized).
+            window._bunkResizedLayers = {};
+            try {
+                const _rzDd = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
+                let _rzOvs = _rzDd?.bunkActivityOverrides || [];
+                if (_rzOvs.length === 0) {
+                    try {
+                        const _rzStored = localStorage.getItem('campBunkOverrides_' + (window.currentScheduleDate || ''));
+                        if (_rzStored) { const _p = JSON.parse(_rzStored); if (Array.isArray(_p)) _rzOvs = _p; }
+                    } catch (_e) {}
+                }
+                _rzOvs.forEach(ov => {
+                    if (!ov || ov.overrideMode !== 'resize' || !ov.bunk) return;
+                    if (ov.originalStartMin == null || ov.originalEndMin == null) return;
+                    if (ov.startMin == null || ov.endMin == null || ov.endMin <= ov.startMin) return;
+                    const bk = String(ov.bunk);
+                    (window._bunkResizedLayers[bk] = window._bunkResizedLayers[bk] || []).push({
+                        origStart: ov.originalStartMin, origEnd: ov.originalEndMin,
+                        layerType: String(ov.layerType || 'custom').toLowerCase(),
+                        newStart: ov.startMin, newEnd: ov.endMin
+                    });
+                });
+                const _rzN = Object.values(window._bunkResizedLayers).reduce((s, a) => s + a.length, 0);
+                if (_rzN) log('[Phase0] ' + _rzN + ' per-bunk layer resize override(s) loaded');
+            } catch (_eRz) {}
+
             orderedPinned.forEach(layer => {
                 const grade = layer.grade || layer.division;
                 if (!grade || (allowedSet && !allowedSet.has(String(grade)))) return;
@@ -3795,8 +3827,21 @@
                             });
                         }
                     } else {
+                        // ★ FN-33: per-bunk resize — if this bunk drag-resized THIS layer
+                        //   in the Bunk Overrides view, place its block on the custom
+                        //   window instead of the grade window. Fixed types only;
+                        //   grade-wide walls (leagues / fullGrade) stay synchronized.
+                        let _pbS = blockStart, _pbE = blockEnd;
+                        if (!isGradeWide && (t === 'lunch' || t === 'snacks' || t === 'dismissal' || t === 'custom')) {
+                            const _rzList = (window._bunkResizedLayers && window._bunkResizedLayers[String(bunk)]) || [];
+                            const _rzHit = _rzList.find(r => r.layerType === t && r.origStart === layer.startMin && r.origEnd === layer.endMin);
+                            if (_rzHit) {
+                                _pbS = _rzHit.newStart; _pbE = _rzHit.newEnd;
+                                log('[Phase0] resize override: ' + bunk + ' ' + t + ' ' + layer.startMin + '-' + layer.endMin + ' → ' + _pbS + '-' + _pbE);
+                            }
+                        }
                         bunkTimelines[bunk].push({
-                            startMin: blockStart, endMin: blockEnd,
+                            startMin: _pbS, endMin: _pbE,
                             type: isCustom ? 'custom' : (layer.type || 'pinned'),
                             event: eventName, layer,
                             _classification: 'pinned', _committed: true, _fixed: true,

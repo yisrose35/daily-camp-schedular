@@ -5604,6 +5604,23 @@ function _boSaveOverrides(overrides) {
   currentOverrides.bunkActivityOverrides = overrides;
 }
 
+// ★ FN-33: does override `o` belong to the layer band (sm-em, ltKey)?
+//   Direct match on the band's window — OR, for resize overrides (which store
+//   their NEW window in startMin/endMin), match on the ORIGINAL layer window
+//   they were created from. Without the second clause a resized band's override
+//   would detach from its layer and render as a duplicate orphan band.
+function _boOvMatchesLayer(o, sm, em, ltKey) {
+  if (!o || o.layerType !== ltKey) return false;
+  if (o.startMin === sm && o.endMin === em) return true;
+  return o.overrideMode === 'resize' && o.originalStartMin === sm && o.originalEndMin === em;
+}
+
+// ★ FN-33: layer types whose per-bunk blocks can be drag-resized in auto mode.
+//   Swim is owned by the wet-bundle machinery; floaters (sport/special/activity)
+//   pack multiple slots inside their window; grade-wide walls stay synchronized —
+//   none of those support a per-bunk window yet.
+const _BO_RESIZABLE_TYPES = { lunch: 1, snacks: 1, dismissal: 1, custom: 1 };
+
 function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
   if (!container) return;
@@ -5778,11 +5795,10 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   //   the grade layers — so a freshly added band landed past the column's
   //   right edge, clipped under the next bunk's column ("blocked"-looking).
   //   Width every column for the widest bunk (layers + its extra bands).
-  const _layerKeyset = new Set(layers.map(l => `${l.startMin}|${l.endMin}|${String(l.type || 'custom')}`));
+  const _ovOnAnyLayer = (o) => layers.some(l => _boOvMatchesLayer(o, l.startMin, l.endMin, String(l.type || 'custom')));
   let _maxExtraBands = 0;
   bunks.forEach(b => {
-    const n = overrides.filter(o => String(o.bunk) === String(b)
-      && !_layerKeyset.has(`${o.startMin}|${o.endMin}|${String(o.layerType || 'custom')}`)).length;
+    const n = overrides.filter(o => String(o.bunk) === String(b) && !_ovOnAnyLayer(o)).length;
     if (n > _maxExtraBands) _maxExtraBands = n;
   });
   const colWidth   = Math.max(GRADE_COL_MIN, (layerCount + _maxExtraBands) * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
@@ -5836,10 +5852,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
       const left = BAND_PAD + idx * (BAND_WIDTH + BAND_GAP);
 
       const _ltKey = (layer.type || 'custom');
-      const override = overrides.find(o =>
-        o.bunk === bunk && o.startMin === sm && o.endMin === em
-        && o.layerType === _ltKey
-      );
+      const override = overrides.find(o => o.bunk === bunk && _boOvMatchesLayer(o, sm, em, _ltKey));
 
       const opSymbol = layer.op === '=' ? '=' : layer.op === '<=' ? '≤' : '≥';
       const _dMin = Math.min(layer.durationMin || 0, layer.durationMax || 0) || layer.durationMin;
@@ -5874,9 +5887,15 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           mainLabel = override.activity;
           subLabel  = 'override';
         }
+        // ★ FN-33: a resize override renders at its NEW window so the band
+        //   visually sits where the bunk's block will actually be placed.
+        const _vS = (mode === 'resize' && override.startMin != null) ? override.startMin : sm;
+        const _vE = (mode === 'resize' && override.endMin != null) ? override.endMin : em;
+        const vTop = (_vS - earliestMin) * PX;
+        const vHeight = (_vE - _vS) * PX;
         html += `<div class="ms-daw-band bo-block bo-override bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-ov-id="${_escHtml(override.id)}" data-type="${_escHtml(_ltKey)}" data-mode="${_escHtml(mode)}"
-          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(sm)}-${minutesToTime(em)}) — Click body to edit, drag edges to resize"
-          style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
+          title="OVERRIDE (${_escHtml(mode)}): ${_escHtml(override.activity)} (${minutesToTime(_vS)}-${minutesToTime(_vE)}) — Click body to edit, drag edges to resize"
+          style="top:${vTop}px;height:${vHeight}px;left:${left}px;width:${BAND_WIDTH}px;${bandStyle}">
           <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
           <span class="band-label">${_escHtml(mainLabel)}</span>
           <span class="band-qty">${_escHtml(subLabel)}</span>
@@ -5884,13 +5903,23 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
         </div>`;
       } else {
-        html += `<div class="ms-daw-band bo-block bo-skeleton bo-resizable" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
-          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}"
+        // ★ FN-33: drag-to-resize only for layer types the solver can honor
+        //   per-bunk (lunch/snacks/dismissal/custom). Floaters/swim/leagues
+        //   keep click-to-override but no resize handles.
+        const _canResize = !!_BO_RESIZABLE_TYPES[String(_ltKey).toLowerCase()];
+        const _handles = _canResize
+          ? `<div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        const _handlesBottom = _canResize
+          ? `<div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>`
+          : '';
+        html += `<div class="ms-daw-band bo-block bo-skeleton${_canResize ? ' bo-resizable' : ''}" data-bunk="${_escHtml(bunk)}" data-start="${sm}" data-end="${em}" data-layer-type="${_escHtml(_ltKey)}" data-type="${_escHtml(_ltKey)}"
+          title="${_escHtml(evName)} layer (${minutesToTime(sm)}-${minutesToTime(em)}) — Click to override for ${_escHtml(bunk)}${_canResize ? ', drag edges to resize for this bunk' : ''}"
           style="top:${top}px;height:${height}px;left:${left}px;width:${BAND_WIDTH}px;">
-          <div class="band-resize band-resize-top" data-edge="top" style="position:absolute;top:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          ${_handles}
           <span class="band-label">${_escHtml(evName)}</span>
           <span class="band-qty">${opSymbol}${layer.qty || 1} · ${durLabel}</span>
-          <div class="band-resize band-resize-bottom" data-edge="bottom" style="position:absolute;bottom:0;left:0;right:0;height:8px;cursor:ns-resize;z-index:5;"></div>
+          ${_handlesBottom}
         </div>`;
       }
     });
@@ -5901,8 +5930,7 @@ function _boRenderAutoBunkGrid(wrap, divName) {
     //   configured (becoming 'force'/'sportPool' at its own window) it matched
     //   no grade band and silently VANISHED from the UI while still affecting
     //   generation. Now force/sportPool/resize/delete orphans all stay visible.
-    const extrasForBunk = overrides.filter(o => o.bunk === bunk
-      && !_layerKeyset.has(`${o.startMin}|${o.endMin}|${String(o.layerType || 'custom')}`));
+    const extrasForBunk = overrides.filter(o => o.bunk === bunk && !_ovOnAnyLayer(o));
     extrasForBunk.forEach((ov, addIdx) => {
       const sm = ov.startMin, em = ov.endMin;
       if (sm == null || em == null || em <= sm) return;
@@ -6043,9 +6071,10 @@ function _boRenderAutoBunkGrid(wrap, divName) {
           } : o);
         } else {
           // Skeleton band — create a new resize-only override with no activity.
-          // Storing the resize as overrideMode:'resize' so the solver knows
-          // this layer runs on a custom window for this bunk.
-          list = list.filter(o => !(o.bunk === bunk && o.startMin === originalStart && o.endMin === originalEnd && o.layerType === layerType));
+          // overrideMode:'resize' → the solver places THIS bunk's block for the
+          // layer on the custom window (FN-33, fixed types only).
+          if (!_BO_RESIZABLE_TYPES[String(layerType || 'custom').toLowerCase()]) return;
+          list = list.filter(o => !(o.bunk === bunk && _boOvMatchesLayer(o, originalStart, originalEnd, layerType)));
           list.push({
             id: uid(), bunk,
             startMin: newStart, endMin: newEnd,
@@ -6147,10 +6176,10 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
   const POOL_TYPES = { sport: 'sports', special: 'specials', activity: 'fields' };
   const isPoolType = !isAdded && !!POOL_TYPES[_lt];
 
-  // Find existing override for this band (if any)
+  // Find existing override for this band (if any) — resize overrides match by
+  // their ORIGINAL layer window (they store the new window in startMin/endMin).
   const existing = (currentOverrides.bunkActivityOverrides || []).find(o =>
-    o.bunk === bunk && o.startMin === startMin && o.endMin === endMin
-    && o.layerType === (layerType || 'custom')
+    o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom')
   );
 
   const initPool = (existing?.sportPool && Array.isArray(existing.sportPool))
@@ -6357,7 +6386,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     pop.querySelector('#bo-pop-cancel').onclick = () => pop.remove();
     pop.querySelector('#bo-pop-delete').onclick = () => {
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
-        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
       );
       // ★ BO-fix: deleting an ADDED band just removes the override — pushing a
       //   'delete' override here would leave a confusing orphan "deleted" badge
@@ -6410,7 +6439,7 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
       if (curEnd <= curStart) { alert('End time must be after start time.'); return; }
       // Remove any existing override matching original time + layer
       let list = (currentOverrides.bunkActivityOverrides || []).filter(o =>
-        !(o.bunk === bunk && o.startMin === startMin && o.endMin === endMin && o.layerType === (layerType || 'custom'))
+        !(o.bunk === bunk && _boOvMatchesLayer(o, startMin, endMin, layerType || 'custom'))
       );
 
       if (isPoolType) {
