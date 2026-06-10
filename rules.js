@@ -505,7 +505,7 @@ function renderSportsRulesCard(container) {
                         Sports Rules
                         ${count ? `<span class="rules-badge">${count} sport${count !== 1 ? 's' : ''}</span>` : ''}
                     </div>
-                    <div class="rules-card-subtitle">Min/max players per sport so the scheduler can match bunks by size.</div>
+                    <div class="rules-card-subtitle">Min/max players per sport so the scheduler can match bunks by size. "Consec" runs the whole grade through the activity back-to-back (auto builder).</div>
                 </div>
                 <span class="rules-caret" id="rules-sport-caret">
                     <svg width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg>
@@ -545,6 +545,9 @@ function renderSportsRulesCard(container) {
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="min" value="${m.minPlayers || ''}" placeholder="—" min="1">
                 <span class="sr-label">Max</span>
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="max" value="${m.maxPlayers || ''}" placeholder="∞" min="1">
+                <span class="sr-label" title="Auto builder: the whole grade cycles through this activity back-to-back, one batch of bunks after another (like consecutive special activities)">Consec</span>
+                <input type="checkbox" class="sr-in" data-sport="${escapeHtml(sport)}" data-type="consec" ${m.consecutiveBunks === true ? 'checked' : ''} style="width:16px;height:16px;accent-color:#147D91;cursor:pointer;">
+                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="consecdur" value="${m.consecutiveDuration || ''}" placeholder="30" min="5" title="Minutes per bunk slice (default 30)" style="${m.consecutiveBunks === true ? '' : 'opacity:0.45;'}">
             </div>`;
         grid.appendChild(row);
     });
@@ -554,10 +557,12 @@ function renderSportsRulesCard(container) {
         container.querySelectorAll('.sr-in').forEach(inp => {
             const sp = inp.dataset.sport;
             const type = inp.dataset.type;
-            const v = parseInt(inp.value) || null;
             if (!updated[sp]) updated[sp] = {};
+            if (type === 'consec') { updated[sp].consecutiveBunks = inp.checked === true; return; }
+            const v = parseInt(inp.value) || null;
             if (type === 'min') updated[sp].minPlayers = v;
             else if (type === 'max') updated[sp].maxPlayers = v;
+            else if (type === 'consecdur') updated[sp].consecutiveDuration = v;
         });
         return updated;
     }
@@ -569,6 +574,13 @@ function renderSportsRulesCard(container) {
         saveKey('app1', app1b);
     }
     container.querySelectorAll('.sr-in').forEach(inp => inp.addEventListener('change', persist));
+    // Consecutive checkbox dims/undims its duration input
+    container.querySelectorAll('.sr-in[data-type="consec"]').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const dur = container.querySelector(`.sr-in[data-type="consecdur"][data-sport="${CSS.escape(cb.dataset.sport)}"]`);
+            if (dur) dur.style.opacity = cb.checked ? '' : '0.45';
+        });
+    });
 
     const saveBtn = document.getElementById('rules-sport-save');
     if (saveBtn) {

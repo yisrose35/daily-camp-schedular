@@ -1103,6 +1103,33 @@
                 consecutiveBunkSpecials.map(s => s.name).join(', '));
         }
 
+        // ★ FN-39: CONSECUTIVE-BUNK GENERAL ACTIVITIES (auto-only) — the same
+        //   whole-grade back-to-back treatment for FIELD-HOSTED activities,
+        //   flagged per activity in the Rules tab (sportMetaData[name]
+        //   .consecutiveBunks; slice length .consecutiveDuration, default 30).
+        //   Reserved by Phase 2.35's general walk below; normal rotation never
+        //   re-places them for walled bunks (intra-day no-repeat). No-op when
+        //   none are flagged.
+        const consecutiveBunkSports = [];
+        try {
+            const _smdCB = window.sportMetaData || {};
+            const _fldsCB = (globalSettings.app1 && globalSettings.app1.fields) || globalSettings.fields || [];
+            Object.keys(_smdCB).forEach(function (nm) {
+                const m = _smdCB[nm];
+                if (!m || m.consecutiveBunks !== true) return;
+                const hosts = _fldsCB.filter(function (f) {
+                    return f && f.name && Array.isArray(f.activities) &&
+                        f.activities.some(function (a) { return String(a).toLowerCase().trim() === String(nm).toLowerCase().trim(); });
+                });
+                if (!hosts.length) return; // not field-hosted (a special handles its own flag)
+                consecutiveBunkSports.push({ name: nm, duration: parseInt(m.consecutiveDuration) || 30, hosts: hosts });
+            });
+            if (consecutiveBunkSports.length) {
+                log('[STEP 1] Consecutive-bunk general activities (reserved by Phase 2.35): ' +
+                    consecutiveBunkSports.map(function (s) { return s.name + ' (' + s.duration + 'm)'; }).join(', '));
+            }
+        } catch (_eCBS) {}
+
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
 
@@ -14029,6 +14056,185 @@
                 }
               } catch (_e235) {
                 warn('[Phase2.35] error (skipped, non-fatal): ' + (_e235 && _e235.message));
+              }
+            }
+
+            // ★ FN-39: CONSECUTIVE-BUNK GENERAL ACTIVITIES — the same machinery as
+            //   the special walk above, field-flavored: station = a hosting field;
+            //   batch size = the field's sharing capacity, additionally capped by
+            //   the activity's maxPlayers (combined bunk sizes); walls ride the
+            //   protected custom lane with _customField/_customActivity so the
+            //   custom writer materializes them as field-located activity blocks
+            //   (and field-locks the station).
+            if (typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports.length > 0) {
+              try {
+                var _p235SCount = 0;
+                consecutiveBunkSports.forEach(function (_cbS) {
+                    var _aName = _cbS.name;
+                    var _aDur = _cbS.duration || 30;
+                    if (_aDur < 5) return;
+                    var _bmCB = window.bunkMetaData || {};
+                    var _metaCB = (window.sportMetaData || {})[_aName] || {};
+                    var _maxP = parseInt(_metaCB.maxPlayers) || 0;
+                    var _minP = parseInt(_metaCB.minPlayers) || 0;
+
+                    function _capOfField(f) {
+                        var sw = (f && f.sharableWith) || {};
+                        var t = String(sw.type || 'not_sharable').toLowerCase();
+                        if (t === 'not_sharable') return 1;
+                        var c = parseInt(sw.capacity); if (c > 0) return c;
+                        return t === 'all' ? 99 : 2;
+                    }
+                    function _stationBusyS(station, s, e) {
+                        var _fLow = String(station).toLowerCase().trim();
+                        for (var _bk in bunkTimelines) {
+                            var _tl = bunkTimelines[_bk] || [];
+                            for (var _i = 0; _i < _tl.length; _i++) {
+                                var _b = _tl[_i];
+                                if (!_b) continue;
+                                var _loc = _b._specialLocation || _b._customField || _b.field || null;
+                                if (!_loc || String(_loc).toLowerCase().trim() !== _fLow) continue;
+                                if (_b.startMin < e && _b.endMin > s) return true;
+                            }
+                        }
+                        return false;
+                    }
+                    function _bunkFreeS(bunk, s, e) {
+                        var _tl = bunkTimelines[bunk] || [];
+                        for (var _i = 0; _i < _tl.length; _i++) {
+                            var _b = _tl[_i];
+                            if (!_b) continue;
+                            if (!(_b._activityLocked || _b._fixed || _b._classification === 'pinned')) continue;
+                            var _bt = (_b.type || '').toLowerCase();
+                            if (_bt === 'pre-change' || _bt === 'post-change') continue;
+                            if (_b.startMin < e && _b.endMin > s) return false;
+                        }
+                        return true;
+                    }
+                    function _gradeAllowedOnField(f, grade) {
+                        var ar = f && f.accessRestrictions;
+                        if (!ar || !ar.enabled || !ar.divisions || Object.keys(ar.divisions).length === 0) return true;
+                        return (String(grade) in ar.divisions) || (grade in ar.divisions);
+                    }
+
+                    allGrades.forEach(function (grade) {
+                        if (allowedSet && !allowedSet.has(String(grade))) return;
+                        var _gLayers2 = layersByGrade[grade] || [];
+                        var _hasSlot = _gLayers2.some(function (l) {
+                            var _lt = (l.type || '').toLowerCase();
+                            return _lt === 'sport' || _lt === 'activity';
+                        });
+                        if (!_hasSlot) return;
+
+                        var _bunks = getBunksForGrade(grade, divisions).filter(function (b) {
+                            return !(bunkTimelines[b] || []).some(function (x) {
+                                return x && (x._assignedSport === _aName || x.event === _aName);
+                            });
+                        });
+                        if (_bunks.length === 0) return;
+
+                        var _gObj = divisions[grade] || divisions[String(grade)];
+                        var _gStart = parseTimeToMinutes(_gObj && _gObj.startTime) || 540;
+                        var _gEnd = parseTimeToMinutes(_gObj && _gObj.endTime) || 960;
+                        var _band = staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.sport;
+
+                        var _periods = (window.campPeriods && window.campPeriods[grade])
+                            ? window.campPeriods[grade].slice().sort(function (a, b) { return a.startMin - b.startMin; })
+                            : [{ startMin: _gStart, endMin: _gEnd }];
+                        var _anchors = [];
+                        _periods.forEach(function (p) { if (p.startMin >= _gStart && p.startMin < _gEnd) _anchors.push(p.startMin); });
+                        if (_band && _band.start >= _gStart && _band.start < _gEnd && _anchors.indexOf(_band.start) === -1) _anchors.push(_band.start);
+                        if (_anchors.length === 0) _anchors.push(_gStart);
+                        var _walkPeriods = _periods.filter(function (p) { return p.endMin > _gStart && p.startMin < _gEnd; });
+                        if (_walkPeriods.length === 0) _walkPeriods = [{ startMin: _gStart, endMin: _gEnd }];
+
+                        // Best plan across (station × anchor): most bunks, then tightest run.
+                        var _best = null;
+                        _cbS.hosts.forEach(function (fHost) {
+                            if (!_gradeAllowedOnField(fHost, grade)) return;
+                            var _station = fHost.name;
+                            var _sCap = _capOfField(fHost);
+                            for (var _ai = 0; _ai < _anchors.length; _ai++) {
+                                var _t0 = _anchors[_ai];
+                                var _plan = [], _placed = 0;
+                                var _pool = _bunks.slice();
+                                var _cursor = _t0, _guard = 0;
+                                while (_placed < _bunks.length && _guard++ < 300) {
+                                    var _per = null, _s = null;
+                                    for (var _wp = 0; _wp < _walkPeriods.length; _wp++) {
+                                        var _p3 = _walkPeriods[_wp];
+                                        var _cand = Math.max(_cursor, _p3.startMin);
+                                        if (_cand + _aDur <= _p3.endMin && _cand + _aDur <= _gEnd) { _per = _p3; _s = _cand; break; }
+                                    }
+                                    if (!_per) break;
+                                    var _e = _s + _aDur;
+                                    if (_stationBusyS(_station, _s, _e)) { _cursor = _s + 5; continue; }
+                                    var _take = [], _takeSize = 0;
+                                    for (var _pk = 0; _pk < _pool.length && _take.length < _sCap; _pk++) {
+                                        var _cbBunk = _pool[_pk];
+                                        if (!_bunkFreeS(_cbBunk, _s, _e)) continue;
+                                        var _bsz = (_bmCB[_cbBunk] && _bmCB[_cbBunk].size) || 0;
+                                        if (_maxP && _bsz && _bsz > _maxP) continue;               // single bunk over max — never legal
+                                        if (_maxP && _takeSize && _takeSize + _bsz > _maxP) continue; // batch would exceed max
+                                        _take.push(_cbBunk); _takeSize += _bsz;
+                                    }
+                                    if (_take.length === 0) { _cursor = _s + 5; continue; }
+                                    // minPlayers: don't reserve a slice the batch can't legally fill
+                                    if (_minP && _takeSize && _takeSize < _minP) { _cursor = _s + 5; continue; }
+                                    for (var _tk = 0; _tk < _take.length; _tk++) _pool.splice(_pool.indexOf(_take[_tk]), 1);
+                                    _plan.push({ start: _s, end: _e, bunks: _take });
+                                    _placed += _take.length;
+                                    _cursor = _e;
+                                }
+                                var _span = _plan.length ? (_plan[_plan.length - 1].end - _plan[0].start) : 0;
+                                if (!_best || _placed > _best.placed || (_placed === _best.placed && _span < _best.span)) {
+                                    _best = { plan: _plan, placed: _placed, station: _station, anchor: _t0, span: _span };
+                                }
+                            }
+                        });
+                        if (!_best || _best.placed <= 0) {
+                            log('[Phase2.35] ✗ ' + grade + '/' + _aName + ' (general) — no station/anchor fits the run (bunks=' + _bunks.length + ', dur=' + _aDur + ')');
+                            return;
+                        }
+                        _best.plan.forEach(function (slot) {
+                            if (!slot || !slot.bunks || slot.bunks.length === 0) return;
+                            slot.bunks.forEach(function (bunk) {
+                                // Same protected custom-lane wall shape as the special walk
+                                // (see the type:'custom' rationale above) — sport-flavored.
+                                bunkTimelines[bunk].push({
+                                    startMin: slot.start, endMin: slot.end,
+                                    type: 'custom', event: _aName, layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                    _assignedSport: _aName,
+                                    field: _best.station,
+                                    _customField: _best.station,
+                                    _customActivity: _aName,
+                                    dMin: _aDur, dMax: _aDur,
+                                    _cbResStart: slot.start, _cbResEnd: slot.end,
+                                    _consecutiveBunk: true, _source: 'phase2.35-general'
+                                });
+                                _p235SCount++;
+                                try {
+                                    if (fieldLedger && fieldLedger[_best.station]) {
+                                        fieldLedger[_best.station].claims.push({ bunk: bunk, grade: grade, activity: _aName, startMin: slot.start, endMin: slot.end });
+                                    }
+                                } catch (_e3) {}
+                            });
+                        });
+                        log('[Phase2.35] ' + (_best.placed < _bunks.length ? '⚠' : '✓') + ' ' + grade + '/' + _aName + ' (general) — ' +
+                            _best.placed + '/' + _bunks.length + ' bunks consecutive @ ' + _best.station +
+                            ' from ' + minutesToTimeLabel(_best.anchor) + ', ' + _aDur + 'min each');
+                    });
+                });
+                if (_p235SCount > 0) {
+                    allGrades.forEach(function (grade) {
+                        getBunksForGrade(grade, divisions).forEach(function (bunk) { ensureTimelineIntegrity(bunk); });
+                    });
+                    log('[Phase2.35] ★ RESERVED ' + _p235SCount + ' consecutive-bunk GENERAL-activity wall(s)');
+                }
+              } catch (_e235S) {
+                warn('[Phase2.35-general] error (skipped, non-fatal): ' + (_e235S && _e235S.message));
               }
             }
 
