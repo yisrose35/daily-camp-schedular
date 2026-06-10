@@ -1,4 +1,3 @@
-
 // =============================================================================
 // scheduler_core_auto.js — CAMPISTRY AUTO SCHEDULER CORE v4.3
 // test comment: copy-auto branch change verified
