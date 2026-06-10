@@ -3829,10 +3829,12 @@
                     } else {
                         // ★ FN-33: per-bunk resize — if this bunk drag-resized THIS layer
                         //   in the Bunk Overrides view, place its block on the custom
-                        //   window instead of the grade window. Fixed types only;
-                        //   grade-wide walls (leagues / fullGrade) stay synchronized.
+                        //   window instead of the grade window. Fixed types only.
+                        //   NOTE: lunch/snacks naturally carry fullGrade (isGradeWide), but
+                        //   an explicit per-bunk resize override WINS over grade-wideness —
+                        //   only league walls must stay synchronized (shared games).
                         let _pbS = blockStart, _pbE = blockEnd;
-                        if (!isGradeWide && (t === 'lunch' || t === 'snacks' || t === 'dismissal' || t === 'custom')) {
+                        if (t === 'lunch' || t === 'snacks' || t === 'dismissal' || t === 'custom') {
                             const _rzList = (window._bunkResizedLayers && window._bunkResizedLayers[String(bunk)]) || [];
                             const _rzHit = _rzList.find(r => r.layerType === t && r.origStart === layer.startMin && r.origEnd === layer.endMin);
                             if (_rzHit) {
