@@ -19032,7 +19032,13 @@
                         let resolvedField = isCustom ? block._customField : block.event;
                         let resolvedSport = null;
                         const blockType = (block.type || '').toLowerCase();
-                        const isSportOverride = !isCustom && blockType === 'sport';
+                        // ★ FN-37c: an overridden CUSTOM wall whose activity is a sport also
+                        //   goes through court resolution — intermediate wall rebuilds can
+                        //   strip the Phase-0 _customField, leaving event='Baseball' with no
+                        //   field. Scoped to _bunkOverride blocks so ordinary custom layers
+                        //   that happen to share a sport's name keep today's behavior.
+                        const isSportOverride = !isCustom && (blockType === 'sport' ||
+                            (blockType === 'custom' && block._bunkOverride === true));
 
                         if (isSportOverride) {
                             const sportName = block.event;
