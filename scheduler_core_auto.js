@@ -13809,11 +13809,18 @@
                                 // Match the canonical special-wall shape (see Phase 2.4
                                 // day-packer push) so downstream passes treat it
                                 // identically to any other pre-placed special.
+                                // ★ type:'custom' — NOT 'special'. Phase 3's template pipeline
+                                //   REBUILDS each bunk's day and re-times type-'special' walls
+                                //   (live evidence: walls re-emerged without _consecutiveBunk
+                                //   or their reservation stamps, scattered). Type-'custom'
+                                //   pinned blocks ride the protected lane every pass honors
+                                //   (same as user custom layers like "Main activity"), so the
+                                //   reserved interval survives to materialization untouched.
                                 bunkTimelines[bunk].push({
                                     startMin: slot.start, endMin: slot.end,
-                                    type: 'special', event: _sName, layer: null,
+                                    type: 'custom', event: _sName, layer: null,
                                     _classification: 'pinned', _committed: true, _fixed: true,
-                                    _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                                    _gradeWide: false, _activityLocked: true, _noBacktrack: true,
                                     _assignedSpecial: _sName,
                                     _specialLocation: _sField,
                                     _specialDuration: _sDur,
