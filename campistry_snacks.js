@@ -100,10 +100,25 @@ function saveSnacksData(data) {
     // Also write local fallback
     try { localStorage.setItem(SNACKS_LOCAL_KEY, JSON.stringify(data)); } catch (_) {}
 
-    // Cloud sync if bridge available
+    cloudSaveSnacks(data);
+}
+
+// Cloud write — prefer the full hooks bridge when present, otherwise upsert
+// the campistrySnacks key into camp_state_kv directly via the Supabase client.
+function cloudSaveSnacks(data) {
     if (window.saveGlobalSettings && window.saveGlobalSettings._isAuthoritativeHandler) {
         window.saveGlobalSettings('campistrySnacks', data);
+        return;
     }
+    try {
+        const db = window.CampistryDB;
+        if (!db || !db.client) return;
+        const campId = db.getCampId && db.getCampId();
+        if (!campId) return;
+        db.client.from('camp_state_kv')
+            .upsert({ camp_id: campId, key: 'campistrySnacks', value: data, updated_at: new Date().toISOString() }, { onConflict: 'camp_id,key' })
+            .then(res => { if (res.error) console.warn('[Snacks] Cloud save failed:', res.error.message); });
+    } catch (e) { console.warn('[Snacks] Cloud save error:', e); }
 }
 
 // ==========================================================================
@@ -133,7 +148,12 @@ function ensureAccountsForRoster() {
 }
 
 function getAccount(name) {
-    return snacks.accounts[name] || { balance: 0, dailyLimit: 10, spentToday: 0 };
+    const a = snacks.accounts[name] || { balance: 0, dailyLimit: 10, spentToday: 0 };
+    // Daily spend resets at midnight
+    const t = new Date();
+    const today = t.getFullYear() + '-' + String(t.getMonth() + 1).padStart(2, '0') + '-' + String(t.getDate()).padStart(2, '0');
+    if (a.lastSpendDate !== today) { a.spentToday = 0; a.lastSpendDate = today; }
+    return a;
 }
 
 // ==========================================================================
