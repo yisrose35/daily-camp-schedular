@@ -6740,6 +6740,14 @@
                 // Transition pads (pre/post travel) intentionally short — never enforce.
                 if (blk._isTransition) continue;
 
+                // ★ FN-33: user-resized blocks (Bunk Overrides drag-resize) keep their
+                //   exact window — skip the layer-window clamp and dMin/dMax enforcement
+                //   below (they reverted every resize: 770-810 lunch → clamped to the
+                //   lunch layer's 780 start + trimmed to its 30-min dMax = back to
+                //   780-810). The user's drag IS the requirement; Pass 1 overlap
+                //   resolution above still applies.
+                if (blk._bunkResized) continue;
+
                 var dur = blk.endMin - blk.startMin;
 
                 // Resolve constraints
