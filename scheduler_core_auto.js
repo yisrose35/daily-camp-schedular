@@ -1145,6 +1145,11 @@
                     consecutiveBunkSports.map(function (s) { return s.name + ' @ ' + s.hosts[0].name + ' (' + s.duration + 'm)'; }).join(', '));
             }
         } catch (_eCBS) {}
+        // ★ FN-41: window-level mirror of the consecutive-general names — the
+        //   per-bunk needs packer runs in a different closure and must skip
+        //   these too (the walk owns them). Refreshed every run.
+        try { window.__cbGeneralNamesLow = consecutiveBunkSports.map(function (s) { return String(s.name).toLowerCase().trim(); }); }
+        catch (_eCBM) { window.__cbGeneralNamesLow = []; }
 
         const scarceSpecials = todaysSpecials.filter(s => isScarce(s.name, dayName, globalSettings));
         log('[STEP 1] Specials: ' + todaysSpecials.length + ' (' + scarceSpecials.length + ' scarce)' + (dailyDisabledSpecials.length ? ' | disabled: ' + dailyDisabledSpecials.join(', ') : ''));
@@ -7733,7 +7738,17 @@
 
                     // Custom windowed layers — skip if already a wall or outside grade window
                     (layersByGrade[grade] || []).filter(function(l) {
-                        return (l.type || '').toLowerCase() === 'custom' && l._classification !== 'pinned';
+                        if ((l.type || '').toLowerCase() !== 'custom' || l._classification === 'pinned') return false;
+                        // ★ FN-41: a custom layer naming a consecutive-bunks general
+                        //   is owned by the Phase 2.35 walk — its suppressed band must
+                        //   not resurface here as a flexible per-bunk need (live leak:
+                        //   2 bunks got a second band-length copy at the old window).
+                        //   Bunk-scoped bands keep their original lane, same as Phase 0.
+                        if (!(l.customBunks && l.customBunks.length > 0)) {
+                            var _nmLowCB = String(l.customActivity || l.event || '').toLowerCase().trim();
+                            if ((window.__cbGeneralNamesLow || []).indexOf(_nmLowCB) >= 0) return false;
+                        }
+                        return true;
                     }).forEach(function(cl) {
                         // ★ Custom "connect-to" layers are PRIMARILY placed by the Phase 2.4
                         //   wet-bundle engine (synthesized rotation_event, adjacent to swim with
@@ -7759,10 +7774,14 @@
                             if (_seMatch) { _clShareEvtId = _seMatch.id; _clShareConc = _seMatch.concurrency; }
                         }
                         if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
-                        // Skip if already placed as a wall
+                        // Skip if already placed as a wall (case-insensitive — the
+                        // wall can carry the registry spelling while the layer
+                        // carries the hand-typed one, e.g. "Main Activity" vs
+                        // "Main activity")
+                        var _clNameLow = String(cl.customActivity || cl.event || 'Custom').toLowerCase().trim();
                         var alreadyWall = template.some(function(w) {
                             return w._fixed && (w.type || '').toLowerCase() === 'custom' &&
-                                   w.event === (cl.customActivity || cl.event || 'Custom');
+                                   String(w.event || '').toLowerCase().trim() === _clNameLow;
                         });
                         if (alreadyWall) return;
                         // Skip if window is outside grade bounds
