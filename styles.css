@@ -163,7 +163,8 @@ textarea:focus {
    full-height shell card — drop the outer card chrome so the workspace owns
    the whole content area edge-to-edge with a single internal scroller. */
 #master-scheduler.tab-content,
-#daily-adjustments.tab-content {
+#daily-adjustments.tab-content,
+#print.tab-content {
   background: transparent;
   border: none;
   box-shadow: none;

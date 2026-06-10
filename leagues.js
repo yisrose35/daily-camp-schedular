@@ -691,7 +691,7 @@
        const contentWrapper = document.createElement('div');
         contentWrapper.innerHTML = `
             <div class="setup-grid">
-              <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent;">
+              <section class="setup-card setup-card-wide" style="border:none; box-shadow:none; background:transparent; padding-bottom:0;">
                 <div class="setup-card-header" style="margin-bottom:20px;">
                   <span class="setup-step-pill">Leagues</span>
                   <div class="setup-card-text">
