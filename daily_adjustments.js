@@ -5615,11 +5615,15 @@ function _boOvMatchesLayer(o, sm, em, ltKey) {
   return o.overrideMode === 'resize' && o.originalStartMin === sm && o.originalEndMin === em;
 }
 
-// ★ FN-33: layer types whose per-bunk blocks can be drag-resized in auto mode.
-//   Swim is owned by the wet-bundle machinery; floaters (sport/special/activity)
-//   pack multiple slots inside their window; grade-wide walls stay synchronized —
-//   none of those support a per-bunk window yet.
-const _BO_RESIZABLE_TYPES = { lunch: 1, snacks: 1, dismissal: 1, custom: 1 };
+// ★ FN-33: grade-layer (skeleton) bands whose per-bunk blocks may be drag-resized.
+//   EMPTY for now: the solver re-derives grade walls from layers in multiple
+//   passes, so a per-bunk resize of a grade layer doesn't survive generation yet
+//   (three attempted enforcement points were each rebuilt downstream — see the
+//   solver's inert 'resize' branch). Drag handles therefore only appear on
+//   OVERRIDE bands (added/force/sportPool), whose windows ride the proven
+//   force-pin lane. Re-populate (lunch/snacks/dismissal/custom) once the solver
+//   honors per-bunk layer windows end-to-end.
+const _BO_RESIZABLE_TYPES = {};
 
 function renderBunkOverridesUI() {
   const container = document.getElementById('da-bunk-overrides-container');
