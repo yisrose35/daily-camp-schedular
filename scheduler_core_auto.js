@@ -3849,6 +3849,9 @@
                             _classification: 'pinned', _committed: true, _fixed: true,
                             _gradeWide: isGradeWide && !isCustom, _activityLocked: true,
                             _noBacktrack: isGradeWide,
+                            // ★ FN-33: user-resized window — downstream period-containment
+                            //   snapping must leave it exactly where the user put it.
+                            _bunkResized: (_pbS !== blockStart || _pbE !== blockEnd),
                             _customActivity: isCustom ? layer.customActivity : null,
                             _customField: isCustom ? layer.customField : null,
                             _customBunks: isCustom ? layer.customBunks : null
@@ -7384,8 +7387,10 @@
                         // ── Period containment: snap pre-placed blocks to a single period ──
                         // Multi-period specials whose duration exceeds every single period
                         // are exempt — they span consecutive periods by design.
+                        // ★ FN-33: user-resized blocks (_bunkResized) are exempt too — the
+                        //   user explicitly chose that window in the Bunk Overrides view.
                         var _p0Start = b.startMin, _p0End = b.endMin;
-                        var _p0Periods = window.campPeriods && window.campPeriods[grade];
+                        var _p0Periods = (!b._bunkResized) && window.campPeriods && window.campPeriods[grade];
                         if (_p0Periods && _p0Periods.length > 0) {
                             var _p0Duration = _p0End - _p0Start;
                             var _p0PS = null; // period containing startMin
@@ -7475,6 +7480,7 @@
                             dMin: c ? c.dMin : (_p0End - _p0Start),
                             dMax: c ? c.dMax : (_p0End - _p0Start),
                             _fixed: true, _source: 'phase0',
+                            _bunkResized: b._bunkResized || false,
                             _gradeWide: b._gradeWide || false,
                             _activityLocked: true,
                             _noBacktrack: b._noBacktrack || false,
