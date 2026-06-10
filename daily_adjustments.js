@@ -5787,8 +5787,11 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   });
   const colWidth   = Math.max(GRADE_COL_MIN, (layerCount + _maxExtraBands) * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-  // Outer wrap with horizontal scroll
-  let html = `<div class="bo-auto-scroll" style="overflow:auto;max-width:100%;max-height:70vh;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
+  // Outer wrap — horizontal scroll only. ★ BO-fix: the old max-height:70vh made
+  // this a NESTED vertical scrollbox whose bottom sat below the page fold —
+  // wheel-scrolling the page never reached the grid's lower half ("can't scroll
+  // all the way down"). Let the grid take its full height; the page scrolls it.
+  let html = `<div class="bo-auto-scroll" style="overflow-x:auto;overflow-y:visible;max-width:100%;border:1px solid #e2e8f0;border-radius:8px;background:#fff;">`;
   html += `<div class="ms-daw-columns-wrap" style="min-width:max-content;">`;
 
   // Time ruler column (sticky left)
@@ -6377,7 +6380,9 @@ function _boShowAutoLayerPopover(anchorEl, bunk, startMin, endMin, layerType) {
     //   Modifies globalSettings.app1.dailyAutoLayers[date][grade] in place,
     //   strips out the layer whose type+window matches, then persists via
     //   saveGlobalSettings + cloud sync.
-    pop.querySelector('#bo-pop-delete-layer').onclick = () => {
+    // ★ BO-fix: button absent for added bands — guard before attaching.
+    const _dlBtn = pop.querySelector('#bo-pop-delete-layer');
+    if (_dlBtn) _dlBtn.onclick = () => {
       if (!confirm('Delete the ' + layerLabel + ' layer entirely from ' + _boSelectedDiv + '? This affects every bunk in this grade.')) return;
       try {
         const gs = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
