@@ -3221,24 +3221,112 @@
                     return;
                 }
 
-                // ★ FN-41: a custom layer naming a CONSECUTIVE-BUNKS general activity
-                //   is the user saying WHEN — the facility config says HOW (n minutes
-                //   per batch). Skip the grade-wide band here and hand the window to
-                //   the Phase 2.35 walk, which chunks it into consecutive batches at
-                //   the host facility (and restores the band untouched if no walk
-                //   fits). Bunk-scoped bands (customBunks) keep their original
-                //   placement — the walk is whole-grade.
+                // ★ FN-46: a custom layer naming a CONSECUTIVE-BUNKS general activity
+                //   places PER-BATCH right here in the pinned lane — the band keeps
+                //   its exact drawn time (pinned customs are never perturbed by the
+                //   layout search), batch 1 starts at the band start, later batches
+                //   follow back-to-back, queueing past contention. Every target bunk
+                //   is seated; bunks the forward pass can't fit get a whole-day
+                //   leftover scan (coverage guarantee — generals are like swim/lunch:
+                //   everyone must get it). The Phase 2.35 generals walk skips
+                //   activities owned here. (FN-41's suppress-then-rewalk design read
+                //   the layout search's perturbed working copy — bands drifted and
+                //   grades silently fell back to legacy mode; Phase 0 is immune.)
                 if (isCustom && typeof consecutiveBunkSports !== 'undefined' && consecutiveBunkSports.length &&
-                    !(layer.customBunks && layer.customBunks.length > 0)) {
+                    !(layer.customBunks && layer.customBunks.length > 0) &&
+                    layer.startMin != null && layer.endMin != null && layer.endMin > layer.startMin) {
                     const _evLowCB = String(eventName).toLowerCase().trim();
                     const _cbHit = consecutiveBunkSports.find(s => s && String(s.name).toLowerCase().trim() === _evLowCB);
-                    if (_cbHit && layer.startMin != null && layer.endMin != null) {
-                        if (!_cbHit._bands) _cbHit._bands = {};
-                        if (!_cbHit._bands[grade]) _cbHit._bands[grade] = [];
-                        _cbHit._bands[grade].push({ start: layer.startMin, end: layer.endMin, layer: layer });
-                        log('[Phase0] Custom "' + eventName + '" (' + grade + ' ' + layer.startMin + '-' + layer.endMin +
-                            ') hosts consecutive bunks @ ' + ((_cbHit.hosts && _cbHit.hosts[0] && _cbHit.hosts[0].name) || '?') +
-                            ' → band handed to the Phase 2.35 walk; grade-wide placement skipped');
+                    if (_cbHit) {
+                        _cbHit._phase0Owned = true;
+                        const _host = (_cbHit.hosts && _cbHit.hosts[0]) || null;
+                        const _stn = (_host && _host.name) || layer.customField || null;
+                        const _bandLenCB = layer.endMin - layer.startMin;
+                        let _durCB = _bandLenCB;
+                        const _ldCB = parseInt(layer.durationMin || layer.periodMin) || 0;
+                        if (_ldCB >= 5 && _ldCB < _bandLenCB) _durCB = _ldCB;
+                        let _capCB = 1;
+                        try {
+                            const _sw = (_host && _host.sharableWith) || {};
+                            const _swt = String(_sw.type || 'not_sharable').toLowerCase();
+                            _capCB = _swt === 'not_sharable' ? 1
+                                : (parseInt(_sw.capacity) > 0 ? parseInt(_sw.capacity) : (_swt === 'all' ? 99 : 2));
+                        } catch (_eCap) {}
+                        const _gObjCB = divisions[grade] || divisions[String(grade)] || {};
+                        const _dayEndCB = parseTimeToMinutes(_gObjCB.endTime) || 960;
+                        const _dayStartCB = parseTimeToMinutes(_gObjCB.startTime) || 540;
+                        const _stnLowCB = _stn ? String(_stn).toLowerCase().trim() : null;
+                        const _busyAtCB = (s, e) => {
+                            if (!_stnLowCB) return false;
+                            for (const _bk in bunkTimelines) {
+                                const _tl = bunkTimelines[_bk] || [];
+                                for (let _i = 0; _i < _tl.length; _i++) {
+                                    const _b = _tl[_i];
+                                    if (!_b) continue;
+                                    const _loc = _b._specialLocation || _b._customField || _b.field || null;
+                                    if (!_loc || String(_loc).toLowerCase().trim() !== _stnLowCB) continue;
+                                    if (_b.startMin < e && _b.endMin > s) return true;
+                                }
+                            }
+                            return false;
+                        };
+                        const _bunkFreeAtCB = (bunk, s, e) => {
+                            const _tl = bunkTimelines[bunk] || [];
+                            for (let _i = 0; _i < _tl.length; _i++) {
+                                const _b = _tl[_i];
+                                if (!_b) continue;
+                                if (!(_b._activityLocked || _b._fixed || _b._classification === 'pinned')) continue;
+                                const _bt = (_b.type || '').toLowerCase();
+                                if (_bt === 'pre-change' || _bt === 'post-change') continue;
+                                if (_b.startMin < e && _b.endMin > s) return false;
+                            }
+                            return true;
+                        };
+                        const _seatCB = (pool, fromMin) => {
+                            let _cur = Math.max(fromMin, _dayStartCB), _guard = 0, _batches = 0;
+                            while (pool.length && _guard++ < 400) {
+                                if (_cur + _durCB > _dayEndCB) break;
+                                const _e = _cur + _durCB;
+                                if (_busyAtCB(_cur, _e)) { _cur += 5; continue; }
+                                const _take = [];
+                                for (let _i = 0; _i < pool.length && _take.length < _capCB; _i++) {
+                                    if (_bunkFreeAtCB(pool[_i], _cur, _e)) _take.push(pool[_i]);
+                                }
+                                if (!_take.length) { _cur += 5; continue; }
+                                _take.forEach(b => {
+                                    pool.splice(pool.indexOf(b), 1);
+                                    bunkTimelines[b].push({
+                                        startMin: _cur, endMin: _e,
+                                        type: 'custom', event: eventName, layer,
+                                        // block.field = durable claim carrier (FN-37c) —
+                                        // Phase 3's pre-register pass claims it in the
+                                        // rebuilt ledger, keeping other bunks off the
+                                        // facility during each batch.
+                                        field: _stn || undefined,
+                                        _classification: 'pinned', _committed: true, _fixed: true,
+                                        _gradeWide: false, _activityLocked: true, _noBacktrack: true,
+                                        _customActivity: eventName,
+                                        _customField: _stn || null,
+                                        _customBunks: null,
+                                        _consecutiveBunk: true,
+                                        _source: 'phase0-consecutive-general'
+                                    });
+                                    count++;
+                                });
+                                _batches++;
+                                _cur = _e;
+                            }
+                            return _batches;
+                        };
+                        const _poolCB = targetBunks.slice();
+                        _seatCB(_poolCB, layer.startMin);
+                        let _sweepBatches = 0;
+                        if (_poolCB.length) _sweepBatches = _seatCB(_poolCB, _dayStartCB);
+                        log('[Phase0] Consecutive "' + eventName + '" (' + grade + ') @ ' + (_stn || '?') + ' — ' +
+                            (targetBunks.length - _poolCB.length) + '/' + targetBunks.length + ' bunks seated from ' +
+                            layer.startMin + ', ' + _durCB + 'min each, cap ' + _capCB +
+                            (_sweepBatches ? ' (+' + _sweepBatches + ' off-band batch(es) for coverage)' : '') +
+                            (_poolCB.length ? ' — UNSEATED: ' + _poolCB.join(', ') : ''));
                         return;
                     }
                 }
@@ -14150,6 +14238,10 @@
               try {
                 var _p235SCount = 0;
                 consecutiveBunkSports.forEach(function (_cbS) {
+                    // ★ FN-46: activities with custom-layer bands are placed by
+                    //   Phase 0's chunked pinned placement — the walk only serves
+                    //   pure band-less (autonomous) configs.
+                    if (_cbS._phase0Owned) return;
                     var _aName = _cbS.name;
                     var _aDur = _cbS.duration || 30;
                     if (_aDur < 5) return;
