@@ -1173,9 +1173,51 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
         }
         return true;
     }
+    // ★ Sharing-aware occupancy: who's on this room/field during [s,e)?
+    //   Returns {count, sameGradeOnly} so the refill can SHARE under capacity
+    //   (the completely-free-only rule left rule-displaced slots unfillable in
+    //   the pre-lunch crunch when every bunk competes for the special rooms).
+    function _occInfo(exclBunk, exclIdx, fl, s, e, grade) {
+        const key = _nmR(fl);
+        let count = 0, sameGradeOnly = true;
+        const names = Object.keys(scheduleAssignments);
+        for (let bi = 0; bi < names.length; bi++) {
+            const b = names[bi]; const arr = scheduleAssignments[b]; if (!Array.isArray(arr)) continue;
+            for (let i = 0; i < arr.length; i++) {
+                if (String(b) === String(exclBunk) && i === exclIdx) continue;
+                const en = arr[i]; if (!en || en.continuation) continue;
+                if (_nmR(en.field || en._specialLocation || en.location) !== key) continue;
+                const t = slotTime(b, i, en); if (!t) continue;
+                if (t.s < e && t.e > s) {
+                    count++;
+                    if (_b2g[String(b)] !== grade) sameGradeOnly = false;
+                }
+            }
+        }
+        return { count: count, sameGradeOnly: sameGradeOnly };
+    }
+    // Sharing capacity of a room/field from its sharableWith config — mirrors the
+    // solvers' normalization: not_sharable→1, explicit capacity wins, 'all'→∞,
+    // anything else defaults to 2 (same_division-style).
+    function _capOfSW(sw) {
+        if (!sw) return 1;
+        const t = String(sw.type || sw.shareType || 'not_sharable').toLowerCase();
+        if (t === 'not_sharable') return 1;
+        const c = parseInt(sw.capacity);
+        if (c > 0) return c;
+        return t === 'all' ? 999 : 2;
+    }
     function refillSlot(bunk, grade, slots, idx, s, e, demotedType, template) {
         const done = {};
         slots.forEach(function (en, i) { if (i !== idx && en && !en.continuation) { const a = en._activity || en.sport || en.event; if (a && !/^free$/i.test(a)) done[_nmR(a)] = 1; } });
+        // Shared-room admission: under capacity, and only joining occupants of the
+        // SAME grade (conservative — no cross-division pairing logic re-implemented here).
+        const roomOpen = function (room, sw) {
+            const occ = _occInfo(bunk, idx, room, s, e, grade);
+            if (occ.count === 0) return true;
+            if (!occ.sameGradeOnly) return false;
+            return occ.count < _capOfSW(sw);
+        };
         const trySport = function () {
             for (let fi = 0; fi < _fieldsR.length; fi++) {
                 const f = _fieldsR[fi]; if (!f || !f.name) continue;
@@ -1184,7 +1226,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 if (f.timeRules && f.timeRules.enabled) continue;                // skip time-restricted (conservative)
                 if (!Array.isArray(f.activities) || !f.activities.length) continue;
                 if (!_accessOk(f.accessRestrictions, grade)) continue;
-                if (!_occFree(bunk, idx, f.name, s, e)) continue;
+                if (!roomOpen(f.name, f.sharableWith)) continue;
                 for (let ai = 0; ai < f.activities.length; ai++) {
                     const A = f.activities[ai]; if (!A || done[_nmR(A)]) continue;
                     if (isCandidateAllowed({ type: 'sport', event: A, field: f.name, startMin: s, endMin: e }, template, { mode: mode }))
@@ -1198,7 +1240,7 @@ function enforceSpacingSweep(scheduleAssignments, opts) {
                 const sp = _specialsR[si]; if (!sp || !sp.name || done[_nmR(sp.name)]) continue;
                 const room = sp.location || sp.name;
                 if (!_accessOk(sp.accessRestrictions, grade)) continue;
-                if (!_occFree(bunk, idx, room, s, e)) continue;
+                if (!roomOpen(room, sp.sharableWith)) continue;
                 let dur = null;
                 if (Array.isArray(sp.durations) && sp.durations.filter(Boolean).length) dur = Math.min.apply(null, sp.durations.filter(Boolean));
                 else dur = sp.duration || sp.periodMin || null;
