@@ -2370,13 +2370,23 @@
                     const sa = window.scheduleAssignments || {};
                     let fixedCells = 0;
                     trips.forEach(trip => {
-                        const tS = trip.startMin != null ? trip.startMin : null;
-                        const tE = trip.endMin != null ? trip.endMin : null;
-                        if (tS == null || tE == null) return;
+                        const tS0 = trip.startMin != null ? trip.startMin : null;
+                        const tE0 = trip.endMin != null ? trip.endMin : null;
+                        if (tS0 == null || tE0 == null) return;
                         const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
                         rawDivs.forEach(divName => {
                             const info = divisions[divName];
                             if (!info) return;
+                            // clip to the division's day window (same as the engine
+                            // writer) so the anchor span both writers produce agrees
+                            let dS = null, dE = null;
+                            try {
+                                dS = window.CampUtils?.parseTimeToMinutes?.(info.startTime);
+                                dE = window.CampUtils?.parseTimeToMinutes?.(info.endTime);
+                            } catch (eC) {}
+                            const tS = (dS != null) ? Math.max(tS0, dS) : tS0;
+                            const tE = (dE != null) ? Math.min(tE0, dE) : tE0;
+                            if (tE <= tS) return;
                             (info.bunks || []).forEach(bunk => {
                                 const arr = sa[String(bunk)];
                                 if (!Array.isArray(arr)) return;
@@ -2396,7 +2406,13 @@
                                         : (dts && dts[i] && dts[i].endMin != null) ? dts[i].endMin : null;
                                     if (s == null || e == null) continue;
                                     if (!(s < tE && e > tS)) continue;
-                                    if (arr[i] && arr[i]._isTrip) { isFirst = false; continue; }
+                                    if (arr[i] && arr[i]._isTrip) {
+                                        // normalize the anchor's span to the full trip window
+                                        if (isFirst && !arr[i].continuation && (arr[i]._startMin !== tS || arr[i]._endMin !== tE)) {
+                                            arr[i]._startMin = tS; arr[i]._endMin = tE; fixedCells++;
+                                        }
+                                        isFirst = false; continue;
+                                    }
                                     arr[i] = {
                                         field: trip.event || 'Trip', sport: null,
                                         _activity: trip.event || 'Trip',
@@ -2404,7 +2420,11 @@
                                         _tripId: trip.id || null,
                                         _fixed: true, _pinned: true, _activityLocked: true,
                                         _autoMode: true, continuation: !isFirst,
-                                        _startMin: s, _endMin: e
+                                        // anchor spans the FULL trip window so the view
+                                        // shows one continuous block; continuations keep
+                                        // slot times and are skipped by renderers
+                                        _startMin: isFirst ? tS : s,
+                                        _endMin: isFirst ? tE : e
                                     };
                                     isFirst = false;
                                     fixedCells++;

@@ -19953,8 +19953,14 @@
                                 _activityLocked: true,
                                 _autoMode: true,
                                 continuation: !isFirst,
-                                _startMin: slot.startMin,
-                                _endMin: slot.endMin
+                                // ★ The ANCHOR carries the trip's FULL window so the
+                                // schedule view renders one continuous block from
+                                // trip start to trip end (the underlying slot grid
+                                // can be fragmented with gaps on trip days);
+                                // continuations keep their slot times and are
+                                // skipped by the renderers.
+                                _startMin: isFirst ? tStart : slot.startMin,
+                                _endMin: isFirst ? tEnd : slot.endMin
                             };
                             tripWriteCount++;
                         });
