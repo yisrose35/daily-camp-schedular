@@ -8232,7 +8232,7 @@ function init() {
         const sa = window.scheduleAssignments || {};
         const divs = window.divisions || {};
         const b2g = {}; Object.keys(divs).forEach(g => ((divs[g] && divs[g].bunks) || []).forEach(b => { b2g[String(b)] = g; }));
-        const isProt = e => !!(e && (e._league || e._postEdit));
+        const isProt = e => !!(e && (e._league || e._postEdit || e._isTrip));
         const findSlot = (bunk, fieldName) => {
           const arr = sa[bunk] || []; const fl = String(fieldName || '').toLowerCase().trim();
           for (let i = 0; i < arr.length; i++) { const e = arr[i]; if (e && !e.continuation && e.field !== 'Free' && !isProt(e) && String(e.field || e._specialLocation || '').toLowerCase().trim() === fl) return i; }

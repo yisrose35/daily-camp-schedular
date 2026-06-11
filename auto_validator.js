@@ -152,6 +152,10 @@
             slots.forEach((entry, idx) => {
                 if (!entry || !entry.field || entry.field === 'Free') return;
                 if (entry.continuation) return;
+                // Trips are offsite events, not field bookings — many bunks
+                // "at the Zoo" simultaneously is the intended state, not a
+                // cross-division conflict / capacity violation (FN-59).
+                if (entry._isTrip) return;
 
                 const fn = entry.field.toLowerCase().trim();
                 if (SKIP_FIELDS.has(fn) || isLeagueField(fn)) return;
