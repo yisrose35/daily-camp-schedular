@@ -2731,6 +2731,134 @@
         _isInitialized = false;
     };
 
+    // =========================================================================
+    // ★ FN-58: AUTO-SAVED GAME RESULTS — public API for the league engine
+    // =========================================================================
+    // The scheduler engine calls syncGamesFromGeneration after every
+    // generation that covers a league's day, so games appear in Game Results
+    // automatically (no "Import from Schedule" click). A regeneration calls
+    // it again with the day's NEW games: the date's auto-saved games are
+    // replaced, but scores already entered for matchups that still exist are
+    // preserved. Date deletion calls removeAutoGamesForDate. Games the user
+    // added manually via "+ Add Game" (no importedFrom flag) are never touched.
+
+    function _pairKeyFor(a, b) { return [a, b].sort().join('|'); }
+    function _isAutoGame(g) { return g && (g.importedFrom === 'auto' || g.importedFrom === 'schedule'); }
+
+    function _refreshGamesUIIfShowing(leagueName) {
+        try {
+            if (!detailPaneEl) return;
+            if (leagueName && selectedLeagueName !== leagueName) return;
+            const lg = leaguesByName[selectedLeagueName];
+            const c = detailPaneEl.querySelector('[data-section="games"]');
+            if (lg && c && c.offsetParent) renderGameEntryUI(lg, c);
+        } catch (e) { /* display refresh is best-effort */ }
+    }
+
+    window.LeaguesAPI = window.LeaguesAPI || {};
+
+    window.LeaguesAPI.syncGamesFromGeneration = function (leagueName, dateKey, gameEntries) {
+        try {
+            const league = leaguesByName[leagueName];
+            if (!league || !dateKey) return false;
+            if (!Array.isArray(league.games)) league.games = [];
+
+            // Collect entered scores from the date's outgoing auto games so a
+            // regen that keeps a matchup keeps its result. Primary identity:
+            // gameLabel + pair; fallback to pair-only when the pair appears
+            // exactly once on the date (labels can shift on renumbering).
+            const oldByLabelPair = {};
+            const oldByPair = {};
+            const oldPairCount = {};
+            league.games.forEach(function (g) {
+                if (g.date !== dateKey || !_isAutoGame(g)) return;
+                (g.matches || []).forEach(function (m) {
+                    if (m.scoreA == null && m.scoreB == null) return;
+                    const pk = _pairKeyFor(m.teamA, m.teamB);
+                    oldByLabelPair[(g.gameLabel || '') + '|' + pk] = m;
+                    oldByPair[pk] = m;
+                    oldPairCount[pk] = (oldPairCount[pk] || 0) + 1;
+                });
+            });
+
+            // Replace the date's auto games (manual games untouched)
+            league.games = league.games.filter(function (g) { return !(g.date === dateKey && _isAutoGame(g)); });
+
+            const newPairCount = {};
+            (gameEntries || []).forEach(function (ge) {
+                (ge && ge.matches || []).forEach(function (m) {
+                    const pk = _pairKeyFor(m.teamA, m.teamB);
+                    newPairCount[pk] = (newPairCount[pk] || 0) + 1;
+                });
+            });
+
+            let totalMatches = 0;
+            (gameEntries || []).forEach(function (ge) {
+                if (!ge || !Array.isArray(ge.matches) || ge.matches.length === 0) return;
+                const numMatch = String(ge.gameLabel || '').match(/Game\s*(\d+)/i);
+                league.games.push({
+                    date: dateKey,
+                    gameLabel: ge.gameLabel || 'Game',
+                    gameNumber: ge.gameNumber != null ? ge.gameNumber : (numMatch ? parseInt(numMatch[1], 10) : null),
+                    matches: ge.matches.map(function (m) {
+                        const pk = _pairKeyFor(m.teamA, m.teamB);
+                        let old = oldByLabelPair[(ge.gameLabel || '') + '|' + pk];
+                        if (!old && oldPairCount[pk] === 1 && newPairCount[pk] === 1) old = oldByPair[pk];
+                        const aligned = old && old.teamA === m.teamA;
+                        return {
+                            teamA: m.teamA,
+                            teamB: m.teamB,
+                            scoreA: old ? (aligned ? old.scoreA : old.scoreB) : null,
+                            scoreB: old ? (aligned ? old.scoreB : old.scoreA) : null,
+                            sport: m.sport || null
+                        };
+                    }),
+                    importedFrom: 'auto',
+                    importedAt: new Date().toISOString()
+                });
+                totalMatches += ge.matches.length;
+            });
+
+            league.games.sort(function (a, b) {
+                return (a.date || '').localeCompare(b.date || '') || (a.gameNumber || 0) - (b.gameNumber || 0);
+            });
+
+            recalcStandings(league);
+            saveLeaguesData();
+            _refreshGamesUIIfShowing(leagueName);
+            console.log('[LEAGUES] 🔄 Auto-saved ' + (gameEntries || []).length + ' game(s) / ' + totalMatches + ' match(es) for "' + leagueName + '" on ' + dateKey);
+            return true;
+        } catch (e) {
+            console.error('[LEAGUES] syncGamesFromGeneration failed:', e);
+            return false;
+        }
+    };
+
+    window.LeaguesAPI.removeAutoGamesForDate = function (dateKey, leagueNames) {
+        try {
+            if (!dateKey) return;
+            const names = (Array.isArray(leagueNames) && leagueNames.length > 0) ? leagueNames : Object.keys(leaguesByName);
+            let changed = false;
+            names.forEach(function (n) {
+                const lg = leaguesByName[n];
+                if (!lg || !Array.isArray(lg.games)) return;
+                const before = lg.games.length;
+                lg.games = lg.games.filter(function (g) { return !(g.date === dateKey && _isAutoGame(g)); });
+                if (lg.games.length !== before) {
+                    changed = true;
+                    recalcStandings(lg);
+                }
+            });
+            if (changed) {
+                saveLeaguesData();
+                _refreshGamesUIIfShowing(null);
+                console.log('[LEAGUES] 🗑️ Removed auto-saved games for ' + dateKey);
+            }
+        } catch (e) {
+            console.error('[LEAGUES] removeAutoGamesForDate failed:', e);
+        }
+    };
+
     // Auto-load on script run
     window.loadLeagueGlobals();
 
