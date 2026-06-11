@@ -2644,12 +2644,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         var leagueInfo = (typeof getLeagueMatchups === 'function') ? getLeagueMatchups(divName, slotIdx) : null;
         if (!leagueInfo) leagueInfo = {};
 
+        // Header is just the game label ("Game 2") — no emoji, no sport. Each
+        // matchup line carries its own sport, so a single header sport is
+        // wrong whenever the game's matchups play different sports.
         var title = leagueInfo.gameLabel || block.event || 'League';
-        if (leagueInfo.sport && title.toLowerCase().indexOf(String(leagueInfo.sport).toLowerCase()) < 0) {
-            title += ' - ' + leagueInfo.sport;
-        }
 
-        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">🏆 ' + escapeHtml(title) + '</div>';
+        var html = '<div style="font-weight: 700; font-size: 0.82rem; color: #0369a1; margin-bottom: 6px;">' + escapeHtml(title) + '</div>';
 
         var matchups = leagueInfo.matchups || [];
         if (matchups.length > 0) {
@@ -3279,10 +3279,12 @@ divBlocks.forEach((block, blockIdx) => {
         const slotIdx = block.slotIndex !== undefined ? block.slotIndex : findFirstSlotForTime(block.startMin, divName);
         let leagueInfo = getLeagueMatchups(divName, slotIdx);
         
+        // Header is just the game label ("Game 2") — no emoji, no sport. Each
+        // matchup line carries its own sport, so a single header sport is
+        // wrong whenever the game's matchups play different sports.
         let title = leagueInfo.gameLabel || block.event;
-        if (leagueInfo.sport && !title.toLowerCase().includes(leagueInfo.sport.toLowerCase())) title += ` - ${leagueInfo.sport}`;
-        
-        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">🏆 ${escapeHtml(title)}</div>`;
+
+        let html = `<div style="font-weight: 600; font-size: 1rem; color: #0369a1; margin-bottom: 8px;">${escapeHtml(title)}</div>`;
         
         if (leagueInfo.matchups?.length > 0) {
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
