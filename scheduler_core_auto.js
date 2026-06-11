@@ -23560,17 +23560,26 @@
                 //   _validateWritePlacement on the temporarily-applied state).
                 let movedC = 0;
                 try {
-                    const _allG = [];
+                    // UNITS: all of one grade's blocks sharing (group, field,
+                    // window) move as one atom — this is what lets locked PAIRS
+                    // participate (both halves trade fields together, so the
+                    // pair-integrity contract holds; live repro: a Majors pair
+                    // sat on rank 3 while a Quints pair held rank 1, and the
+                    // block-level pass had to skip them).
+                    const _unitMap = {};
                     Object.keys(sa).forEach(function (bb) {
                         (sa[bb] || []).forEach(function (s) {
                             if (!s || s.continuation || !s.field || s.field === 'Free') return;
-                            if (s._pairLock) return;
                             const fg = fgMap[s.field]; if (!fg) return;
                             const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
                             if (st == null || en == null) return;
-                            _allG.push({ s: s, grade: bunkGrade[String(bb)], bunk: String(bb), st: st, en: en, group: fg.group });
+                            const gr = bunkGrade[String(bb)];
+                            const key = fg.group + '|' + s.field + '|' + st + '|' + en + '|' + gr;
+                            if (!_unitMap[key]) _unitMap[key] = { group: fg.group, field: s.field, st: st, en: en, grade: gr, blocks: [] };
+                            _unitMap[key].blocks.push({ s: s, bunk: String(bb) });
                         });
                     });
+                    const _units = Object.keys(_unitMap).map(function (k) { return _unitMap[k]; });
                     const _occRemove = function (fname, bunk, st, en) {
                         const fl = occ[fname]; if (!fl) return null;
                         for (let k = 0; k < fl.length; k++) {
@@ -23581,40 +23590,67 @@
                     let _passC = 0, _improvedC = true;
                     while (_improvedC && _passC++ < 4) {
                         _improvedC = false;
-                        const _ordered = _allG.slice().sort(function (a, b) { return _sen(b.grade) - _sen(a.grade); });
+                        const _ordered = _units.slice().sort(function (a, b) { return _sen(b.grade) - _sen(a.grade); });
                         for (let i = 0; i < _ordered.length; i++) {
                             const A = _ordered[i];
-                            for (let j = 0; j < _allG.length; j++) {
-                                const B = _allG[j];
-                                if (A === B || A.group !== B.group) continue;
-                                if (!(A.st < B.en && B.st < A.en)) continue;             // must overlap
-                                if (A.st === B.st && A.en === B.en) continue;            // exact → Phase B's job
-                                if (_sen(A.grade) <= _sen(B.grade)) continue;            // A strictly senior
-                                const ra = fgMap[A.s.field].rank, rb = fgMap[B.s.field].rank;
-                                if (ra <= rb) continue;                                   // already correctly ranked
-                                const fa = A.s.field, fb = B.s.field;
-                                if ((hostsBySport[A.s._activity] || []).indexOf(fb) < 0) continue;
-                                if ((hostsBySport[B.s._activity] || []).indexOf(fa) < 0) continue;
-                                // pull both from the ledger, test the cross placements
-                                const _entA = _occRemove(fa, A.bunk, A.st, A.en);
-                                const _entB = _occRemove(fb, B.bunk, B.st, B.en);
-                                let okSwap = canUse(fb, A.st, A.en, A.bunk, A.grade, A.s._activity) &&
-                                             canUse(fa, B.st, B.en, B.bunk, B.grade, B.s._activity);
+                            for (let j = 0; j < _units.length; j++) {
+                                const B = _units[j];
+                                if (A === B || A.group !== B.group || A.field === B.field) continue;
+                                if (!(A.st < B.en && B.st < A.en)) continue;              // must overlap
+                                if (_sen(A.grade) <= _sen(B.grade)) continue;             // A strictly senior
+                                const ra = fgMap[A.field].rank, rb = fgMap[B.field].rank;
+                                if (ra <= rb) continue;                                    // already correctly ranked
+                                const fa = A.field, fb = B.field;
+                                let hostsOk = true;
+                                A.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fb) < 0) hostsOk = false; });
+                                B.blocks.forEach(function (x) { if ((hostsBySport[x.s._activity] || []).indexOf(fa) < 0) hostsOk = false; });
+                                if (!hostsOk) continue;
+                                // pull every involved ledger entry, then validate the
+                                // cross placements block-by-block (each pass inserts a
+                                // temp entry so the pair's second half sees the first)
+                                const _removed = [], _temp = [];
+                                A.blocks.forEach(function (x) { const e = _occRemove(fa, x.bunk, A.st, A.en); if (e) _removed.push({ f: fa, e: e }); });
+                                B.blocks.forEach(function (x) { const e = _occRemove(fb, x.bunk, B.st, B.en); if (e) _removed.push({ f: fb, e: e }); });
+                                let okSwap = true;
+                                for (let xa = 0; xa < A.blocks.length && okSwap; xa++) {
+                                    const x = A.blocks[xa];
+                                    if (!canUse(fb, A.st, A.en, x.bunk, A.grade, x.s._activity)) { okSwap = false; break; }
+                                    const te = { s: A.st, e: A.en, bunk: x.bunk, act: x.s._activity };
+                                    (occ[fb] = occ[fb] || []).push(te); _temp.push({ f: fb, e: te });
+                                }
+                                for (let xb = 0; xb < B.blocks.length && okSwap; xb++) {
+                                    const x = B.blocks[xb];
+                                    if (!canUse(fa, B.st, B.en, x.bunk, B.grade, x.s._activity)) { okSwap = false; break; }
+                                    const te = { s: B.st, e: B.en, bunk: x.bunk, act: x.s._activity };
+                                    (occ[fa] = occ[fa] || []).push(te); _temp.push({ f: fa, e: te });
+                                }
                                 if (okSwap) {
-                                    A.s.field = fb; B.s.field = fa; // apply so the validator sees the post-swap state
-                                    if (_validateWritePlacement(fb, A.s._activity, A.grade, A.bunk, A.st, A.en) ||
-                                        _validateWritePlacement(fa, B.s._activity, B.grade, B.bunk, B.st, B.en)) {
-                                        A.s.field = fa; B.s.field = fb; okSwap = false;
+                                    A.blocks.forEach(function (x) { x.s.field = fb; });
+                                    B.blocks.forEach(function (x) { x.s.field = fa; });
+                                    for (let xa2 = 0; xa2 < A.blocks.length && okSwap; xa2++) {
+                                        if (_validateWritePlacement(fb, A.blocks[xa2].s._activity, A.grade, A.blocks[xa2].bunk, A.st, A.en)) okSwap = false;
+                                    }
+                                    for (let xb2 = 0; xb2 < B.blocks.length && okSwap; xb2++) {
+                                        if (_validateWritePlacement(fa, B.blocks[xb2].s._activity, B.grade, B.blocks[xb2].bunk, B.st, B.en)) okSwap = false;
+                                    }
+                                    if (!okSwap) {
+                                        A.blocks.forEach(function (x) { x.s.field = fa; });
+                                        B.blocks.forEach(function (x) { x.s.field = fb; });
                                     }
                                 }
                                 if (okSwap) {
-                                    (occ[fb] = occ[fb] || []).push({ s: A.st, e: A.en, bunk: A.bunk, act: A.s._activity });
-                                    (occ[fa] = occ[fa] || []).push({ s: B.st, e: B.en, bunk: B.bunk, act: B.s._activity });
-                                    A.s._fqMoved = true; B.s._fqMoved = true;
+                                    A.blocks.forEach(function (x) { x.s._fqMoved = true; });
+                                    B.blocks.forEach(function (x) { x.s._fqMoved = true; });
+                                    A.field = fb; B.field = fa;
                                     movedC++; _improvedC = true;
                                 } else {
-                                    if (_entA) (occ[fa] = occ[fa] || []).push(_entA);
-                                    if (_entB) (occ[fb] = occ[fb] || []).push(_entB);
+                                    // rollback: drop temp entries, restore originals
+                                    _temp.forEach(function (t) {
+                                        const fl = occ[t.f] || [];
+                                        const ix = fl.indexOf(t.e);
+                                        if (ix >= 0) fl.splice(ix, 1);
+                                    });
+                                    _removed.forEach(function (r) { (occ[r.f] = occ[r.f] || []).push(r.e); });
                                 }
                             }
                         }
