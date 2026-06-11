@@ -37,6 +37,7 @@
                 history.conferenceRounds = history.conferenceRounds || {};
                 history.matchupHistory = history.matchupHistory || {};
                 history.gamesPerDate = history.gamesPerDate || {};  // ★ NEW
+                history.gameLog = history.gameLog || {};            // ★ FN-55
                 console.log("[SpecialtyLeagues] ✅ Loaded history from cloud");
                 return history;
             }
@@ -48,9 +49,10 @@
                 lastSlotOrder: {},
                 conferenceRounds: {},
                 matchupHistory: {},
-                gamesPerDate: {}  // ★ NEW: { leagueId: { "2025-01-01": 2, "2025-01-02": 3 } }
+                gamesPerDate: {},  // ★ NEW: { leagueId: { "2025-01-01": 2, "2025-01-02": 3 } }
+                gameLog: {}        // ★ FN-55
             };
-            
+
             const history = JSON.parse(raw);
             // Ensure new fields exist
             history.teamFieldRotation = history.teamFieldRotation || {};
@@ -58,6 +60,7 @@
             history.conferenceRounds = history.conferenceRounds || {};
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
+            history.gameLog = history.gameLog || {};
             
             // Migrate old format if needed
             if (history.roundCounters && !history.gamesPerDate) {
@@ -73,7 +76,8 @@
                 lastSlotOrder: {},
                 conferenceRounds: {},
                 matchupHistory: {},
-                gamesPerDate: {}
+                gamesPerDate: {},
+                gameLog: {}
             };
         }
     }
@@ -702,8 +706,13 @@
     // UPDATE HISTORY AFTER SCHEDULING
     // =========================================================================
 
-    function updateHistoryAfterScheduling(league, assignments, history, currentDate) {
+    function updateHistoryAfterScheduling(league, assignments, history, currentDate, gameLabel) {
         const { id } = league;
+
+        // ★ FN-55: date-keyed game log — see rollbackDayRecords below.
+        if (!history.gameLog) history.gameLog = {};
+        if (!history.gameLog[id]) history.gameLog[id] = {};
+        if (!history.gameLog[id][currentDate]) history.gameLog[id][currentDate] = [];
 
         // Always update field rotation and slot order
         assignments.forEach(game => {
@@ -722,7 +731,49 @@
             const fullKey = `${id}|${matchupKey}`;
             if (!history.matchupHistory[fullKey]) history.matchupHistory[fullKey] = [];
             history.matchupHistory[fullKey].push(currentDate);
+
+            history.gameLog[id][currentDate].push({ tA: game.teamA, tB: game.teamB, field: game.field, g: gameLabel || null });
         });
+    }
+
+    // =========================================================================
+    // ★ FN-55: DATE-KEYED GAME LOG — makes a day's records reversible
+    // =========================================================================
+    // Specialty analog of the regular engine's FN-54: teamFieldRotation and
+    // matchupHistory had no memory of which date contributed an entry, so
+    // regenerating a date re-recorded all of its games (field-rotation arrays
+    // and matchup date-arrays inflate) and deleting a date left them behind.
+    // Every recorded game now also lands in history.gameLog[id][date] so a
+    // regeneration or date-delete can subtract exactly what that date
+    // contributed. lastSlotOrder is overwrite-only and needs no rollback.
+
+    function rollbackDayRecords(leagueId, date, history) {
+        const entries = history.gameLog?.[leagueId]?.[date];
+        if (!entries || !entries.length) return 0;
+        entries.forEach(function (e) {
+            if (e.field) {
+                [e.tA, e.tB].forEach(function (team) {
+                    if (!team) return;
+                    const arr = history.teamFieldRotation[`${leagueId}|${team}`];
+                    if (!arr) return;
+                    const idx = arr.lastIndexOf(e.field);
+                    if (idx !== -1) arr.splice(idx, 1);
+                });
+            }
+            if (e.tA && e.tB) {
+                const mk = `${leagueId}|${[e.tA, e.tB].sort().join('|')}`;
+                const dates = history.matchupHistory[mk];
+                if (Array.isArray(dates)) {
+                    const di = dates.indexOf(date);
+                    if (di !== -1) dates.splice(di, 1);
+                    if (dates.length === 0) delete history.matchupHistory[mk];
+                }
+            }
+        });
+        const n = entries.length;
+        delete history.gameLog[leagueId][date];
+        console.log(`[SpecialtyLeagues] ↩️ Rolled back ${n} logged game record(s) for league ${leagueId} on ${date}`);
+        return n;
     }
 
     // =========================================================================
@@ -764,8 +815,40 @@
             (b.event && b.event.toLowerCase().includes('specialty league'))
         );
 
+        // ★ FN-55: a generation that covers a specialty league's divisions
+        // REPLACES that league's games for this date — subtract what the date
+        // previously logged before anything re-records. In-play = a specialty
+        // block's division OR a generated division (context.generatedDivisions
+        // catches a regen whose skeleton dropped the specialty tile, which
+        // previously left ghost games in the history forever).
+        const _dayResetLeaguesS = new Set();
+        (function () {
+            const _divsInPlay = new Set(specialtyBlocks.map(function (b) { return b.divName; }).filter(Boolean));
+            (context.generatedDivisions || []).forEach(function (d) { _divsInPlay.add(d); });
+            Object.values(specialtyLeaguesConfig).forEach(function (l) {
+                if (!l || !l.id) return;
+                if (!(l.divisions || []).some(function (d) { return _divsInPlay.has(d); })) return;
+                _dayResetLeaguesS.add(l.id);
+                rollbackDayRecords(l.id, currentDate, history);
+                if (history.gamesPerDate?.[l.id]?.[currentDate] !== undefined) {
+                    delete history.gamesPerDate[l.id][currentDate];
+                }
+            });
+        })();
+
         if (specialtyBlocks.length === 0) {
-            console.log("[SpecialtyLeagues] No specialty league blocks in skeleton.");
+            if (_dayResetLeaguesS.size > 0) {
+                // Day regenerated without specialty tiles — persist the reset
+                // and clear the date's auto-saved result games.
+                saveSpecialtyHistory(history);
+                updateFutureSchedules(currentDate, history);
+                _dayResetLeaguesS.forEach(function (id) {
+                    try { window.SpecialtyLeaguesAPI?.syncGamesFromGeneration?.(id, currentDate, []); } catch (e) {}
+                });
+                console.log('[SpecialtyLeagues] Day records reset for ' + _dayResetLeaguesS.size + ' league(s) (no specialty blocks this run).');
+            } else {
+                console.log("[SpecialtyLeagues] No specialty league blocks in skeleton.");
+            }
             return;
         }
 
@@ -994,7 +1077,7 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 block.processed = true;
             });
 
-            updateHistoryAfterScheduling(league, assignments, history, currentDate);
+            updateHistoryAfterScheduling(league, assignments, history, currentDate, gameLabel);
 
             // Store in leagueAssignments for UI
             if (!window.leagueAssignments) window.leagueAssignments = {};
@@ -1026,6 +1109,30 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
         }
 
         saveSpecialtyHistory(history);
+
+        // ★ FN-58: auto-save the day's games into the Specialty Leagues
+        // results store — no manual "Import from Schedule" needed. The sync
+        // swaps out the date's auto-saved games while preserving scores
+        // already entered for matchups that still exist; an empty list
+        // clears the date (league dropped from the day / produced no games).
+        if (window.SpecialtyLeaguesAPI?.syncGamesFromGeneration) {
+            _dayResetLeaguesS.forEach(function (id) {
+                try {
+                    const byLabel = {};
+                    (history.gameLog?.[id]?.[currentDate] || []).forEach(function (e) {
+                        const lbl = e.g || 'Game';
+                        (byLabel[lbl] = byLabel[lbl] || []).push({ teamA: e.tA, teamB: e.tB, field: e.field || null });
+                    });
+                    const entries = Object.keys(byLabel).map(function (lbl) {
+                        const m = String(lbl).match(/Game\s*(\d+)/i);
+                        return { gameLabel: lbl, gameNumber: m ? parseInt(m[1], 10) : null, matches: byLabel[lbl] };
+                    });
+                    window.SpecialtyLeaguesAPI.syncGamesFromGeneration(id, currentDate, entries);
+                } catch (e) {
+                    console.warn('[SpecialtyLeagues] FN-58 games auto-save failed for league ' + id + ':', e);
+                }
+            });
+        }
 
         // ★★★ UPDATE FUTURE SCHEDULES TO MAINTAIN CHRONOLOGICAL ORDER ★★★
         updateFutureSchedules(currentDate, history);
@@ -1158,10 +1265,22 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
     SpecialtyLeagues.cleanupDateFromHistory = function(dateKey) {
         try {
             const history = loadSpecialtyHistory();
-            if (!history.gamesPerDate) return;
 
             let changed = false;
-            for (const leagueId of Object.keys(history.gamesPerDate)) {
+
+            // ★ FN-55: subtract the deleted date's logged games from the
+            // rotation/matchup aggregates — previously a deleted day's games
+            // stayed in them forever.
+            for (const leagueId of Object.keys(history.gameLog || {})) {
+                if (rollbackDayRecords(leagueId, dateKey, history) > 0) {
+                    changed = true;
+                }
+            }
+
+            // ★ FN-58: the deleted day's auto-saved result games go with it
+            try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey); } catch (e) {}
+
+            for (const leagueId of Object.keys(history.gamesPerDate || {})) {
                 if (history.gamesPerDate[leagueId][dateKey] !== undefined) {
                     delete history.gamesPerDate[leagueId][dateKey];
                     changed = true;
@@ -1176,6 +1295,43 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
             updateFutureSchedules(dateKey, history);
         } catch (e) {
             console.error('[SpecialtyLeagues] cleanupDateFromHistory error:', e);
+        }
+    };
+
+    /**
+     * ★ FN-55: subtract a date's logged specialty records for every league
+     * whose divisions intersect divisionNames, then renumber future schedules.
+     * For callers that regenerate a day WITHOUT invoking this engine at all
+     * (auto builder with zero league blocks) — the engine's own in-play reset
+     * can't run there.
+     */
+    SpecialtyLeagues.resetDayRecords = function(divisionNames, dateKey) {
+        try {
+            if (!Array.isArray(divisionNames) || divisionNames.length === 0 || !dateKey) return;
+            const cfg = loadSpecialtyLeagues();
+            const history = loadSpecialtyHistory();
+            const divSet = new Set(divisionNames);
+            let changed = false;
+            const affected = [];
+            Object.values(cfg || {}).forEach(function (l) {
+                if (!l || !l.id) return;
+                if (!(l.divisions || []).some(function (d) { return divSet.has(d); })) return;
+                affected.push(l.id);
+                if (rollbackDayRecords(l.id, dateKey, history) > 0) changed = true;
+                if (history.gamesPerDate?.[l.id]?.[dateKey] !== undefined) {
+                    delete history.gamesPerDate[l.id][dateKey];
+                    changed = true;
+                }
+            });
+            if (affected.length > 0) {
+                try { window.SpecialtyLeaguesAPI?.removeAutoGamesForDate?.(dateKey, affected); } catch (e) {}
+            }
+            if (!changed) return;
+            saveSpecialtyHistory(history);
+            updateFutureSchedules(dateKey, history);
+            console.log('[SpecialtyLeagues] ↩️ Reset day records for', dateKey, 'across divisions [' + divisionNames.join(', ') + ']');
+        } catch (e) {
+            console.error('[SpecialtyLeagues] resetDayRecords error:', e);
         }
     };
 

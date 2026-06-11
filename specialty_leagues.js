@@ -2375,6 +2375,118 @@
     // ★ v2.1: Export diagnostics
     window.diagnoseSpecialtyLeagues = diagnoseSpecialtyLeagues;
 
+    // =========================================================================
+    // ★ FN-58: AUTO-SAVED GAME RESULTS — public API for the specialty engine
+    // =========================================================================
+    // The specialty scheduler calls syncGamesFromGeneration after every
+    // generation that covers a specialty league's day, so games appear in
+    // Game Results automatically (no "Import from Schedule" click). A
+    // regeneration calls it again with the day's NEW games: the date's
+    // auto-saved games are replaced, but scores already entered for matchups
+    // that still exist are preserved. Date deletion calls
+    // removeAutoGamesForDate. Games the user added manually (no importedFrom
+    // flag) are never touched.
+
+    function _slPairKey(a, b) { return [a, b].sort().join('|'); }
+    function _slIsAutoGame(g) { return g && (g.importedFrom === 'auto' || g.importedFrom === 'schedule'); }
+
+    window.SpecialtyLeaguesAPI = window.SpecialtyLeaguesAPI || {};
+
+    window.SpecialtyLeaguesAPI.syncGamesFromGeneration = function (leagueId, dateKey, gameEntries) {
+        try {
+            const league = specialtyLeagues[leagueId];
+            if (!league || !dateKey) return false;
+            if (!Array.isArray(league.games)) league.games = [];
+
+            const oldByLabelPair = {};
+            const oldByPair = {};
+            const oldPairCount = {};
+            league.games.forEach(function (g) {
+                if (g.date !== dateKey || !_slIsAutoGame(g)) return;
+                (g.matches || []).forEach(function (m) {
+                    if (m.scoreA == null && m.scoreB == null) return;
+                    const pk = _slPairKey(m.teamA, m.teamB);
+                    oldByLabelPair[(g.gameLabel || '') + '|' + pk] = m;
+                    oldByPair[pk] = m;
+                    oldPairCount[pk] = (oldPairCount[pk] || 0) + 1;
+                });
+            });
+
+            league.games = league.games.filter(function (g) { return !(g.date === dateKey && _slIsAutoGame(g)); });
+
+            const newPairCount = {};
+            (gameEntries || []).forEach(function (ge) {
+                (ge && ge.matches || []).forEach(function (m) {
+                    const pk = _slPairKey(m.teamA, m.teamB);
+                    newPairCount[pk] = (newPairCount[pk] || 0) + 1;
+                });
+            });
+
+            let totalMatches = 0;
+            (gameEntries || []).forEach(function (ge) {
+                if (!ge || !Array.isArray(ge.matches) || ge.matches.length === 0) return;
+                const numMatch = String(ge.gameLabel || '').match(/Game\s*(\d+)/i);
+                league.games.push({
+                    date: dateKey,
+                    gameLabel: ge.gameLabel || 'Game',
+                    gameNumber: ge.gameNumber != null ? ge.gameNumber : (numMatch ? parseInt(numMatch[1], 10) : null),
+                    matches: ge.matches.map(function (m) {
+                        const pk = _slPairKey(m.teamA, m.teamB);
+                        let old = oldByLabelPair[(ge.gameLabel || '') + '|' + pk];
+                        if (!old && oldPairCount[pk] === 1 && newPairCount[pk] === 1) old = oldByPair[pk];
+                        const aligned = old && old.teamA === m.teamA;
+                        return {
+                            teamA: m.teamA,
+                            teamB: m.teamB,
+                            scoreA: old ? (aligned ? old.scoreA : old.scoreB) : null,
+                            scoreB: old ? (aligned ? old.scoreB : old.scoreA) : null,
+                            field: m.field || null
+                        };
+                    }),
+                    importedFrom: 'auto',
+                    importedAt: new Date().toISOString()
+                });
+                totalMatches += ge.matches.length;
+            });
+
+            league.games.sort(function (a, b) {
+                return (a.date || '').localeCompare(b.date || '') || (a.gameNumber || 0) - (b.gameNumber || 0);
+            });
+
+            recalcStandings(league);
+            saveData();
+            console.log('[SPECIALTY_LEAGUES] 🔄 Auto-saved ' + (gameEntries || []).length + ' game(s) / ' + totalMatches + ' match(es) for "' + (league.name || leagueId) + '" on ' + dateKey);
+            return true;
+        } catch (e) {
+            console.error('[SPECIALTY_LEAGUES] syncGamesFromGeneration failed:', e);
+            return false;
+        }
+    };
+
+    window.SpecialtyLeaguesAPI.removeAutoGamesForDate = function (dateKey, leagueIds) {
+        try {
+            if (!dateKey) return;
+            const ids = (Array.isArray(leagueIds) && leagueIds.length > 0) ? leagueIds : Object.keys(specialtyLeagues);
+            let changed = false;
+            ids.forEach(function (id) {
+                const lg = specialtyLeagues[id];
+                if (!lg || !Array.isArray(lg.games)) return;
+                const before = lg.games.length;
+                lg.games = lg.games.filter(function (g) { return !(g.date === dateKey && _slIsAutoGame(g)); });
+                if (lg.games.length !== before) {
+                    changed = true;
+                    recalcStandings(lg);
+                }
+            });
+            if (changed) {
+                saveData();
+                console.log('[SPECIALTY_LEAGUES] 🗑️ Removed auto-saved games for ' + dateKey);
+            }
+        } catch (e) {
+            console.error('[SPECIALTY_LEAGUES] removeAutoGamesForDate failed:', e);
+        }
+    };
+
     console.log("[SPECIALTY_LEAGUES] Module v2.2.7 loaded");
 
 })();

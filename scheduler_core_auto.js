@@ -20432,6 +20432,7 @@
             try {
                 const _genGrades = [...new Set(autoSkeleton.map(b => b && b.division).filter(Boolean))];
                 window.SchedulerCoreLeagues?.resetDayRecords?.(_genGrades, currentDate);
+                window.SchedulerCoreSpecialtyLeagues?.resetDayRecords?.(_genGrades, currentDate);
             } catch (e) { warn('[3] league day-record reset: ' + e.message); }
         }
 
