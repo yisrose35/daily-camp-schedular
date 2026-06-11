@@ -2834,9 +2834,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             if (!shouldShowDivision(divName)) return;
             var divInfo = divisions[divName];
             if (!divInfo) return;
-            var bunks = (divInfo.bunks || []).slice().sort(function (a, b) {
-                return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
-            });
+            // ★ FN-49: divInfo.bunks already carries the user's Camp Structure
+            //   order (drag-reorderable on the Me page) — render it as-is.
+            //   The old alphanumeric sort silently discarded custom orders.
+            var bunks = (divInfo.bunks || []).slice();
             if (bunks.length === 0) return;
             var divSlots = divisionTimes[divName] || [];
             var divColor = divInfo.color || '#4b5563';

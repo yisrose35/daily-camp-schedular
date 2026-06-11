@@ -3027,11 +3027,8 @@ function openAutoBunkOverridesPanel(grade) {
     const divisions = window.divisions || {};
     const div = divisions[grade];
     if (!div) { window.showAlert?.('Division not found.'); return; }
-    const bunks = (div.bunks || []).slice().sort((a, b) => {
-        const na = parseInt(String(a).match(/\d+/)?.[0] || 0);
-        const nb = parseInt(String(b).match(/\d+/)?.[0] || 0);
-        return na - nb || String(a).localeCompare(String(b));
-    });
+    // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+    const bunks = (div.bunks || []).slice();
     if (bunks.length === 0) { window.showAlert?.('No bunks in this division.'); return; }
     // ★ Day 24: read the layers the grid ACTUALLY rendered — in the DA auto
     //   view that's the externalLayers arg (daAutoLayers), not the module

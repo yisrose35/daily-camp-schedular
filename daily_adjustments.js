@@ -5788,10 +5788,8 @@ function _boRenderAutoBunkGrid(wrap, divName) {
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
-  const bunks = (div.bunks || []).slice().sort((a, b) => {
-    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
-    return na - nb || a.localeCompare(b);
-  });
+  // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+  const bunks = (div.bunks || []).slice();
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
   // Pull the active auto layers for this grade for the current date — using the
@@ -6676,10 +6674,8 @@ function _boRenderBunkGrid(wrap, divName) {
   const div = divisions[divName];
   if (!div) { wrap.innerHTML = '<p style="color:#94a3b8;">Division not found.</p>'; return; }
 
-  const bunks = (div.bunks || []).slice().sort((a, b) => {
-    const na = parseInt(a.match(/\d+/)?.[0] || 0), nb = parseInt(b.match(/\d+/)?.[0] || 0);
-    return na - nb || a.localeCompare(b);
-  });
+  // ★ FN-49: keep the user's Camp Structure order (no alphanumeric re-sort)
+  const bunks = (div.bunks || []).slice();
   if (bunks.length === 0) { wrap.innerHTML = '<p style="color:#94a3b8;">No bunks in this division.</p>'; return; }
 
   // Get skeleton events for this division
