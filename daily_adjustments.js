@@ -2026,15 +2026,33 @@ function renderPalette() {
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
-  
+
+  // ★ FN-48: custom general activities (facilities registry) as pinned tiles
+  //   in the MANUAL palette too — the tile carries gaName/gaFacility so the
+  //   drop pre-binds the event + facility and only asks for times.
+  const _gaItemsM = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItemsM.length) {
+    categories.push({
+      label: 'General Activities',
+      tiles: _gaItemsM.map(ga => ({
+        type: 'custom',
+        name: ga.name,
+        style: 'background:#fef3c7;color:#92400e;',
+        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+        gaName: ga.name,
+        gaFacility: ga.facility
+      }))
+    });
+  }
+
   categories.forEach((cat, catIndex) => {
     const label = document.createElement('div');
     label.className = 'da-tile-label';
     label.textContent = cat.label;
     paletteEl.appendChild(label);
-    
-    cat.types.forEach(type => {
-      const tile = TILES.find(t => t.type === type);
+
+    const catTiles = cat.tiles || cat.types.map(type => TILES.find(t => t.type === type));
+    catTiles.forEach(tile => {
       if (!tile) return;
       
       const el = document.createElement('div');
@@ -3205,6 +3223,30 @@ function addDropListeners(gridEl) {
           type: 'elective', event: 'Elective', division: divName,
           startTime: result.startTime, endTime: result.endTime,
           electiveActivities, isNightActivity
+        };
+      }
+      // ★ FN-48: GENERAL-ACTIVITY tile — name + facility pre-bound from the
+      //   facilities registry; only the time window is asked.
+      else if (tileData.type === 'custom' && tileData.gaName) {
+        const result = await daShowModal({
+          title: tileData.gaName + ' for ' + divName,
+          description: 'Pinned at ' + (tileData.gaFacility || 'its facility') + '. Set the time window.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:30am', default: endStr }
+          ]
+        });
+        if (!result || !result.startTime || !result.endTime) return;
+        const times = await validateStartEnd(result.startTime, result.endTime);
+        if (!times) return;
+        isNightActivity = times.isNight;
+        const _gaFlds = tileData.gaFacility ? [tileData.gaFacility] : [];
+        newEvent = {
+          id: 'evt_' + Math.random().toString(36).slice(2, 9), type: 'pinned', event: tileData.gaName,
+          division: divName, startTime: result.startTime, endTime: result.endTime,
+          reservedFields: _gaFlds,
+          location: tileData.gaFacility || null,
+          isNightActivity
         };
       }
       // ===== CUSTOM PINNED =====

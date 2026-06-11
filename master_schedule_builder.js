@@ -3523,15 +3523,34 @@ function renderPalette() {
     { label: 'Leagues', types: ['league', 'specialty_league'] },
     { label: 'Fixed', types: ['swim', 'lunch', 'snacks', 'dismissal', 'custom'] }
   ];
-  
+
+  // ★ FN-48: every custom general activity (facilities registry) gets its own
+  //   pinned tile — same lane as the auto-mode palette. The tile carries
+  //   gaName/gaFacility so the drop pre-binds the event + facility and only
+  //   asks for the times.
+  const _gaItems = (window.getGeneralActivityPaletteItems?.() || []);
+  if (_gaItems.length) {
+    categories.push({
+      label: 'General Activities',
+      tiles: _gaItems.map(ga => ({
+        type: 'custom',
+        name: ga.name,
+        style: 'background:#fef3c7;color:#92400e;',
+        description: 'Pinned general activity at ' + ga.facility + '. Drop on a division and set the times.',
+        gaName: ga.name,
+        gaFacility: ga.facility
+      }))
+    });
+  }
+
   categories.forEach((cat, catIndex) => {
     const label = document.createElement('div');
     label.className = 'ms-tile-label';
     label.textContent = cat.label;
     palette.appendChild(label);
-    
-    cat.types.forEach(type => {
-      const tile = TILES.find(t => t.type === type);
+
+    const catTiles = cat.tiles || cat.types.map(type => TILES.find(t => t.type === type));
+    catTiles.forEach(tile => {
       if (!tile) return;
       
       const el = document.createElement('div');
@@ -4256,6 +4275,31 @@ function addDropListeners(selector) {
           swimLocation: defaultPool,
           electiveActivities: chosen,
           reservedFields: Array.from(new Set([...(defaultPool ? [defaultPool] : []), ...chosen]))
+        };
+      }
+      // ★ FN-48: GENERAL-ACTIVITY tile — the name + facility come pre-bound
+      //   from the facilities registry; only the time window is asked
+      //   (mirrors the swim/lunch flow).
+      else if (tileData.type === 'custom' && tileData.gaName) {
+        const result = await showModal({
+          title: tileData.gaName,
+          description: 'Pinned at ' + (tileData.gaFacility || 'its facility') + '. Set the time window for ' + divName + '.',
+          fields: [
+            { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am' },
+            { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am' }
+          ]
+        });
+        if (!result) return;
+        const _gaFlds = tileData.gaFacility ? [tileData.gaFacility] : [];
+        newEvent = {
+          id: Date.now().toString(),
+          type: 'pinned',
+          event: tileData.gaName,
+          division: divName,
+          startTime: result.startTime,
+          endTime: result.endTime,
+          reservedFields: _gaFlds,
+          location: tileData.gaFacility || null
         };
       }
       // ★ v2.5: CUSTOM PINNED - Now uses grouped locations from locationZones (matches DA bunk overrides)
