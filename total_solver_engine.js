@@ -2767,7 +2767,7 @@
         }
         if (violations.length === 0) return 0;
         console.log('[v14.1] 🔧 Cross-division violations: ' + violations.length);
-        var resolved = 0;
+        var resolved = 0, demoted = 0;
         for (var vi = 0; vi < violations.length; vi++) {
             var v = violations[vi], bi = v.blockIdx, blk2 = v.block;
             S._todayCache.clear();
@@ -2788,10 +2788,25 @@
                 S.addToFieldTimeIndex(fn, blk2.startTime, blk2.endTime, blk2.bunk, blk2.divName, normName(pk._activity));
                 S.invalidateRotationCacheForBunk(blk2.bunk); S._todayCache.clear();
                 resolved++;
+            } else {
+                // ★ FN-53: no legal alternative — DEMOTE TO FREE. An illegal
+                //   cross-division share must never survive to the final
+                //   schedule (live repro: Soloists + Quints sharing the
+                //   same_division 'Belts' field — the re-solve found the
+                //   violation, had no alternative, and silently kept it).
+                //   Free is honest; later fill passes may refill it legally.
+                S.undoPickFromSchedule(blk2, v.assignment.pick);
+                S.removeFromFieldTimeIndex(normName(v.assignment.pick.field), blk2.startTime, blk2.endTime, blk2.bunk);
+                var freePick = { field: 'Free', sport: null, _activity: 'Free' };
+                S._assignments.set(bi, { candIdx: -1, pick: freePick, cost: 0 });
+                S.applyPickToSchedule(blk2, freePick);
+                S.invalidateRotationCacheForBunk(blk2.bunk); S._todayCache.clear();
+                demoted++;
+                console.warn('[v14.1] ⛔ ' + blk2.bunk + ' (' + blk2.divName + ') demoted to Free — illegal share on "' + v.assignment.pick.field + '" @' + blk2.startTime + '-' + blk2.endTime + ' had no legal alternative');
             }
         }
-        console.log('[v14.1] 🔧 Resolved: ' + resolved + '/' + violations.length);
-        return resolved;
+        console.log('[v14.1] 🔧 Resolved: ' + resolved + '/' + violations.length + (demoted ? ' (+' + demoted + ' demoted to Free — no legal alternative)' : ''));
+        return resolved + demoted;
     }
 
     // ========================================================================
@@ -2882,6 +2897,14 @@
         //        better-ranked one in the same group is genuinely free. Sweep
         //        once at the end and swap upward where every constraint allows.
         fieldQualityReoptimize(activityBlocks);
+
+        // ★ FN-53: FINAL cross-division invariant sweep — the duplicate sweep
+        //   and quality passes above move blocks AFTER the first re-solve, so
+        //   they can create fresh violations nothing re-checked. Run the
+        //   re-solve once more as the LAST field-mutating pass; with the
+        //   demote-to-Free fallback it always ends at zero illegal shares.
+        S.buildFieldTimeIndex();
+        crossDivisionReSolve(activityBlocks);
 
         // Final stats
         var freeCount = 0;

@@ -25509,6 +25509,93 @@
             if (typeof _runFieldQualityReopt === 'function') _runFieldQualityReopt();
         } catch (_eFQ2) { try { warn('[FieldQualityReopt#2] ' + (_eFQ2 && _eFQ2.message)); } catch (_e2) {} }
 
+        // ★ FN-53: FINAL FIELD-SHARING INVARIANT SWEEP — a sharing violation
+        //   (cross-division on a same_division field, non-allowed pair on a
+        //   cross_division field, over-capacity share) must NEVER survive to
+        //   the final schedule, no matter which pass produced it. Scans the
+        //   written schedule minute-by-minute per configured field and demotes
+        //   the junior offender(s) to Free. Plain sport/activity placements
+        //   only — pinned/custom/special/league entries have their own
+        //   placement semantics and are skipped.
+        try {
+            (function _xdivBackstop() {
+                const _gsX = getGlobalSettings();
+                const _fldsX = (_gsX.app1 && _gsX.app1.fields) || _gsX.fields || [];
+                const _fpX = {};
+                _fldsX.forEach(function (f) {
+                    if (!f || !f.name || !f.sharableWith) return;
+                    const sw = f.sharableWith;
+                    const t = String(sw.type || 'not_sharable').toLowerCase();
+                    _fpX[String(f.name).toLowerCase().trim()] = {
+                        name: f.name, type: t,
+                        cap: t === 'not_sharable' ? 1 : (parseInt(sw.capacity) > 0 ? parseInt(sw.capacity) : (t === 'all' ? 99 : 2)),
+                        pairs: sw.allowedPairs || {}
+                    };
+                });
+                if (!Object.keys(_fpX).length) return;
+                const _senX = {};
+                try {
+                    const _of = (typeof window.getDivisionAgeOrder === 'function') ? window.getDivisionAgeOrder(Object.keys(divisions || {})) : Object.keys(divisions || {});
+                    _of.forEach(function (n, i) { _senX[n] = i; }); // 0 = most senior
+                } catch (_eS) {}
+                const _bgX = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _bgX[String(b)] = g; }); });
+                const sa2 = window.scheduleAssignments || {};
+                const byField = {};
+                Object.keys(sa2).forEach(function (bb) {
+                    (sa2[bb] || []).forEach(function (e) {
+                        if (!e || e.continuation) return;
+                        if (e.type || e._autoSpecial || e._pinned) return;
+                        if (e._league || e._leagueGame || e.leagueName) return;
+                        const fk = String(e.field || '').toLowerCase().trim();
+                        if (!fk || fk === 'free' || !_fpX[fk]) return;
+                        const st = (e._startMin != null ? e._startMin : e.startMin), en = (e._endMin != null ? e._endMin : e.endMin);
+                        if (st == null || en == null) return;
+                        (byField[fk] = byField[fk] || []).push({ e: e, bunk: String(bb), grade: _bgX[String(bb)], st: st, en: en });
+                    });
+                });
+                let demotedX = 0;
+                Object.keys(byField).forEach(function (fk) {
+                    const cfg = _fpX[fk], list = byField[fk];
+                    let changed = true, guard = 0;
+                    while (changed && guard++ < 20) {
+                        changed = false;
+                        for (let i = 0; i < list.length && !changed; i++) {
+                            const a = list[i];
+                            if (a.e.field === 'Free') continue;
+                            // overlapping co-occupants (excluding demoted)
+                            const co = list.filter(function (x) { return x !== a && x.e.field !== 'Free' && x.st < a.en && a.st < x.en; });
+                            if (!co.length) continue;
+                            const grades = {}; grades[a.grade] = 1;
+                            co.forEach(function (x) { grades[x.grade] = 1; });
+                            const gradeNames = Object.keys(grades);
+                            let illegal = false;
+                            if (cfg.type === 'not_sharable') illegal = true;
+                            else if (co.length + 1 > cfg.cap) illegal = true;
+                            else if (cfg.type === 'same_division' && gradeNames.length > 1) illegal = true;
+                            else if (cfg.type === 'cross_division' && gradeNames.length > 1) {
+                                for (let gi = 0; gi < gradeNames.length && !illegal; gi++) {
+                                    for (let gj = gi + 1; gj < gradeNames.length && !illegal; gj++) {
+                                        if (!cfg.pairs[[gradeNames[gi], gradeNames[gj]].sort().join('|')]) illegal = true;
+                                    }
+                                }
+                            }
+                            if (!illegal) continue;
+                            // demote the most junior occupant in this overlap set
+                            const all = [a].concat(co);
+                            all.sort(function (x, y) { return (_senX[y.grade] != null ? _senX[y.grade] : 99) - (_senX[x.grade] != null ? _senX[x.grade] : 99); });
+                            const victim = all[0];
+                            try { console.warn('[XDIV-BACKSTOP] ' + victim.bunk + ' (' + victim.grade + ') demoted to Free — illegal share on "' + cfg.name + '" @' + victim.st + '-' + victim.en + ' (' + cfg.type + ', cap ' + cfg.cap + ')'); } catch (_eW) {}
+                            victim.e.field = 'Free'; victim.e.sport = null; victim.e._activity = 'Free';
+                            victim.e._source = 'xdiv-backstop';
+                            demotedX++; changed = true;
+                        }
+                    }
+                });
+                if (demotedX) log('  ⛔ Sharing-invariant backstop: demoted ' + demotedX + ' illegal share(s) to Free.');
+            })();
+        } catch (_eXB) { try { warn('[XDIV-BACKSTOP] ' + (_eXB && _eXB.message)); } catch (_e3) {} }
+
         // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
         //   the final null sweep can't refill our cleared slots with violations.
         //   Re-derives the pool/delete map from saved overrides to avoid
