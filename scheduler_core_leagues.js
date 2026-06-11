@@ -463,6 +463,104 @@
     }
 
     // =========================================================================
+    // ★ FN-57: MODE-AWARE PAIRING + REMATCH-SPORT CAVEAT
+    // =========================================================================
+    // The two scheduling priorities must actually differ in WHO plays WHOM:
+    //   - matchup_variety: strict round-robin — every team plays every other
+    //     team before any rematch (opponent coverage is the guarantee).
+    //   - sport_variety: pairings serve SPORT coverage — when the round-robin
+    //     pairing would force a team to repeat a sport while some other
+    //     pairing lets everyone play something new, deviate. Ties prefer the
+    //     least-met opponents, so with plentiful sports this still behaves
+    //     like round-robin (all pairs before rematch).
+    // Caveat (both modes): when a pair DOES meet again, never replay a sport
+    // that pair already played together. Per-pair sport history is derived
+    // from the date-keyed gameLog (FN-54), so it is regen/delete-safe for
+    // free; games recorded before gameLog existed are invisible to it.
+
+    function getPairSports(leagueName, team1, team2, history) {
+        const out = [];
+        const gl = history.gameLog?.[leagueName];
+        if (!gl) return out;
+        const key = getMatchupKey(team1, team2);
+        Object.keys(gl).forEach(function (d) {
+            (gl[d] || []).forEach(function (e) {
+                if (e && e.sport && getMatchupKey(e.t1, e.t2) === key) out.push(e.sport);
+            });
+        });
+        return out;
+    }
+
+    // All ways to split the team list into pairs (odd counts get one bye).
+    // 4 teams → 3 matchings, 8 → 105, 12 → 10395 — fine; larger leagues fall
+    // back to round-robin in the chooser.
+    function generatePerfectMatchings(teams) {
+        const arr = teams.slice();
+        if (arr.length % 2 === 1) arr.push('__BYE__');
+        const out = [];
+        (function rec(rem, cur) {
+            if (rem.length === 0) { out.push(cur.slice()); return; }
+            const a = rem[0];
+            for (let i = 1; i < rem.length; i++) {
+                cur.push([a, rem[i]]);
+                rec(rem.slice(1, i).concat(rem.slice(i + 1)), cur);
+                cur.pop();
+            }
+        })(arr, []);
+        return out;
+    }
+
+    function choosePairingsForSportVariety(activeTeams, availablePool, leagueName, history, fallbackMatchups) {
+        try {
+            if (!Array.isArray(activeTeams) || activeTeams.length < 2 || activeTeams.length > 12) return fallbackMatchups;
+            if (!Array.isArray(availablePool) || availablePool.length === 0) return fallbackMatchups;
+            const matchings = generatePerfectMatchings(activeTeams);
+            if (matchings.length <= 1) return fallbackMatchups;
+
+            const histSets = {};
+            activeTeams.forEach(function (t) { histSets[t] = new Set(getTeamSportHistory(leagueName, t, history)); });
+
+            // Score each matching: fresh = how many team-slots can receive a
+            // sport that team hasn't played (per pair, the best single option:
+            // new-to-both = 2, new-to-one = 1). Maximize fresh; tie-break on
+            // fewest prior meetings (prefer fresh opponents). Cross-pair field
+            // contention is ignored here — the assigner resolves it.
+            let best = null, bestFresh = -1, bestMeet = Infinity;
+            for (const m of matchings) {
+                let fresh = 0, meet = 0;
+                for (const pair of m) {
+                    if (pair[0] === '__BYE__' || pair[1] === '__BYE__') continue;
+                    meet += getMatchupCount(leagueName, pair[0], pair[1], history);
+                    let bestPair = 0;
+                    for (const o of availablePool) {
+                        const s = (histSets[pair[0]].has(o.sport) ? 0 : 1) + (histSets[pair[1]].has(o.sport) ? 0 : 1);
+                        if (s > bestPair) { bestPair = s; if (bestPair === 2) break; }
+                    }
+                    fresh += bestPair;
+                }
+                if (fresh > bestFresh || (fresh === bestFresh && meet < bestMeet)) {
+                    best = m; bestFresh = fresh; bestMeet = meet;
+                }
+            }
+            if (!best) return fallbackMatchups;
+            const chosen = best
+                .filter(function (p) { return p[0] !== '__BYE__' && p[1] !== '__BYE__'; })
+                .map(function (p) { return [p[0], p[1]]; });
+            const _key = function (ms) { return ms.map(function (p) { return p.slice().sort().join('v'); }).sort().join(','); };
+            if (_key(chosen) !== _key(fallbackMatchups)) {
+                console.log('   ★ [SportVariety] pairing optimized for sport coverage: '
+                    + chosen.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', ')
+                    + ' (round-robin would be: '
+                    + fallbackMatchups.map(function (p) { return p[0] + ' vs ' + p[1]; }).join(', ') + ')');
+            }
+            return chosen;
+        } catch (e) {
+            console.warn('[RegularLeagues] sport-variety pairing chooser failed — using round-robin:', e);
+            return fallbackMatchups;
+        }
+    }
+
+    // =========================================================================
     // ★★★ FIELD AVAILABILITY - WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
@@ -629,7 +727,16 @@
             // the rule requires it AND such a field is available; otherwise use
             // the full eligible set so the matchup always gets a sport.
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
-            const _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+            let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+
+            // ★ FN-57 caveat: a rematch never replays a sport this pair has
+            // already played together — unless nothing else is available.
+            const _pairSports = new Set(getPairSports(leagueName, t1, t2, history));
+            if (_pairSports.size > 0) {
+                const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
+                if (_freshPool.length > 0) _pool = _freshPool;
+                else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
+            }
 
             for (const option of _pool) {
                 let score = 0;
@@ -716,7 +823,16 @@
 
             // ★ INDOOR HARD CONSTRAINT (non-blocking) — same as SportVariety
             const _eligible = availablePool.filter(function (o) { return !_isFieldUsedConsideringCombos(usedFields, o.field); });
-            const _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+            let _pool = _applyIndoorHardFilter(_eligible, t1, t2, leagueRules);
+
+            // ★ FN-57 caveat: a rematch never replays a sport this pair has
+            // already played together — unless nothing else is available.
+            const _pairSports = new Set(getPairSports(leagueName, t1, t2, history));
+            if (_pairSports.size > 0) {
+                const _freshPool = _pool.filter(function (o) { return !_pairSports.has(o.sport); });
+                if (_freshPool.length > 0) _pool = _freshPool;
+                else console.log(`   ⚠️ ${t1} vs ${t2}: every available sport already played by this pair — allowing a repeat`);
+            }
 
             for (const option of _pool) {
                 let score = 0;
@@ -1527,6 +1643,46 @@
                 const todayGameIndex = leagueGameCounters[league.name];
                 const gameNumber = baseGameNumber + todayGameIndex + 1;
                 
+                // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
+                // ★ FN-57: built BEFORE matchup selection so sport_variety
+                // pairing can see which sports are actually available today.
+                const leagueSports = league.sports || ["General Sport"];
+                var availablePool = buildAvailableFieldSportPool(
+                    leagueSports,
+                    context,
+                    leagueDivisions,
+                    timeKey,
+                    slots
+                );
+                // ★ Multi-game-per-day: exclude sports already used by this
+                // league EARLIER today so games get distinct sports even when
+                // the matchup is identical (e.g., 2-team league).
+                if (todayGameIndex > 0 && availablePool.length > 1) {
+                    var _prevSports = new Set();
+                    var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
+                    _leagueTeamKeys.forEach(function(k) {
+                        var hist = history.teamSports[k] || [];
+                        if (hist.length > 0) _prevSports.add(hist[hist.length - 1]);
+                    });
+                    if (_prevSports.size > 0) {
+                        var filtered = availablePool.filter(function(p) { return !_prevSports.has(p.sport); });
+                        if (filtered.length > 0) {
+                            console.log('   ★ Multi-game: excluding sports from earlier game(s): [' + [..._prevSports].join(', ') + ']');
+                            availablePool = filtered;
+                        }
+                    }
+                }
+
+                console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
+                availablePool.slice(0, 10).forEach(p =>
+                    console.log(`      • ${p.sport} @ ${p.field}`)
+                );
+
+                if (availablePool.length === 0) {
+                    console.log(`   🚨 No fields available for league sports!`);
+                    continue;
+                }
+
                 // ★★★ Get matchups — playoff > round-robin ★★★
                 let matchups;
                 let playoffMatchupSports = null;     // null when not in playoff mode
@@ -1572,7 +1728,19 @@
                 } else {
                     const fullSchedule = generateRoundRobinSchedule(activeTeams);
                     const roundIndex = (gameNumber - 1) % fullSchedule.length;
-                    matchups = fullSchedule[roundIndex] || [];
+                    const _rrMatchups = fullSchedule[roundIndex] || [];
+                    // ★ FN-57: the two priorities differ in WHO plays WHOM.
+                    // matchup_variety: strict round-robin — every opponent
+                    // before any rematch. sport_variety: pairings chosen to
+                    // maximize teams getting a sport they haven't played
+                    // (ties prefer least-met opponents, so with plentiful
+                    // sports this matches round-robin behavior).
+                    const _prioMode = league.schedulingPriority || 'sport_variety';
+                    if (_prioMode === 'sport_variety') {
+                        matchups = choosePairingsForSportVariety(activeTeams, availablePool, league.name, history, _rrMatchups);
+                    } else {
+                        matchups = _rrMatchups;
+                    }
                 }
 
                console.log(`   Game #${gameNumber} (Today's Game: ${todayGameIndex + 1})`);
@@ -1585,43 +1753,9 @@
 
                 if (matchups.length === 0) continue;
 
-                // ★★★ BUILD POOL - RESPECTS GLOBAL LOCKS ★★★
-                const leagueSports = league.sports || ["General Sport"];
-                var availablePool = buildAvailableFieldSportPool(
-                    leagueSports,
-                    context,
-                    leagueDivisions,
-                    timeKey,
-                    slots
-                );
-                // ★ Multi-game-per-day: exclude sports already used by this
-                // league EARLIER today so games get distinct sports even when
-                // the matchup is identical (e.g., 2-team league).
-                if (todayGameIndex > 0 && availablePool.length > 1) {
-                    var _prevSports = new Set();
-                    var _leagueTeamKeys = leagueTeams.map(function(t) { return league.name + '|' + t; });
-                    _leagueTeamKeys.forEach(function(k) {
-                        var hist = history.teamSports[k] || [];
-                        if (hist.length > 0) _prevSports.add(hist[hist.length - 1]);
-                    });
-                    if (_prevSports.size > 0) {
-                        var filtered = availablePool.filter(function(p) { return !_prevSports.has(p.sport); });
-                        if (filtered.length > 0) {
-                            console.log('   ★ Multi-game: excluding sports from earlier game(s): [' + [..._prevSports].join(', ') + ']');
-                            availablePool = filtered;
-                        }
-                    }
-                }
-
-                console.log(`   Available Field/Sport Combinations: ${availablePool.length}`);
-                availablePool.slice(0, 10).forEach(p =>
-                    console.log(`      • ${p.sport} @ ${p.field}`)
-                );
-
-                if (availablePool.length === 0) {
-                    console.log(`   🚨 No fields available for league sports!`);
-                    continue;
-                }
+                // (★ FN-57: the field/sport pool is now built BEFORE matchup
+                // selection — see above — because sport_variety pairing needs
+                // to know which sports are actually available today.)
 
                 // ★★★ PLAYOFF TBD: information-only mode ★★★
                 // For game 2+ in playoff mode, winners aren't decided yet so we
