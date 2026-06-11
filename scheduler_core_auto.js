@@ -25754,6 +25754,17 @@
             }
         } catch (_pe2) { /* non-fatal */ }
 
+        // ★ FN-59: ABSOLUTE-FINAL TRIP APPLICATION — the very last writer
+        // before return. Post-save passes (STEP 6.5 null sweep, FQ re-opt,
+        // sharing backstop, pool/delete enforcement) and async generation-
+        // complete listeners all run after the pre-save application; nothing
+        // may outlive this one.
+        try {
+            const _preTripAbs = tripWriteCount;
+            applyTripMultiSlotWrite();
+            if (tripWriteCount > _preTripAbs) log('[FN-59] absolute-final trip write: ' + (tripWriteCount - _preTripAbs) + ' slot(s) restored');
+        } catch (_eTa) { try { warn('[FN-59] absolute-final trip write: ' + (_eTa && _eTa.message)); } catch (_e4) {} }
+
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;
         window._dbgDivisions = divisions;
