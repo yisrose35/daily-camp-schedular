@@ -20125,6 +20125,10 @@
             const mla = Array.isArray(window.masterLeagues) ? window.masterLeagues : Object.values(window.masterLeagues || {});
             const lctx = {
                 schedulableSlotBlocks: leagueBlocks, fieldUsageBySlot, activityProperties,
+                // ★ FN-54: grades covered by THIS generation — lets the league
+                // engine reset a covered league's day records even when its
+                // layer was removed (no blocks naming it in play).
+                generatedDivisions: [...new Set(autoSkeleton.map(b => b && b.division).filter(Boolean))],
                 masterLeagues: mla, disabledLeagues: window.disabledLeagues || [],
                 masterSpecialtyLeagues: window.masterSpecialtyLeagues || [], disabledSpecialtyLeagues: window.disabledSpecialtyLeagues || [],
                 rotationHistory: window.rotationHistory || {}, yesterdayHistory, divisions,
@@ -20419,6 +20423,16 @@
                     });
                 });
             });
+        } else {
+            // ★ FN-54: no league blocks this run, so the league engine never
+            // runs — but this generation still REPLACES the covered grades'
+            // day. If a league layer was removed since the last generation,
+            // its games for this date are ghosts now; subtract them so game
+            // numbering and variety history match the actual schedule.
+            try {
+                const _genGrades = [...new Set(autoSkeleton.map(b => b && b.division).filter(Boolean))];
+                window.SchedulerCoreLeagues?.resetDayRecords?.(_genGrades, currentDate);
+            } catch (e) { warn('[3] league day-record reset: ' + e.message); }
         }
 
         const solverBlocks = schedulableSlotBlocks.filter(b => b.type !== 'league' && b.type !== 'specialty_league');

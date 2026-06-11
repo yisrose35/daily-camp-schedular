@@ -3242,6 +3242,13 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             disabledSpecialtyLeagues,
             masterLeagues,
             disabledLeagues,
+            // ★ FN-54: divisions covered by THIS generation — lets the league
+            // engine reset a covered league's day records even when its tile
+            // was removed from the skeleton (no league blocks in play).
+            generatedDivisions: [...new Set(
+                [...specialtyLeagueBlocks, ...leagueBlocks, ...schedulableSlotBlocks]
+                    .map(b => b && b.divName).filter(Boolean)
+            )],
             disabledFields,
             rotationHistory,
             yesterdayHistory,

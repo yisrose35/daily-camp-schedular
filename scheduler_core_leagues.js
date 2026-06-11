@@ -33,8 +33,9 @@
                 // Ensure all fields exist
                 history.teamSports = history.teamSports || {};
                 history.matchupHistory = history.matchupHistory || {};
-                history.gamesPerDate = history.gamesPerDate || {};  
+                history.gamesPerDate = history.gamesPerDate || {};
                 history.offCampusCounts = history.offCampusCounts || {};// ★ NEW: tracks games per date per league
+                history.gameLog = history.gameLog || {};
                 console.log("[RegularLeagues] ✅ Loaded history from cloud");
                 return history;
             }
@@ -45,7 +46,8 @@
                 teamSports: {},
                 matchupHistory: {},
                 gamesPerDate: {},
-                offCampusCounts: {}
+                offCampusCounts: {},
+                gameLog: {}
             };
 
             const history = JSON.parse(raw);
@@ -61,7 +63,8 @@
             history.matchupHistory = history.matchupHistory || {};
             history.gamesPerDate = history.gamesPerDate || {};
             history.offCampusCounts = history.offCampusCounts || {};
-            
+            history.gameLog = history.gameLog || {};
+
             return history;
         } catch (e) {
             console.error("Failed to load league history:", e);
@@ -69,7 +72,8 @@
                 teamSports: {},
                 matchupHistory: {},
                 gamesPerDate: {},
-                offCampusCounts: {}
+                offCampusCounts: {},
+                gameLog: {}
             };
         }
     }
@@ -379,6 +383,49 @@
     function recordMatchup(leagueName, team1, team2, history) {
         const matchupKey = `${leagueName}:${getMatchupKey(team1, team2)}`;
         history.matchupHistory[matchupKey] = (history.matchupHistory[matchupKey] || 0) + 1;
+    }
+
+    // =========================================================================
+    // ★ FN-54: DATE-KEYED GAME LOG — makes a day's records reversible
+    // =========================================================================
+    // teamSports/matchupHistory are flat aggregates with no memory of WHICH
+    // date contributed an entry, so regenerating a date re-recorded all of its
+    // games (observed live: 101 recorded plays per team against 7 real game
+    // dates) and deleting a date left its games in the aggregates forever —
+    // both poison the variety ordering. Every recorded game now also lands in
+    // history.gameLog[league][date], so a regeneration or a date-delete can
+    // subtract exactly what that date previously contributed.
+
+    function logGameRecord(leagueName, date, team1, team2, sport, history) {
+        if (!history.gameLog) history.gameLog = {};
+        if (!history.gameLog[leagueName]) history.gameLog[leagueName] = {};
+        if (!history.gameLog[leagueName][date]) history.gameLog[leagueName][date] = [];
+        history.gameLog[leagueName][date].push({ t1: team1, t2: team2, sport: sport || null });
+    }
+
+    function rollbackDayRecords(leagueName, date, history) {
+        const entries = history.gameLog?.[leagueName]?.[date];
+        if (!entries || !entries.length) return 0;
+        entries.forEach(function (e) {
+            if (e.sport) {
+                [e.t1, e.t2].forEach(function (team) {
+                    if (!team) return;
+                    const arr = history.teamSports[`${leagueName}|${team}`];
+                    if (!arr) return;
+                    const idx = arr.lastIndexOf(e.sport);
+                    if (idx !== -1) arr.splice(idx, 1);
+                });
+            }
+            if (e.t1 && e.t2) {
+                const mk = `${leagueName}:${getMatchupKey(e.t1, e.t2)}`;
+                if (history.matchupHistory[mk] > 1) history.matchupHistory[mk]--;
+                else delete history.matchupHistory[mk];
+            }
+        });
+        const n = entries.length;
+        delete history.gameLog[leagueName][date];
+        console.log(`[RegularLeagues] ↩️ Rolled back ${n} logged game record(s) for "${leagueName}" on ${date}`);
+        return n;
     }
 
     // =========================================================================
@@ -1024,6 +1071,35 @@
         // Sort time slots to ensure consistent ordering
      const sortedTimeKeys = Object.keys(blocksByTime).sort((a, b) => Number(a) - Number(b));
 
+        // ★ FN-54: a generation that covers a league's divisions REPLACES that
+        // league's games for this date — so before anything re-records, subtract
+        // what this date previously logged (sports/matchups) and clear its
+        // games-per-date entry. A league is in play when its blocks appear this
+        // run (name hint or division match — the same matching the per-period
+        // loop uses) OR when one of its divisions is being generated
+        // (context.generatedDivisions) — the latter catches a regen whose
+        // skeleton no longer has the league tile, which previously left ghost
+        // games in the history forever. Scoped, so a partial-division regen
+        // leaves other leagues' day records untouched. Without this, every
+        // regen re-appended the day's games into the flat aggregates.
+        (function () {
+            const _genDivs = new Set(context.generatedDivisions || []);
+            const _allLeagues = Array.isArray(masterLeagues) ? masterLeagues : Object.values(masterLeagues || {});
+            _allLeagues.forEach(function (league) {
+                if (!league || !league.name) return;
+                const inPlay = sortedTimeKeys.some(function (tk) {
+                    const td = blocksByTime[tk];
+                    if (td.allBlocks.some(function (b) { return b.leagueName === league.name; })) return true;
+                    return Object.keys(td.byDivision).some(function (d) { return (league.divisions || []).includes(d); });
+                }) || (league.divisions || []).some(function (d) { return _genDivs.has(d); });
+                if (!inPlay) return;
+                rollbackDayRecords(league.name, dayId, history);
+                if (history.gamesPerDate?.[league.name]?.[dayId] !== undefined) {
+                    delete history.gamesPerDate[league.name][dayId];
+                }
+            });
+        })();
+
         // ★★★ CHINUCH: Pre-compute which teams attend chinuch at each league period ★★★
         // Distribution is fully automatic: teamsPerSession = ceil(teams / numPeriods).
         // Only periodsNeeded = ceil(teams / teamsPerSession) periods get chinuch — the
@@ -1266,6 +1342,8 @@
                 [g1All, g2All].forEach(function(aa) { aa.forEach(function(a) {
                     if (a.sport) { recordTeamSport(league.name, a.team1||a.teamA, a.sport, history); recordTeamSport(league.name, a.team2||a.teamB, a.sport, history); }
                     recordMatchup(league.name, a.team1||a.teamA, a.team2||a.teamB, history);
+                    // ★ FN-54: date-keyed log so regen/delete can subtract this game
+                    logGameRecord(league.name, dayId, a.team1||a.teamA, a.team2||a.teamB, a.sport, history);
                 }); });
 
                 leagueGameCounters[league.name] += 2;
@@ -1763,9 +1841,11 @@ if (playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedAc
                     console.log(`      ✅ ${a.team1} vs ${a.team2} → ${a.sport} @ ${a.field}`);
                     recordTeamSport(league.name, a.team1, a.sport, history);
                     recordTeamSport(league.name, a.team2, a.sport, history);
-                    
+
                     // Record matchup for matchup_variety tracking
                     recordMatchup(league.name, a.team1, a.team2, history);
+                    // ★ FN-54: date-keyed log so regen/delete can subtract this game
+                    logGameRecord(league.name, dayId, a.team1, a.team2, a.sport, history);
                 });
 window._debugLeagueTimeData = timeData;
                 // ★ Day 20 fix #1: iterate filteredLeagueDivisions, not
@@ -1986,13 +2066,57 @@ window._debugLeagueTimeData = timeData;
      * game numbers to any future dates still in localStorage.
      * Called by eraseCurrentDailyData after a day is deleted.
      */
+    /**
+     * ★ FN-54: subtract a date's logged league records for every league whose
+     * divisions intersect divisionNames, then renumber future schedules.
+     * For callers that regenerate a day WITHOUT invoking the league engine at
+     * all (auto builder with zero league layers) — the engine's own in-play
+     * reset can't run there, which previously left ghost games in the history
+     * when a league layer was removed and the day regenerated.
+     */
+    Leagues.resetDayRecords = function(divisionNames, dateKey) {
+        try {
+            if (!Array.isArray(divisionNames) || divisionNames.length === 0 || !dateKey) return;
+            const history = loadLeagueHistory();
+            const divSet = new Set(divisionNames);
+            const settings = window.loadGlobalSettings?.() || {};
+            const leagues = settings.app1?.leagues || settings.leaguesByName || {};
+            const allLeagues = Array.isArray(leagues) ? leagues : Object.values(leagues || {});
+            let changed = false;
+            allLeagues.forEach(function (league) {
+                if (!league || !league.name) return;
+                if (!(league.divisions || []).some(function (d) { return divSet.has(d); })) return;
+                if (rollbackDayRecords(league.name, dateKey, history) > 0) changed = true;
+                if (history.gamesPerDate?.[league.name]?.[dateKey] !== undefined) {
+                    delete history.gamesPerDate[league.name][dateKey];
+                    changed = true;
+                }
+            });
+            if (!changed) return;
+            saveLeagueHistory(history);
+            updateFutureSchedules(dateKey, history);
+            console.log('[RegularLeagues] ↩️ Reset day records for', dateKey, 'across divisions [' + divisionNames.join(', ') + ']');
+        } catch (e) {
+            console.error('[RegularLeagues] resetDayRecords error:', e);
+        }
+    };
+
     Leagues.cleanupDateFromHistory = function(dateKey) {
         try {
             const history = loadLeagueHistory();
-            if (!history.gamesPerDate) return;
 
             let changed = false;
-            for (const leagueName of Object.keys(history.gamesPerDate)) {
+
+            // ★ FN-54: subtract the deleted date's logged games from the
+            // variety aggregates (teamSports/matchupHistory) — previously a
+            // deleted day's games stayed in the aggregates forever.
+            for (const leagueName of Object.keys(history.gameLog || {})) {
+                if (rollbackDayRecords(leagueName, dateKey, history) > 0) {
+                    changed = true;
+                }
+            }
+
+            for (const leagueName of Object.keys(history.gamesPerDate || {})) {
                 if (history.gamesPerDate[leagueName][dateKey] !== undefined) {
                     delete history.gamesPerDate[leagueName][dateKey];
                     changed = true;
