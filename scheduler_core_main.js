@@ -3606,12 +3606,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     });
                     return s;
                 })();
+                // ★ FN-56: league periods keep their per-bunk slots EMPTY by design
+                // (fillBlock stores matchups in leagueAssignments only; the grid
+                // overlays them at render). This pass saw those nulls as "leftover
+                // Free" and stuffed them with general activities — invisible under
+                // the overlay, but they consumed real field capacity (blocking other
+                // divisions from those fields at that hour) and polluted rotation
+                // counts. Skip any slot whose division-time is a league period or
+                // that has league matchups stored for its slot index.
+                const _b2d75 = {};
+                Object.keys(divisions || {}).forEach(d => ((divisions[d] && divisions[d].bunks) || []).forEach(b => { _b2d75[String(b)] = String(d); }));
+                const _isLeagueSlot75 = (bunk, si) => {
+                    const d = _b2d75[String(bunk)];
+                    if (!d) return false;
+                    const ds = window.divisionTimes?.[d];
+                    const sl = Array.isArray(ds) ? ds[si] : null;
+                    if (sl && (sl.type === 'league' || sl.type === 'specialty_league')) return true;
+                    const la = window.leagueAssignments?.[d]?.[si];
+                    return !!(la && Array.isArray(la.matchups) && la.matchups.length > 0);
+                };
                 const _freeFills = [];
+                let _lgSkipped75 = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(bunk => {
                     if (_allowedBunks && !_allowedBunks.has(bunk)) return;
                     const arr = window.scheduleAssignments[bunk] || [];
                     for (let si = 0; si < arr.length; si++) {
                         const e = arr[si];
+                        if (_isLeagueSlot75(bunk, si)) { _lgSkipped75++; continue; }
                         if (!e) { _freeFills.push({ bunk, si }); continue; }
                         if (e.continuation || e._isTransition || e._fixed || e._pinned || e._h2h || e._bunkOverride) continue;
                         const actLower = String(e._activity || e.field || e.sport || '').toLowerCase().trim();
@@ -3620,6 +3641,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         }
                     }
                 });
+                if (_lgSkipped75 > 0) console.log(`[STEP 7.5] FN-56: left ${_lgSkipped75} league-period slot(s) alone`);
                 if (_freeFills.length) {
                     console.log(`[STEP 7.5] Silent fallback: ${_freeFills.length} leftover Free slots`);
                     let _ffOk = 0, _ffSkip = 0;
