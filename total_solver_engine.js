@@ -2691,7 +2691,62 @@
         });
         S._todayCache.clear();
 
-        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
+        // ★ FN-52 PHASE C — staggered-overlap seniority swap. Phase B only
+        //   re-pairs EXACT windows; grouped placements that merely OVERLAP
+        //   stayed misranked even when swapping the two fields was perfectly
+        //   legal (windows stay put — only the fields trade). Both sides must
+        //   re-validate on the freed state; restored verbatim otherwise.
+        var overlapSwaps = 0;
+        try {
+            var groupedAll = [];
+            for (var bi3 = 0; bi3 < activityBlocks.length; bi3++) {
+                if (!S._assignedBlocks.has(bi3)) continue;
+                var asgn3 = S._assignments.get(bi3);
+                if (!asgn3 || !asgn3.pick || !asgn3.pick.field || asgn3.pick.field === 'Free') continue;
+                var fg3 = fgMap[asgn3.pick.field];
+                if (!fg3) continue;
+                var blk3 = activityBlocks[bi3];
+                if (blk3.startTime === undefined || blk3.endTime === undefined) continue;
+                groupedAll.push({ bi: bi3, blk: blk3, asgn: asgn3, group: fg3.groupName });
+            }
+            var senOf = function (divName) { var s = seniorityMap && seniorityMap[divName]; return (s === undefined) ? Infinity : s; };
+            var passC = 0, improvedC = true;
+            while (improvedC && passC++ < 4) {
+                improvedC = false;
+                for (var ia = 0; ia < groupedAll.length; ia++) {
+                    for (var ib = 0; ib < groupedAll.length; ib++) {
+                        var A = groupedAll[ia], B = groupedAll[ib];
+                        if (A === B || A.group !== B.group) continue;
+                        var aS = A.blk.startTime, aE = A.blk.endTime, bS = B.blk.startTime, bE = B.blk.endTime;
+                        if (!(aS < bE && bS < aE)) continue;                       // must overlap
+                        if (aS === bS && aE === bE) continue;                      // exact → Phase B's job
+                        if (senOf(A.blk.divName) >= senOf(B.blk.divName)) continue; // A strictly senior (lower index)
+                        var fa = A.asgn.pick.field, fb = B.asgn.pick.field;
+                        var raC = (fgMap[fa] && fgMap[fa].qualityRank) || 999;
+                        var rbC = (fgMap[fb] && fgMap[fb].qualityRank) || 999;
+                        if (raC <= rbC) continue;                                  // already correctly ranked
+                        var actA = A.asgn.pick._activity || fa, actB = B.asgn.pick._activity || fb;
+                        S.undoPickFromSchedule(A.blk, A.asgn.pick);
+                        S.removeFromFieldTimeIndex(normName(fa), aS, aE, A.blk.bunk);
+                        S.undoPickFromSchedule(B.blk, B.asgn.pick);
+                        S.removeFromFieldTimeIndex(normName(fb), bS, bE, B.blk.bunk);
+                        var okA = _fqValidSwap(A.blk, fb, actA, A.blk.bunk);
+                        var okB = _fqValidSwap(B.blk, fa, actB, B.blk.bunk);
+                        if (okA && okB) {
+                            _fqApplySwap(A.bi, A.blk, A.asgn, fb);
+                            _fqApplySwap(B.bi, B.blk, B.asgn, fa);
+                            overlapSwaps++; improvedC = true;
+                        } else {
+                            _fqApplySwap(A.bi, A.blk, A.asgn, fa);
+                            _fqApplySwap(B.bi, B.blk, B.asgn, fb);
+                        }
+                    }
+                }
+            }
+            S._todayCache.clear();
+        } catch (eC) { console.warn('[v15.5 C] overlap swap error:', eC && eC.message); }
+
+        console.log('[v15.5] 🏟️ Field quality re-optimize: ' + improved + ' free-field upgrade(s), ' + seniorityImproved + ' seniority re-pair(s), ' + overlapSwaps + ' staggered-overlap swap(s) (' + considered + ' grouped placements considered, ' + blocksWithBetterCandidate + ' had a higher-ranked group member to try)');
         if (blocksWithBetterCandidate > improved) {
             console.log('[v15.5]    ' + (blocksWithBetterCandidate - improved) + ' block(s) had a higher-ranked candidate but the swap was rejected. Set window.DEBUG_FQ_REOPT = true and regenerate to see why.');
         }

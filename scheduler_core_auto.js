@@ -23549,8 +23549,80 @@
                     for (let j = 0; j < bySen.length; j++) { bySen[j].s.field = fieldsByRank[j]; bySen[j].s._fqMoved = true; }
                     moved++;
                 });
-                try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved); } catch (_eL) {}
-                if (moved > 0) log('  🏟️ Field-quality re-opt: moved ' + moved + ' placement(s) to a better-ranked field.');
+
+                // ★ FN-52 PHASE C — staggered-overlap seniority swap. Phase B only
+                //   re-pairs EXACT windows; placements that merely OVERLAP stayed
+                //   misranked even when swapping the two fields was perfectly legal
+                //   (live repro: junior Trios 690-730 on rank 1 vs senior Quints
+                //   700-730 on rank 2). Windows stay put — only the FIELDS swap,
+                //   and only when both sides re-validate (host + capacity/sharing
+                //   via canUse against the occ ledger + access/time/maxPlayers via
+                //   _validateWritePlacement on the temporarily-applied state).
+                let movedC = 0;
+                try {
+                    const _allG = [];
+                    Object.keys(sa).forEach(function (bb) {
+                        (sa[bb] || []).forEach(function (s) {
+                            if (!s || s.continuation || !s.field || s.field === 'Free') return;
+                            if (s._pairLock) return;
+                            const fg = fgMap[s.field]; if (!fg) return;
+                            const st = (s._startMin != null ? s._startMin : s.startMin), en = (s._endMin != null ? s._endMin : s.endMin);
+                            if (st == null || en == null) return;
+                            _allG.push({ s: s, grade: bunkGrade[String(bb)], bunk: String(bb), st: st, en: en, group: fg.group });
+                        });
+                    });
+                    const _occRemove = function (fname, bunk, st, en) {
+                        const fl = occ[fname]; if (!fl) return null;
+                        for (let k = 0; k < fl.length; k++) {
+                            if (fl[k].bunk === bunk && fl[k].s === st && fl[k].e === en) return fl.splice(k, 1)[0];
+                        }
+                        return null;
+                    };
+                    let _passC = 0, _improvedC = true;
+                    while (_improvedC && _passC++ < 4) {
+                        _improvedC = false;
+                        const _ordered = _allG.slice().sort(function (a, b) { return _sen(b.grade) - _sen(a.grade); });
+                        for (let i = 0; i < _ordered.length; i++) {
+                            const A = _ordered[i];
+                            for (let j = 0; j < _allG.length; j++) {
+                                const B = _allG[j];
+                                if (A === B || A.group !== B.group) continue;
+                                if (!(A.st < B.en && B.st < A.en)) continue;             // must overlap
+                                if (A.st === B.st && A.en === B.en) continue;            // exact → Phase B's job
+                                if (_sen(A.grade) <= _sen(B.grade)) continue;            // A strictly senior
+                                const ra = fgMap[A.s.field].rank, rb = fgMap[B.s.field].rank;
+                                if (ra <= rb) continue;                                   // already correctly ranked
+                                const fa = A.s.field, fb = B.s.field;
+                                if ((hostsBySport[A.s._activity] || []).indexOf(fb) < 0) continue;
+                                if ((hostsBySport[B.s._activity] || []).indexOf(fa) < 0) continue;
+                                // pull both from the ledger, test the cross placements
+                                const _entA = _occRemove(fa, A.bunk, A.st, A.en);
+                                const _entB = _occRemove(fb, B.bunk, B.st, B.en);
+                                let okSwap = canUse(fb, A.st, A.en, A.bunk, A.grade, A.s._activity) &&
+                                             canUse(fa, B.st, B.en, B.bunk, B.grade, B.s._activity);
+                                if (okSwap) {
+                                    A.s.field = fb; B.s.field = fa; // apply so the validator sees the post-swap state
+                                    if (_validateWritePlacement(fb, A.s._activity, A.grade, A.bunk, A.st, A.en) ||
+                                        _validateWritePlacement(fa, B.s._activity, B.grade, B.bunk, B.st, B.en)) {
+                                        A.s.field = fa; B.s.field = fb; okSwap = false;
+                                    }
+                                }
+                                if (okSwap) {
+                                    (occ[fb] = occ[fb] || []).push({ s: A.st, e: A.en, bunk: A.bunk, act: A.s._activity });
+                                    (occ[fa] = occ[fa] || []).push({ s: B.st, e: B.en, bunk: B.bunk, act: B.s._activity });
+                                    A.s._fqMoved = true; B.s._fqMoved = true;
+                                    movedC++; _improvedC = true;
+                                } else {
+                                    if (_entA) (occ[fa] = occ[fa] || []).push(_entA);
+                                    if (_entB) (occ[fb] = occ[fb] || []).push(_entB);
+                                }
+                            }
+                        }
+                    }
+                } catch (_eC) { try { warn('[FQ-REOPT C] ' + (_eC && _eC.message)); } catch (_e3) {} }
+
+                try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved + ', overlapSwaps=' + movedC); } catch (_eL) {}
+                if (moved > 0 || movedC > 0) log('  🏟️ Field-quality re-opt: ' + moved + ' move(s), ' + movedC + ' staggered-overlap seniority swap(s).');
             })();
         } catch (_eFQ) { try { warn('[FieldQualityReopt] ' + (_eFQ && _eFQ.message)); } catch (_e2) {} }
 
