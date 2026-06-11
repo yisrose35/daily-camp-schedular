@@ -25765,6 +25765,33 @@
             if (tripWriteCount > _preTripAbs) log('[FN-59] absolute-final trip write: ' + (tripWriteCount - _preTripAbs) + ' slot(s) restored');
         } catch (_eTa) { try { warn('[FN-59] absolute-final trip write: ' + (_eTa && _eTa.message)); } catch (_e4) {} }
 
+        // ★ FN-59: AUTHORITATIVE FINAL SAVE on trip days. The async verified
+        // cloud save (generation-complete listener) can serialize the schedule
+        // while a late pass has temporarily clobbered trip cells — the
+        // daily_schedules row then resurrects the trip-less day on every
+        // reload, overwriting the good local copy (observed live: row saved
+        // with 0 trips while localStorage held 92). Re-save the FINAL state to
+        // local + cloud so the last word everywhere includes the trips.
+        if (tripWriteCount > 0) {
+            try {
+                const _dkT = window.currentScheduleDate || '';
+                try {
+                    const DAILY_KEY_T = 'campDailyData_v1';
+                    const _allT = JSON.parse(localStorage.getItem(DAILY_KEY_T) || '{}');
+                    if (!_allT[_dkT]) _allT[_dkT] = {};
+                    _allT[_dkT].scheduleAssignments = window.scheduleAssignments || {};
+                    _allT[_dkT].leagueAssignments = window.leagueAssignments || {};
+                    _allT[_dkT]._savedAt = Date.now();
+                    localStorage.setItem(DAILY_KEY_T, JSON.stringify(_allT));
+                } catch (_eLt) {}
+                window.ScheduleDB?.saveSchedule?.(_dkT, {
+                    scheduleAssignments: window.scheduleAssignments || {},
+                    leagueAssignments: window.leagueAssignments || {}
+                }, { skipFilter: true });
+                log('[FN-59] authoritative final save (' + tripWriteCount + ' trip slot(s) in payload)');
+            } catch (_eSv) { try { warn('[FN-59] authoritative final save: ' + (_eSv && _eSv.message)); } catch (_e6) {} }
+        }
+
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;
         window._dbgDivisions = divisions;
