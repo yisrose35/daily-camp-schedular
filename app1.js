@@ -111,26 +111,17 @@
     window.getUserDivisionOrder = function (keys) {
         if (!Array.isArray(keys) || keys.length === 0) return keys || [];
         var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
-        var manualOrder = (gs.app1 && Array.isArray(gs.app1.manualColumnOrder)) ? gs.app1.manualColumnOrder : null;
         var structureOrder = Object.keys(gs.campStructure || {});
         var cs = gs.campStructure || {};
         var divs = window.divisions || {};
 
-        // Sort structureOrder by manualColumnOrder so _csGradeOrder reflects
-        // the user's division drag order from the Me page
-        if (manualOrder && manualOrder.length > 0) {
-            structureOrder = structureOrder.slice().sort(function (a, b) {
-                var ai = manualOrder.indexOf(a);
-                var bi = manualOrder.indexOf(b);
-                if (ai >= 0 && bi >= 0) return ai - bi;
-                if (ai >= 0) return -1;
-                if (bi >= 0) return 1;
-                return 0;
-            });
-        }
+        // ★ FN-50: the Camp Structure (Campistry Me drag order) is the SINGLE
+        //   source of truth — division order = campStructure key order, grade
+        //   order = each division's gradeOrder. The old app1.manualColumnOrder
+        //   influence is gone: a stale alphabetical list saved by an earlier
+        //   session kept overriding the user's Me order.
 
         // Build a flat grade order from campStructure gradeOrder arrays
-        // This preserves the user's drag-reorder on the Me page
         var _csGradeOrder = [];
         structureOrder.forEach(function (divName) {
             var go = cs[divName] && Array.isArray(cs[divName].gradeOrder) ? cs[divName].gradeOrder : Object.keys((cs[divName] && cs[divName].grades) || {});
@@ -145,14 +136,6 @@
                 if (agi >= 0 && bgi >= 0) return agi - bgi;
                 if (agi >= 0) return -1;
                 if (bgi >= 0) return 1;
-            }
-            // Fallback: manualColumnOrder (Flow page column reorder)
-            if (manualOrder) {
-                var ai = manualOrder.indexOf(a);
-                var bi = manualOrder.indexOf(b);
-                if (ai >= 0 && bi >= 0) return ai - bi;
-                if (ai >= 0) return -1;
-                if (bi >= 0) return 1;
             }
             if (structureOrder.length > 0) {
                 var aParent = (divs[a] && divs[a].parentDivision) || a;

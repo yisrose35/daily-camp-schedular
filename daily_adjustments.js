@@ -2115,13 +2115,13 @@ function renderPalette() {
 
 // =================================================================
 // --- Column Order Persistence ---
+// ★ FN-50: the Camp Structure order (Campistry Me drag order) is the single
+//   source of truth for grade columns — see master_schedule_builder note.
 function getColumnOrder() {
   const all = window.availableDivisions || [];
-  const g = window.loadGlobalSettings?.() || {};
-  const saved = g.app1?.manualColumnOrder;
-  if (!Array.isArray(saved) || saved.length === 0) return [...all];
-  const valid = saved.filter(d => all.includes(d));
-  return [...valid, ...all.filter(d => !valid.includes(d))];
+  return (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder([...all])
+    : [...all];
 }
 
 function saveColumnOrder(order) {

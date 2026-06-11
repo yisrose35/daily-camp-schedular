@@ -839,7 +839,10 @@ async function showCreateEventModal(containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunks = getAllBunks();
-    const allGrades = [...new Set(allBunks.map(b => b.grade))].sort();
+    // ★ FN-50: Camp Structure order, not alphabetical
+    const _rawGrades = [...new Set(allBunks.map(b => b.grade))];
+    const allGrades = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(_rawGrades) : _rawGrades.sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;
@@ -945,7 +948,10 @@ async function showEditEventModal(evt, containerEl) {
     const g = window.loadGlobalSettings?.() || {};
     const allFields = (g.app1?.fields || []).map(f => f.name).sort();
     const allBunksForEdit = getAllBunks();
-    const allGradesForEdit = [...new Set(allBunksForEdit.map(b => b.grade))].sort();
+    // ★ FN-50: Camp Structure order, not alphabetical
+    const _rawGradesE = [...new Set(allBunksForEdit.map(b => b.grade))];
+    const allGradesForEdit = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(_rawGradesE) : _rawGradesE.sort();
     const allActivityNames = buildAllActivityNames(g);
 
     const showModal = typeof window.daShowModal === 'function' ? window.daShowModal : null;

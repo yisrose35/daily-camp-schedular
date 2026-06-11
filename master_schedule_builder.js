@@ -3678,14 +3678,16 @@ function softenColor(hexColor) {
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
-// --- Column Order Persistence ---
+// --- Column Order ---
+// ★ FN-50: the Camp Structure order (Campistry Me drag order) is the single
+//   source of truth for grade columns. The old code preferred a saved
+//   app1.manualColumnOrder — a stale alphabetical list from an earlier
+//   session kept overriding the user's Me order.
 function getColumnOrder() {
   const all = window.availableDivisions || [];
-  const g = window.loadGlobalSettings?.() || {};
-  const saved = g.app1?.manualColumnOrder;
-  if (!Array.isArray(saved) || saved.length === 0) return [...all];
-  const valid = saved.filter(d => all.includes(d));
-  return [...valid, ...all.filter(d => !valid.includes(d))];
+  return (typeof window.getUserDivisionOrder === 'function')
+    ? window.getUserDivisionOrder([...all])
+    : [...all];
 }
 
 function saveColumnOrder(order) {

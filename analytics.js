@@ -111,7 +111,10 @@
         try {
             const g = window.loadGlobalSettings?.() || {};
             divisionsDat = window.divisions || {};
-            availableDivisions = (window.availableDivisions || Object.keys(divisionsDat)).sort();
+            // ★ FN-50: Camp Structure order, not alphabetical
+            const _rawDivsA = (window.availableDivisions || Object.keys(divisionsDat)).slice();
+            availableDivisions = (typeof window.getUserDivisionOrder === 'function')
+                ? window.getUserDivisionOrder(_rawDivsA) : _rawDivsA;
             allFieldsDat = g.app1?.fields || [];
             const specials = g.app1?.specialActivities || [];
             // ★ Day 18 fix: respect each item's actual `type` field from
@@ -140,7 +143,11 @@
     }
 
     function getDivisionColor(divName) {
-        const names = Object.keys(divisionsDat).sort();
+        // ★ FN-50: index by the Camp Structure order so chart colors line up
+        //   with the displayed division order
+        const _rawN = Object.keys(divisionsDat);
+        const names = (typeof window.getUserDivisionOrder === 'function')
+            ? window.getUserDivisionOrder(_rawN.slice()) : _rawN;
         const idx = names.indexOf(divName);
         return DIV_COLORS[Math.max(0, idx) % DIV_COLORS.length];
     }
