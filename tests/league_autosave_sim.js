@@ -122,4 +122,32 @@ function syncGames(league, dateKey, gameEntries) {
     console.log('TEST 5 PASS — empty regen clears the date');
 }
 
-console.log('\nALL 5 AUTO-SAVE TESTS PASS');
+// ---- Test 6: multiple games per day — same pair twice stays distinct ----
+{
+    const league = { games: [] };
+    // two league periods in one day; a 2-team-style rematch (1v4 in BOTH games)
+    syncGames(league, 'd', [
+        { gameLabel: 'Game 1', matches: [{ teamA: '1', teamB: '4', sport: 'Gaga' }, { teamA: '2', teamB: '3', sport: 'Hockey' }] },
+        { gameLabel: 'Game 2', matches: [{ teamA: '1', teamB: '4', sport: 'Belts' }, { teamA: '2', teamB: '3', sport: 'Jumbo' }] }
+    ]);
+    assert.strictEqual(league.games.length, 2, 'two game entries for the day');
+    // score game 1's 1v4 only
+    league.games.find(g => g.gameLabel === 'Game 1').matches[0].scoreA = 9;
+    league.games.find(g => g.gameLabel === 'Game 1').matches[0].scoreB = 6;
+    // score game 2's 1v4 differently
+    league.games.find(g => g.gameLabel === 'Game 2').matches[0].scoreA = 2;
+    league.games.find(g => g.gameLabel === 'Game 2').matches[0].scoreB = 3;
+    // regen: same two games (sports may differ)
+    syncGames(league, 'd', [
+        { gameLabel: 'Game 1', matches: [{ teamA: '1', teamB: '4', sport: 'Dodgeball' }, { teamA: '2', teamB: '3', sport: 'Coloring' }] },
+        { gameLabel: 'Game 2', matches: [{ teamA: '1', teamB: '4', sport: 'Jumprope' }, { teamA: '2', teamB: '3', sport: 'Machanayim' }] }
+    ]);
+    const g1 = league.games.find(g => g.gameLabel === 'Game 1');
+    const g2 = league.games.find(g => g.gameLabel === 'Game 2');
+    assert.strictEqual(g1.matches[0].scoreA, 9, 'Game 1 keeps ITS 1v4 score');
+    assert.strictEqual(g2.matches[0].scoreA, 2, 'Game 2 keeps ITS 1v4 score (label+pair identity, no cross-bleed)');
+    assert.strictEqual(g2.matches[1].scoreA, null, 'unscored match stays blank');
+    console.log('TEST 6 PASS — multi-game day: per-game score identity holds');
+}
+
+console.log('\nALL 6 AUTO-SAVE TESTS PASS');
