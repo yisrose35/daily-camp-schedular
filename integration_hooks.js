@@ -2352,6 +2352,84 @@
             // Then do verified cloud save (no artificial delay)
             await verifiedScheduleSave(dateKey);
 
+            // ★ FN-59 TRIP WATCHDOG: trips are the user's strongest statement
+            // about the day — every slot overlapping a saved trip MUST show the
+            // trip, no matter what the generation pipeline did. The in-engine
+            // writes cover normal runs, but cold-start hydration races can
+            // still drop them on some generations. After the dust settles,
+            // re-assert trips from the saved store onto the final schedule and
+            // re-save if anything was missing.
+            setTimeout(() => {
+                try {
+                    const dk = dateKey;
+                    if (!dk || window.currentScheduleDate !== dk) return;
+                    let trips = [];
+                    try { const s = localStorage.getItem('campDailyTrips_' + dk); if (s) trips = JSON.parse(s); } catch (e) {}
+                    if (!Array.isArray(trips) || !trips.length) return;
+                    const divisions = window.divisions || {};
+                    const sa = window.scheduleAssignments || {};
+                    let fixedCells = 0;
+                    trips.forEach(trip => {
+                        const tS = trip.startMin != null ? trip.startMin : null;
+                        const tE = trip.endMin != null ? trip.endMin : null;
+                        if (tS == null || tE == null) return;
+                        const rawDivs = Array.isArray(trip.division) ? trip.division : [trip.division];
+                        rawDivs.forEach(divName => {
+                            const info = divisions[divName];
+                            if (!info) return;
+                            (info.bunks || []).forEach(bunk => {
+                                const arr = sa[String(bunk)];
+                                if (!Array.isArray(arr)) return;
+                                // slot times: prefer the per-bunk grid, fall back to
+                                // entry stamps, then division slots
+                                const pbs = window._perBunkSlots?.[divName]?.[String(bunk)]
+                                    || window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)]
+                                    || null;
+                                const dts = Array.isArray(window.divisionTimes?.[divName]) ? window.divisionTimes[divName] : null;
+                                let isFirst = true;
+                                for (let i = 0; i < arr.length; i++) {
+                                    let s = (pbs && pbs[i] && pbs[i].startMin != null) ? pbs[i].startMin
+                                        : (arr[i] && arr[i]._startMin != null) ? arr[i]._startMin
+                                        : (dts && dts[i] && dts[i].startMin != null) ? dts[i].startMin : null;
+                                    let e = (pbs && pbs[i] && pbs[i].endMin != null) ? pbs[i].endMin
+                                        : (arr[i] && arr[i]._endMin != null) ? arr[i]._endMin
+                                        : (dts && dts[i] && dts[i].endMin != null) ? dts[i].endMin : null;
+                                    if (s == null || e == null) continue;
+                                    if (!(s < tE && e > tS)) continue;
+                                    if (arr[i] && arr[i]._isTrip) { isFirst = false; continue; }
+                                    arr[i] = {
+                                        field: trip.event || 'Trip', sport: null,
+                                        _activity: trip.event || 'Trip',
+                                        _isTrip: true, _tripEvent: trip.event || 'Trip',
+                                        _tripId: trip.id || null,
+                                        _fixed: true, _pinned: true, _activityLocked: true,
+                                        _autoMode: true, continuation: !isFirst,
+                                        _startMin: s, _endMin: e
+                                    };
+                                    isFirst = false;
+                                    fixedCells++;
+                                }
+                            });
+                        });
+                    });
+                    if (fixedCells > 0) {
+                        console.warn('🔗 [FN-59 watchdog] re-asserted ' + fixedCells + ' missing trip slot(s) — re-saving');
+                        try {
+                            const DK2 = 'campDailyData_v1';
+                            const all2 = JSON.parse(localStorage.getItem(DK2) || '{}');
+                            if (!all2[dk]) all2[dk] = {};
+                            all2[dk].scheduleAssignments = window.scheduleAssignments || {};
+                            all2[dk]._savedAt = Date.now();
+                            localStorage.setItem(DK2, JSON.stringify(all2));
+                        } catch (e2) {}
+                        try { verifiedScheduleSave(dk); } catch (e3) {}
+                        try { window.dispatchEvent(new CustomEvent('campistry-schedule-refreshed', { detail: { dateKey: dk } })); } catch (e4) {}
+                    }
+                } catch (eW) {
+                    console.warn('🔗 [FN-59 watchdog] error:', eW && eW.message);
+                }
+            }, 2000);
+
             // ★★★ Update rotation history for ALL bunks ★★★
             // Manual edits call peiUpdateRotationHistory per bunk, but auto-gen never did.
             // This stamps every scheduled activity with the current timestamp so next-day
