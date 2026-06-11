@@ -6980,6 +6980,22 @@
                 }
             }
 
+            // ★ FN-59: TRIP SNAP-BACK — same machinery as the walls above.
+            //   A trip is the strongest commitment on the day (the bunk is off
+            //   camp); LNS / rebalancers / gap absorbers can nudge even _fixed
+            //   blocks, and Pass-1 fights with other pins were trimming the
+            //   trip away entirely. Restore its exact saved window every time
+            //   integrity runs; the overlap pass below then trims whatever
+            //   drifted into its place (trips win all both-fixed conflicts).
+            for (var _tp0 = 0; _tp0 < tl.length; _tp0++) {
+                var _tpB = tl[_tp0];
+                if (_tpB && _tpB._isTrip && _tpB._tripResStart != null &&
+                    (_tpB.startMin !== _tpB._tripResStart || _tpB.endMin !== _tpB._tripResEnd)) {
+                    _tpB.startMin = _tpB._tripResStart;
+                    _tpB.endMin = _tpB._tripResEnd;
+                }
+            }
+
             // Pass 1: Sort and fix overlaps
             tl.sort(function(a, b) { return a.startMin - b.startMin; });
             for (var i = 0; i < tl.length - 1; i++) {
@@ -6995,12 +7011,17 @@
                         if (dur1 >= dur2) tl[i+1].startMin = tl[i].endMin;
                         else tl[i].endMin = tl[i+1].startMin;
                     } else {
-                        // Both fixed — consecutive-bunk walls win first (their exact
-                        // interval IS the feature; trim the other fixed block), then
-                        // Change blocks win; otherwise force trim the later one.
+                        // Both fixed — TRIPS win over everything (★ FN-59: the bunk
+                        // is off camp; lunch/swim pins and even consecutive-bunk
+                        // walls inside the trip window get trimmed away, which
+                        // excuses them for the day), then consecutive-bunk walls
+                        // (their exact interval IS the feature), then Change
+                        // blocks; otherwise force trim the later one.
                         var _iIsChg = ['pre-change','post-change','change'].includes((tl[i].type||'').toLowerCase());
                         var _i1IsChg = ['pre-change','post-change','change'].includes((tl[i+1].type||'').toLowerCase());
-                        if (tl[i]._consecutiveBunk && !tl[i+1]._consecutiveBunk) tl[i+1].startMin = tl[i].endMin;
+                        if (tl[i]._isTrip && !tl[i+1]._isTrip) tl[i+1].startMin = tl[i].endMin;
+                        else if (tl[i+1]._isTrip && !tl[i]._isTrip) tl[i].endMin = tl[i+1].startMin;
+                        else if (tl[i]._consecutiveBunk && !tl[i+1]._consecutiveBunk) tl[i+1].startMin = tl[i].endMin;
                         else if (tl[i+1]._consecutiveBunk && !tl[i]._consecutiveBunk) tl[i].endMin = tl[i+1].startMin;
                         else if (_i1IsChg && !_iIsChg) tl[i].endMin = tl[i+1].startMin;
                         else tl[i+1].startMin = tl[i].endMin;
@@ -7026,6 +7047,11 @@
 
                 // Transition pads (pre/post travel) intentionally short — never enforce.
                 if (blk._isTransition) continue;
+
+                // ★ FN-59: trips keep their exact reserved window (Pass-0 snap-back);
+                //   never window-clamp, trim, or extend them here — resolveConstraints'
+                //   type ceilings/floors don't apply to a user-entered trip span.
+                if (blk._isTrip) continue;
 
                 // ★ FN-33: user-resized blocks (Bunk Overrides drag-resize) keep their
                 //   exact window — skip the layer-window clamp and dMin/dMax enforcement
@@ -7136,7 +7162,9 @@
             tl.sort(function(a, b) { return a.startMin - b.startMin; });
             for (var k = 0; k < tl.length - 1; k++) {
                 if (tl[k].endMin > tl[k+1].startMin) {
-                    if (tl[k]._fixed) tl[k+1].startMin = tl[k].endMin;
+                    // ★ FN-59: never push a trip's start — trim the intruder instead.
+                    if (tl[k+1]._isTrip && !tl[k]._isTrip) tl[k].endMin = tl[k+1].startMin;
+                    else if (tl[k]._fixed) tl[k+1].startMin = tl[k].endMin;
                     else tl[k].endMin = tl[k+1].startMin;
                 }
             }
@@ -13464,7 +13492,12 @@
                             _isTrip: true, _activityLocked: true, _noBacktrack: true,
                             // Stamp exact duration constraints so the dMax/dMin enforcers
                             // treat the trip as a precise pin instead of trimming it.
-                            dMin: _tripDur, dMax: _tripDur
+                            dMin: _tripDur, dMax: _tripDur,
+                            // ★ FN-59: reserved geometry — integrity Pass-0 snap-back
+                            // restores the trip to exactly this window if any later
+                            // pass nudges or trims it (same machinery as the
+                            // consecutive-bunk walls' _cbResStart/_cbResEnd).
+                            _tripResStart: tStart, _tripResEnd: tEnd
                         });
                         tripBlockCount++;
                     });
@@ -13930,6 +13963,14 @@
                         var _p23ChosenStart = _p23AllFree.length > 0 ? _p23AllFree[0].start : null;
 
                         if (!_p23Chosen) {
+                            // ★ FN-59: a bunk on a trip is EXCUSED from swim — the
+                            //   trip owns the day; this is expected, not a failure.
+                            var _p23Trip = (bunkTimelines[bunk] || []).find(function (b) { return b && b._isTrip; });
+                            if (_p23Trip) {
+                                log('[Phase2.3] ⛱ ' + bunk + '/' + grade + ' — swim excused (on trip "' +
+                                    (_p23Trip.event || 'Trip') + '" ' + _p23Trip.startMin + '-' + _p23Trip.endMin + ')');
+                                return;
+                            }
                             // ★ DIAG: categorize WHY no slot was found (runs only on
                             //   failure, so the rescan cost is negligible). Tells us if
                             //   the pool is saturated (capacity/sharing config) or the
@@ -19836,6 +19877,10 @@
         // subsequent are continuation:true. Preserves _isTrip so renderer can
         // identify the slots as one trip block.
         let tripWriteCount = 0;
+        // ★ FN-59: wrapped in a callable so it can be re-applied right before
+        // STEP 5 SAVE — later passes (sport writes, perfection fills, sweeps)
+        // must never be the last word on a trip's slots.
+        function applyTripMultiSlotWrite() {
         try {
             // Read trips from the SAME sources Phase 0 reads (localStorage primary,
             // dailyData fallback) so this pass is immune to bunkTimeline corruption.
@@ -19917,6 +19962,9 @@
                 });
             });
         } catch (_eTrip) { try { warn('[TripMultiSlotWrite] ' + (_eTrip && _eTrip.message)); } catch (_e2) {} }
+        }
+        applyTripMultiSlotWrite();
+        if (tripWriteCount > 0) log('[TripMultiSlotWrite] wrote ' + tripWriteCount + ' trip slot(s)');
 
         // Write capacity-checked sport blocks
         let sportWriteCount = 0;
@@ -22786,6 +22834,18 @@
             });
             if (_wdFlagged === 0) log('[WetDiag] every swim has a Change on both sides — clean');
         } catch (_ewd) {}
+
+        // ★ FN-59: FINAL TRIP RE-WRITE — the multi-slot write ran once after
+        // materialization, but every pass since (sport writes, perfection
+        // fills, null-bucket sweeps, demotes) could have overwritten trip
+        // cells. Trips are the user's strongest statement about the day;
+        // re-apply them as the last writer so the saved schedule always
+        // shows the trip across its full window.
+        try {
+            const _preTripFinal = tripWriteCount;
+            applyTripMultiSlotWrite();
+            if (tripWriteCount > _preTripFinal) log('[FN-59] final trip re-write: ' + (tripWriteCount - _preTripFinal) + ' slot(s) restored');
+        } catch (_eTf) { try { warn('[FN-59] final trip re-write: ' + (_eTf && _eTf.message)); } catch (_e2) {} }
 
         // STEP 5 — SAVE
         // =====================================================================
