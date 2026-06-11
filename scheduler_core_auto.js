@@ -23389,8 +23389,13 @@
         // field in its group when that field is free (or same-grade shareable
         // within capacity) and the move passes access/time validation. No-op when
         // no field groups are configured.
-        try {
-            (function _fieldQualityReopt() {
+        // ★ FN-52c: named so it can re-run AFTER the field-mutating post-passes
+        //   (active pairing creates pair placements AFTER this first run — live
+        //   repro: a freshly-formed Quints pair landed on rank 4 while junior
+        //   Trios held rank 1 in the same window, and FQ never saw it). The
+        //   pass rebuilds its ledger from scheduleAssignments each run, so
+        //   re-running is safe and idempotent.
+        const _runFieldQualityReopt = function _fieldQualityReopt() {
                 const _gs = getGlobalSettings();
                 const _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                 const fgMap = {}, fgGroups = {}, hostsBySport = {}, capMap = {};
@@ -23659,7 +23664,9 @@
 
                 try { console.log('[FQ-REOPT] ran: groups=' + Object.keys(fgGroups).length + ', moved=' + moved + ', overlapSwaps=' + movedC); } catch (_eL) {}
                 if (moved > 0 || movedC > 0) log('  🏟️ Field-quality re-opt: ' + moved + ' move(s), ' + movedC + ' staggered-overlap seniority swap(s).');
-            })();
+        };
+        try {
+            _runFieldQualityReopt();
         } catch (_eFQ) { try { warn('[FieldQualityReopt] ' + (_eFQ && _eFQ.message)); } catch (_e2) {} }
 
         // ── ACTIVE pairing pass (form new pairs by swapping a partner) ──
@@ -25491,6 +25498,16 @@
                 warn('[STEP 6.5] Final null sweep error: ' + eS.message);
             }
         })();
+
+        // ★ FN-52c: SECOND field-quality re-opt — the passes above (active
+        //   pairing, time-reloc, drop-refill, null sweep) move and CREATE
+        //   placements after the first FQ run, so freshly-formed pairs could
+        //   land on a poor-ranked group field with no seniority correction.
+        //   The pass rebuilds its state from scheduleAssignments, so this
+        //   re-run is idempotent.
+        try {
+            if (typeof _runFieldQualityReopt === 'function') _runFieldQualityReopt();
+        } catch (_eFQ2) { try { warn('[FieldQualityReopt#2] ' + (_eFQ2 && _eFQ2.message)); } catch (_e2) {} }
 
         // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
         //   the final null sweep can't refill our cleared slots with violations.
