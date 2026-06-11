@@ -151,6 +151,23 @@
         });
     };
     
+    // ★ FN-51: canonical AGE order — division/grade names OLDEST FIRST, from
+    //   the Camp Structure order (Campistry Me drag order) + the Me page's
+    //   "Grade age order" direction (app1.divisionAgeDirection). This is the
+    //   seniority source for Field Quality Groups: index 0 = most senior =
+    //   gets the rank-1 field. Both solvers previously guessed (the auto FQ
+    //   pass read the stale manualColumnOrder; the manual solver extracted a
+    //   number from the grade name and fell back to ALPHABETICAL — pure
+    //   nonsense for named grades like Minors/Soloists/Majors).
+    window.getDivisionAgeOrder = function (names) {
+        var keys = Array.isArray(names) && names.length ? names.slice() : Object.keys(window.divisions || {});
+        var ordered = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(keys) : keys;
+        var gs = (typeof window.loadGlobalSettings === 'function') ? (window.loadGlobalSettings() || {}) : {};
+        var dir = (gs.app1 && gs.app1.divisionAgeDirection) || 'youngToOld';
+        // youngToOld = the Me list runs top(young) → bottom(old), so oldest-first = reversed
+        return dir === 'oldToYoung' ? ordered.slice() : ordered.slice().reverse();
+    };
+
     function escapeHtml(str) { return window.CampUtils.escapeHtml(str); }  // → campistry_utils.js (canonical)
 
     // ==================== SYNC SPINE ====================

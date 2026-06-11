@@ -23451,16 +23451,19 @@
                     return true;
                 }
 
-                // Seniority from camp-structure age order (manualColumnOrder + direction):
-                //   higher score = older = more senior → processed FIRST so senior grades
-                //   claim better-ranked fields before juniors.
+                // ★ FN-51: seniority from the canonical age order (Camp Structure
+                //   order + the Me page's "Grade age order" direction). Higher
+                //   score = older = more senior → processed FIRST so senior grades
+                //   claim better-ranked fields. (Previously read the stale
+                //   app1.manualColumnOrder — an alphabetical leftover — so
+                //   seniority was alphabetical, not age.)
                 const _senMap = {};
                 try {
-                    const _a1 = (window.loadGlobalSettings ? (window.loadGlobalSettings().app1 || {}) : {});
-                    const _ord = (Array.isArray(_a1.manualColumnOrder) && _a1.manualColumnOrder.length) ? _a1.manualColumnOrder.slice() : Object.keys(divisions || {});
-                    const _dir = _a1.divisionAgeDirection || 'youngToOld';
-                    const _N = _ord.length;
-                    _ord.forEach(function (nm, i) { _senMap[nm] = (_dir === 'oldToYoung') ? (_N - 1 - i) : i; });
+                    const _oldFirst = (typeof window.getDivisionAgeOrder === 'function')
+                        ? window.getDivisionAgeOrder(Object.keys(divisions || {}))
+                        : Object.keys(divisions || {});
+                    const _N = _oldFirst.length;
+                    _oldFirst.forEach(function (nm, i) { _senMap[nm] = _N - 1 - i; }); // oldest gets the highest score
                 } catch (_eS) {}
                 const _sen = function (gr) { const v = _senMap[gr]; return (v == null) ? -1 : v; };
                 let moved = 0;

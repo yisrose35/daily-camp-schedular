@@ -48,17 +48,23 @@
         return map;
     }
 
-    // Replicates solver seniority: sort by trailing grade number desc.
-    // Highest grade number = seniority index 0 = ideal rank 1 (best field).
+    // ★ FN-51: replicates solver seniority — the canonical age order (Camp
+    // Structure order + the Me 'Grade age order' direction), oldest first.
+    // Index 0 = most senior = ideal rank 1 (best field). Legacy grade-number
+    // heuristic kept only as the fallback.
     function _buildSeniorityMap() {
         const divs = window.divisions || {};
         const names = Object.keys(divs);
+        const map = {};
+        if (typeof window.getDivisionAgeOrder === 'function') {
+            window.getDivisionAgeOrder(names).forEach((n, i) => { map[n] = i; });
+            return map;
+        }
         const withNum = names.map(n => {
             const m = String(n).match(/(\d+)/);
             return { name: n, num: m ? parseInt(m[1], 10) : 0 };
         });
         withNum.sort((a, b) => b.num - a.num);
-        const map = {};
         withNum.forEach((d, i) => { map[d.name] = i; });
         return map;
     }

@@ -373,19 +373,30 @@
 
         var divisions = window.divisions || {};
         var divNames = Object.keys(divisions);
+        // ★ FN-51: seniority from the canonical age order (Camp Structure order
+        //   + the Me page's "Grade age order" direction) — index 0 = most
+        //   senior. The old grade-number extraction fell back to ALPHABETICAL
+        //   for named grades (Minors/Soloists/Majors), which made seniority
+        //   meaningless. Legacy numeric heuristic kept only as the fallback
+        //   when the helper isn't loaded (node tests).
         var divWithNumbers = [];
-        for (var di = 0; di < divNames.length; di++) {
-            var dn = divNames[di];
-            var m = String(dn).toLowerCase().trim().match(/(\d+)/);
-            var gradeNum = m ? parseInt(m[1], 10) : null;
-            divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+        if (typeof window.getDivisionAgeOrder === 'function') {
+            var _oldFirst = window.getDivisionAgeOrder(divNames);
+            divWithNumbers = _oldFirst.map(function (n) { return { name: n }; });
+        } else {
+            for (var di = 0; di < divNames.length; di++) {
+                var dn = divNames[di];
+                var m = String(dn).toLowerCase().trim().match(/(\d+)/);
+                var gradeNum = m ? parseInt(m[1], 10) : null;
+                divWithNumbers.push({ name: dn, gradeNum: gradeNum });
+            }
+            divWithNumbers.sort(function(a, b) {
+                if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
+                if (a.gradeNum !== null) return -1;
+                if (b.gradeNum !== null) return 1;
+                return a.name.localeCompare(b.name);
+            });
         }
-        divWithNumbers.sort(function(a, b) {
-            if (a.gradeNum !== null && b.gradeNum !== null) return b.gradeNum - a.gradeNum;
-            if (a.gradeNum !== null) return -1;
-            if (b.gradeNum !== null) return 1;
-            return a.name.localeCompare(b.name);
-        });
         for (var si = 0; si < divWithNumbers.length; si++) {
             _divisionSeniorityMap[divWithNumbers[si].name] = si;
         }
