@@ -50,6 +50,29 @@ function _mbAllLeaguesForGrade(grade) {
 }
 try { window._mbAllLeaguesForGrade = _mbAllLeaguesForGrade; } catch (_) {}
 
+// Specialty leagues live in a SEPARATE store (gs.specialtyLeagues), keyed by
+// id with { name, enabled, divisions, ... }. Regular-league dropdowns read
+// leaguesByName and never see these, which is why a specialty-league tile used
+// to list regular leagues and miss the specialty ones.
+function _mbSpecialtyLeaguesForGrade(grade) {
+  const _gs = window.loadGlobalSettings?.() || {};
+  const sl = _gs.specialtyLeagues || {};
+  return Object.values(sl)
+    .filter(l => l && l.enabled !== false && l.name &&
+      Array.isArray(l.divisions) && l.divisions.includes(String(grade)))
+    .map(l => l.name);
+}
+try { window._mbSpecialtyLeaguesForGrade = _mbSpecialtyLeaguesForGrade; } catch (_) {}
+
+// Pick the right league list for a tile type: a specialty_league tile lists
+// specialty leagues, every other league tile lists regular leagues.
+function _mbLeaguesForGradeByType(grade, tileType) {
+  return tileType === 'specialty_league'
+    ? _mbSpecialtyLeaguesForGrade(grade)
+    : _mbAllLeaguesForGrade(grade);
+}
+try { window._mbLeaguesForGradeByType = _mbLeaguesForGradeByType; } catch (_) {}
+
 // Mutates a copied event so its league reference matches the new grade.
 // No-op for non-league events. If the target grade has no league, clears
 // leagueName + reverts event label so the schedule remains valid.
@@ -1065,12 +1088,9 @@ async function editTile(id) {
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _lbn = _gs.leaguesByName || {};
-      // Only show leagues assigned to this event's grade.
-      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
-        _lbn[ln] && _lbn[ln].enabled !== false &&
-        Array.isArray(_lbn[ln].divisions) &&
-        _lbn[ln].divisions.includes(String(ev.division))
-      );
+      // Leagues assigned to this event's grade — specialty tiles list specialty
+      // leagues, regular tiles list regular leagues.
+      const _gradeLeagues = _mbLeaguesForGradeByType(ev.division, ev.type);
       if (_gradeLeagues.length === 1) {
         // Single league for this grade → assign silently, no picker.
         if (ev.leagueName !== _gradeLeagues[0]) {
@@ -2300,7 +2320,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         //   logic. 0 → block, 1 → auto-assign, 2+ → prompt user to pick.
         let _pickedLeague = null;
         if (type === 'league' || type === 'specialty_league') {
-          const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+          const _gradeLeagues = _mbLeaguesForGradeByType(grade, type);
           if (_gradeLeagues.length === 0) {
             await showAlert('No leagues are assigned to ' + grade +
               '. Add this grade to a league in League Setup before dropping a league layer here.');
@@ -2611,13 +2631,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       </div>`;
       })()}
       ${(layer.type === 'league' || layer.type === 'specialty_league') ? (() => {
-        const _gs = window.loadGlobalSettings?.() || {};
-        const _lbn = _gs.leaguesByName || {};
-        const _gradeLeagues = Object.keys(_lbn).filter(n =>
-          _lbn[n] && _lbn[n].enabled !== false &&
-          Array.isArray(_lbn[n].divisions) &&
-          _lbn[n].divisions.includes(String(grade))
-        );
+        const _gradeLeagues = _mbLeaguesForGradeByType(grade, layer.type);
         if (_gradeLeagues.length <= 1) return ''; // auto-assigned, no picker needed
         return `
       <div class="ms-daw-pop-divider"></div>
@@ -3252,7 +3266,7 @@ async function dawAddLayerDialog(grade) {
 
   // ★ Multi-league picker for auto builder Add Layer dialog
   if (result.type === 'league' || result.type === 'specialty_league') {
-    const _gradeLeagues = _mbAllLeaguesForGrade(grade);
+    const _gradeLeagues = _mbLeaguesForGradeByType(grade, result.type);
     if (_gradeLeagues.length === 0) {
       await showAlert('No leagues are assigned to ' + grade +
         '. Add this grade to a league in League Setup before adding a league layer here.');

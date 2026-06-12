@@ -3962,12 +3962,15 @@ async function editTile(id) {
     if (ev.type === 'league' || ev.type === 'specialty_league') {
       const _gs = window.loadGlobalSettings?.() || {};
       const _lbn = _gs.leaguesByName || {};
-      // Filter to leagues assigned to this event's grade.
-      const _gradeLeagues = Object.keys(_lbn).filter(ln =>
-        _lbn[ln] && _lbn[ln].enabled !== false &&
-        Array.isArray(_lbn[ln].divisions) &&
-        _lbn[ln].divisions.includes(String(ev.division))
-      );
+      // Leagues assigned to this event's grade — specialty tiles list specialty
+      // leagues (gs.specialtyLeagues), regular tiles list regular leagues.
+      const _gradeLeagues = (typeof window._mbLeaguesForGradeByType === 'function')
+        ? window._mbLeaguesForGradeByType(ev.division, ev.type)
+        : Object.keys(_lbn).filter(ln =>
+            _lbn[ln] && _lbn[ln].enabled !== false &&
+            Array.isArray(_lbn[ln].divisions) &&
+            _lbn[ln].divisions.includes(String(ev.division))
+          );
       if (_gradeLeagues.length === 1) {
         // Single league for this grade → assign silently, no picker.
         if (ev.leagueName !== _gradeLeagues[0]) {
