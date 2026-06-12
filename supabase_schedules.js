@@ -546,25 +546,54 @@
             return ta < tb ? -1 : ta > tb ? 1 : 0;
         });
 
+        // ★ MS-3: per-bunk winner is decided by the bunk's DIVISION stamp
+        // (payload._divStamps, written at save time) when available, falling
+        // back to the row's updated_at. This stops a scoped generation's
+        // re-saved STALE copies of other divisions (fresh row timestamp,
+        // old content) from shadowing the other scheduler's newer work.
+        const _bunkToDiv = {};
+        try {
+            Object.entries(window.divisions || {}).forEach(([dn, di]) =>
+                ((di && di.bunks) || []).forEach(b => { _bunkToDiv[String(b)] = dn; }));
+        } catch (e) { /* fall back to row timestamps */ }
+        const _bunkEff = {};
+        const _segEff = {};
+
         records.forEach(record => {
             const data = record.schedule_data || {};
+            const _rowMs = Date.parse(record.updated_at || record.created_at || '') || 0;
+            const _stamps = data._divStamps || null;
+            const _effFor = function (bunkId) {
+                const dn = _bunkToDiv[String(bunkId)];
+                return (_stamps && dn && _stamps[dn] != null) ? _stamps[dn] : _rowMs;
+            };
 
             log('Merging from', record.scheduler_name || 'unknown', {
                 bunks: Object.keys(data.scheduleAssignments || {}).length,
                 slots: data.unifiedTimes?.length || 0
             });
 
-            // Merge scheduleAssignments (each scheduler owns their bunks)
+            // Merge scheduleAssignments (each scheduler owns their bunks);
+            // per-bunk newest-by-division-stamp wins (>= keeps the legacy
+            // ascending-updated_at behavior for ties and unstamped rows)
             if (data.scheduleAssignments) {
                 Object.entries(data.scheduleAssignments).forEach(([bunkId, slots]) => {
-                    mergedAssignments[bunkId] = slots;
+                    const eff = _effFor(bunkId);
+                    if (_bunkEff[bunkId] == null || eff >= _bunkEff[bunkId]) {
+                        _bunkEff[bunkId] = eff;
+                        mergedAssignments[bunkId] = slots;
+                    }
                 });
             }
 
             // Phase 4: merge scheduleSegments per-bunk (same ownership as assignments)
             if (data.scheduleSegments) {
                 Object.entries(data.scheduleSegments).forEach(([bunkId, row]) => {
-                    mergedSegments[bunkId] = row;
+                    const eff = _effFor(bunkId);
+                    if (_segEff[bunkId] == null || eff >= _segEff[bunkId]) {
+                        _segEff[bunkId] = eff;
+                        mergedSegments[bunkId] = row;
+                    }
                 });
             }
             
@@ -910,6 +939,38 @@
             if (pbSlotsData && Object.keys(pbSlotsData).length > 0) {
                 payload._perBunkSlotsData = pbSlotsData;
             }
+
+            // ★ MS-3: per-DIVISION recency stamps. A scoped generation
+            // re-saves the whole row, which used to make its STALE copies of
+            // unscoped divisions look newest (row updated_at) and shadow the
+            // other scheduler's real work in the merge. Stamp each division
+            // in this payload: NOW for divisions this generation actually
+            // touched (window.__lastGenScope, set by runOptimizer; a null
+            // divisions list = unscoped = stamp all), carry forward the last
+            // seen stamp for the rest. mergeSchedules prefers these stamps
+            // over row updated_at; legacy rows without stamps behave as
+            // before.
+            try {
+                const bunkToDiv = {};
+                Object.entries(window.divisions || {}).forEach(([dn, di]) =>
+                    ((di && di.bunks) || []).forEach(b => { bunkToDiv[String(b)] = dn; }));
+                const gs = window.__lastGenScope;
+                const scopeActive = gs && gs.date === dateKey &&
+                    (Date.now() - (gs.at || 0)) < 180000 &&
+                    Array.isArray(gs.divisions) && gs.divisions.length > 0;
+                const scopeSet = scopeActive ? new Set(gs.divisions.map(String)) : null;
+                const prev = (window.__divStampCache && window.__divStampCache[dateKey]) || {};
+                const nowMs = Date.now();
+                const stamps = {};
+                Object.keys(filteredAssignments).forEach(b => {
+                    const dn = bunkToDiv[String(b)];
+                    if (!dn || stamps[dn] != null) return;
+                    stamps[dn] = (!scopeSet || scopeSet.has(dn)) ? nowMs : (prev[dn] || nowMs);
+                });
+                payload._divStamps = stamps;
+                window.__divStampCache = window.__divStampCache || {};
+                window.__divStampCache[dateKey] = Object.assign({}, prev, stamps);
+            } catch (eStamps) { /* non-fatal — merge falls back to updated_at */ }
 
             // ★★★ DAY 16b FIX: Round-trip _autoGenerated + manualSkeleton too.
             // These tell the load-side code path "this was an auto build" so

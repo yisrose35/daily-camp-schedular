@@ -4847,6 +4847,17 @@ async function runOptimizer() {
     } else {
         delete window.selectedDivisionsForGeneration;
     }
+    // ★ MS-3: record this generation's scope durably for the save layer —
+    // selectedDivisionsForGeneration is deleted before the post-gen verified
+    // save runs, but saveSchedule needs the scope to stamp per-division
+    // recency (_divStamps). TTL-checked (180s) on the consumer side.
+    try {
+        window.__lastGenScope = {
+            date: window._activeGenDate || window.currentScheduleDate || '',
+            divisions: _effScope ? [..._effScope] : null,
+            at: Date.now()
+        };
+    } catch (_eGS) {}
 
    // ★★★ AUTO MODE: Full pipeline via scheduler_core_auto.js ★★★
     const isAutoMode = window._daBuilderMode === 'auto';
