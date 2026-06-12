@@ -879,12 +879,35 @@
 
             console.log(`\n[SpecialtyLeagues] Processing ${divName} @ ${startTime}`);
 
-            const league = Object.values(specialtyLeaguesConfig).find(l => {
-                if (!l.enabled) return false;
-                if (disabledSpecialtyLeagues?.includes(l.name)) return false;
-                if (!l.divisions || !l.divisions.includes(divName)) return false;
-                return true;
-            });
+            // ★ Honor the tile's chosen league: if a block names a valid
+            //   specialty league for this division, schedule THAT one. Fall back
+            //   to the division's first enabled specialty league when the tile
+            //   has no pick (legacy tiles) or names something that isn't a valid
+            //   specialty league here (e.g. a stale/regular name from the old
+            //   dropdown) — matching the previous default rather than scheduling
+            //   nothing.
+            const _pickedLeagueName = (blocks.find(b => b && b.leagueName) || {}).leagueName || null;
+            let league = _pickedLeagueName
+                ? Object.values(specialtyLeaguesConfig).find(l =>
+                    l && l.enabled &&
+                    !disabledSpecialtyLeagues?.includes(l.name) &&
+                    l.name === _pickedLeagueName &&
+                    (l.divisions || []).includes(divName)
+                  )
+                : null;
+            if (league) {
+                console.log(`[SpecialtyLeagues] ${divName} @ ${startTime}: honoring tile pick "${_pickedLeagueName}"`);
+            } else {
+                if (_pickedLeagueName) {
+                    console.log(`[SpecialtyLeagues] ${divName} @ ${startTime}: tile pick "${_pickedLeagueName}" isn't a valid specialty league here — using division default`);
+                }
+                league = Object.values(specialtyLeaguesConfig).find(l => {
+                    if (!l.enabled) return false;
+                    if (disabledSpecialtyLeagues?.includes(l.name)) return false;
+                    if (!l.divisions || !l.divisions.includes(divName)) return false;
+                    return true;
+                });
+            }
 
             if (!league) {
                 console.log(`[SpecialtyLeagues] No enabled league for division ${divName}`);
