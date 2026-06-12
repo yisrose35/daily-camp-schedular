@@ -364,6 +364,53 @@ function initSpecialActivitiesTab() {
     console.log("[SPECIAL_ACTIVITIES] Initialized:", { specials: specialActivities.length, rainyDay: rainyDayActivities.length });
 }
 
+// ═══ DELETION TOMBSTONES ═════════════════════════════════════════════
+// Deleting a special used to be represented only by ABSENCE from the
+// arrays. The load path UNIONS both storage copies (top-level +
+// app1.specialActivities) to protect against blank-copy data loss, so a
+// deleted special resurrected whenever ANY stale copy (another device, an
+// old tab, the IDB snapshot) still contained it. Tombstones record the
+// deletion as a FACT: name (case-insensitive) → deletion epoch-ms, stored
+// in BOTH copies (gs.deletedSpecials + gs.app1.deletedSpecials,
+// union-on-read) so the marker survives whichever copy syncs. The
+// union-on-load keeps its anti-wipe behavior but drops tombstoned names;
+// re-creating a special with the same name clears its tombstone (saveData).
+function _saTombKey(n) { return String(n || '').trim().toLowerCase(); }
+function _saReadTombstones(settings) {
+    const out = {};
+    const s = settings || window.loadGlobalSettings?.() || {};
+    [s.deletedSpecials, s.app1 && s.app1.deletedSpecials].forEach(m => {
+        if (!m || typeof m !== 'object') return;
+        Object.keys(m).forEach(k => {
+            const t = Number(m[k]) || 0;
+            const kk = _saTombKey(k);
+            if (kk && t > (out[kk] || 0)) out[kk] = t;
+        });
+    });
+    return out;
+}
+function _saWriteTombstones(tombs) {
+    try {
+        const gs = window.loadGlobalSettings?.() || {};
+        if (!gs.app1) gs.app1 = {};
+        gs.app1.deletedSpecials = tombs;
+        window.saveGlobalSettings?.('deletedSpecials', tombs);
+        window.saveGlobalSettings?.('app1', gs.app1);
+    } catch (e) { console.warn('[SPECIAL_ACTIVITIES] tombstone save failed:', e); }
+}
+window.recordSpecialDeletion = function (name) {
+    if (!name) return;
+    const tombs = _saReadTombstones();
+    tombs[_saTombKey(name)] = Date.now();
+    _saWriteTombstones(tombs);
+};
+window.clearSpecialTombstone = function (name) {
+    if (!name) return;
+    const tombs = _saReadTombstones();
+    const k = _saTombKey(name);
+    if (k in tombs) { delete tombs[k]; _saWriteTombstones(tombs); }
+};
+
 function loadData() {
     try {
         const settings = window.loadGlobalSettings?.() || {};
@@ -381,15 +428,31 @@ function loadData() {
         //   duplicate exists, PREFER the row that carries a subcategory tag so a
         //   blank copy can never shadow a tagged one (the tag-wipe bug).
         const _hasSub = (s) => (s && typeof s.subcategory === 'string' && s.subcategory.trim() !== '');
+        // Keyed case-insensitively so "Canteen"/"canteen" can't both survive.
         const _seenNames = new Map();
         for (const s of allActivities) {
             if (!s || !s.name) continue;
-            const ex = _seenNames.get(s.name);
-            if (!ex) { _seenNames.set(s.name, s); continue; }
+            const _key = _saTombKey(s.name);
+            const ex = _seenNames.get(_key);
+            if (!ex) { _seenNames.set(_key, s); continue; }
             // Upgrade the kept row to a tagged duplicate if the kept one is blank.
-            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(s.name, s);
+            if (!_hasSub(ex) && _hasSub(s)) _seenNames.set(_key, s);
         }
-        const dedupedActivities = [..._seenNames.values()];
+        let dedupedActivities = [..._seenNames.values()];
+        // ★ Tombstone filter: a deleted special stays deleted even when a stale
+        //   copy still carries it — drop tombstoned names from the union.
+        const _tombs = _saReadTombstones(settings);
+        if (Object.keys(_tombs).length > 0) {
+            const _dropped = [];
+            dedupedActivities = dedupedActivities.filter(s => {
+                const dead = _saTombKey(s.name) in _tombs;
+                if (dead) _dropped.push(s.name);
+                return !dead;
+            });
+            if (_dropped.length > 0) {
+                console.warn(`[SPECIAL_ACTIVITIES] loadData: dropped ${_dropped.length} tombstoned (deleted) special(s): ${_dropped.join(', ')}`);
+            }
+        }
         const _rawMax = Math.max(_topActs.length, _app1Acts.length);
         if (dedupedActivities.length < _rawMax) {
             console.warn(`[SPECIAL_ACTIVITIES] loadData: healed duplicates within a copy (max copy ${_rawMax} → ${dedupedActivities.length} unique)`);
@@ -421,6 +484,18 @@ function saveData() {
     try {
         specialActivities = validateAllActivities(specialActivities);
         rainyDayActivities = validateAllActivities(rainyDayActivities);
+        // ★ Re-creating a special with a tombstoned name clears its tombstone.
+        //   Tombstoned names are filtered out on load, so one can only be live
+        //   here via an explicit add/rename this session — honor that intent.
+        try {
+            const _tombs = _saReadTombstones();
+            let _cleared = false;
+            [...specialActivities, ...rainyDayActivities].forEach(s => {
+                const k = _saTombKey(s && s.name);
+                if (k && (k in _tombs)) { delete _tombs[k]; _cleared = true; }
+            });
+            if (_cleared) _saWriteTombstones(_tombs);
+        } catch (_) {}
         window.saveGlobalSpecialActivities?.([...specialActivities, ...rainyDayActivities]);
         if (typeof window.forceSyncToCloud === 'function') {
             if (window._specialActivitiesSyncTimeout) clearTimeout(window._specialActivitiesSyncTimeout);
@@ -2639,6 +2714,10 @@ function addRainyDayActivity() { if(!window.AccessControl?.checkSetupAccess?.('a
 
 function cleanupDeletedSpecialActivity(name) {
     if (!name) return;
+    // ★ Record the deletion as a tombstone BEFORE purging references, so a
+    //   stale copy of the arrays (another device/tab, the IDB snapshot) can
+    //   never resurrect this special through the union-on-load merge.
+    try { window.recordSpecialDeletion?.(name); } catch (_) {}
     try {
         const s = window.loadGlobalSettings?.() || {};
         const ds = s.daily_schedules || {};
@@ -2885,8 +2964,11 @@ window.getAllSpecialActivities = function() {
         const _app1Arr=Array.isArray(settings.app1?.specialActivities)?settings.app1.specialActivities:null;
         const allActivities=(_topArr&&_topArr.length>0)?_topArr:((_app1Arr&&_app1Arr.length>0)?_app1Arr:[]);
         if(allActivities.length>0){
+            // ★ Same tombstone filter as loadData — a deleted special must not
+            //   resurrect through this fallback loader either.
+            const _tombs=_saReadTombstones(settings);
             specialActivities=[];rainyDayActivities=[];
-            allActivities.forEach(s=>{const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
+            allActivities.forEach(s=>{if(s&&s.name&&(_saTombKey(s.name) in _tombs))return;const v=validateSpecialActivity(s,s?.name);if(v.rainyDayExclusive||v.rainyDayOnly)rainyDayActivities.push(v);else specialActivities.push(v);});
             console.log(`[SPECIAL_ACTIVITIES] Auto-loaded ${specialActivities.length} regular + ${rainyDayActivities.length} rainy-only`);
         }
     }
