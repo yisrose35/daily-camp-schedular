@@ -556,6 +556,17 @@
                 //   Write a tiny unique beacon instead — the storage event still fires (and
                 //   the campGlobalSettings_v1 write above already triggers the same listener).
                 localStorage.setItem('CAMPISTRY_LOCAL_CACHE', String(Date.now()) + ':' + Math.random().toString(36).slice(2, 8));
+                // ★ Cross-camp guard: stamp the local cache with the camp that
+                //   wrote it. campGlobalSettings_v1 + the IDB snapshot are
+                //   BROWSER-WIDE keys — without this stamp, opening a different
+                //   camp on the same browser let hydration merge the previous
+                //   camp's settings into the new camp's cloud (that is how
+                //   foreign special activities slipped into a camp's config).
+                //   The hydrate path refuses + purges on stamp mismatch.
+                try {
+                    const _ownCampId = window.CampistryDB?.getCampId?.();
+                    if (_ownCampId) localStorage.setItem('campistry_settings_camp_id', String(_ownCampId));
+                } catch (_) {}
                 try { sessionStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
                 try { localStorage.removeItem('_campistry_local_write_failed'); } catch (_) {}
             } catch (innerE) {
@@ -1715,7 +1726,26 @@
             }
 
             if (cloudState) {
-                const localState = getLocalSettings();
+                let localState = getLocalSettings();
+
+                // ★ Cross-camp guard: the local cache (campGlobalSettings_v1 +
+                //   IDB snapshot) is browser-wide, not camp-scoped. If it was
+                //   written by a DIFFERENT camp (stamp mismatch), merging it
+                //   below would push that camp's keys into THIS camp's cloud —
+                //   the newer-local-wins branch and the missing-key backfill
+                //   both do it. Refuse the merge and purge the foreign cache;
+                //   the cloud state is the truth for this camp.
+                try {
+                    const _stamp = localStorage.getItem('campistry_settings_camp_id');
+                    if (_stamp && campId && _stamp !== String(campId)) {
+                        console.warn('🛑 [IntegrationHooks] Local settings cache belongs to camp ' + _stamp + ' but this session is camp ' + campId + ' — discarding the foreign local cache (cloud wins).');
+                        try { localStorage.removeItem(CONFIG.LOCAL_STORAGE_KEY); } catch (_) {}
+                        try { localStorage.removeItem('campistry_settings_camp_id'); } catch (_) {}
+                        try { window.LocalCacheIDB?.clear?.(); } catch (_) {}
+                        _localCache = {};
+                        localState = {};
+                    }
+                } catch (_eCampGuard) {}
 
                 const cloudTime = new Date(cloudState.updated_at || 0).getTime();
                 const localTime = new Date(localState.updated_at || 0).getTime();
