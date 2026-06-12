@@ -1820,9 +1820,25 @@
            var gk = (startMin||'?')+'-'+(endMin||'?')+'-'+blockDiv;
             if (!slotGroups.has(gk)) slotGroups.set(gk, []);
             slotGroups.get(gk).push(bi);
+            // ★ Specific-activity blocks (smart tiles naming a concrete sport):
+            //   hard-restrict the domain to the named activities. If NOTHING
+            //   feasible hosts them, a second pass drops the restriction so the
+            //   block degrades to a general pick instead of going Free.
+            var _allowSet = null;
+            if (block.allowedActivities && block.allowedActivities.length) {
+                _allowSet = new Set();
+                for (var _aai = 0; _aai < block.allowedActivities.length; _aai++) _allowSet.add(normName(block.allowedActivities[_aai]));
+            }
+            for (var _domPass = 0; _domPass < 2; _domPass++) {
+            if (_domPass === 1) {
+                if (!_allowSet || domain.size > 0) break;
+                console.warn('[SOLVER] Specific activity "' + block.allowedActivities.join(', ') + '" has no feasible field for ' + bunk + ' @' + startMin + ' — dropping the restriction (general pick).');
+                _allowSet = null;
+            }
             for (var ci2 = 0; ci2 < numCands; ci2++) {
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
+                if (_allowSet && !_allowSet.has(c2._actNorm)) continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
                 var _dLoc = window.getLocationForActivity?.(c2.activityName||fn) || window.getPinnedTileDefaultLocation?.(c2.activityName||fn);
                 if (_dLoc && typeof _dLoc === 'string' && window.GlobalFieldLocks?.isFieldLocked(_dLoc, slots, blockDiv)) continue;
@@ -1878,6 +1894,7 @@
                 if (S.getPrecomputedRotationScore(bunk, c2.activityName) === Infinity) continue;
                 domain.add(ci2);
             }
+            } // end _domPass (specific-activity restriction + general fallback)
             // Hard-filter yesterday-repeats if fresher alternatives exist
             if (domain.size > 1) {
                 var freshOpts = new Set();

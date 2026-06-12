@@ -3034,9 +3034,9 @@ function addDropListeners(gridEl) {
           fields: [
             { name: 'startTime', label: 'Start Time', type: 'text', placeholder: 'e.g., 11:00am', default: startStr },
             { name: 'endTime', label: 'End Time', type: 'text', placeholder: 'e.g., 11:45am', default: endStr },
-            { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Swim, Special' },
-            { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity' },
-            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports' }
+            { name: 'main1', label: 'Main Activity 1 (limited capacity)', type: 'text', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+            { name: 'main2', label: 'Main Activity 2 (everyone else)', type: 'text', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+            { name: 'fallbackActivity', label: 'Fallback (when Main 1 is full)', type: 'text', default: 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
           ]
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
@@ -3802,9 +3802,9 @@ async function editTile(id) {
       fields: [
         { name: 'startTime', label: 'Start Time', type: 'text', default: ev.startTime },
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
-        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '' },
-        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '' },
-        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity' }
+        { name: 'main1', label: 'Main 1 (limited capacity)', type: 'text', default: ev.smartData?.main1 || '', placeholder: 'e.g., Special, Swim — or a specific one: Lake' },
+        { name: 'main2', label: 'Main 2 (everyone else)', type: 'text', default: ev.smartData?.main2 || '', placeholder: 'e.g., Sports, Activity — or specific: Pickleball' },
+        { name: 'fallbackActivity', label: 'Fallback', type: 'text', default: ev.smartData?.fallbackActivity || 'Activity', placeholder: 'e.g., Activity, Sports — or specific: Pickleball' }
       ]
     });
     if (!result || !result.main1 || !result.main2) return;

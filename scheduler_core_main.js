@@ -708,6 +708,17 @@
             if (s.name) knownSpecialNames.add(s.name.toLowerCase().trim());
         });
 
+        // ★ Specific-activity smart tiles: every sport hosted by at least one
+        //   field. Lets a tile name a concrete sport (e.g. main2 = "Pickleball")
+        //   and have it SOLVER-placed on a real hosting field instead of
+        //   literal-filled with the sport name as its own location.
+        const knownSportNames = new Set();
+        try {
+            const _lfd = window.SchedulerCoreUtils?.loadAndFilterData?.() || {};
+            Object.keys(_lfd.fieldsBySport || {}).forEach(sp => knownSportNames.add(String(sp).toLowerCase().trim()));
+            (_lfd.masterFields || []).forEach(f => ((f && f.activities) || []).forEach(a => a && knownSportNames.add(String(a).toLowerCase().trim())));
+        } catch (_) {}
+
         const smartJobs = window.SmartLogicAdapter?.preprocessSmartTiles?.(
             manualSkeleton,
             externalOverrides,
@@ -1041,6 +1052,49 @@
                 const _budgetVal = smartTileBudget[_bk];
                 const _fbAct = job.fallbackActivity || '';
                 const _isDirectFill = activityLabel && !needsGeneration(activityLabel) && !knownSpecialNames.has(activityLabel.toLowerCase().trim());
+
+                // ★ SPECIFIC-ACTIVITY TILES: when the tile CONFIG names a concrete
+                //   activity (main1/main2/fallback = "Pickleball" or "Lake" rather
+                //   than a category), honor that exact choice — the scarce-special
+                //   budget machinery must not swap it out. Adapter-RESOLVED specials
+                //   (a name chosen FROM a generic "Special Activity" side) are not
+                //   in the configured set, so V44.3 budget fairness still governs
+                //   those. Swim-style direct-fill labels keep their classic path.
+                const _lblNorm = (activityLabel || '').toLowerCase().trim();
+                const _cfgSpecificSet = [job.main1, job.main2, job.fallbackActivity]
+                    .filter(v => v && !needsGeneration(v))
+                    .map(v => String(v).toLowerCase().trim());
+                const _isUserSpecific = _cfgSpecificSet.includes(_lblNorm);
+                if (_isUserSpecific && knownSpecialNames.has(_lblNorm)) {
+                    // Specific SPECIAL: claim-checked direct fill — capacity and
+                    // cross-division sharing enforced via the same claim tracker
+                    // the budget system uses; falls back when at capacity.
+                    const _sw = _getSharableWith(activityLabel);
+                    const _swCap = (_sw && _sw.capacity) || 1;
+                    if (_canClaim(activityLabel, startMin, endMin, _swCap, divName)) {
+                        _registerClaim(activityLabel, startMin, endMin, divName);
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special: ${activityLabel}`);
+                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: activityLabel, sport: null, _fixed: true, _activity: activityLabel }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    } else if (_fbAct && needsGeneration(_fbAct)) {
+                        const _fbT = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → ${_fbT}`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: _fbT, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, _smartTileFallback: true });
+                    } else if (_fbAct) {
+                        console.log(`[SmartTile] ${bunk} -> SPECIFIC special "${activityLabel}" at capacity → DIRECT FILL: ${_fbAct}`);
+                        window.fillBlock({ divName, bunk, startTime: startMin, endTime: endMin, slots }, { field: _fbAct, sport: null, _fixed: true, _activity: _fbAct }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                    }
+                    return;
+                }
+                if (_isUserSpecific && knownSportNames.has(_lblNorm) && !_lblNorm.includes('swim')) {
+                    // Specific SPORT: hand the solver a block restricted to this one
+                    // activity so it resolves a real hosting field (capacity, sharing,
+                    // rotation all enforced). If no hosting field is feasible, the
+                    // solver drops the restriction and picks generally.
+                    console.log(`[SmartTile] ${bunk} -> SPECIFIC sport: ${activityLabel} (solver-placed, restricted)`);
+                    schedulableSlotBlocks.push({ divName, bunk, event: activityLabel, startTime: startMin, endTime: endMin, slots, fromSmartTile: true, allowedActivities: [activityLabel] });
+                    return;
+                }
+
                 if (_budgetVal === false && !_isDirectFill) {
                     if (_fbAct && needsGeneration(_fbAct)) {
                         const fbSlotType = _fbAct.toLowerCase().includes('sport') ? 'Sports Slot' : 'General Activity Slot';
