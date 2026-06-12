@@ -2157,6 +2157,29 @@ actualSlots.forEach((slotIdx, i) => {
 // =========================================================================
 // HELPER: Find Best Activity (DIVISION-AWARE)
 // =========================================================================
+
+// MS-5b: resolve the real time window for a bunk's slots. Prefer the
+// displaced entry's stamped _startMin/_endMin, then the bunk's per-bunk
+// slot table — the division-level table can disagree with both in auto
+// mode (per-bunk timelines), which stamped smart-regen replacements at
+// the wrong time (observed 850-855 vs the entry's real 905-945 slot).
+function _resolveSlotWindow(bunk, divName, slots) {
+    const first = window.scheduleAssignments?.[bunk]?.[slots[0]];
+    if (first && typeof first._startMin === 'number' && typeof first._endMin === 'number') {
+        const last = window.scheduleAssignments?.[bunk]?.[slots[slots.length - 1]];
+        return {
+            startMin: first._startMin,
+            endMin: (last && typeof last._endMin === 'number') ? last._endMin : first._endMin
+        };
+    }
+    const table = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || window.divisionTimes?.[divName] || [];
+    const s = table[slots[0]], l = table[slots[slots.length - 1]];
+    if (s && typeof s.startMin === 'number') {
+        return { startMin: s.startMin, endMin: (l && typeof l.endMin === 'number') ? l.endMin : s.startMin + 30 };
+    }
+    return { startMin: null, endMin: null };
+}
+
  function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
         const disabledFields = window.currentDisabledFields || [];
         const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
@@ -2171,15 +2194,10 @@ actualSlots.forEach((slotIdx, i) => {
         }
 
     
-    // Get time range for these slots
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let startMin = null, endMin = null;
-    
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
-    }
-    
+    // Get time range for these slots (MS-5b: entry times > per-bunk table > division table)
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
+
     const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
     const scoredPicks = [];
     
@@ -2307,13 +2325,11 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
 // =========================================================================
 function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties, bypassInfo = {}) {
     const divSlots = window.divisionTimes?.[divName] || [];
-    
-    let startMin = null, endMin = null;
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        const lastSlot = divSlots[slots[slots.length - 1]];
-        endMin = lastSlot ? lastSlot.endMin : (startMin + 30);
-    }
+
+    // MS-5b: read the window BEFORE overwriting the entry below —
+    // the displaced entry's stamped times are the truest source.
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
     
     const currentUserId = window.AccessControl?.getCurrentUserId?.() || 'unknown';
     const currentUserName = window.AccessControl?.getCurrentUserName?.() || 'Another scheduler';
