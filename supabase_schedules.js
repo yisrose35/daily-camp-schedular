@@ -321,8 +321,21 @@
             return allBunks.map(String);
         }
         
-        // For schedulers, use AccessControl's editable divisions (it's properly initialized)
-        const editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        // ★ MS-2: for schedulers, scope the SAVE filter to their ASSIGNED
+        // divisions (getGeneratableDivisions), not the v3.13 "full editing
+        // access" set (getEditableDivisions = every division). Otherwise a
+        // scheduler's row absorbs stale copies of every other division
+        // (realtime-merged into their memory) stamped with a fresh
+        // updated_at — which silently shadows the owner's later edits in
+        // the per-bunk newest-wins merge. Explicit cross-division writes
+        // still bypass via options.skipFilter.
+        let editableDivisions = [];
+        if (role === 'scheduler') {
+            try { editableDivisions = window.AccessControl?.getGeneratableDivisions?.() || []; } catch (e) {}
+        }
+        if (!editableDivisions.length) {
+            editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
+        }
         log('Editable divisions from AccessControl:', editableDivisions);
         
         if (editableDivisions.length === 0) {
