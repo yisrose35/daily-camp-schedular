@@ -3187,6 +3187,16 @@
 
     function flagTiles(notifs) {
         try {
+            // MS-4g: grid re-renders rebuild entry objects, wiping the
+            // _conflictFlagged mark — so also maintain a render-proof map
+            // (dateKey|bunk|location → true) that blockStyle consults.
+            const map = {};
+            notifs.forEach(n => {
+                const md = n.metadata || {};
+                if (!md.dateKey || !md.location) return;
+                (md.bunks || []).forEach(b => { map[md.dateKey + '|' + b + '|' + md.location] = true; });
+            });
+            window.__conflictFlagMap = map;
             const dk = window.currentScheduleDate;
             if (!dk) return;
             let flagged = 0;
@@ -3205,9 +3215,10 @@
                     });
                 });
             });
-            if (flagged > 0) {
-                console.log('🔗 [ConflictNotify] flagged ' + flagged + ' conflicting cell(s) on ' + dk);
+            if (flagged > 0 || Object.keys(map).length > 0) {
+                console.log('🔗 [ConflictNotify] flagged ' + flagged + ' conflicting cell(s) on ' + dk + ' (map: ' + Object.keys(map).length + ')');
                 try { window.renderStaggeredView?.(); } catch (e) {}
+                try { window.updateTable?.(); } catch (e) {}
                 try { window.dispatchEvent(new CustomEvent('campistry-schedule-refreshed', { detail: { dateKey: dk } })); } catch (e) {}
             }
         } catch (e) { /* non-fatal */ }
@@ -3235,6 +3246,14 @@
                 card.remove();
                 try { await _client().from('notifications').update({ read: true }).eq('id', n.id); } catch (e) {}
                 if (host.children.length === 0) host.remove();
+                // MS-4g: dismissing clears this notification's red flags + repaints
+                try {
+                    const md = n.metadata || {};
+                    const m = window.__conflictFlagMap || {};
+                    (md.bunks || []).forEach(b => { delete m[md.dateKey + '|' + b + '|' + md.location]; });
+                    window.updateTable?.();
+                    window.renderStaggeredView?.();
+                } catch (e) {}
             });
             host.appendChild(card);
         });

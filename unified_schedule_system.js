@@ -1359,12 +1359,19 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
     const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
     const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
-    // Build time ranges for the slots being claimed
+    // Build time ranges for the slots being claimed.
+    // MS-5: prefer the editing bunk's entry-stamped times (_startMin/_endMin)
+    // — per-bunk slot tables can be stale/degenerate after merges while the
+    // entries carry the solver's real times; mixing the two coordinate
+    // systems made real cross-division overlaps invisible.
     const claimedTimeRanges = [];
     for (const slotIdx of slots) {
         const slotInfo = excludeBunkSlots[slotIdx];
-        if (slotInfo && slotInfo.startMin !== undefined && slotInfo.endMin !== undefined) {
-            claimedTimeRanges.push({ slotIdx, startMin: slotInfo.startMin, endMin: slotInfo.endMin });
+        const ownEntry = (assignments[excludeBunk] || [])[slotIdx];
+        const cs = (ownEntry && typeof ownEntry._startMin === 'number') ? ownEntry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+        const ce = (ownEntry && typeof ownEntry._endMin === 'number') ? ownEntry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+        if (cs !== undefined && ce !== undefined) {
+            claimedTimeRanges.push({ slotIdx, startMin: cs, endMin: ce });
         }
     }
     
@@ -1403,33 +1410,39 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
                 const bunkAssignments = assignments[bunkName];
                 if (!bunkAssignments) continue;
                 
-                // Check each slot in THIS bunk's division for time overlap
-                for (let idx = 0; idx < divSlots.length; idx++) {
+                // Check each slot in THIS bunk's division for time overlap.
+                // MS-5: iterate the full assignment array (entries can exist
+                // past the division table's length) and prefer entry-stamped
+                // times over the table's — same reasoning as the claimed side.
+                const _scanLen = Math.max(divSlots.length, bunkAssignments.length);
+                for (let idx = 0; idx < _scanLen; idx++) {
                     const entry = bunkAssignments[idx];
                     if (!entry || entry.continuation) continue;
-                    
+
                     const entryField = fieldLabel(entry.field);
                     const entryActivity = entry._activity || entryField;
                     const entryLocation = entry._location || entryField;
-                    
+
                     // Check if this entry uses the same location
                     const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
                         entryLocation?.toLowerCase() === locationName.toLowerCase() ||
                         entryActivity?.toLowerCase() === locationName.toLowerCase();
-                    
+
                     if (!matchesLocation) continue;
-                    
+
                     // *** KEY FIX: Check TIME OVERLAP, not slot index ***
                     const slotInfo = divSlots[idx];
-                    if (!slotInfo || slotInfo.startMin === undefined) continue;
-                    
+                    const oS = (typeof entry._startMin === 'number') ? entry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+                    const oE = (typeof entry._endMin === 'number') ? entry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+                    if (oS === undefined || oE === undefined) continue;
+
                     for (const claimed of claimedTimeRanges) {
                         // Time overlap: NOT (end1 <= start2 OR start1 >= end2)
-                        const hasOverlap = !(slotInfo.endMin <= claimed.startMin || slotInfo.startMin >= claimed.endMin);
-                        
+                        const hasOverlap = !(oE <= claimed.startMin || oS >= claimed.endMin);
+
                         if (hasOverlap) {
                             if (!usageBySlot[claimed.slotIdx]) usageBySlot[claimed.slotIdx] = [];
-                            
+
                             // Avoid duplicate entries for same bunk in same claimed slot
                             if (!usageBySlot[claimed.slotIdx].find(u => u.bunk === String(bunkName))) {
                                 usageBySlot[claimed.slotIdx].push({
@@ -1439,8 +1452,8 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
                                     field: entryField,
                                     canEdit: editBunks.has(String(bunkName)),
                                     theirSlot: idx,
-                                    overlapStart: Math.max(slotInfo.startMin, claimed.startMin),
-                                    overlapEnd: Math.min(slotInfo.endMin, claimed.endMin)
+                                    overlapStart: Math.max(oS, claimed.startMin),
+                                    overlapEnd: Math.min(oE, claimed.endMin)
                                 });
                             }
                         }
