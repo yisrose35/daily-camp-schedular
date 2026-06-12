@@ -2641,8 +2641,11 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         if (allTimes.length === 0) return [];
         var dayStart = Math.min.apply(null, allTimes);
         var dayEnd = Math.max.apply(null, allTimes);
-        // Snap dayStart down to a clean increment boundary so columns align nicely.
-        dayStart = Math.floor(dayStart / increment) * increment;
+        // ★ Do NOT snap dayStart down to the increment grid. Snapping a 12:20
+        //   camp-wide start to 12:00 fabricated a leading column nobody
+        //   occupies — rendered as a striped "hasn't started" band for every
+        //   bunk. Columns start at the true earliest minute; a day that
+        //   already starts on a clean boundary renders exactly as before.
         var cols = [];
         for (var t = dayStart; t < dayEnd; t += increment) {
             cols.push({ startMin: t, endMin: t + increment });

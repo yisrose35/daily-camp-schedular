@@ -1898,7 +1898,10 @@ function renderAutoDivisionTable(divName, bunks) {
 
     if (dayStart === Infinity) dayStart = 480;
     if (dayEnd === -Infinity) dayEnd = 960;
-    dayStart = Math.floor(dayStart / inc) * inc;
+    // ★ Do NOT snap dayStart down to the increment grid: a 12:20 day start
+    //   would fabricate a 12:00 column nobody occupies (a striped "hasn't
+    //   started" band for every bunk). Columns start at the true first
+    //   minute; only the end is padded out to a full column.
     dayEnd = Math.ceil(dayEnd / inc) * inc;
 
     // ─── 2. Identify "Periods" from the bell schedule (DAW layer templates) ─────
@@ -2702,7 +2705,10 @@ function renderCombinedAutoTable(divBunks) {
 
     if (dayStart === Infinity) dayStart = 480;
     if (dayEnd === -Infinity) dayEnd = 960;
-    dayStart = Math.floor(dayStart / inc) * inc;
+    // ★ Do NOT snap dayStart down to the increment grid: a 12:20 day start
+    //   would fabricate a 12:00 column nobody occupies (a striped "hasn't
+    //   started" band for every bunk). Columns start at the true first
+    //   minute; only the end is padded out to a full column.
     dayEnd = Math.ceil(dayEnd / inc) * inc;
 
     // Build activity ranges
