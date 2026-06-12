@@ -1854,7 +1854,7 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     
     if (nonEditableConflicts.length > 0) {
         sendSchedulerNotification(
-            [...new Set(nonEditableConflicts.map(c => c.bunk))], 
+            [...new Set(nonEditableConflicts.map(c => c.bunk))],
             location, activity, 'bypassed'
         );
         if (window.showToast) {
@@ -1863,7 +1863,24 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     }
 }
     }
-    
+
+    // ★ MS-4e: the NOTIFY choice must actually notify. With only other-user
+    // conflicts, conflictsToResolve is empty, so the block above never ran —
+    // the double-booking was created silently and no notification was ever
+    // sent. Fire the conflict notification independently of whether any
+    // same-user conflicts needed reassignment.
+    if (!bypassMode && nonEditableConflicts.length > 0) {
+        try {
+            sendSchedulerNotification(
+                [...new Set(nonEditableConflicts.map(c => c.bunk))],
+                location, activity, 'conflict'
+            );
+            if (window.showToast) {
+                window.showToast('Double-booking created — the other scheduler was notified', 'warning');
+            }
+        } catch (eN) { console.warn('[resolveConflictsAndApply] notify failed:', eN); }
+    }
+
     return result;
 }
 
