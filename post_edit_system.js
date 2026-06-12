@@ -851,11 +851,11 @@
                         <div style="display:flex;flex-direction:column;gap:8px;">
                             <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;">
-                                <div><div style="font-weight:500;color:#374151;">📧 Notify other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Create double-booking & send warning</div></div>
+                                <div><div style="font-weight:500;color:#374151;">Override &amp; flag the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflicting activity is flagged and they're notified</div></div>
                             </label>
                             <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;">
                                 <input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;">
-                                <div><div style="font-weight:500;color:#374151;">🔓 Bypass & reassign (Admin mode)</div><div style="font-size:0.75rem;color:#6b7280;">Override permissions and use smart regeneration</div></div>
+                                <div><div style="font-weight:500;color:#374151;">Override &amp; reschedule the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflict is auto-rescheduled and they're notified</div></div>
                             </label>
                         </div>
                     </div>`;
