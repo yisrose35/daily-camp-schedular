@@ -558,6 +558,13 @@
         } catch (e) { /* fall back to row timestamps */ }
         const _bunkEff = {};
         const _segEff = {};
+        // ★ MS-4c: the division's GRID (divisionTimes + _perBunkSlotsData)
+        // must come from the SAME row that wins the division's CONTENT.
+        // The old "keep the version with more slots" rule could pair one
+        // scheduler's 12-slot grid with another's 10-slot assignments for
+        // the same division — post-edit saves then fail the shape guard
+        // ("Slot count mismatch — refusing upload").
+        const _divEff = {}, _divWinnerDT = {}, _divWinnerPBS = {};
 
         records.forEach(record => {
             const data = record.schedule_data || {};
@@ -567,6 +574,21 @@
                 const dn = _bunkToDiv[String(bunkId)];
                 return (_stamps && dn && _stamps[dn] != null) ? _stamps[dn] : _rowMs;
             };
+            try {
+                const _divsInRow = new Set();
+                Object.keys(data.scheduleAssignments || {}).forEach(b => {
+                    const dn = _bunkToDiv[String(b)];
+                    if (dn) _divsInRow.add(dn);
+                });
+                _divsInRow.forEach(dn => {
+                    const eff = (_stamps && _stamps[dn] != null) ? _stamps[dn] : _rowMs;
+                    if (_divEff[dn] == null || eff > _divEff[dn]) {
+                        _divEff[dn] = eff;
+                        if (data.divisionTimes && data.divisionTimes[dn]) _divWinnerDT[dn] = data.divisionTimes[dn];
+                        if (data._perBunkSlotsData && data._perBunkSlotsData[dn]) _divWinnerPBS[dn] = data._perBunkSlotsData[dn];
+                    }
+                });
+            } catch (eDW) { /* fall back to more-slots merge */ }
 
             log('Merging from', record.scheduler_name || 'unknown', {
                 bunks: Object.keys(data.scheduleAssignments || {}).length,
@@ -687,6 +709,12 @@
             }
         } catch (eDS) { /* non-fatal */ }
 
+        // ★ MS-4c: override the more-slots divisionTimes merge with the
+        // content-winner's grid per division (keeps grid ≡ content)
+        try {
+            Object.keys(_divWinnerDT).forEach(dn => { mergedDivisionTimes[dn] = _divWinnerDT[dn]; });
+        } catch (eDW2) {}
+
         // ★★★ FIX: Deserialize unifiedTimes if needed ★★★
         const deserializedTimes = deserializeUnifiedTimes(mergedUnifiedTimes);
 
@@ -702,6 +730,10 @@
             leagueAssignments: mergedLeagues,
             unifiedTimes: deserializedTimes,  // ★★★ FIX: Now included! ★★★
             divisionTimes: window.DivisionTimesSystem?.deserialize(mergedDivisionTimes) || mergedDivisionTimes,
+            // ★ MS-4c: content-winner per-bunk grids (consumed by the
+            // unified restore so window.divisionTimes._perBunkSlots matches
+            // the merged assignments' shape)
+            _perBunkSlotsData: Object.keys(_divWinnerPBS).length > 0 ? _divWinnerPBS : undefined,
             slotCount: maxSlots,
             isRainyDay,
             _mergedAt: new Date().toISOString(),
