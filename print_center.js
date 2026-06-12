@@ -3438,11 +3438,23 @@ function runLiveStandalone() {
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
         '</div>';
 
-    // Set the title once data is loaded (fall back to "Camp Schedule")
+    // Set the title once data is loaded (fall back to "Camp Schedule").
+    // ★ Prefer the authoritative camp name — the DB camp record exposed via
+    //   AccessControl.getCampName(), the same source the dashboard shows — over
+    //   the stored settings copy, which goes stale on rename (it kept showing
+    //   the old "Camp Awesome" test name). Then app1.campName, then the legacy
+    //   top-level fields (a stale one there could shadow the real name).
     function refreshTitle() {
         try {
             var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
-            var nm = g.camp_name || g.campName || (g.app1 ? g.app1.campName : '') || 'Camp Schedule';
+            var nm = '';
+            try {
+                if (window.AccessControl && typeof window.AccessControl.getCampName === 'function') {
+                    var _an = window.AccessControl.getCampName();
+                    if (_an && _an !== 'Your Camp' && _an !== 'Unknown Camp') nm = _an;
+                }
+            } catch (_) {}
+            nm = nm || (g.app1 ? g.app1.campName : '') || g.campName || g.camp_name || 'Camp Schedule';
             var titleEl = document.getElementById('pc3-live-title');
             if (titleEl) titleEl.textContent = nm;
             document.title = nm + ' — Live';
