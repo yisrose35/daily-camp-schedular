@@ -475,9 +475,9 @@
         
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
         const userId = window.CampistryDB?.getUserId?.() || null;
-        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        const dateKey = window.currentScheduleDate || window.currentDate || new Date().toISOString().split('T')[0];
         if (!campId) return;
-        
+
         try {
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
@@ -486,17 +486,23 @@
                     if (divData.bunks?.includes(bunk)) affectedDivisions.add(divName);
                 }
             }
-            
+
+            // ★ camp_users stores division scope in assigned_divisions
+            // (selecting the nonexistent `divisions` column errored the whole
+            // query, so notifications were NEVER sent)
             const { data: schedulers } = await supabase
-                .from('camp_users').select('user_id, divisions')
+                .from('camp_users').select('user_id, assigned_divisions')
                 .eq('camp_id', campId).neq('user_id', userId);
-            if (!schedulers) return;
-            
+
             const notifyUsers = [];
-            for (const scheduler of schedulers) {
-                const theirDivisions = scheduler.divisions || [];
+            for (const scheduler of (schedulers || [])) {
+                if (!scheduler.user_id) continue;
+                const theirDivisions = scheduler.assigned_divisions || [];
                 if (theirDivisions.some(d => affectedDivisions.has(d))) notifyUsers.push(scheduler.user_id);
             }
+            // ★ the camp OWNER schedules every division but is not a
+            // camp_users row — include them (camp_id is the owner's uid)
+            if (campId && campId !== userId && !notifyUsers.includes(campId)) notifyUsers.push(campId);
             if (notifyUsers.length === 0) return;
             
             const notifications = notifyUsers.map(targetUserId => ({

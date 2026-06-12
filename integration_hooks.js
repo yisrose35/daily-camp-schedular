@@ -3120,3 +3120,112 @@
     console.log('   v6.8: Scheduler role guard for camp_state + localStorage fallback hydration');
 
 })();
+
+// =====================================================================
+// ★ CROSS-SCHEDULER CONFLICT NOTIFICATIONS — RECEIVER (MS-4)
+// The post-edit conflict flow inserts rows into the `notifications`
+// table ("notify other scheduler" / "bypassed"), but nothing ever READ
+// them — the other user was never actually notified. This receiver:
+//  1. on load + via realtime INSERT, fetches my unread notifications
+//  2. shows dismissible cards (dismiss = mark read in the table)
+//  3. flags the conflicting entries on the loaded date
+//     (entry._conflictFlagged → red tile in the auto grid)
+// =====================================================================
+(function () {
+    'use strict';
+    let _notifChannel = null;
+
+    function _client() {
+        return window.CampistryDB?.getClient?.() || window.supabaseClient || window.supabase;
+    }
+
+    async function fetchAndShow() {
+        try {
+            const c = _client();
+            const uid = window.CampistryDB?.getUserId?.();
+            if (!c || !uid || !c.from) return;
+            const { data, error } = await c.from('notifications')
+                .select('id,type,title,message,metadata,created_at')
+                .eq('user_id', uid).eq('read', false)
+                .in('type', ['schedule_conflict', 'schedule_bypassed'])
+                .order('created_at', { ascending: false }).limit(20);
+            if (error || !data || !data.length) return;
+            showCards(data);
+            flagTiles(data);
+        } catch (e) { /* non-fatal */ }
+    }
+
+    function flagTiles(notifs) {
+        try {
+            const dk = window.currentScheduleDate;
+            if (!dk) return;
+            let flagged = 0;
+            notifs.forEach(n => {
+                const md = n.metadata || {};
+                if (md.dateKey !== dk) return;
+                (md.bunks || []).forEach(b => {
+                    const arr = (window.scheduleAssignments || {})[b] || [];
+                    arr.forEach(e => {
+                        if (!e || e.continuation) return;
+                        const f = (typeof e.field === 'object') ? (e.field && e.field.name) : e.field;
+                        if (md.location && String(f) === String(md.location) && !e._conflictFlagged) {
+                            e._conflictFlagged = true;
+                            flagged++;
+                        }
+                    });
+                });
+            });
+            if (flagged > 0) {
+                console.log('🔗 [ConflictNotify] flagged ' + flagged + ' conflicting cell(s) on ' + dk);
+                try { window.renderStaggeredView?.(); } catch (e) {}
+                try { window.dispatchEvent(new CustomEvent('campistry-schedule-refreshed', { detail: { dateKey: dk } })); } catch (e) {}
+            }
+        } catch (e) { /* non-fatal */ }
+    }
+
+    function showCards(notifs) {
+        let host = document.getElementById('campistry-conflict-notices');
+        if (host) host.remove();
+        host = document.createElement('div');
+        host.id = 'campistry-conflict-notices';
+        host.style.cssText = 'position:fixed;bottom:16px;right:16px;z-index:99999;max-width:380px;display:flex;flex-direction:column;gap:8px;';
+        const esc = (window.CampUtils && window.CampUtils.escapeHtml) || function (s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
+                return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
+            });
+        };
+        notifs.slice(0, 5).forEach(n => {
+            const card = document.createElement('div');
+            card.style.cssText = 'background:#fff7ed;border:1px solid #f59e0b;border-left:4px solid #f59e0b;border-radius:8px;padding:10px 12px;box-shadow:0 4px 12px rgba(0,0,0,0.18);font-size:0.85rem;color:#78350f;';
+            card.innerHTML = '<div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start;">'
+                + '<div><strong>' + esc(n.title || 'Schedule notice') + '</strong>'
+                + '<div style="margin-top:4px;line-height:1.35;">' + esc(n.message || '') + '</div></div>'
+                + '<button title="Dismiss" style="border:none;background:transparent;font-size:1rem;cursor:pointer;color:#92400e;flex-shrink:0;">&#10005;</button></div>';
+            card.querySelector('button').addEventListener('click', async function () {
+                card.remove();
+                try { await _client().from('notifications').update({ read: true }).eq('id', n.id); } catch (e) {}
+                if (host.children.length === 0) host.remove();
+            });
+            host.appendChild(card);
+        });
+        document.body.appendChild(host);
+    }
+
+    function subscribe() {
+        try {
+            const c = _client();
+            const uid = window.CampistryDB?.getUserId?.();
+            if (!c || !uid || !c.channel || _notifChannel) return;
+            _notifChannel = c.channel('campistry-notif-' + uid)
+                .on('postgres_changes',
+                    { event: 'INSERT', schema: 'public', table: 'notifications', filter: 'user_id=eq.' + uid },
+                    function () { fetchAndShow(); })
+                .subscribe();
+            console.log('🔗 [ConflictNotify] realtime subscription active');
+        } catch (e) { /* non-fatal */ }
+    }
+
+    // start after auth/init settles; re-flag when the date's schedule reloads
+    setTimeout(function () { fetchAndShow(); subscribe(); }, 6000);
+    window.__refreshConflictNotifications = fetchAndShow;
+})();

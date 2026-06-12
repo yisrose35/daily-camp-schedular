@@ -4024,19 +4024,22 @@ if (bypassStatus.highlight) {
         if (!supabase) return;
         const campId = window.CampistryDB?.getCampId?.() || localStorage.getItem('currentCampId');
         const userId = window.CampistryDB?.getUserId?.() || null;
-        const dateKey = window.currentDate || new Date().toISOString().split('T')[0];
+        const dateKey = window.currentScheduleDate || window.currentDate || new Date().toISOString().split('T')[0];
         if (!campId) return;
         try {
             const affectedDivisions = new Set();
             const divisions = window.divisions || {};
-            for (const bunk of affectedBunks) { 
-                for (const [divName, divData] of Object.entries(divisions)) { 
-                    if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName); 
-                } 
+            for (const bunk of affectedBunks) {
+                for (const [divName, divData] of Object.entries(divisions)) {
+                    if (divData.bunks?.some(b => String(b) === String(bunk))) affectedDivisions.add(divName);
+                }
             }
-            const { data: schedulers } = await supabase.from('camp_users').select('user_id, divisions').eq('camp_id', campId).neq('user_id', userId);
-            if (!schedulers) return;
-            const notifyUsers = schedulers.filter(s => (s.divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
+            // ★ real column is assigned_divisions (selecting `divisions`
+            // errored the query → notifications were never sent)
+            const { data: schedulers } = await supabase.from('camp_users').select('user_id, assigned_divisions').eq('camp_id', campId).neq('user_id', userId);
+            const notifyUsers = (schedulers || []).filter(s => s.user_id && (s.assigned_divisions || []).some(d => affectedDivisions.has(d))).map(s => s.user_id);
+            // ★ include the camp owner (not a camp_users row; camp_id is the owner's uid)
+            if (campId && campId !== userId && !notifyUsers.includes(campId)) notifyUsers.push(campId);
             if (notifyUsers.length === 0) return;
             const notifications = notifyUsers.map(targetUserId => ({
                 camp_id: campId, user_id: targetUserId,
@@ -6451,8 +6454,8 @@ if (softBlocks.length > 0) {
 
             if (!schedulers) return;
 
-            const notifyUsers = schedulers.filter(s => 
-                (s.divisions || []).some(d => proposal.affected_divisions.includes(d))
+            const notifyUsers = schedulers.filter(s =>
+                (s.assigned_divisions || s.divisions || []).some(d => proposal.affected_divisions.includes(d))
             ).map(s => s.user_id);
 
             if (notifyUsers.length === 0) return;
