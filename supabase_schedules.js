@@ -667,6 +667,23 @@
             }
         } catch (e) { /* non-fatal: never let the prune break a load */ }
 
+        // ★ MS-3: remember the winning per-division stamps so this session's
+        // later saves CARRY THEM FORWARD for divisions a scoped generation
+        // doesn't touch (without this, the save side has no "prev" and
+        // stamps everything NOW — recreating the stale-copy shadowing).
+        try {
+            const _dk = records[0] && (records[0].date_key || records[0].dateKey);
+            if (_dk) {
+                const m = {};
+                Object.keys(_bunkEff).forEach(b => {
+                    const dn = _bunkToDiv[String(b)];
+                    if (dn) m[dn] = Math.max(m[dn] || 0, _bunkEff[b] || 0);
+                });
+                window.__divStampCache = window.__divStampCache || {};
+                window.__divStampCache[_dk] = Object.assign({}, window.__divStampCache[_dk] || {}, m);
+            }
+        } catch (eDS) { /* non-fatal */ }
+
         // ★★★ FIX: Deserialize unifiedTimes if needed ★★★
         const deserializedTimes = deserializeUnifiedTimes(mergedUnifiedTimes);
 
