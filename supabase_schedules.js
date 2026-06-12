@@ -579,7 +579,10 @@
             if (data.scheduleAssignments) {
                 Object.entries(data.scheduleAssignments).forEach(([bunkId, slots]) => {
                     const eff = _effFor(bunkId);
-                    if (_bunkEff[bunkId] == null || eff >= _bunkEff[bunkId]) {
+                    // strict > : a CARRIED-FORWARD stamp equals the original
+                    // owner's stamp — the original (processed earlier) must
+                    // keep the bunk, not the row that merely copied it
+                    if (_bunkEff[bunkId] == null || eff > _bunkEff[bunkId]) {
                         _bunkEff[bunkId] = eff;
                         mergedAssignments[bunkId] = slots;
                     }
@@ -590,7 +593,7 @@
             if (data.scheduleSegments) {
                 Object.entries(data.scheduleSegments).forEach(([bunkId, row]) => {
                     const eff = _effFor(bunkId);
-                    if (_segEff[bunkId] == null || eff >= _segEff[bunkId]) {
+                    if (_segEff[bunkId] == null || eff > _segEff[bunkId]) {
                         _segEff[bunkId] = eff;
                         mergedSegments[bunkId] = row;
                     }

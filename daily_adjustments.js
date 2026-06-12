@@ -4852,9 +4852,22 @@ async function runOptimizer() {
     // save runs, but saveSchedule needs the scope to stamp per-division
     // recency (_divStamps). TTL-checked (180s) on the consumer side.
     try {
+        // The scope picker may express the scope as BUNKS only
+        // (_generationBunkScope) — derive the division list from it when no
+        // division-level scope is set, so the save layer still knows which
+        // divisions this generation touches.
+        let _gsDivs = _effScope ? [..._effScope] : null;
+        if (!_gsDivs && _generationBunkScope && _generationBunkScope.size > 0) {
+            const _b2d = {};
+            Object.entries(window.divisions || {}).forEach(([dn, di]) =>
+                ((di && di.bunks) || []).forEach(b => { _b2d[String(b)] = dn; }));
+            const _ds = new Set();
+            [..._generationBunkScope].forEach(b => { const dn = _b2d[String(b)]; if (dn) _ds.add(dn); });
+            if (_ds.size > 0) _gsDivs = [..._ds];
+        }
         window.__lastGenScope = {
             date: window._activeGenDate || window.currentScheduleDate || '',
-            divisions: _effScope ? [..._effScope] : null,
+            divisions: _gsDivs,
             at: Date.now()
         };
     } catch (_eGS) {}
