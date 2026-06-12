@@ -864,6 +864,15 @@
             blocksByDivisionTime[key].push(block);
         });
 
+        // ★ Shared specialty leagues: when 2+ divisions reference the SAME
+        //   specialty league at the SAME time slot (e.g. 8th & 9th both play
+        //   ABBL @1035) it is ONE game, not separate games. The first division
+        //   processed schedules + locks the fields; the rest REUSE that single
+        //   game (identical matchups/fields) instead of trying to schedule a
+        //   second game and colliding with the locks (which left the 2nd
+        //   division empty). Keyed by `${league.id}_${startTime}`.
+        const scheduledLeagueSlots = {};
+
         // Process each division/time combination
         for (const [key, blocks] of Object.entries(blocksByDivisionTime)) {
             const [divName, startTime] = key.split('_');
@@ -879,6 +888,26 @@
 
             if (!league) {
                 console.log(`[SpecialtyLeagues] No enabled league for division ${divName}`);
+                continue;
+            }
+
+            // ★ Reuse path: this league already played at this slot this run
+            //   (another division sharing it). Show the SAME game here — do not
+            //   schedule a second game, re-lock fields, or re-record history.
+            const _shareKey = `${league.id}_${startTime}`;
+            const _shared = scheduledLeagueSlots[_shareKey];
+            if (_shared) {
+                console.log(`[SpecialtyLeagues] ${divName} shares ${_shared.gameLabel} with an earlier division @${startTime} — reusing the same game`);
+                if (!window.leagueAssignments) window.leagueAssignments = {};
+                blocks.forEach(block => {
+                    fillBlock(block, Object.assign({}, _shared.pick), fieldUsageBySlot, {}, true, activityProperties);
+                    block.processed = true;
+                    const _sIdx = block.slots && block.slots[0];
+                    if (_sIdx !== undefined) {
+                        if (!window.leagueAssignments[block.divName]) window.leagueAssignments[block.divName] = {};
+                        window.leagueAssignments[block.divName][_sIdx] = _shared.uiEntry;
+                    }
+                });
                 continue;
             }
 
@@ -1057,48 +1086,52 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 ? (`${league.name} Playoff R${_playoffRoundNum}` + (_playoffIsTBD ? ' TBD' : ''))
                 : `${league.name} Game ${gameNumber}`;
 
-            // Fill all blocks
-            blocks.forEach(block => {
-                const pick = {
-                    field: gameLabel,
-                    sport: league.sport || 'League',
-                    _activity: gameLabel,
-                    _h2h: true,
-                    _fixed: true,
-                    _allMatchups: matchupStrings,
-                    _gameLabel: gameLabel,
-                    _leagueName: league.name,
-                    _isSpecialtyLeague: true,
-                    _assignments: assignments,
-                    _playoffRound: _playoffRoundNum || null
-                };
+            // Build the fill pick + UI entry ONCE — identical for every block,
+            // and reused verbatim by any other division that shares this game.
+            const pick = {
+                field: gameLabel,
+                sport: league.sport || 'League',
+                _activity: gameLabel,
+                _h2h: true,
+                _fixed: true,
+                _allMatchups: matchupStrings,
+                _gameLabel: gameLabel,
+                _leagueName: league.name,
+                _isSpecialtyLeague: true,
+                _assignments: assignments,
+                _playoffRound: _playoffRoundNum || null
+            };
+            const uiEntry = {
+                leagueName: league.name,
+                sport: league.sport,
+                gameLabel: gameLabel,
+                isSpecialtyLeague: true,
+                matchups: assignments.map(a => ({
+                    teamA: a.teamA,
+                    teamB: a.teamB,
+                    field: a.field,
+                    slotOrder: a.slotOrder,
+                    conference: a.conference || null
+                }))
+            };
 
-                fillBlock(block, pick, fieldUsageBySlot, {}, true, activityProperties);
+            // Fill all blocks for this division + store its UI entry.
+            if (!window.leagueAssignments) window.leagueAssignments = {};
+            blocks.forEach(block => {
+                fillBlock(block, Object.assign({}, pick), fieldUsageBySlot, {}, true, activityProperties);
                 block.processed = true;
+                const _sIdx = block.slots && block.slots[0];
+                if (_sIdx !== undefined) {
+                    if (!window.leagueAssignments[block.divName]) window.leagueAssignments[block.divName] = {};
+                    window.leagueAssignments[block.divName][_sIdx] = uiEntry;
+                }
             });
 
             updateHistoryAfterScheduling(league, assignments, history, currentDate, gameLabel);
 
-            // Store in leagueAssignments for UI
-            if (!window.leagueAssignments) window.leagueAssignments = {};
-            if (!window.leagueAssignments[divName]) window.leagueAssignments[divName] = {};
-
-            const slotIdx = blocks[0]?.slots?.[0];
-            if (slotIdx !== undefined) {
-                window.leagueAssignments[divName][slotIdx] = {
-                    leagueName: league.name,
-                    sport: league.sport,
-                    gameLabel: gameLabel,
-                    isSpecialtyLeague: true,
-                    matchups: assignments.map(a => ({
-                        teamA: a.teamA,
-                        teamB: a.teamB,
-                        field: a.field,
-                        slotOrder: a.slotOrder,
-                        conference: a.conference || null
-                    }))
-                };
-            }
+            // ★ Record this league+slot so other divisions that share the same
+            //   specialty league at the same time reuse this single game.
+            scheduledLeagueSlots[`${league.id}_${startTime}`] = { pick, uiEntry, gameLabel };
         }
 
         // ★★★ SAVE GAMES PER DATE FOR EACH LEAGUE ★★★
