@@ -3738,12 +3738,34 @@ if (bypassStatus.highlight) {
                 }
             }
             if (corruptedBunks.length > 0) {
-                console.warn('[UnifiedSchedule] [BYPASS] Slot count mismatch for ' + corruptedBunks.length + ' bunks — refusing upload:',
-                    corruptedBunks);
-                if (typeof window.showNotification === 'function') {
-                    window.showNotification('Schedule data shape mismatch — save deferred. Refresh recommended.', 'error');
+                // ★ MS-4d: SELF-HEAL instead of refusing. Cross-user merges
+                // can pair a division's content with a different-shaped local
+                // grid (e.g. owner's 10-slot Harmony content vs the
+                // scheduler's 12-slot grid) — the safe padding fixer aligns
+                // them (grow-with-nulls, never truncate real data). Only
+                // refuse if the shapes STILL disagree after the fix.
+                console.warn('[UnifiedSchedule] [BYPASS] Slot count mismatch for ' + corruptedBunks.length + ' bunks — attempting reconcile:', corruptedBunks);
+                try { window.DivisionTimesSystem?.fixAllBunkSlotCounts?.(); } catch (eFix) {}
+                const stillBad = [];
+                for (let i = 0; i < corruptedBunks.length; i++) {
+                    const cb = corruptedBunks[i];
+                    const arr2 = window.scheduleAssignments[cb.bunk];
+                    const divName2 = (typeof getDivisionForBunk === 'function') ? getDivisionForBunk(cb.bunk) : null;
+                    const expected2 = (divName2 && window.divisionTimes?.[divName2]?._perBunkSlots?.[String(cb.bunk)]?.length)
+                                   || window.divisionTimes?.[divName2]?.length
+                                   || (arr2 ? arr2.length : 0);
+                    if (Array.isArray(arr2) && expected2 > 0 && Math.abs(arr2.length - expected2) > 1) {
+                        stillBad.push({ bunk: cb.bunk, expected: expected2, got: arr2.length });
+                    }
                 }
-                return { success: false, error: 'shape-mismatch', corruptedBunks: corruptedBunks };
+                if (stillBad.length > 0) {
+                    console.warn('[UnifiedSchedule] [BYPASS] Shape mismatch persists after reconcile — refusing upload:', stillBad);
+                    if (typeof window.showNotification === 'function') {
+                        window.showNotification('Schedule data shape mismatch — save deferred. Refresh recommended.', 'error');
+                    }
+                    return { success: false, error: 'shape-mismatch', corruptedBunks: stillBad };
+                }
+                console.log('[UnifiedSchedule] [BYPASS] Reconciled — proceeding with save');
             }
         }
         
