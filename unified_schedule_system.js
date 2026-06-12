@@ -1317,8 +1317,22 @@ function checkLocationConflict(locationName, slots, excludeBunk) {
     const activityProps = getActivityProperties();
     const locationInfo = activityProps[locationName] || {};
     let maxCapacity = locationInfo.sharableWith?.capacity ? parseInt(locationInfo.sharableWith.capacity) || 1 : (locationInfo.sharable ? 2 : 1);
+   // ★ MS-4b: for CONFLICT CLASSIFICATION, "mine" = bunks in my GENERATION
+   // scope (assigned divisions). v3.13 gave schedulers edit access to ALL
+   // bunks, so every cross-user conflict looked "editable" and other users'
+   // bunks were silently auto-reassigned without the notify/bypass/cancel
+   // choice. Owners keep full ownership (their scope is every division).
+   let _conflictOwnScope = null;
+   try {
+       const _gd = window.AccessControl?.getGeneratableDivisions?.();
+       const _allDivCount = Object.keys(window.divisions || {}).length;
+       if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+           _conflictOwnScope = new Set();
+           _gd.forEach(dn => (((window.divisions || {})[dn] || {}).bunks || []).forEach(b => _conflictOwnScope.add(String(b))));
+       }
+   } catch (_eScope) { /* fall back to edit-permission classification */ }
    const editBunksResult = getEditableBunks();
-const editBunks = editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []);
+const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBunksResult : new Set(editBunksResult || []));
     const conflicts = [], usageBySlot = {};
     
     // *** FIX: Get the ACTUAL time range from the editing bunk's slots ***

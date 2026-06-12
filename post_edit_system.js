@@ -273,7 +273,18 @@
             maxCapacity = 2;
         }
         
-        const editableBunks = getEditableBunks();
+        // ★ MS-4b: conflict classification uses GENERATION scope — see
+        // unified_schedule_system.checkLocationConflict for the rationale
+        let _conflictOwnScope = null;
+        try {
+            const _gd = window.AccessControl?.getGeneratableDivisions?.();
+            const _allDivCount = Object.keys(window.divisions || {}).length;
+            if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+                _conflictOwnScope = new Set();
+                _gd.forEach(dn => (((window.divisions || {})[dn] || {}).bunks || []).forEach(b => _conflictOwnScope.add(String(b))));
+            }
+        } catch (_eScope) { /* fall back */ }
+        const editableBunks = _conflictOwnScope || getEditableBunks();
         const conflicts = [];
         const usageBySlot = {};
         
