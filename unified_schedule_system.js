@@ -1271,9 +1271,27 @@ return activity || field || '';    }
                lower.includes('dismissal') || lower.includes('rest') || lower.includes('free');
     }
 
+    // True iff `name` exactly matches a configured league (regular or specialty).
+    // Used to distinguish a real league slot from a custom pin whose name merely
+    // contains the word "league" (e.g. a "Signup Leagues" placeholder tile).
+    window.isConfiguredLeagueName = function (name) {
+        if (!name) return false;
+        var n = String(name).toLowerCase().trim();
+        var gs = (typeof window.loadGlobalSettings === 'function' && window.loadGlobalSettings()) || {};
+        var byName = window.leaguesByName || gs.leaguesByName || {};
+        if (Object.keys(byName).some(function (k) { return String(k).toLowerCase().trim() === n; })) return true;
+        var sp = window.specialtyLeagues || gs.specialtyLeagues || [];
+        var arr = Array.isArray(sp) ? sp : Object.values(sp || {});
+        return arr.some(function (l) { return l && l.name && String(l.name).toLowerCase().trim() === n; });
+    };
+
     function isLeagueBlockType(eventName, blockType) {
         if (blockType === 'league' || blockType === 'specialty_league') return true;
-        return eventName && eventName.toLowerCase().includes('league');
+        // Name fallback for blocks that lost their explicit type — scoped to a
+        // REAL configured league. A custom pin whose name merely contains
+        // "league" (e.g. "Signup Leagues") must NOT render as a league slot, or
+        // it inherits a neighboring league's matchups via the ±2 slot lookup.
+        return !!eventName && window.isConfiguredLeagueName(eventName);
     }
 
     // =========================================================================

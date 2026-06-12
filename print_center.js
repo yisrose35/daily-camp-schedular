@@ -735,7 +735,7 @@ function buildDivisionBlocks(divName) {
 
     sorted.forEach(function (bl) {
         var evName = bl.item.event || bl.item.type || '';
-        var isLeagueBlock = (bl.item.type === 'league' || bl.item.type === 'specialty_league' || evName === 'League Game' || evName === 'Specialty League' || evName.toLowerCase().indexOf('league') >= 0);
+        var isLeagueBlock = (bl.item.type === 'league' || bl.item.type === 'specialty_league' || evName === 'League Game' || evName === 'Specialty League' || (typeof window.isConfiguredLeagueName === 'function' && window.isConfiguredLeagueName(evName)));
         var ev = evName;
         if (isLeagueBlock) {
             var isSpecialty = (bl.item.type === 'specialty_league' || evName === 'Specialty League');
