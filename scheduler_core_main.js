@@ -748,6 +748,24 @@
         // Helper — is this activity label a special-type that needs generation?
         const _isSpecialLabel = v => !!v && v.toLowerCase().trim().includes('special');
 
+        // ★ SINGLE-TILE ROTATION MODE: one smart tile (no Block B) whose config
+        //   names 2+ distinct options rotates PER BUNK across DAYS — e.g.
+        //   main1=Special, main2=Pickleball, fallback=Swim → each bunk cycles
+        //   special → Pickleball → Swim on consecutive days (staggered across
+        //   bunks so scarce capacity spreads), instead of splitting the
+        //   division within the day. Rotation jobs run their own placement
+        //   loop; keep them OUT of the scarce-special budget pre-calc so its
+        //   claims don't consume capacity the rotation never uses.
+        const _rotationOptions = (job) => {
+            if (!job || job.blockB) return null;
+            const seen = new Set(); const opts = [];
+            [job.main1, job.main2, job.fallbackActivity].forEach(v => {
+                const t = String(v || '').trim(); const k = t.toLowerCase();
+                if (!t || seen.has(k)) return; seen.add(k); opts.push(t);
+            });
+            return opts.length >= 2 ? opts : null;
+        };
+
         // Group jobs by time window key so we can pool capacity across divisions
         const _windowJobs = {};
         filteredJobs.forEach(job => {
@@ -804,7 +822,9 @@
             const [startMin, endMin] = wk.split('|').map(Number);
 
             // Only process windows where at least one job has a fallback-able special main
-            const fallbackableJobs = wJobs.filter(j => _isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2));
+            // (rotation-mode jobs place themselves — excluding them keeps the budget's
+            // claim registrations from eating capacity the rotation never consumes)
+            const fallbackableJobs = wJobs.filter(j => !_rotationOptions(j) && (_isSpecialLabel(j.fallbackFor) || _isSpecialLabel(j.main2)));
             if (fallbackableJobs.length === 0) return;
 
             // Total special capacity for this window — deduplicated by name
@@ -987,6 +1007,78 @@
             if (bunkList.length === 0) {
                 console.warn(`[SmartTile] No bunks in division ${divName}`);
                 return;
+            }
+
+            // ★ SINGLE-TILE ROTATION MODE: each bunk walks the configured
+            //   options cycle offset by (day + bunk index) — so every bunk
+            //   experiences Special on day 1, Pickleball on day 2, Swim on
+            //   day 3 (etc.), while on any single day the division spreads a
+            //   third per option (scarce capacity stays sane). Same date
+            //   regenerated → same assignment (deterministic). Infeasible
+            //   options fall through to the bunk's next option in the cycle.
+            const _rotOpts = _rotationOptions(job);
+            if (_rotOpts) {
+                const _dayNum = (() => {
+                    try { const d = String(window.currentScheduleDate || '').split('-'); const n = Math.floor(Date.UTC(+d[0], +d[1] - 1, +d[2]) / 86400000); return isFinite(n) ? n : 0; } catch (_) { return 0; }
+                })();
+                const _rStart = job.blockA.startMin, _rEnd = job.blockA.endMin;
+                const _rotSlots = Utils.findSlotsForRange(_rStart, _rEnd, divName);
+                if (_rotSlots.length === 0) {
+                    console.warn(`[SmartTile] ROTATION: no slots for ${divName} at ${_rStart}-${_rEnd}`);
+                    return;
+                }
+                console.log(`[SmartTile] ROTATION MODE ${divName}: [${_rotOpts.join(' → ')}], day offset ${_dayNum % _rotOpts.length}`);
+                bunkList.forEach((bunk, _bIdx) => {
+                    const _rEx = window.scheduleAssignments[bunk]?.[_rotSlots[0]];
+                    if (_rEx && _rEx._bunkOverride) return;
+                    let _placed = false;
+                    for (let _o = 0; _o < _rotOpts.length && !_placed; _o++) {
+                        const opt = _rotOpts[(_dayNum + _bIdx + _o) % _rotOpts.length];
+                        const optNorm = opt.toLowerCase().trim();
+                        if (needsGeneration(opt)) {
+                            if (optNorm.includes('special')) {
+                                // Category SPECIAL → this bunk's least-done claimable special
+                                const _avail = window.SmartLogicAdapter?.getAvailableSpecialsForTimeBlock?.(_rStart, _rEnd, divName, activityProperties, dailyFieldAvailability) || [];
+                                const _h = historicalCounts[bunk] || {};
+                                _avail.sort((a, b) => (_h[a.name] || 0) - (_h[b.name] || 0));
+                                for (const sp of _avail) {
+                                    if (!_canClaim(sp.name, _rStart, _rEnd, sp.capacity || 1, divName)) continue;
+                                    _registerClaim(sp.name, _rStart, _rEnd, divName);
+                                    console.log(`[SmartTile] ${bunk} -> ROTATION special: ${sp.name}`);
+                                    window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: sp.name, sport: null, _fixed: true, _activity: sp.name }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                    _placed = true; break;
+                                }
+                            } else {
+                                const _gT = optNorm.includes('sport') ? 'Sports Slot' : 'General Activity Slot';
+                                console.log(`[SmartTile] ${bunk} -> ROTATION ${_gT}`);
+                                schedulableSlotBlocks.push({ divName, bunk, event: _gT, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true });
+                                _placed = true;
+                            }
+                        } else if (knownSpecialNames.has(optNorm)) {
+                            const _rsw = _getSharableWith(opt); const _rcap = (_rsw && _rsw.capacity) || 1;
+                            if (_canClaim(opt, _rStart, _rEnd, _rcap, divName)) {
+                                _registerClaim(opt, _rStart, _rEnd, divName);
+                                console.log(`[SmartTile] ${bunk} -> ROTATION specific special: ${opt}`);
+                                window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                                _placed = true;
+                            }
+                        } else if (knownSportNames.has(optNorm) && !optNorm.includes('swim')) {
+                            console.log(`[SmartTile] ${bunk} -> ROTATION specific sport: ${opt} (solver-restricted)`);
+                            schedulableSlotBlocks.push({ divName, bunk, event: opt, startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, allowedActivities: [opt] });
+                            _placed = true;
+                        } else {
+                            // Direct-fill label (Swim etc.) — always placeable
+                            console.log(`[SmartTile] ${bunk} -> ROTATION direct fill: ${opt}`);
+                            window.fillBlock({ divName, bunk, startTime: _rStart, endTime: _rEnd, slots: _rotSlots }, { field: opt, sport: null, _fixed: true, _activity: opt }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                            _placed = true;
+                        }
+                    }
+                    if (!_placed) {
+                        console.log(`[SmartTile] ${bunk} -> ROTATION exhausted → Sports Slot`);
+                        schedulableSlotBlocks.push({ divName, bunk, event: 'Sports Slot', startTime: _rStart, endTime: _rEnd, slots: _rotSlots, fromSmartTile: true, _smartTileFallback: true });
+                    }
+                });
+                return; // rotation handled this job — skip the A/B split machinery
             }
 
             const result = window.SmartLogicAdapter.generateAssignments(
