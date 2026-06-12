@@ -2653,6 +2653,60 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         return cols;
     }
 
+    // ─── Schedule zoom (trackpad pinch / Ctrl+scroll) ────────────────────
+    // Trackpad pinch gestures arrive in the browser as wheel events with
+    // ctrlKey set: pinch-out (spread) → negative deltaY → zoom IN (bigger,
+    // less of the schedule on screen); pinch-in → positive deltaY → zoom
+    // OUT (smaller, more on screen). Ctrl+scroll on a mouse maps to the
+    // same path. Plain two-finger scrolling (no ctrlKey) passes through.
+    var SCHEDULE_ZOOM_KEY = 'campistry_schedule_zoom_v1';
+    function _getScheduleZoom() {
+        try {
+            var z = parseFloat(localStorage.getItem(SCHEDULE_ZOOM_KEY));
+            return (z >= 0.4 && z <= 2.5) ? z : 1;
+        } catch (_) { return 1; }
+    }
+    function _applyScheduleZoom(container) {
+        var z = _getScheduleZoom();
+        container.style.zoom = (z === 1) ? '' : String(z);
+    }
+    function _wireScheduleZoom(container) {
+        if (container._zoomWired) return;
+        container._zoomWired = true;
+        container.addEventListener('wheel', function (e) {
+            if (!e.ctrlKey) return;
+            e.preventDefault();   // keep the BROWSER from page-zooming; we zoom the schedule instead
+            var z = _getScheduleZoom();
+            // Exponential step: equal pinch effort = equal relative change,
+            // smooth on trackpads, ~±25% per notch on a ctrl+scroll mouse.
+            z *= Math.exp(-e.deltaY * 0.0025);
+            z = Math.max(0.4, Math.min(2.5, z));
+            z = Math.round(z * 100) / 100;
+            try { localStorage.setItem(SCHEDULE_ZOOM_KEY, String(z)); } catch (_) {}
+            container.style.zoom = (z === 1) ? '' : String(z);
+        }, { passive: false });
+    }
+
+    // Compact per-grade time ruler — repeated under each division band so
+    // the time axis is visible right next to every grade, not only at the
+    // top of the table.
+    function _buildGradeTimelineRow(timeColumns) {
+        var tr = document.createElement('tr');
+        tr.className = 'grade-timeline-row';
+        var lead = document.createElement('td');
+        lead.textContent = '';
+        lead.style.cssText = 'position: sticky; left: 0; z-index: 1; background: #f8fafc; border-right: 2px solid #e5e7eb; border-bottom: 1px solid #e5e7eb; padding: 2px 12px;';
+        tr.appendChild(lead);
+        timeColumns.forEach(function (col) {
+            var td = document.createElement('td');
+            var isHour = (col.startMin % 60) === 0;
+            td.textContent = minutesToTimeLabel(col.startMin);
+            td.style.cssText = 'padding: 2px 6px; background: #f8fafc; color: ' + (isHour ? '#334155' : '#94a3b8') + '; font-weight: ' + (isHour ? '700' : '500') + '; font-size: 0.68rem; white-space: nowrap; border-left: ' + (isHour ? '2px solid #cbd5e1' : '1px solid #f1f5f9') + '; border-bottom: 1px solid #e5e7eb; text-align: left;';
+            tr.appendChild(td);
+        });
+        return tr;
+    }
+
     function _findSlotIndexAtTime(divSlots, colStartMin) {
         if (!divSlots || divSlots.length === 0) return -1;
         for (var i = 0; i < divSlots.length; i++) {
@@ -2764,6 +2818,12 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
         });
 
         container.innerHTML = '';
+
+        // Pinch-zoom: wire once (survives re-renders — innerHTML resets don't
+        // clear the container's own listeners) and re-apply the saved factor.
+        // Applies to both the manual flat table and the auto per-division grids.
+        _wireScheduleZoom(container);
+        _applyScheduleZoom(container);
 
         // Empty-state (mirrors the legacy view's check)
         if ((!skeleton || skeleton.length === 0) && Object.keys(divisionTimes).length === 0) {
@@ -2903,6 +2963,10 @@ if (window.showToast) window.showToast(`-> ${bunk}: Moved to ${bestPick.activity
             ghTd.textContent = divName + (isEditable ? '' : ' [LOCKED]');
             ghTr.appendChild(ghTd);
             tbody.appendChild(ghTr);
+
+            // Per-grade time ruler directly under the division band, so the
+            // time axis is readable next to every grade when scrolled down.
+            tbody.appendChild(_buildGradeTimelineRow(timeColumns));
 
             // Pre-compute which slots in this division have identical content
             // for every bunk — those will merge into a single rowspan cell.
