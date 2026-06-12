@@ -891,8 +891,27 @@
                     .from('camps')
                     .update({ name: newCampName, address: newAddress })
                     .eq('id', campData.id);
-                
+
                 if (error) throw error;
+
+                // Keep the saved-settings copies of the name in sync with the
+                // camp record. Renaming the camp updated only the DB row; the
+                // Live view, Print Center, and Me page read app1.campName /
+                // camp_name from settings, which otherwise stay stale (this is
+                // why the Live view kept showing the old "Camp Awesome").
+                try {
+                    if (typeof window.loadGlobalSettings === 'function' &&
+                        typeof window.saveGlobalSettings === 'function') {
+                        const _gs = window.loadGlobalSettings() || {};
+                        if (!_gs.app1) _gs.app1 = {};
+                        _gs.app1.campName = newCampName;
+                        window.saveGlobalSettings('app1', _gs.app1);
+                        window.saveGlobalSettings('campName', newCampName);
+                        window.saveGlobalSettings('camp_name', newCampName);
+                    }
+                } catch (e) {
+                    console.warn('[Dashboard] camp-name settings sync failed:', e);
+                }
             } else {
                 // ⭐ FIX: Double-check this user is NOT a team member before creating
                 // Check if they have a pending invite
