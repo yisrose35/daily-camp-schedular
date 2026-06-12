@@ -1584,18 +1584,26 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
         return options;
     }
 
-    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps) {
+    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps, timeWindow = null) {
         const divName = getDivisionForBunk(bunk);
         if (!divName || slots.length === 0) return false;
-        
-        // Get time range for these slots
+
+        // Get time range for these slots.
+        // MS-5b: when the caller already resolved the real window (entry
+        // times / per-bunk table), use it — the division-level table can be
+        // SHORTER than the bunk's slot index in auto mode, which made the
+        // guard below reject every candidate and park bunks at Free.
         const divSlots = window.divisionTimes?.[divName] || [];
-        if (slots[0] >= divSlots.length) return false;
-        
-        const startMin = divSlots[slots[0]]?.startMin;
-        const endMin = divSlots[slots[slots.length - 1]]?.endMin;
-        
-        if (startMin === undefined || endMin === undefined) return false;
+        let startMin, endMin;
+        if (timeWindow && typeof timeWindow.startMin === 'number' && typeof timeWindow.endMin === 'number') {
+            startMin = timeWindow.startMin;
+            endMin = timeWindow.endMin;
+        } else {
+            if (slots[0] >= divSlots.length) return false;
+            startMin = divSlots[slots[0]]?.startMin;
+            endMin = divSlots[slots[slots.length - 1]]?.endMin;
+            if (startMin === undefined || endMin === undefined) return false;
+        }
         
         // Use time-based availability check
         const props = activityProps[fName] || {};
@@ -1627,7 +1635,9 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
             const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
             let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
             if (slotIdx < 0) slotIdx = 0;
-            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            // `pick` was never a parameter here — referencing it would throw
+            // a ReferenceError the moment checkSequenceViolation exists.
+            const seqViolation = window.checkSequenceViolation(bunk, fName, slotIdx, getDivisionForBunk(bunk));
             if (seqViolation?.violated) return false;
         }
 
@@ -2210,8 +2220,8 @@ function _resolveSlotWindow(bunk, divName, slots) {
        // Check field availability by TIME
         if (!checkFieldAvailableByTime(cand.field, startMin, endMin, bunk, activityProperties)) continue;
         
-        // Also check slot-based for backwards compat
-        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+        // Also check slot-based for backwards compat (MS-5b: pass the real window)
+        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties, { startMin, endMin })) continue;
         
         // *** v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ***
         // Without this, bumped bunks get assigned fields/specials their division can't access
