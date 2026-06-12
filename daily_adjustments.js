@@ -4818,9 +4818,32 @@ async function runOptimizer() {
     try { window._activeGenDate = window.currentScheduleDate || (document.getElementById('calendar-date-picker') || {}).value || ''; } catch (_eSnap) {}
 
     // ★★★ v3.13: Apply generation scope from settings picker ★★★
-    if (_generationScope && _generationScope.size > 0) {
-        window.selectedDivisionsForGeneration = [..._generationScope];
-        console.log('[Optimizer] Generation scope applied:', [..._generationScope]);
+    // ★ MS-1 (multi-scheduler): clamp the scope to the ROLE's generatable
+    // divisions. The scheduler-mode banner promises "Generate scoped to:
+    // <assigned>", but generation trusted the picker alone — a scheduler
+    // with no picker selection generated and SAVED all divisions into
+    // their daily_schedules row, stomping the owner's work in the merge.
+    // Owners/admins are unaffected (their generatable set is every
+    // division, so _roleScope stays null and behavior is unchanged).
+    let _roleScope = null;
+    try {
+        const _gd = window.AccessControl?.getGeneratableDivisions?.();
+        const _allDivCount = Object.keys(window.divisions || {}).length;
+        if (Array.isArray(_gd) && _gd.length > 0 && _allDivCount > 0 && _gd.length < _allDivCount) {
+            _roleScope = _gd.map(String);
+        }
+    } catch (_eRS) { /* non-fatal — fall through unclamped */ }
+    let _effScope = (_generationScope && _generationScope.size > 0) ? [..._generationScope] : null;
+    if (_roleScope) {
+        _effScope = _effScope ? _effScope.filter(d => _roleScope.includes(String(d))) : [..._roleScope];
+        if (_effScope.length === 0) {
+            await daShowAlert('None of the selected divisions are in your assigned scope (' + _roleScope.join(', ') + ').');
+            return;
+        }
+    }
+    if (_effScope) {
+        window.selectedDivisionsForGeneration = [..._effScope];
+        console.log('[Optimizer] Generation scope applied:', [..._effScope], _roleScope ? '(role-clamped)' : '');
     } else {
         delete window.selectedDivisionsForGeneration;
     }
@@ -4885,7 +4908,8 @@ async function runOptimizer() {
 
         try {
             window.invalidateSmartLogicSpecialsCache?.();
-            const scopeDivisions = _generationScope ? [..._generationScope] : null;
+            // ★ MS-1: use the role-clamped scope computed above (NOT the raw picker)
+            const scopeDivisions = _effScope ? [..._effScope] : null;
             const scopeBunks = _generationBunkScope ? [..._generationBunkScope] : null;
             // ★ Day 22.5: install per-bunk gate read by getBunksForGrade inside solver
             if (scopeBunks) window.__allowedBunkSet = new Set(scopeBunks.map(String));

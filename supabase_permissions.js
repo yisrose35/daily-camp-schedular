@@ -192,8 +192,12 @@
     // =========================================================================
 
     function getAllBunkIds() {
+        // window.bunks is an array of bunk NAME STRINGS in this app;
+        // legacy object form ({id,name}) is still handled.
         const bunks = window.bunks || window.globalBunks || [];
-        return bunks.map(b => String(b.id || b.name));
+        return bunks
+            .map(b => typeof b === 'string' ? b : String(b.id || b.name))
+            .filter(b => b && b !== 'undefined');
     }
 
     // =========================================================================
@@ -201,16 +205,32 @@
     // =========================================================================
 
     function getBunksForDivisions(divisionNames) {
-        const bunks = window.bunks || window.globalBunks || [];
         const divisionSet = new Set(divisionNames.map(String));
-        
+
+        // Primary: the division registry — bunk membership lives at
+        // divisions[name].bunks (array of bunk-name strings).
+        const divs = window.divisions || {};
+        const fromRegistry = [];
+        Object.entries(divs).forEach(([name, info]) => {
+            if (!divisionSet.has(String(name))) return;
+            (info?.bunks || []).forEach(b => {
+                const v = typeof b === 'string' ? b : String(b.id || b.name);
+                if (v && v !== 'undefined') fromRegistry.push(v);
+            });
+        });
+        if (fromRegistry.length > 0) return fromRegistry;
+
+        // Legacy fallback: object-shaped window.bunks with division refs.
+        const bunks = window.bunks || window.globalBunks || [];
         return bunks
             .filter(bunk => {
+                if (typeof bunk === 'string') return false;
                 const divId = String(bunk.divisionId || bunk.division);
                 const divName = getDivisionName(divId);
                 return divisionSet.has(divName) || divisionSet.has(divId);
             })
-            .map(b => String(b.id || b.name));
+            .map(b => String(b.id || b.name))
+            .filter(b => b && b !== 'undefined');
     }
 
     function getDivisionName(divisionId) {
