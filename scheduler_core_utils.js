@@ -2418,6 +2418,28 @@
             if (!Array.isArray(slots)) return;
             if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
         });
+        // ★★★ CB-66: also consult cloud rotation_counts (per-date). The local scan
+        // above reads only campDailyData_v1, so on a SECOND DEVICE (no local dates)
+        // or after the documented local-quota save-skip, period caps
+        // (maxUsage/exactFrequency per 'half'/'Nweek') silently UNDER-enforce. Take
+        // the MAX of local and a cloud period-count (count of distinct in-window
+        // dates where rotation_counts has this bunk+activity). MAX avoids
+        // double-counting dates present in both sources; it never lowers the local
+        // count, so it can only tighten (never loosen) the hard cap.
+        try {
+            var _cbd66 = (window.RotationCloud && window.RotationCloud.getCachedCountsByDate)
+                ? window.RotationCloud.getCachedCountsByDate() : null;
+            if (_cbd66) {
+                var _cloudCount66 = 0;
+                Object.keys(_cbd66).forEach(function(dateKey) {
+                    if (dateKey >= today) return;
+                    if (periodStart && dateKey < periodStart) return;
+                    var _byB = _cbd66[dateKey] && _cbd66[dateKey][bunk];
+                    if (_byB && (_byB[activityName] || 0) > 0) _cloudCount66++;
+                });
+                if (_cloudCount66 > count) count = _cloudCount66;
+            }
+        } catch (_e66) { /* non-fatal — local count stands */ }
         return count;
     };
 

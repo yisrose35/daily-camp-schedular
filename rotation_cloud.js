@@ -363,6 +363,13 @@
         _loadGen++;
     }
 
+    // ★★★ CB-66: synchronous read of the already-loaded per-date counts (no fetch,
+    // no promise). Lets the solver's period-cap enforcement consult cloud
+    // rotation_counts without becoming async. Returns null if nothing is cached.
+    function getCachedCountsByDate() {
+        return (_cache && _cache.countsByDate) ? _cache.countsByDate : null;
+    }
+
     // =====================================================================
     // EXPOSE
     // =====================================================================
@@ -373,7 +380,8 @@
         deleteActivity: deleteActivityCounts,
         clearAll: clearAllRotationCounts,
         clearForBunks: clearForBunks,
-        invalidateCache: invalidateCache
+        invalidateCache: invalidateCache,
+        getCachedCountsByDate: getCachedCountsByDate // ★ CB-66: sync per-date counts for period-cap enforcement
     };
 
     console.log('[RotationCloud] Module ready');
