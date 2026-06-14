@@ -17,6 +17,20 @@
 (function(){
 'use strict';
 
+// ★★★ CB-27/28/29 (+ folds CB-49/86/87): module-level HTML escaper. Layer/tile
+// names (customActivity, leagueName) and event names (ev.event) are
+// user-controlled and were interpolated RAW into innerHTML — the band label,
+// the edit-popover input `value=` attribute, the drag-ghost, and the skeleton
+// tile header — yielding stored XSS. The local `_esc` (~L1484) is scoped to a
+// single function and not in scope at these sinks; this module-level helper
+// covers all of them. Complete `&<>"'` set → safe in element and attribute
+// context alike.
+const _mbEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 let container=null, palette=null, grid=null;
 let dailySkeleton=[];
 let currentLoadedTemplate = null;
@@ -2028,7 +2042,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
         style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
-        <span class="band-label">${layer.customActivity || layer.leagueName || typeDef?.name || layer.type}</span>
+        <span class="band-label">${_mbEsc(layer.customActivity || layer.leagueName || typeDef?.name || layer.type)}</span>
         <span class="band-qty">${opSymbol}${layer.qty} · ${durLabel}</span>
         ${_ovDots}
         <div class="band-resize band-resize-bottom"></div>
@@ -2117,7 +2131,7 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
         document.body.appendChild(ghost);
       }
       const typeDef = DAW_LAYER_TYPES.find(t => t.type === layer.type);
-      ghost.innerHTML = '<div>' + (layer.customActivity || typeDef?.name || layer.type) + '</div>'
+      ghost.innerHTML = '<div>' + _mbEsc(layer.customActivity || typeDef?.name || layer.type) + '</div>'
         + '<div id="daw-drag-ghost-time" style="font-weight:400;color:#94a3b8;margin-top:2px;">'
         + minutesToTime(layer.startMin) + ' – ' + minutesToTime(layer.endMin) + '</div>';
       ghost.style.display = 'block';
@@ -2706,7 +2720,7 @@ function showDAWPopover(bandEl, layer, grade, opts) {
       <div class="ms-daw-pop-field">
         <label>Activity Name</label>
         <div class="ms-daw-pop-row">
-          <input type="text" id="daw-pop-custom-name" value="${layer.customActivity || ''}" placeholder="e.g. Home Run Derby" style="flex:1;">
+          <input type="text" id="daw-pop-custom-name" value="${_mbEsc(layer.customActivity || '')}" placeholder="e.g. Home Run Derby" style="flex:1;">
         </div>
       </div>
       <div class="ms-daw-pop-field">
@@ -3926,8 +3940,8 @@ function renderEventTile(ev, top, height) {
   
   let innerHtml = `
     <div class="tile-header">
-      <strong style="font-size:11px;">${ev.event}</strong>
-      <div style="font-size:10px;opacity:0.9;">${ev.startTime}-${ev.endTime}</div>
+      <strong style="font-size:11px;">${_mbEsc(ev.event)}</strong>
+      <div style="font-size:10px;opacity:0.9;">${_mbEsc(ev.startTime)}-${_mbEsc(ev.endTime)}</div>
     </div>
   `;
 
