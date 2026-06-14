@@ -2308,6 +2308,34 @@
             if (overlapping.some(c => c._bunkOverride && String(c.bunk) !== String(bunk))) return false;
             if (overlapping.length >= ledger.capacity) return false;
 
+            // ★★★ CB-84: zone max-concurrent enforcement. The zone editor saves a
+            // per-zone maxConcurrent cap but NO solver consulted it (silent no-op
+            // config). When the field's zone has a REAL cap (< 99), count the
+            // DISTINCT bunks already claiming ANY field in that zone at an
+            // overlapping time — reusing the same per-field claim ledgers the
+            // capacity check above uses — and block this field if the zone is at
+            // its cap. Guarded to capped zones, so the default (99 = unlimited) is
+            // byte-unchanged; fails open on any error so a zone-config glitch never
+            // blocks generation.
+            try {
+                const _zoneName84 = window.getZoneForField && window.getZoneForField(fieldName);
+                const _zoneCap84 = _zoneName84 ? (window.getZoneMaxConcurrent ? (window.getZoneMaxConcurrent(_zoneName84) || 99) : 99) : 99;
+                if (_zoneCap84 < 99) {
+                    const _zoneFields84 = (window.getFieldsInZone && window.getFieldsInZone(_zoneName84)) || [];
+                    const _busy84 = new Set();
+                    for (let _zi = 0; _zi < _zoneFields84.length; _zi++) {
+                        const _zl = fieldLedger[_zoneFields84[_zi]];
+                        if (!_zl || !_zl.claims) continue;
+                        for (let _ci = 0; _ci < _zl.claims.length; _ci++) {
+                            const _c = _zl.claims[_ci];
+                            if (_c.startMin < endMin && _c.endMin > startMin) _busy84.add(String(_c.bunk));
+                        }
+                    }
+                    _busy84.delete(String(bunk)); // this bunk does not count against itself
+                    if (_busy84.size >= _zoneCap84) return false;
+                }
+            } catch (_e84) { /* non-fatal — never block generation on a zone-check error */ }
+
             // ★ PRIORITY ENFORCEMENT: if field uses priority order and this grade has lower
             // priority than a grade that is already at capacity, or if a higher-priority grade
             // that hasn't yet been assigned would be blocked by this claim, defer.
