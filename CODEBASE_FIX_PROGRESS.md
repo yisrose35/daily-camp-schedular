@@ -18,7 +18,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-57 calendar.js:1430 — Erase-ALL now clears historicalCounts/historicalCountedDates/rotationHistory/manualUsageOffsets/swim+activity history (mem + globalSettings)
 - ✅ CB-58 validator.js:937 — escMsg (escape + intentional-tag whitelist restore) at the <li> sink
 - ✅ CB-59 auto_validator.js:643 — _avEscMsg at both error+warning <li> sinks (twin of CB-58)
-- ⬜ CB-60 campistry_me.js:141 — save() strips forms/customFields/locale/Stripe key
+- ✅ CB-60 campistry_me.js:141 — save() spreads existing campistryMe before overriding (preserves forms/customFields/locale/Stripe key)
 - ⬜ CB-61 schedule_calendar_views.js:339 [LIVE] — day-view nav defeats cross-date save guard
 - ⬜ CB-107 campistry_go.js:2348 [LIVE] — clearAll* wipes whole cloud state row
 

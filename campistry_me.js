@@ -138,7 +138,12 @@ function save(){
         // entries built from campStructure (startTime, endTime, parentDivision, etc.).
         // campStructure is the authoritative source for division/grade/bunk structure;
         // app1.loadData() derives everything from it, so we must not overwrite it here.
-        g.campistryMe={
+        // ★★★ CB-60: SPREAD the existing campistryMe first, then override only
+        // the keys this save() owns. The previous fixed object literal dropped
+        // every sub-key NOT listed here — forms, customFields, locale,
+        // campSettings, stripePublishableKey, etc. (each written by a sibling
+        // saver) — so an unrelated save() silently wiped them from cache + cloud.
+        g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
             broadcasts:broadcasts,
@@ -151,7 +156,7 @@ function save(){
             formConfig:formConfig,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
-        };
+        });
         g.updated_at=new Date().toISOString();
 
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
