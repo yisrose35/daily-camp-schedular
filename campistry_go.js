@@ -2277,7 +2277,7 @@ let _toastTimer = null;
         const grade = document.getElementById('addrGrade')?.value.trim();
         const bunk = document.getElementById('addrBunk')?.value.trim();
 
-        if (!st) { delete D.addresses[_editCamper]; save(); closeModal('addressModal'); renderAddresses(); updateStats(); return; }
+        if (!st) { delete D.addresses[_editCamper]; save(); if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses'); /* ★ CB-113 */ closeModal('addressModal'); renderAddresses(); updateStats(); return; }
         // ★ Starter plan: check limit if this is a NEW address
         if (!D.addresses[_editCamper]) {
             var limit = await checkCamperLimitGo(1);
@@ -2308,13 +2308,22 @@ let _toastTimer = null;
         if (!_editCamper) return;
         if (!confirm('Delete all address data for ' + _editCamper + '?\n\nThis cannot be undone.')) return;
         delete D.addresses[_editCamper];
-        save(); closeModal('addressModal'); renderAddresses(); updateStats();
+        save();
+        // ★★★ CB-113: when the map drops to empty, save() skips the cloud write
+        // (it only pushes addresses when non-empty), so the deletion never reaches
+        // cloud and reload resurrects the old set. Explicitly overwrite the cloud
+        // 'addresses' row with {} so the delete sticks.
+        if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses');
+        closeModal('addressModal'); renderAddresses(); updateStats();
         toast(_editCamper + ': address deleted');
     }
     function _quickDeleteAddress(name) {
         // Called directly from table row — confirmation already shown inline
         delete D.addresses[name];
-        save(); renderAddresses(); updateStats();
+        save();
+        // ★★★ CB-113: see deleteAddress — clear the cloud row when it becomes empty.
+        if (!D.addresses || Object.keys(D.addresses).length === 0) _clearCloudDataType('addresses');
+        renderAddresses(); updateStats();
         toast(name + ': address deleted');
     }
 
