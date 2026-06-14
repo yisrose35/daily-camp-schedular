@@ -326,7 +326,34 @@
                 cachedAt: Date.now()
             };
             sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(rbacCache));
-            
+
+            // ★★★ CB-108: assignedDivisions above is the DENORMALIZED
+            // camp_users.assigned_divisions snapshot, which goes STALE when an owner
+            // edits a subdivision's divisions[] (the member's row isn't touched).
+            // Re-resolve the scheduler's divisions from the LIVE subdivisions table
+            // by subdivision_ids and overwrite the cache, so Flow/Me read the current
+            // scope rather than a stale invite-time snapshot. Best-effort + async;
+            // the snapshot stands until this resolves.
+            try {
+                const _subIds108 = membership?.subdivision_ids || [];
+                if (window.supabase && _subIds108.length > 0) {
+                    window.supabase.from('subdivisions').select('divisions').in('id', _subIds108)
+                        .then(function (res) {
+                            if (res.error || !res.data) return;
+                            const _live = new Set();
+                            res.data.forEach(function (r) { (Array.isArray(r.divisions) ? r.divisions : []).forEach(function (d) { _live.add(d); }); });
+                            try {
+                                const _c = JSON.parse(sessionStorage.getItem('campistry_rbac_cache') || '{}');
+                                _c.assignedDivisions = [..._live];
+                                _c.cachedAt = Date.now();
+                                sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(_c));
+                                console.log('[Dashboard] CB-108: refreshed assignedDivisions from live subdivisions:', _c.assignedDivisions.join(', '));
+                            } catch (_) {}
+                        })
+                        .catch(function () {});
+                }
+            } catch (_) {}
+
             // ★★★ v2.5: Also write to localStorage as durable fallback ★★★
             // sessionStorage is cleared on tab close. localStorage persists.
             // access_control.js reads localStorage as last-resort fallback.
