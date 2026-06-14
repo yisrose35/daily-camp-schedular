@@ -37,6 +37,19 @@
 
     console.log('📝 Post-Generation Edit System v3.3 (UI Client) loading...');
 
+    // ★★★ CB-7: this file had NO HTML escaper, interpolating user-controlled
+    // bunk / activity / field / location names raw into innerHTML across the
+    // edit modal, conflict panel, drag tooltip and availability banner — a
+    // broad stored/attribute XSS (a bunk or field named with an <img onerror>
+    // executes in the editor's session). Delegate to the shared CampUtils
+    // escaper (complete &<>"' set) with a local fallback so it works even if
+    // campistry_utils.js hasn't loaded yet.
+    const escHtml = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+
     // =========================================================================
     // CONFIGURATION
     // =========================================================================
@@ -737,13 +750,13 @@
                 <button id="post-edit-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button>
             </div>
             <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;">
-                <div style="font-weight:600;color:#374151;">${bunk}</div>
+                <div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div>
                 <div style="font-size:0.875rem;color:#6b7280;" id="post-edit-time-display">${minutesToTimeLabel(startMin)} - ${minutesToTimeLabel(endMin)}</div>
             </div>
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div>
                     <label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label>
-                    <input type="text" id="post-edit-activity" value="${currentActivity}" placeholder="e.g., Basketball"
+                    <input type="text" id="post-edit-activity" value="${escHtml(currentActivity)}" placeholder="e.g., Basketball"
                         style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;">
                     <div style="font-size:0.75rem;color:#9ca3af;margin-top:4px;">Enter CLEAR or FREE to empty this slot</div>
                 </div>
@@ -752,13 +765,13 @@
                     <select id="post-edit-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;">
                         <option value="">-- No specific location --</option>
                         <optgroup label="Fields">
-                            ${locations.filter(l => l.type === 'field').map(l => 
-                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`
+                            ${locations.filter(l => l.type === 'field').map(l =>
+                                `<option value="${escHtml(l.name)}" ${l.name === currentField ? 'selected' : ''}>${escHtml(l.name)}${l.capacity > 1 ? ` (capacity: ${l.capacity})` : ''}</option>`
                             ).join('')}
                         </optgroup>
                         <optgroup label="Special Activities">
-                            ${locations.filter(l => l.type === 'special').map(l => 
-                                `<option value="${l.name}" ${l.name === currentField ? 'selected' : ''}>${l.name}</option>`
+                            ${locations.filter(l => l.type === 'special').map(l =>
+                                `<option value="${escHtml(l.name)}" ${l.name === currentField ? 'selected' : ''}>${escHtml(l.name)}</option>`
                             ).join('')}
                         </optgroup>
                     </select>
@@ -838,14 +851,14 @@
                         <span style="font-size:1.25rem;">⚠️</span>
                         <strong style="color:#92400e;">Location Conflict Detected</strong>
                     </div>
-                    <p style="margin:0 0 8px 0;color:#78350f;font-size:0.875rem;"><strong>${location}</strong> is already in use:</p>`;
-                
+                    <p style="margin:0 0 8px 0;color:#78350f;font-size:0.875rem;"><strong>${escHtml(location)}</strong> is already in use:</p>`;
+
                 if (editableBunks.length > 0) {
-                    html += `<div style="margin-bottom:8px;padding:8px;background:#d1fae5;border-radius:6px;"><div style="font-size:0.8rem;color:#065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.join(', ')}</div></div>`;
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#d1fae5;border-radius:6px;"><div style="font-size:0.8rem;color:#065f46;"><strong>✓ Can auto-reassign:</strong> ${editableBunks.map(escHtml).join(', ')}</div></div>`;
                 }
-                
+
                 if (nonEditableBunks.length > 0) {
-                    html += `<div style="margin-bottom:8px;padding:8px;background:#fee2e2;border-radius:6px;"><div style="font-size:0.8rem;color:#991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.join(', ')}</div></div>
+                    html += `<div style="margin-bottom:8px;padding:8px;background:#fee2e2;border-radius:6px;"><div style="font-size:0.8rem;color:#991b1b;"><strong>✗ Other scheduler's bunks:</strong> ${nonEditableBunks.map(escHtml).join(', ')}</div></div>
                     <div style="margin-top:12px;">
                         <div style="font-weight:500;color:#374151;margin-bottom:8px;font-size:0.875rem;">How to handle their bunks?</div>
                         <div style="display:flex;flex-direction:column;gap:8px;">
@@ -1175,7 +1188,7 @@
         const br = s.block.getBoundingClientRect();
         let tip = peiToLabel(newStart) + ' – ' + peiToLabel(newEnd) + ` <span style="opacity:0.6">(${dur}min)</span>`;
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newEnd, s.fieldName, s.slotIdx);
-        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => escHtml(x.bunk)).join(', ')}</span>`;
         peiShowTooltip(br.right + 8, s.direction === 'bottom' ? br.bottom : br.top, tip);
         peiShowConflictIndicator(s.block, c);
     }
@@ -1366,7 +1379,7 @@
         const br = s.block.getBoundingClientRect();
         let tip = '↕ ' + peiToLabel(newStart) + ' – ' + peiToLabel(newStart + s.duration);
         const c = PEI_ConflictEngine.check(s.bunk, newStart, newStart + s.duration, s.fieldName, s.slotIdx);
-        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => x.bunk).join(', ')}</span>`;
+        if (c.fieldConflicts.length > 0) tip += `<br><span style="color:#fcd34d;">⚡ Field: ${c.fieldConflicts.map(x => escHtml(x.bunk)).join(', ')}</span>`;
         peiShowTooltip(br.right + 8, br.top, tip);
         peiShowConflictIndicator(s.block, c);
     }
@@ -1450,18 +1463,18 @@
     function peiShowAddModal(bunk, divName, startMin, endMin) {
         document.getElementById('pei-add-overlay')?.remove();
         const locations = getAllLocations();
-        const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${l.name}">${l.name}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
-        const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${l.name}">${l.name}</option>`).join('');
+        const fieldOpts = locations.filter(l => l.type === 'field').map(l => `<option value="${escHtml(l.name)}">${escHtml(l.name)}${l.capacity > 1 ? ` (cap:${l.capacity})` : ''}</option>`).join('');
+        const specOpts = locations.filter(l => l.type === 'special').map(l => `<option value="${escHtml(l.name)}">${escHtml(l.name)}</option>`).join('');
         // Build constraint-aware suggestions by generating many candidates and taking top 8
         const allCandidates = peiAutoFillCandidates(bunk, divName, startMin, endMin);
         const suggestions = allCandidates.slice(0, 8);
-        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.map(a => `<button class="pei-suggestion-btn" data-activity="${a.activity}" data-field="${a.field || ''}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${a.activity}${a.field && a.field !== a.activity ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${a.field}</span>` : ''}</button>`).join('')}</div></div>` : '';
+        const sugHtml = suggestions.length > 0 ? `<div><label style="display:block;font-weight:500;color:#374151;margin-bottom:8px;">Quick Pick</label><div id="pei-add-suggestions" style="display:flex;flex-wrap:wrap;gap:6px;">${suggestions.map(a => `<button class="pei-suggestion-btn" data-activity="${escHtml(a.activity)}" data-field="${escHtml(a.field || '')}" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:#fff;font-size:0.8rem;cursor:pointer;color:#374151;transition:all 0.15s;">${escHtml(a.activity)}${a.field && a.field !== a.activity ? ` <span style='font-size:0.7rem;opacity:0.6'>@ ${escHtml(a.field)}</span>` : ''}</button>`).join('')}</div></div>` : '';
 
         const overlay = document.createElement('div'); overlay.id = 'pei-add-overlay';
         overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:100003;display:flex;align-items:center;justify-content:center;animation:pei-fade-in 0.2s ease-out';
         overlay.innerHTML = `<div style="background:#fff;border-radius:16px;padding:28px;min-width:420px;max-width:520px;max-height:85vh;overflow-y:auto;box-shadow:0 24px 80px rgba(0,0,0,0.3);font-family:-apple-system,BlinkMacSystemFont,sans-serif;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;"><h2 style="margin:0;font-size:1.2rem;color:#1f2937;">Add New Activity</h2><button id="pei-add-close" style="background:none;border:none;font-size:1.5rem;cursor:pointer;color:#9ca3af;line-height:1;">&times;</button></div>
-            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;"><div style="font-weight:600;color:#374151;">${bunk}</div><div style="font-size:0.875rem;color:#6b7280;">${peiToLabel(startMin)} – ${peiToLabel(endMin)} (${endMin - startMin}min)</div></div>
+            <div style="background:#f3f4f6;padding:12px 16px;border-radius:8px;margin-bottom:20px;"><div style="font-weight:600;color:#374151;">${escHtml(bunk)}</div><div style="font-size:0.875rem;color:#6b7280;">${peiToLabel(startMin)} – ${peiToLabel(endMin)} (${endMin - startMin}min)</div></div>
             <div style="display:flex;flex-direction:column;gap:16px;">
                 <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Activity Name</label><input type="text" id="pei-add-activity" placeholder="e.g., Basketball" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;"></div>
                 <div><label style="display:block;font-weight:500;color:#374151;margin-bottom:6px;">Location / Field</label><select id="pei-add-location" style="width:100%;padding:10px 12px;border:1px solid #d1d5db;border-radius:8px;font-size:1rem;box-sizing:border-box;background:white;"><option value="">-- No location --</option>${fieldOpts ? '<optgroup label="Fields">' + fieldOpts + '</optgroup>' : ''}${specOpts ? '<optgroup label="Specials">' + specOpts + '</optgroup>' : ''}</select></div>
@@ -1517,8 +1530,8 @@
         const el = document.getElementById('pei-add-conflict-status');
         if (!el || !location) { if (el) el.style.display = 'none'; return; }
         const c = PEI_ConflictEngine.check(bunk, startMin, endMin, location, -1);
-        if (!c.hasConflict) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:0.85rem;display:block;'; el.innerHTML = '✅ ' + location + ' is available'; }
-        else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + location + ' in use by: ' + c.fieldConflicts.map(x => x.bunk).join(', '); }
+        if (!c.hasConflict) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:0.85rem;display:block;'; el.innerHTML = '✅ ' + escHtml(location) + ' is available'; }
+        else if (c.fieldConflicts.length > 0) { el.style.display = 'block'; el.style.cssText = 'padding:10px 14px;border-radius:8px;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;font-size:0.85rem;display:block;'; el.innerHTML = '⚠️ ' + escHtml(location) + ' in use by: ' + c.fieldConflicts.map(x => escHtml(x.bunk)).join(', '); }
     }
 
     // ── Auto-fill (constraint-aware) ──

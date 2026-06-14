@@ -11,8 +11,8 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-3 schedule_orchestrator.js:381 — slim restricted to past in-window dates only; future/out-of-window dates untouched; LOCAL_ONLY_FIELDS preserved
 - ✅ CB-4 [LIVE] schedule_orchestrator.js:848 — mergeCloudRecords now delegates to ScheduleDB.mergeSchedules (MS-3/4c/#V2-25); local loop kept as fallback; auto/skeleton/rainy signals layered back. Owed: 2-account live verify
 - ✅ CB-5 [LIVE] scheduler_core_main.js:1665 — STEP 0f slim restricted to past in-window dates; LOCAL_ONLY preserved on slim. Owed: live manual-gen verify
-- ⬜ CB-6 supabase_schedules.js:336 [LIVE] — scheduler save filter falls back to ALL divisions
-- ⬜ CB-7 post_edit_system.js:746 — no HTML escaper (broad XSS)
+- ✅ CB-6 + CB-18 + CB-112 [LIVE] supabase_schedules.js — scheduler save scope hardened (no ALL-divisions fallback; empty set returns {})
+- ✅ CB-7 post_edit_system.js — added escHtml (CampUtils delegate + fallback); wrapped bunk/activity/field/location/conflict-bunk names in edit modal, conflict panel, drag tooltips, availability banner, add modal
 - ⬜ CB-8 scheduler_core_main.js:3893 [LIVE] — STEP 7.55 demotes off-site trips
 - ⬜ CB-56 scheduler_core_utils.js:2592 [LIVE] — rebuildHistoricalCounts whole-key overwrite from partial scan
 - ⬜ CB-57 calendar.js:1430 — Erase ALL leaves stale local historicalCounts/rotationHistory
