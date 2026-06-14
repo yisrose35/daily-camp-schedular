@@ -1435,10 +1435,33 @@
      * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
+    // ★★★ CB-73: resolve the correct slot array for a bunk-OR-division. When a
+    // BUNK with per-bunk geometry (auto mode) is given, return THAT bunk's
+    // _perBunkSlots timeline; otherwise the division-level array. The index→time
+    // helpers below used to always read divisionTimes[div], so for a per-bunk
+    // schedule whose timeline differs from the division table they returned the
+    // wrong slot / time / activity. Falls back to the flat division array (manual
+    // geometry) and to [] for a per-bunk object addressed without a bunk (which
+    // was never validly iterable anyway).
+    Utils._resolveSlotArray = function(bunkOrDiv) {
+        if (bunkOrDiv == null) return [];
+        const key = String(bunkOrDiv);
+        const dt = window.divisionTimes || {};
+        const grade = Utils.getDivisionForBunk ? Utils.getDivisionForBunk(key) : null;
+        if (grade) {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][key])
+                || (dt[grade] && dt[grade]._perBunkSlots && dt[grade]._perBunkSlots[key]);
+            if (Array.isArray(pbs) && pbs.length) return pbs;
+            if (Array.isArray(dt[grade])) return dt[grade];
+            return [];
+        }
+        if (Array.isArray(dt[key])) return dt[key];
+        return [];
+    };
+
     Utils.getSlotsForDivision = function(divisionName) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr] || [];
+        // ★★★ CB-73: per-bunk aware (was: divisionTimes[div] || []).
+        return Utils._resolveSlotArray(divisionName);
     };
 
     /**
@@ -1448,9 +1471,8 @@
      * @returns {Object|null} Slot object or null
      */
     Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+        // ★★★ CB-73: per-bunk aware when a bunk is passed (else division-level).
+        return Utils._resolveSlotArray(divisionName)[slotIndex] || null;
     };
 
     /**
@@ -1461,26 +1483,18 @@
      * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
      */
     Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
-        // Try division-specific lookup first
-        if (bunkOrDiv && window.divisionTimes) {
-            let divName = bunkOrDiv;
-            
-            // Check if it's a bunk name, convert to division
-            const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
-            if (possibleDiv) divName = possibleDiv;
-            
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-            const divNameStr = String(divName);
-            const slot = window.divisionTimes[divNameStr]?.[slotIdx];
+        // ★★★ CB-73: per-bunk aware. _resolveSlotArray returns the bunk's own
+        // _perBunkSlots timeline when bunkOrDiv is a per-bunk auto-mode bunk,
+        // else the division-level array. Previously it converted a bunk to its
+        // division and read divisionTimes[div][slotIdx] — wrong window for a
+        // per-bunk schedule whose timeline differs from the division table.
+        if (bunkOrDiv) {
+            const slot = Utils._resolveSlotArray(bunkOrDiv)[slotIdx];
             if (slot) {
-                return {
-                    startMin: slot.startMin,
-                    endMin: slot.endMin
-                };
+                return { startMin: slot.startMin, endMin: slot.endMin };
             }
         }
-        
-        // No fallback - division context is required
+        // No fallback - division/bunk context is required
         return { startMin: null, endMin: null };
     };
 
@@ -1658,7 +1672,11 @@
     Utils.findSlotForBunkAtTime = function(bunkName, targetMin) {
         const divName = Utils.getDivisionForBunk(bunkName);
         if (!divName) return -1;
-        return Utils.findSlotForTime(divName, targetMin);
+        // ★★★ CB-73: pass the BUNK (not its division) so findSlotForTime →
+        // getSlotsForDivision → _resolveSlotArray uses the bunk's own per-bunk
+        // timeline in auto mode. _resolveSlotArray falls back to the division
+        // array when there's no per-bunk geometry, so manual mode is unchanged.
+        return Utils.findSlotForTime(bunkName, targetMin);
     };
 
     // =================================================================
