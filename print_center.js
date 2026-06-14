@@ -385,7 +385,18 @@ function ensureWeekDataLoaded(force) {
     var keys = getWeekDateKeys(anchor);
     if (!keys.length) return;
     var weekId = keys[0];
-    if (!force && _weekAnchor === weekId && Object.keys(_weekData).length === 7) return;
+    if (!force && _weekAnchor === weekId && Object.keys(_weekData).length === 7) {
+        // ★★★ CB-78: the anchor (current) day's slot was a point-in-time snapshot of
+        // window.scheduleAssignments taken at view-open. An in-session regen/edit
+        // updates memory but this cache guard kept the STALE snapshot the whole
+        // session. Refresh just the anchor slot from live memory before the
+        // early-return — guarded by the _scheduleAssignmentsDate coherence stamp so
+        // a navigated-away memory never overwrites the anchor slot with wrong data.
+        if (anchor && _weekData[anchor] && window._scheduleAssignmentsDate === anchor) {
+            _weekData[anchor] = { scheduleAssignments: window.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || {} };
+        }
+        return;
+    }
     _weekAnchor = weekId;
     _weekData = {};
     _weekLoading = true;
@@ -580,7 +591,14 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
         : (myEntry.field && myEntry.field.name ? myEntry.field.name : '');
     if (!myField) return [];
     var myFieldKey = myField.toLowerCase().trim();
-    var mySlot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];
+    // ★★★ CB-80: resolve the slot time from the BUNK's per-bunk geometry, not the
+    // division-level table indexed by the per-bunk slotIdx (auto mode they
+    // diverge → wrong/missing "vs Bunk" sharer annotations). _resolveSlotArray
+    // (CB-73) returns the bunk's _perBunkSlots, falling back to the division array.
+    var _mySlots80 = (window.SchedulerCoreUtils && window.SchedulerCoreUtils._resolveSlotArray)
+        ? window.SchedulerCoreUtils._resolveSlotArray(bunk)
+        : ((window.divisionTimes && window.divisionTimes[divName]) || []);
+    var mySlot = _mySlots80[slotIdx];
     if (!mySlot || mySlot.startMin == null) return [];
     var myStart = mySlot.startMin, myEnd = mySlot.endMin;
     var sharers = [];
@@ -592,7 +610,12 @@ function pcFindFieldSharers(bunk, slotIdx, divName) {
             ? window.SchedulerCoreUtils.getDivisionForBunk(otherBunk)
             : ((window.DivisionTimesSystem && window.DivisionTimesSystem.getDivisionForBunk)
                 ? window.DivisionTimesSystem.getDivisionForBunk(otherBunk) : null);
-        var otherSlots = (window.divisionTimes && window.divisionTimes[otherDiv]) || [];
+        // ★★★ CB-80: per-bunk slot times for the OTHER bunk too, so its per-bunk
+        // entry index maps to the right window (else cross-division share overlap
+        // is computed against the wrong times).
+        var otherSlots = (window.SchedulerCoreUtils && window.SchedulerCoreUtils._resolveSlotArray)
+            ? window.SchedulerCoreUtils._resolveSlotArray(otherBunk)
+            : ((window.divisionTimes && window.divisionTimes[otherDiv]) || []);
         var otherEntries = allBunks[otherBunk] || [];
         for (var si = 0; si < otherSlots.length; si++) {
             var oslot = otherSlots[si];
@@ -3041,7 +3064,14 @@ function _pcCellTipEl() {
 
 function _pcBuildCellTipHtml(bunk, slotIdx, divName) {
     var entry = window.scheduleAssignments && window.scheduleAssignments[bunk] && window.scheduleAssignments[bunk][slotIdx];
-    var slot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];
+    // ★★★ CB-81: the cell's data-slot index is the PER-BUNK index in auto mode;
+    // reading the time from the division-level divisionTimes[div][slotIdx] showed a
+    // "When" window that doesn't match the hovered cell. Resolve from the bunk's
+    // per-bunk geometry (CB-73 helper), falling back to the division array.
+    var _slots81 = (window.SchedulerCoreUtils && window.SchedulerCoreUtils._resolveSlotArray)
+        ? window.SchedulerCoreUtils._resolveSlotArray(bunk)
+        : ((window.divisionTimes && window.divisionTimes[divName]) || []);
+    var slot = _slots81[slotIdx];
     if (!entry) return '';
     var act = entry._partLabel || entry._activity || entry.sport || ''; // ★ Day 19 multiPart label
     var field = (typeof entry.field === 'string') ? entry.field
