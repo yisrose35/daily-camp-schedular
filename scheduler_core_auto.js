@@ -25875,10 +25875,16 @@
                     _allT[_dkT]._savedAt = Date.now();
                     localStorage.setItem(DAILY_KEY_T, JSON.stringify(_allT));
                 } catch (_eLt) {}
-                window.ScheduleDB?.saveSchedule?.(_dkT, {
+                // ★★★ CB-48: saveSchedule is async — attach a .catch so a cloud-write
+                // rejection is logged, not swallowed (the surrounding sync try/catch
+                // can't trap a Promise rejection). Still fire-and-forget (local re-save
+                // already succeeded); this just surfaces a stale-cloud failure.
+                Promise.resolve(window.ScheduleDB?.saveSchedule?.(_dkT, {
                     scheduleAssignments: window.scheduleAssignments || {},
                     leagueAssignments: window.leagueAssignments || {}
-                }, { skipFilter: true });
+                }, { skipFilter: true })).catch(function (_eSvAsync) {
+                    try { warn('[FN-59] authoritative final save (cloud) rejected: ' + (_eSvAsync && _eSvAsync.message)); } catch (_e7) {}
+                });
                 log('[FN-59] authoritative final save (' + tripWriteCount + ' trip slot(s) in payload)');
             } catch (_eSv) { try { warn('[FN-59] authoritative final save: ' + (_eSv && _eSv.message)); } catch (_e6) {} }
         }

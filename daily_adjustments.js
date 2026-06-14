@@ -5135,7 +5135,9 @@ async function runOptimizer() {
 
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★★★ CB-46: use the ROLE-CLAMPED _effScope (matches the auto branch), not the
+  // raw picker — a scheduler who makes no pick must not take the full-camp wipe.
+  const scopeDivsForWipe = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null);
   // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
   const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
   const allDivKeys = Object.keys(window.divisions || {});
@@ -5281,7 +5283,7 @@ async function runOptimizer() {
   window.invalidateSmartLogicSpecialsCache?.();
   let success = false;
   try {
-    const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeDivsManual = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null); // ★ CB-46: role-clamped scope (matches auto)
     const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
     // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
     if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
