@@ -537,13 +537,36 @@
             _membershipSubscription = window.supabase
                 .channel('my-membership-' + _currentUser.id)
                 .on('postgres_changes', {
-                    event: 'UPDATE',
+                    // ★★★ CB-125: was 'UPDATE' only, so a remote member REMOVAL (row
+                    // DELETE) never reached this session — a removed scheduler kept
+                    // full write/generate access until reload. Subscribe to ALL events
+                    // ('*') so a DELETE also fires refresh(), which re-checks
+                    // membership, finds none, and revokes access. (Filtered DELETE
+                    // delivery needs REPLICA IDENTITY FULL on camp_users; the
+                    // unfiltered DELETE handler below is the backstop.)
+                    event: '*',
                     schema: 'public',
                     table: 'camp_users',
                     filter: `user_id=eq.${_currentUser.id}`
                 }, (payload) => {
-                    console.log('🔐 Membership updated remotely, refreshing permissions...');
+                    console.log('🔐 Membership change (' + (payload && payload.eventType) + ') — refreshing permissions...');
                     refresh();
+                })
+                // Backstop: unfiltered DELETE (covers tables without REPLICA IDENTITY
+                // FULL, where a filtered DELETE payload carries only the PK). Match the
+                // removed row by id/user_id before refreshing.
+                .on('postgres_changes', {
+                    event: 'DELETE',
+                    schema: 'public',
+                    table: 'camp_users'
+                }, (payload) => {
+                    try {
+                        const gone = payload && payload.old;
+                        if (gone && (String(gone.user_id) === String(_currentUser.id))) {
+                            console.log('🔐 This membership was deleted remotely — revoking access...');
+                            refresh();
+                        }
+                    } catch (_) { refresh(); }
                 })
                 .subscribe();
             
@@ -1042,9 +1065,14 @@
     }
 
     function canManageSubdivisions() {
-        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
-        if (!_initialized) return false;
+        // ★★★ CB-110: owner/admin ONLY. Subdivisions ARE the scheduler-scoping
+        // mechanism (a subdivision's divisions[] define what a scheduler may
+        // generate), so letting a SCHEDULER create/rewrite them is a privilege-
+        // escalation path — a scheduler could grant itself any division. This
+        // function gates ONLY createSubdivision/updateSubdivision (no UI-read
+        // callers), and deleteSubdivision is already owner-only, so dropping
+        // scheduler here closes the write path without affecting scheduler reads.
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return false;
     }
 
