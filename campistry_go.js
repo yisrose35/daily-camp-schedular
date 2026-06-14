@@ -97,6 +97,16 @@ let _toastTimer = null;
     // HELPERS
     // =========================================================================
     const esc = s => { if (s == null) return ''; const m = {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#x27;'}; return String(s).replace(/[&<>"']/g, c => m[c]); };
+    // ★★★ CB-126: make a value safe inside a SINGLE-quoted JS string literal that
+    // itself lives inside a DOUBLE-quoted HTML onclick attribute. esc() can't be
+    // used there: it turns ' into &#x27;, which the attribute parser decodes back
+    // to a bare ' BEFORE the JS runs, prematurely closing the string (e.g. an
+    // address "O'Brien St" broke "Pin as anchor"). HTML-escape &<>" (so the
+    // attribute stays intact; &quot; decodes to " which is harmless in a
+    // single-quoted JS string), then backslash-escape \ and ' for the JS string.
+    const _goJsArg = s => String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+        .replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     const uid = () => 'go_' + Date.now().toString(36) + '_' + Math.random().toString(36).substr(2, 6);
     function toast() { /* removed */ }
     function openModal(id) {
@@ -6083,6 +6093,13 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
             const coordsArr = [{ lat: campLat, lng: campLng }];
             stops.forEach(s => coordsArr.push({ lat: s.lat, lng: s.lng }));
             matrix = await fetchDistanceMatrix(coordsArr, campLat, campLng);
+            // ★★★ CB-118: stamp each stop's matrix index (coordsArr = [camp, ...stops],
+            // so stops[i] → matrix row i+1). The ETA helpers driveMin/campToStopMin
+            // read matrix[a._matrixIdx]/matrix[0][s._matrixIdx], but _matrixIdx was
+            // NEVER assigned, so those guards were always false and every ETA fell
+            // back to haversine — ignoring the road matrix just fetched. (Cleaned up
+            // by the existing `delete s._matrixIdx` at the end of this function.)
+            stops.forEach(function (s, i) { s._matrixIdx = i + 1; });
 
             const startsAtCamp = !isArrival;
             const endsAtCamp = isArrival || reoptNeedsReturn;
@@ -6161,6 +6178,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
         }
 
         route.stops.forEach(s => { delete s._matrixIdx; }); delete route._osrmMatrix;
+        // ★★★ CB-119: evict this route's cached road polyline — the stop order just
+        // changed, but the map render reads _routeGeomCache FIRST, so the old
+        // polyline would be drawn over the new stop sequence until a full regen /
+        // mode switch. delete route._roadPts too so it's rebuilt on next render.
+        try { delete _routeGeomCache[route.busId + '_' + route.shiftIdx]; delete route._roadPts; } catch (_) {}
         _generatedRoutes = D.savedRoutes; save();
         renderRouteResults(D.savedRoutes);
         console.log('[Go] Re-optimized ' + route.busName + ': ~' + Math.round(bestCost / 60) + ' min (' + (matrix ? 'road-matrix' : 'haversine') + ')');
@@ -7202,7 +7224,11 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
                 const isSpecial = stop.isMonitor || stop.isCounselor;
                 const size = isSpecial ? 20 : 26;
                 const icon = L.divIcon({ html: '<div class="stop-marker-icon" style="width:' + size + 'px;height:' + size + 'px;background:' + esc(route.busColor) + ';' + (isSpecial ? 'font-size:10px;' : '') + '">' + (isSpecial ? (stop.isMonitor ? 'M' : 'C') : stop.stopNum) + '</div>', className: '', iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
-                const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');
+                // ★★★ CB-120: escape camper/staff names before they go into the
+                // Leaflet popup innerHTML (sibling lines already esc() the same kind
+                // of value). A camper named <img onerror=...> otherwise executes on
+                // popup open.
+                const names = stop.isMonitor ? '🛡️ ' + esc(stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + esc(stop.counselorName || 'Counselor') : stop.campers.map(c => esc(c.name)).join('<br>');
                 const counselorNames = (stop._counselors?.length) ? '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #eee;">' + stop._counselors.map(c => '<div style="font-size:11px;display:flex;align-items:center;gap:4px;">🎒 <strong>' + esc(c.name) + '</strong> <span style="color:#888;">(' + c.walkFt + 'ft walk)</span></div>').join('') + '</div>' : '';
                 const popup = '<div style="font-family:DM Sans,sans-serif;min-width:160px;"><div style="font-weight:700;color:' + route.busColor + '">' + esc(route.busName) + ' — ' + esc(route.shiftLabel) + '</div><div style="font-weight:600;">Stop ' + stop.stopNum + '</div><div style="font-size:12px;">' + names + '</div>' + counselorNames + '<div style="font-size:11px;color:#888;">' + esc(stop.address) + '</div>' + (stop.estimatedTime ? '<div style="font-weight:600;">Est: ' + stop.estimatedTime + '</div>' : '') + '</div>';
                 const marker = L.marker([stop.lat, stop.lng], { icon, draggable: !isSpecial }).addTo(_map);
@@ -7493,11 +7519,17 @@ function findAnchorStop(campers, intersections, walkMi = 0.2) {
     function moveCamperToBus(camperName, fromBusId, toBusId, shiftIdx) {
         if (!_generatedRoutes || !D.savedRoutes) return;
         const sr = D.savedRoutes[shiftIdx]; if (!sr) return;
+        // ★★★ CB-117: resolve the DESTINATION bus BEFORE mutating the source route.
+        // Previously the camper was spliced out of fromRoute first and toRoute was
+        // looked up only after — if the destination bus was gone (e.g. removed via a
+        // concurrent edit), the early return left the camper removed from source and
+        // re-added nowhere (permanent loss). Validate the destination up front.
+        const toRoute = sr.routes.find(r => r.busId === toBusId);
+        if (!toRoute) { toast('Bus not found', 'error'); return; }
         let camperData = null, camperStop = null;
         const fromRoute = sr.routes.find(r => r.busId === fromBusId);
         if (fromRoute) { for (const st of fromRoute.stops) { const ci = st.campers.findIndex(c => c.name === camperName); if (ci >= 0) { camperData = st.campers.splice(ci, 1)[0]; camperStop = st; break; } } fromRoute.stops = fromRoute.stops.filter(st => st.campers.length > 0 || st.isMonitor || st.isCounselor); fromRoute.stops.forEach((st, i) => { st.stopNum = i + 1; }); fromRoute.camperCount = fromRoute.stops.reduce((s, st) => s + st.campers.length, 0); }
         if (!camperData || !camperStop) { toast('Camper not found', 'error'); return; }
-        const toRoute = sr.routes.find(r => r.busId === toBusId); if (!toRoute) { toast('Bus not found', 'error'); return; }
         let added = false;
         if (camperStop.lat && camperStop.lng) { for (const st of toRoute.stops) { if (st.lat && st.lng && haversineMi(camperStop.lat, camperStop.lng, st.lat, st.lng) < 0.3) { st.campers.push(camperData); added = true; break; } } }
         if (!added) { const cLat = D.setup.campLat || _campCoordsCache?.lat || 0; const cLng = D.setup.campLng || _campCoordsCache?.lng || 0; directionalInsert(toRoute.stops, { stopNum: 0, campers: [camperData], address: camperStop.address, lat: camperStop.lat, lng: camperStop.lng, estimatedTime: camperStop.estimatedTime }, cLat, cLng); }
@@ -8351,7 +8383,7 @@ async function renderDispatcherDashboard(allShifts) {
                 } else {
                     html += '<button class="btn btn-ghost btn-sm"' +
                         ' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' +
-                            esc(r.busId) + '\',\'' + esc(da.address) + '\',' +
+                            _goJsArg(r.busId) + '\',\'' + _goJsArg(da.address) + '\',' +
                             da.kidCount /* unused but keeps API parity */ + ',' + 0 + ')">' +
                         'Pin as anchor' +
                         '</button>';
