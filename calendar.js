@@ -1282,11 +1282,27 @@ all[date].updated_at = new Date().toISOString();
         try {
             const _allDaily = window.loadAllDailyData?.() || {};
             const _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
-            _rotHist.bunks = {};
+            // ★★★ CB-72: a scheduler's local loadAllDailyData holds ONLY their bunks,
+            // so the unconditional `_rotHist.bunks = {}` full rebuild truncated every
+            // other scheduler's rotation history (then saved the truncated map
+            // globally). Scope the wipe+rebuild to the scheduler's own bunks; owner/
+            // admin (who hold the full local cache) still rebuild everything.
+            let _scopedBunkSet72 = null;
+            if (role === 'scheduler') {
+                const _myDivs72 = window.AccessControl?.getGeneratableDivisions?.() || [];
+                const _myBunks72 = getBunksForDivisions(_myDivs72) || [];
+                _scopedBunkSet72 = new Set(_myBunks72.map(String));
+                Object.keys(_rotHist.bunks || {}).forEach(function (bk) {
+                    if (_scopedBunkSet72.has(String(bk))) delete _rotHist.bunks[bk];
+                });
+            } else {
+                _rotHist.bunks = {};
+            }
             Object.entries(_allDaily).forEach(function ([dk, dayData]) {
                 const _ts = new Date(dk + 'T12:00:00').getTime() || Date.now();
                 const _sched = dayData?.scheduleAssignments || {};
                 Object.keys(_sched).forEach(function (bk) {
+                    if (_scopedBunkSet72 && !_scopedBunkSet72.has(String(bk))) return; // scheduler: only own bunks
                     (_sched[bk] || []).forEach(function (entry) {
                         if (entry?._activity && !entry.continuation && !entry._isTransition) {
                             const _aLower = entry._activity.toLowerCase();
