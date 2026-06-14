@@ -29,6 +29,21 @@ function saveRotationEvents(events) {
     g.rotationEvents = events;
     window.saveGlobalSettings?.('rotationEvents', events);
     window.forceSyncToCloud?.();
+    // ★★★ CB-67: rotationEvents lives in camp_state_kv, which RLS makes
+    // owner/admin-write-only (integration_hooks _canWriteCampState gate drops the
+    // queued change for schedulers). Auto-gen completion stamps a scheduler makes
+    // are therefore saved LOCALLY but never reach the cloud — yet the call chain
+    // reported success, so the owner sees the event as not-done. Surface it so the
+    // loss isn't silent. (Full cross-user persistence requires widening the
+    // camp_state RLS policy + a 2-account test — tracked as [LIVE], not done here
+    // to avoid a speculative multi-user regression.)
+    try {
+        if (window.CloudPermissions?.hasFullAccess?.() === false) {
+            console.warn('[RotationEvents] CB-67: rotation-event changes saved LOCALLY ONLY — '
+                + 'scheduler role cannot write rotationEvents to camp_state (RLS). '
+                + 'Completion stamps will not sync to other users until an owner/admin regenerates.');
+        }
+    } catch (e) { /* non-fatal */ }
 }
 
 function getEventById(id) {
