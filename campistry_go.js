@@ -1208,7 +1208,21 @@ let _toastTimer = null;
             //   'state'     — setup, buses, shifts, monitors, counselors (all modes)
             //   'addresses' — geocoded camper addresses (large; kept separate)
             //   'routes'    — computed route results (large; kept separate)
-            if (window.GoCloudSync) {
+            // ★★★ CB-116: Campistry GO had ZERO role enforcement — any camp member,
+            // including a read-only VIEWER, blindly overwrote the entire shared
+            // transportation dataset (go_standalone_data is keyed only by camp_id,
+            // no per-user dimension). Block the cloud push for read-only roles so a
+            // viewer can't stomp the shared data; their local save still works for
+            // their own view. (Full per-user row scoping needs a schema change and
+            // is out of scope; combined with the CB-114/115 recency guards this
+            // closes the worst data-loss path.)
+            var _goReadOnly116 = false;
+            try { _goReadOnly116 = !!(window.AccessControl && typeof window.AccessControl.canEdit === 'function' && window.AccessControl.canEdit() === false); } catch (_) {}
+            if (_goReadOnly116 && !window.__cb116Warned) {
+                window.__cb116Warned = true;
+                try { (window.showToast || window.toast || function(){})('Read-only role — Transportation changes are not saved to the cloud.', 'warning'); } catch (_) {}
+            }
+            if (window.GoCloudSync && !_goReadOnly116) {
                 // ── State: setup + fleet config for both modes ────────────────
                 // Snapshot the current mode's live data back into D[activeMode]
                 // before saving so the cloud copy is always up-to-date.
