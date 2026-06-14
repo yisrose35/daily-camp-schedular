@@ -4096,6 +4096,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
             });
             const _fieldFree76 = (fl, s, e) => { const arr = _occ76[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            // ★★★ CB-39: real per-slot timeRules availability gate. The candidate
+            // filter above uses `!(f.timeRules && f.timeRules.enabled)`, which is
+            // ALWAYS true (timeRules is an array and never has `.enabled`), so the
+            // free-fill would place a sport on a field inside its Unavailable
+            // window (or outside its Available windows). This mirrors the auto
+            // FN-22 gate (scheduler_core_auto.js ~L19049): an Unavailable rule
+            // overlapping [s,e) blocks the field; if any Available rules exist, the
+            // slot must sit fully inside one of them.
+            const _fieldTimeOk76 = (f, s, e) => {
+                const rules = Array.isArray(f.timeRules) ? f.timeRules : null;
+                if (!rules || rules.length === 0) return true;
+                let hasAvail = false, insideAvail = false;
+                for (let i = 0; i < rules.length; i++) {
+                    const r = rules[i]; if (!r) continue;
+                    const rs = (r.startMin != null) ? r.startMin : null;
+                    const re = (r.endMin != null) ? r.endMin : null;
+                    const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                    if (isUnavail) {
+                        if (rs != null && re != null && rs < e && re > s) return false;
+                    } else {
+                        hasAvail = true;
+                        if (rs != null && re != null && s >= rs && e <= re) insideAvail = true;
+                    }
+                }
+                if (hasAvail && !insideAvail) return false;
+                return true;
+            };
             let _filled76 = 0;
             Object.keys(_sa76).forEach(b => {
                 if (_allowed76 && !_allowed76.has(String(b))) return;
@@ -4108,7 +4135,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g)) continue;
+                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
                         let act = null;
                         for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()]) { act = c; break; } }
                         if (!act) continue;
