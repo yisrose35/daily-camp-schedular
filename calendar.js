@@ -371,6 +371,10 @@ all[date].updated_at = new Date().toISOString();
                 // Clear rotation_counts for our bunks only
                 await window.RotationCloud?.clearForBunks?.(myBunks);
 
+                // ★★★ CB-90: clear rotation-event completions for OUR bunks only
+                // (scheduler scope) so a reset re-places events for them.
+                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
+
                 // Scrub rotationHistory.bunks for our bunks only
                 var _rotHist = window.loadRotationHistory?.() || { bunks: {}, leagues: {} };
                 var bunkSet = new Set(myBunks);
@@ -436,6 +440,11 @@ all[date].updated_at = new Date().toISOString();
 
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
+
+            // ★★★ CB-90: also wipe rotation-event completion stamps. Without this,
+            // a full rotation-history reset left evt.completedBunks intact, so a
+            // regenerated event permanently skipped every previously-marked bunk.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
 
             // Clear league round state
             window.leagueRoundState = {};
@@ -521,6 +530,9 @@ all[date].updated_at = new Date().toISOString();
 
                 // 3. Clear rotation counts for our bunks
                 await window.RotationCloud?.clearForBunks?.(myBunks);
+
+                // ★★★ CB-90: clear rotation-event completions for our bunks (scheduler scope)
+                try { window.RotationEvents?.clearAllCompleted?.(null, myBunks); } catch (e) { /* non-fatal */ }
 
                 // 4. Scrub local rotation history for our bunks
                 var bunkSet = new Set(myBunks);
@@ -630,6 +642,10 @@ all[date].updated_at = new Date().toISOString();
 
             // Clear rotation_counts table in Supabase
             await window.RotationCloud?.clearAll?.();
+
+            // ★★★ CB-90: wipe rotation-event completion stamps for the new half too
+            // (otherwise a regenerated event skips every bunk marked done last half).
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (e) { /* non-fatal */ }
 
             // Reset league standings and playoff state
             try {
@@ -1208,6 +1224,10 @@ all[date].updated_at = new Date().toISOString();
             if (window.RotationCloud?.deleteDate) {
                 window.RotationCloud.deleteDate(dateKey);
             }
+            // ★★★ CB-90: also clear THIS date's rotation-event completion stamps,
+            // so a regen of the erased day re-places the event for those bunks
+            // instead of treating them as already-done.
+            try { window.RotationEvents?.clearCompletedForDate?.(dateKey); } catch (e) { /* non-fatal */ }
             // ★ Delete stale schedule_proposals for this date
             try {
                 const _client = window.CampistryDB?.client || window.supabase;
@@ -1448,6 +1468,9 @@ all[date].updated_at = new Date().toISOString();
                 try { if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(k, {}); } catch (_) {}
             });
             try { window.RotationEngine?.clearAllHistory?.(); } catch (_) {}
+            // ★★★ CB-90: Erase-ALL must also wipe rotation-event completion stamps,
+            // else a regenerated event skips every previously-marked bunk.
+            try { window.RotationEvents?.clearAllCompleted?.(); } catch (_) {}
 
             console.log("✅ All daily data erased");
 

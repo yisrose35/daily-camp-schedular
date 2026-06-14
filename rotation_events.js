@@ -533,6 +533,42 @@ function clearCompletedForDate(dateKey, allowedBunks) {
     return cleared;
 }
 
+// ★★★ CB-90: wipe ALL completion stamps across every rotation event (all dates).
+// clearCompletedForDate only prunes the CURRENT date (called at gen STEP 0), so a
+// schedule delete / "Erase ALL" / "Start New Half" left completedBunks intact —
+// regenerating the new half then skipped every already-marked bunk permanently
+// (they showed as done although their schedules were wiped + counters reset).
+// This is the completion-side analog of the historicalCounts reset those paths
+// already do. Optional dateKeys[] limits the wipe to specific dates.
+function clearAllCompleted(dateKeys, bunkFilter) {
+    const events = loadRotationEvents();
+    const scopedDates = Array.isArray(dateKeys) && dateKeys.length > 0;
+    const dateSet = scopedDates ? new Set(dateKeys.map(String)) : null;
+    const scopedBunks = Array.isArray(bunkFilter) && bunkFilter.length > 0;
+    const bunkSet = scopedBunks ? new Set(bunkFilter.map(String)) : null;
+    let cleared = 0;
+    const _wipeDate = (evt, dk) => {
+        const arr = evt.completedBunks[dk];
+        if (!Array.isArray(arr)) return;
+        if (scopedBunks) {
+            const before = arr.length;
+            evt.completedBunks[dk] = arr.filter(b => !bunkSet.has(String(b)));
+            cleared += before - evt.completedBunks[dk].length;
+            if (evt.completedBunks[dk].length === 0) delete evt.completedBunks[dk];
+        } else {
+            cleared += arr.length;
+            delete evt.completedBunks[dk];
+        }
+    };
+    events.forEach(evt => {
+        if (!evt.completedBunks) return;
+        const dates = scopedDates ? [...dateSet] : Object.keys(evt.completedBunks);
+        dates.forEach(dk => _wipeDate(evt, dk));
+    });
+    if (cleared > 0) saveRotationEvents(events);
+    return cleared;
+}
+
 /**
  * Write rotation event blocks into bunk timelines (for auto-scheduler integration).
  * Called from scheduler_core_auto.js after the main scheduling pass.
@@ -738,7 +774,7 @@ function renderEventCard(evt, dateKey, isActive) {
     // Bind events
     card.querySelector('.re-delete-btn')?.addEventListener('click', async () => {
         if (typeof window.daShowConfirm === 'function') {
-            const ok = await window.daShowConfirm('Delete "' + evt.name + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
+            const ok = await window.daShowConfirm('Delete "' + escapeHtml(evt.name) + '"? This cannot be undone.', { danger: true, confirmText: 'Delete' });
             if (ok) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
         } else {
             if (confirm('Delete "' + evt.name + '"?')) { deleteEvent(evt.id); renderRotationEventsPane(card.closest('#da-rotation-events-container')); }
@@ -751,7 +787,7 @@ function renderEventCard(evt, dateKey, isActive) {
 
     card.querySelector('.re-restart-btn')?.addEventListener('click', async () => {
         const confirmFn = typeof window.daShowConfirm === 'function' ? window.daShowConfirm : (msg) => Promise.resolve(confirm(msg));
-        const ok = await confirmFn('Restart "' + evt.name + '"? This will clear all completion records and start from scratch.', { danger: true, confirmText: 'Restart' });
+        const ok = await confirmFn('Restart "' + escapeHtml(evt.name) + '"? This will clear all completion records and start from scratch.', { danger: true, confirmText: 'Restart' });
         if (ok) {
             updateEvent(evt.id, { completedBunks: {} });
             renderRotationEventsPane(card.closest('#da-rotation-events-container'));
@@ -952,7 +988,7 @@ async function showCreateEventModal(containerEl) {
     const actualDays = getDatesBetween(startDate, endDate).length;
 
     alertFn(
-        'Created "' + result.name + '"<br><br>' +
+        'Created "' + escapeHtml(result.name) + '"<br><br>' +
         '<strong>' + totalBunks + ' bunks</strong>, ~' + slotsPerDay + '/day capacity<br>' +
         formatDate(startDate) + ' - ' + formatDate(endDate) + ' (' + actualDays + ' day' + (actualDays > 1 ? 's' : '') + ')' +
         (daysNeeded > actualDays ? '<br><br>Warning: May need ' + daysNeeded + ' days to finish all bunks — consider extending the date range.' : '')
@@ -1376,6 +1412,7 @@ const RotationEvents = {
     writeBlocksToTimelines,
     markCompleted,
     clearCompletedForDate,
+    clearAllCompleted, // ★ CB-90: full completion wipe for erase/new-half paths
     getSchedulerHook,
     getRemainingBunks,
     getCompletedBunks,
