@@ -1370,10 +1370,55 @@ function _propagateGradeRenameTiles(oldG, newG){
         if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'&&(oldG in app1.gradeLayerRules)&&!(newG in app1.gradeLayerRules)){
             app1.gradeLayerRules[newG]=app1.gradeLayerRules[oldG];delete app1.gradeLayerRules[oldG];changed=true;
         }
+        // ★★★ CB-93: autoLayerTemplates[tmpl][oldG] → [newG]. The auto-layer editor
+        // store (master_schedule_builder dawLayers) persists into
+        // app1.autoLayerTemplates, GRADE-keyed inside each template, and
+        // loadDAWLayers reads EXCLUSIVELY from there — so a grade rename previously
+        // left the renamed grade opening with an EMPTY layer editor and its
+        // configured layers orphaned (a delete lost them forever). Rename the grade
+        // key inside every template.
+        if(app1.autoLayerTemplates&&typeof app1.autoLayerTemplates==='object'){
+            Object.keys(app1.autoLayerTemplates).forEach(function(tmpl){
+                var byGrade=app1.autoLayerTemplates[tmpl];
+                if(byGrade&&typeof byGrade==='object'&&!Array.isArray(byGrade)&&(oldG in byGrade)&&!(newG in byGrade)){
+                    byGrade[newG]=byGrade[oldG];delete byGrade[oldG];changed=true;
+                }
+            });
+        }
+        // ★★★ CB-83/CB-85: migrate the grade rename into special-activity per-grade
+        // config. The special validator filters every per-grade list against the
+        // CURRENT grade set, so a rename (which never touched specials) made it
+        // silently PRUNE the now-orphaned grade from sharing divisions, access
+        // restrictions + priority list, rotation cohort and the per-grade
+        // full-grade map. Rename oldG → newG in each (guarded so absent grades
+        // don't force a needless save).
+        if(Array.isArray(app1.specialActivities)){
+            app1.specialActivities.forEach(function(sp){
+                if(!sp||typeof sp!=='object')return;
+                if(sp.sharableWith&&Array.isArray(sp.sharableWith.divisions)&&sp.sharableWith.divisions.indexOf(oldG)!==-1){
+                    sp.sharableWith.divisions=sp.sharableWith.divisions.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                var ar=sp.accessRestrictions;
+                if(ar&&typeof ar==='object'){
+                    if(ar.divisions&&typeof ar.divisions==='object'&&(oldG in ar.divisions)&&!(newG in ar.divisions)){
+                        ar.divisions[newG]=ar.divisions[oldG];delete ar.divisions[oldG];changed=true;
+                    }
+                    if(Array.isArray(ar.priorityList)&&ar.priorityList.indexOf(oldG)!==-1){
+                        ar.priorityList=ar.priorityList.map(function(d){return d===oldG?newG:d});changed=true;
+                    }
+                }
+                if(sp.rotationCohort&&Array.isArray(sp.rotationCohort.grades)&&sp.rotationCohort.grades.indexOf(oldG)!==-1){
+                    sp.rotationCohort.grades=sp.rotationCohort.grades.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                if(sp.fullGradePerGrade&&typeof sp.fullGradePerGrade==='object'&&(oldG in sp.fullGradePerGrade)&&!(newG in sp.fullGradePerGrade)){
+                    sp.fullGradePerGrade[newG]=sp.fullGradePerGrade[oldG];delete sp.fullGradePerGrade[oldG];changed=true;
+                }
+            });
+        }
         if(changed&&typeof window.saveGlobalSettings==='function'){
             window.saveGlobalSettings('app1',app1);
             if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
-            console.log('[Me] Propagated grade rename in skeletons/auto-layers:',oldG,'→',newG);
+            console.log('[Me] Propagated grade rename in skeletons/auto-layers/specials:',oldG,'→',newG);
         }
     }catch(e){console.warn('[Me] _propagateGradeRenameTiles:',e)}
 }
@@ -1437,8 +1482,13 @@ function _propagateDivisionRename(oldName, newName){
             records.forEach(function(record){
                 var sd=record.schedule_data||{};
                 var modified=false;
-                // Rename division-keyed sub-structures
-                ['divisionTimes','unifiedTimes'].forEach(function(k){
+                // Rename division-keyed sub-structures.
+                // ★★★ CB-82: include _perBunkSlotsData — cloud schedule_data carries
+                // a top-level division/grade-keyed _perBunkSlotsData (the auto-mode
+                // per-bunk slot geometry, consumed on load by MS-4c). The rename
+                // previously migrated only divisionTimes/unifiedTimes, orphaning the
+                // renamed unit's per-bunk geometry on every saved date.
+                ['divisionTimes','unifiedTimes','_perBunkSlotsData'].forEach(function(k){
                     if(sd[k]&&typeof sd[k]==='object'&&oldName in sd[k]){
                         sd[k]=Object.assign({},sd[k]);
                         sd[k][newName]=sd[k][oldName];
