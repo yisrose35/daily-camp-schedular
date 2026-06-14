@@ -25353,6 +25353,16 @@
 
             if (_impossibilities.length === 0) {
                 log('\n✅ No unfilled slots — schedule is complete.');
+                // ★★★ CB-91: dispatch an EMPTY impossibilities event so the
+                // coverage-warning Free banner auto-clears on a clean regen.
+                // Previously this clean-path early-return dispatched nothing, so a
+                // red "N unfilled (Free) slots" banner from a prior gen persisted
+                // the whole session until the user closed it or reloaded.
+                try {
+                    window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', {
+                        detail: { count: 0, items: [] }
+                    }));
+                } catch (_e91) { /* non-fatal */ }
                 return;
             }
 
