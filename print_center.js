@@ -287,6 +287,7 @@ var _liveWindow = null;
 var _livePageIndex = 0;
 var _numLivePages = 1;
 var _livePageTimer = null;
+var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
@@ -3541,7 +3542,11 @@ function runLiveStandalone() {
         // Re-render content every 30s, reposition cursor every 15s, clock every 1s
         if (_liveInterval) clearInterval(_liveInterval);
         if (_liveCursorInterval) clearInterval(_liveCursorInterval);
-        _liveInterval = setInterval(tickAll, 30000);
+        // Tick often (cheap — renderLiveContent is signature-gated and only does
+        // real DOM work when the schedule or the "now" state actually changes).
+        // This makes the view fill in within seconds of data loading and keeps
+        // the current/past highlight punctual, without the old 30s rebuild flash.
+        _liveInterval = setInterval(tickAll, 5000);
         _liveCursorInterval = setInterval(positionAllLiveCursors, 15000);
         tickClock();
         setInterval(tickClock, 1000);
@@ -3796,6 +3801,53 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     return html;
 }
 
+// Cheap fingerprint of everything the live view renders. Captures the schedule
+// data AND the time-dependent state (which activity/column is "now"/"past") so
+// the heavy DOM rebuild only fires when the picture actually changes — not on a
+// blind 30-second timer. This is what kills the periodic flash/lag on a kiosk.
+function _liveContentSignature(nowMin) {
+    var divs = getDivisions();
+    var available = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(getAvailableDivisions())
+        : getAvailableDivisions().sort(naturalSort);
+    var inc = _timeIncrement || 15;
+    // tphase changes every increment → keeps the header "current column" highlight live.
+    var parts = [
+        window.currentScheduleDate || '', String(inc), isAutoMode() ? 'A' : 'M',
+        _currentTemplate.hideLeagueMatchups ? '1' : '0',
+        'T' + Math.floor(nowMin / inc)
+    ];
+    available.forEach(function (divName) {
+        var bunks = (divs[divName] && divs[divName].bunks ? divs[divName].bunks : []).slice();
+        if (!bunks.length) return;
+        parts.push('§' + divName + '#' + bunks.join(','));
+        if (isAutoMode()) {
+            bunks.forEach(function (bunk) {
+                var slots = getPerBunkSchedule(bunk, divName);
+                for (var i = 0; i < slots.length; i++) {
+                    var s = slots[i], e = getEntry(bunk, i);
+                    var label = e ? (e._partLabel || e._activity || e.sport || (e.continuation ? '~' : '')) : '';
+                    // start/end relative to now → flips exactly when a cell turns current/past
+                    parts.push(s.startMin + '-' + s.endMin + ':' + label +
+                        (nowMin >= s.startMin ? 's' : '') + (nowMin >= s.endMin ? 'e' : ''));
+                }
+            });
+        } else {
+            var blocks = buildDivisionBlocks(divName);
+            blocks.forEach(function (b) {
+                parts.push(b.startMin + '-' + b.endMin + ':' + (b.event || '') + (b.isLeague ? 'L' : '') +
+                    (nowMin >= b.startMin ? 's' : '') + (nowMin >= b.endMin ? 'e' : ''));
+                bunks.forEach(function (bunk) {
+                    var si = findFirstSlotForTime(b.startMin, divName);
+                    var e = si >= 0 ? getEntry(bunk, si) : null;
+                    parts.push(e ? (e._activity || e.sport || '') : '');
+                });
+            });
+        }
+    });
+    return parts.join('|');
+}
+
 // —— Paginated live view renderer ————————————————————————————————————————————
 function renderLiveContent() {
     var body = el('pc3-live-body');
@@ -3803,6 +3855,18 @@ function renderLiveContent() {
     var nowMin = getNowMinutes();
     var divs = getDivisions();
     var available = (typeof window.getUserDivisionOrder === 'function') ? window.getUserDivisionOrder(getAvailableDivisions()) : getAvailableDivisions().sort(naturalSort);
+
+    // Skip the (expensive) rebuild when nothing the viewer can see has changed.
+    // The page-rotation timer drives "showing different parts of the schedule"
+    // on its own via livePageNav() without touching the DOM here, so a no-op
+    // tick costs only this signature walk — no flash, no jank.
+    var sig = _liveContentSignature(nowMin);
+    var hasPages = !!body.querySelector('[id^="lp-"]');
+    if (sig === _liveRenderSig && hasPages) {
+        positionAllLiveCursors();
+        return;
+    }
+    _liveRenderSig = sig;
 
     // 1. Render all section wraps into body so we can measure their heights
     var sectHtml = '';
@@ -3813,8 +3877,12 @@ function renderLiveContent() {
     });
     if (!sectHtml) {
         body.innerHTML = '<div style="color:#6b7280;padding:40px;text-align:center;font-size:18px;">No schedule data available.</div>';
+        _liveRenderSig = ''; // force a real render once data arrives
         return;
     }
+    // Hide while we measure + bin-pack so the viewer never sees the brief
+    // "all sections stacked" flash before pagination collapses them.
+    body.style.visibility = 'hidden';
     body.innerHTML = sectHtml;
 
     // Defer measure + paginate until after the browser has computed layout.
@@ -3870,6 +3938,7 @@ function renderLiveContent() {
     updateLivePageIndicator();
     if (!_livePageTimer) startLivePageTimer();
     positionAllLiveCursors();
+    body.style.visibility = ''; // reveal — pagination is done, no flash
 
         }); // end inner rAF
     }); // end outer rAF
@@ -3996,7 +4065,7 @@ function buildPrintHTML(sel) {
         }
 
         // Content
-        if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/class="pc3-sheet-head"[^>]*>.*?<\/div>/s, ''); }
+        if (_activeView === 'division') { html += renderDivisionSheet(item).replace(/<div class="pc3-sheet-head"[^>]*>[\s\S]*?<\/div>/, ''); }
         else if (_activeView === 'bunk') { html += renderBunkSheet(item); }
         else if (_activeView === 'location') { html += renderLocationSheet(item); }
         else if (_activeView === 'week') {
@@ -4043,7 +4112,7 @@ function sanitizeForExcel(s) {
         .replace(/[–—]/g, '-')   // – — → -
         .replace(/[‘’]/g, "'")   // ‘ ’ → '
         .replace(/[“”]/g, '"')   // “ ” → "
-        .replace(/·/g, '*')           // · → *
+        .replace(/·/g, '-')           // · → -  (plain separator; '*' read like a stray footnote)
         .replace(/…/g, '...');        // … → ...
 }
 function sanitizeRows(rows) {
@@ -4068,28 +4137,30 @@ function buildPolishedWorkbook(sel) {
         free:     { font: { sz: 10, italic: true, color: { rgb: '94A3B8' } }, alignment: { vertical: 'center', horizontal: 'center' } }
     };
 
-    sel.forEach(function (item) {
-        var rows = sanitizeRows(buildExcelRows(item));
+    // Week view is a single combined sheet; every other view is one sheet per
+    // selected item. Building a uniform spec list keeps the styling pass below
+    // identical for both and lets week-view export actually produce a file
+    // (buildExcelRows has no 'week' branch → used to yield a 0-sheet workbook
+    // and XLSX.writeFile would throw).
+    var sheetSpecs = (_activeView === 'week')
+        ? [{ name: 'Week', rows: buildWeekExcelRows(sel) }]
+        : sel.map(function (item) { return { name: String(item), rows: buildExcelRows(item) }; });
+
+    sheetSpecs.forEach(function (spec) {
+        var rows = sanitizeRows(spec.rows || []);
         if (!rows.length) return;
 
-        // Find the column-header row (where first cell is 'Time')
+        // Find the column-header row (first cell is the axis label).
+        // Division/bunk/location grids lead with 'Time'; the week grid leads
+        // with 'Bunk'. Detecting either keeps freeze-panes + header styling.
         var headerRowIdx = -1;
         for (var ri = 0; ri < rows.length; ri++) {
-            if (rows[ri] && rows[ri][0] === 'Time') { headerRowIdx = ri; break; }
+            if (rows[ri] && (rows[ri][0] === 'Time' || rows[ri][0] === 'Bunk')) { headerRowIdx = ri; break; }
         }
-        // BACKFILL empty data cells with a thin em-dash placeholder so rows
-        // don't visually disappear when a bunk has no assignment for a slot
-        // that another bunk does. Cosmetic only — keeps the grid scannable.
-        if (headerRowIdx >= 0) {
-            for (var br = headerRowIdx + 1; br < rows.length; br++) {
-                var rr = rows[br];
-                if (!rr || !rr.length) continue;
-                // From column 1 onward (skip Time col), if cell is null/'', stamp '-'
-                for (var bc = 1; bc < rr.length; bc++) {
-                    if (rr[bc] == null || rr[bc] === '') rr[bc] = '-';
-                }
-            }
-        }
+        // NOTE: deliberately NO empty-cell backfill. A blank slot in the
+        // schedule must export as a blank cell — stamping a '-' placeholder
+        // injected characters the schedule never had (camps reported the
+        // export wasn't "true" to the grid).
         var ws = XLSX.utils.aoa_to_sheet(rows);
         var numCols = 0;
         rows.forEach(function (r) { if (r && r.length > numCols) numCols = r.length; });
@@ -4157,10 +4228,17 @@ function buildPolishedWorkbook(sel) {
             }
         }
 
-        var name = String(item).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
+        var name = String(spec.name).replace(/[\\\/\?\*\[\]:]/g, '').substring(0, 31) || 'Sheet';
         try { XLSX.utils.book_append_sheet(wb, ws, name); }
         catch (e) { XLSX.utils.book_append_sheet(wb, ws, name + '_' + Math.random().toString(36).slice(2, 5)); }
     });
+
+    // Guard: never hand XLSX.writeFile an empty workbook (it throws). Happens
+    // when the selection has no schedule data for the active view.
+    if (!wb.SheetNames.length) {
+        var wsEmpty = XLSX.utils.aoa_to_sheet([['No schedule data to export for this selection.']]);
+        XLSX.utils.book_append_sheet(wb, wsEmpty, 'Schedule');
+    }
 
     wb.Props = {
         Title: 'Camp Schedule — ' + (formatDisplayDate(dateStr) || dateStr),
@@ -4250,6 +4328,49 @@ function getExportActivityLocation(bunk, slotIdx) {
         return { activity: parts[0].trim(), location: parts.slice(1).join(' \u2013 ').trim() };
     }
     return { activity: label || field, location: (act && field) ? field : '' };
+}
+
+// Combined 7-day grid for the Week view: Bunk × weekday, grouped by division.
+// Mirrors renderWeekSheet so the export matches what the user sees on screen.
+function buildWeekExcelRows(sel) {
+    var rows = [];
+    var keys = getWeekDateKeys(window.currentScheduleDate);
+    if (!keys.length) return rows;
+
+    var divs = getDivisions();
+    var bunkToDiv = {};
+    Object.keys(divs).forEach(function (d) {
+        ((divs[d] && divs[d].bunks) ? divs[d].bunks : []).forEach(function (b) { bunkToDiv[b] = d; });
+    });
+    var bunks = (sel || []).filter(function (b) { return bunkToDiv[b]; });
+    if (!bunks.length) bunks = Object.keys(bunkToDiv);
+
+    rows.push(['Week at a Glance']);
+    rows.push([formatWeekDayLabel(keys[0]) + ' - ' + formatWeekDayLabel(keys[keys.length - 1])]);
+    rows.push([]); // spacer
+    rows.push(['Bunk'].concat(keys.map(function (k) { return formatWeekDayLabel(k); })));
+
+    var byDiv = {};
+    bunks.forEach(function (b) { var d = bunkToDiv[b] || ''; if (!byDiv[d]) byDiv[d] = []; byDiv[d].push(b); });
+    var divOrder = (typeof window.getUserDivisionOrder === 'function')
+        ? window.getUserDivisionOrder(Object.keys(byDiv))
+        : Object.keys(byDiv);
+
+    divOrder.forEach(function (d) {
+        if (!byDiv[d]) return;
+        rows.push([d]); // division separator row
+        byDiv[d].forEach(function (b) {
+            var row = [b];
+            keys.forEach(function (k) {
+                var day = _weekData[k];
+                if (!day) { row.push(''); return; }
+                var labels = summarizeBunkDay(day.scheduleAssignments || {}, b);
+                row.push(labels.join(', '));
+            });
+            rows.push(row);
+        });
+    });
+    return rows;
 }
 
 function buildExcelRows(item) {
@@ -4469,11 +4590,19 @@ function csvSafeCell(v) {
 }
 function buildCSV(sel) {
     var lines = [];
-    sel.forEach(function (item, idx) {
-        if (idx > 0) lines.push(''); // blank separator between items
-        var rows = buildExcelRows(item);
-        rows.forEach(function (row) {
-            lines.push(row.map(function (c) { return '"' + csvSafeCell(c).replace(/"/g, '""') + '"'; }).join(','));
+    // Mirror the Excel sheet structure: one block per item, or a single block
+    // for the combined week grid. Unicode is normalised the same way as the
+    // .xlsx path so the CSV is just as "crisp" (no en-dashes / mojibake).
+    var specs = (_activeView === 'week')
+        ? [{ rows: buildWeekExcelRows(sel) }]
+        : sel.map(function (item) { return { rows: buildExcelRows(item) }; });
+    specs.forEach(function (spec, idx) {
+        if (idx > 0) lines.push(''); // blank separator between blocks
+        (spec.rows || []).forEach(function (row) {
+            lines.push(row.map(function (c) {
+                var v = (typeof c === 'string') ? sanitizeForExcel(c) : c;
+                return '"' + csvSafeCell(v).replace(/"/g, '""') + '"';
+            }).join(','));
         });
     });
     return lines.join('\n');
