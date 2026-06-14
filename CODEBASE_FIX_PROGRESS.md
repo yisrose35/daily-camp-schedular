@@ -8,7 +8,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 ## HIGH (15)
 - ✅ CB-1 supabase_schedules.js:973 — divisionTimes/geometry from passed payload not live window (+ CB-38 folded in)
 - ✅ CB-2 supabase_schedules.js:485 — transient query error ≠ "no records" (_queryErrored tag; 3 delete-on-empty sites guarded)
-- ⬜ CB-3 schedule_orchestrator.js:381 — slimming must skip future dates / preserve local-only fields
+- ✅ CB-3 schedule_orchestrator.js:381 — slim restricted to past in-window dates only; future/out-of-window dates untouched; LOCAL_ONLY_FIELDS preserved
 - ⬜ CB-4 schedule_orchestrator.js:837 [LIVE] — parallel merge bypasses MS fixes; route through ScheduleDB.mergeSchedules
 - ⬜ CB-5 scheduler_core_main.js:1665 [LIVE] — manual STEP 0f slim drops geometry/leagues
 - ⬜ CB-6 supabase_schedules.js:336 [LIVE] — scheduler save filter falls back to ALL divisions

@@ -354,13 +354,22 @@
                 }
             }
             if (hydrated > 0) {
-                // Slim past-date entries before persisting — rotation history
+                // Slim PAST-date entries before persisting — rotation history
                 // only needs _activity/sport/field per slot, so strip the rest.
                 // This keeps 14 days of allDaily under the localStorage quota.
+                //
+                // ★★★ CB-3: ONLY slim dates strictly inside the rotation-history
+                // window [startDate, todayKey). The previous `dk === todayKey`
+                // guard slimmed EVERY other date — including FUTURE dates the
+                // user had built ahead (skeleton/leagues/trips/divisionTimes/
+                // _perBunkSlotsData), permanently destroying that local data.
+                // Future dates and out-of-window past dates are left untouched;
+                // and even within the window we carry forward LOCAL_ONLY_FIELDS
+                // so historical per-day config (leagueRoundState etc.) survives.
                 try {
                     for (const dk of Object.keys(allDaily)) {
                         if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
-                        if (dk === todayKey) continue;
+                        if (!(dk < todayKey && dk >= startDate)) continue; // past, in-window only
                         const d = allDaily[dk];
                         if (!d || !d.scheduleAssignments) continue;
                         const slim = {};
@@ -378,7 +387,9 @@
                                 return out;
                             });
                         }
-                        allDaily[dk] = { scheduleAssignments: slim };
+                        const slimmed = { scheduleAssignments: slim };
+                        LOCAL_ONLY_FIELDS.forEach(f => { if (d[f] !== undefined) slimmed[f] = d[f]; });
+                        allDaily[dk] = slimmed;
                     }
                 } catch (_) {}
                 // Seed save hashes BEFORE writing to localStorage. This way
