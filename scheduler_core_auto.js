@@ -22909,7 +22909,12 @@
                     });
                 });
 
-                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                // ★ CB-23: key off the FN-14 hardened gen-date (window._activeGenDate,
+                // snapshotted at runOptimizer entry) — NOT raw window.currentScheduleDate.
+                // A mid-gen date revert (date-change race) flips currentScheduleDate, and
+                // this Step-5/FN-59 save would then write the just-generated schedule onto
+                // the PREVIOUS date's localStorage row. _activeGenDate is immune to that.
+                const dateKey = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
                 const DAILY_KEY = 'campDailyData_v1';
                 const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                 if (!allDaily[dateKey]) allDaily[dateKey] = {};
