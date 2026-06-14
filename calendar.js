@@ -394,6 +394,17 @@ all[date].updated_at = new Date().toISOString();
                 safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
                 window.saveGlobalSettings?.('smartTileHistory', _smartHist);
 
+                // ★★★ CB-71: scrub manualUsageOffsets for our bunks too. The owner
+                // branch clears it, but the scheduler branch omitted it — so a manual
+                // count offset (e.g. Swim=5 set in the analytics editor) survived the
+                // reset and the new period still treated the activity as already-done.
+                // (historicalCountedDates is date-keyed/global, intentionally left to
+                // the owner — scoping it per-bunk is meaningless and would clobber
+                // other schedulers' tracking.)
+                var _muo = window.loadGlobalSettings?.('manualUsageOffsets') || {};
+                Object.keys(_muo).forEach(function(bk) { if (bunkSet.has(bk)) delete _muo[bk]; });
+                window.saveGlobalSettings?.('manualUsageOffsets', _muo);
+
                 console.log('✅ Scheduler rotation history cleared for', myBunks.length, 'bunks');
                 alert('Rotation history reset for your divisions!');
                 window.location.reload();
@@ -548,6 +559,13 @@ all[date].updated_at = new Date().toISOString();
                 Object.keys(_smartHist).forEach(function(bk) { if (bunkSet.has(bk)) delete _smartHist[bk]; });
                 safeLocalStorageSet(SMART_TILE_HISTORY_KEY, JSON.stringify(_smartHist));
                 window.saveGlobalSettings?.('smartTileHistory', _smartHist);
+
+                // ★★★ CB-71: scrub manualUsageOffsets for our bunks (owner branch
+                // clears it; scheduler branch omitted it → stale offset carried into
+                // the new half).
+                var _muoNH = window.loadGlobalSettings?.('manualUsageOffsets') || {};
+                Object.keys(_muoNH).forEach(function(bk) { if (bunkSet.has(bk)) delete _muoNH[bk]; });
+                window.saveGlobalSettings?.('manualUsageOffsets', _muoNH);
 
                 clearBunksFromGlobals(myBunks);
 
