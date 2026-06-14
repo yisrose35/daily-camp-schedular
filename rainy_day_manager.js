@@ -14,6 +14,18 @@
 (function() {
 'use strict';
 
+// ★★★ CB-35: field & special-activity names are user-controlled camp config and
+// were interpolated RAW into the rainy-day config-panel innerHTML — both as text
+// (rd-item-name) and inside double-quoted data-* attributes (data-field=,
+// data-special=) → stored XSS + attribute breakout. No escaper existed in this
+// file; add one (CampUtils delegate + complete &<>"' fallback, safe in element
+// and attribute context) and wrap every name sink.
+const _rdEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
 // =============================================================
 // STATE
 // =============================================================
@@ -1150,8 +1162,8 @@ function createRainyDayToggleUI(container, onToggle) {
                     </div>
                     <select id="rainy-skeleton-select" class="rainy-settings-select">
                         <option value="">-- None Selected --</option>
-                        ${availableSkeletons.map(name => 
-                            `<option value="${name}" ${name === rainySkeletonName ? 'selected' : ''}>${name}</option>`
+                        ${availableSkeletons.map(name =>
+                            `<option value="${_rdEsc(name)}" ${name === rainySkeletonName ? 'selected' : ''}>${_rdEsc(name)}</option>`
                         ).join('')}
                     </select>
                 </div>
@@ -1527,14 +1539,14 @@ function createRainyDayConfigPanel(container) {
                     return `
                         <div class="rd-item-row ${isIndoor ? 'indoor' : ''}">
                             <div>
-                                <div class="rd-item-name">${f.name}</div>
+                                <div class="rd-item-name">${_rdEsc(f.name)}</div>
                                 <span class="rd-item-badge ${isIndoor ? 'rd-badge-indoor' : 'rd-badge-outdoor'}">
                                     ${isIndoor ? '🏠 Indoor' : '🌳 Outdoor'}
                                 </span>
                             </div>
                             <label class="rd-mini-toggle">
                                 <input type="checkbox" 
-                                       data-field="${f.name}" 
+                                       data-field="${_rdEsc(f.name)}"
                                        ${isIndoor ? 'checked' : ''}>
                                 <span class="track"></span>
                                 <span class="thumb"></span>
@@ -1559,12 +1571,12 @@ function createRainyDayConfigPanel(container) {
                     return `
                         <div class="rd-item-row ${isRainyOnly ? 'rainy-only' : ''}">
                             <div>
-                                <div class="rd-item-name">${s.name}</div>
+                                <div class="rd-item-name">${_rdEsc(s.name)}</div>
                                 ${isRainyOnly ? '<span class="rd-item-badge rd-badge-rainy">🌧️ Rainy Day Only</span>' : ''}
                             </div>
                             <label class="rd-mini-toggle">
                                 <input type="checkbox" 
-                                       data-special="${s.name}" 
+                                       data-special="${_rdEsc(s.name)}"
                                        ${isRainyOnly ? 'checked' : ''}>
                                 <span class="track"></span>
                                 <span class="thumb"></span>
