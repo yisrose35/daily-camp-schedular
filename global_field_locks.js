@@ -14,6 +14,17 @@
 (function() {
     'use strict';
 
+    // ★★★ CB-37: other-scheduler field & division names are user-controlled camp
+    // config and were rendered RAW into the lock-warning panel / detail cards /
+    // badge innerHTML → cross-scheduler stored XSS (a teammate's malicious field
+    // or division name executes in this user's session). No escaper existed;
+    // add one (CampUtils delegate + complete &<>"' fallback) and wrap every sink.
+    const _gflEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
     // =========================================================================
     // GLOBAL LOCK REGISTRY
     // =========================================================================
@@ -809,7 +820,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                         Fields Already Scheduled by Other Schedulers
                     </div>
                     <div style="font-size: 0.85rem; color: #B45309; margin-top: 2px;">
-                        ${fieldCount} field${fieldCount !== 1 ? 's' : ''} in use by: ${otherDivisions.join(', ')}
+                        ${fieldCount} field${fieldCount !== 1 ? 's' : ''} in use by: ${otherDivisions.map(_gflEsc).join(', ')}
                     </div>
                 </div>
                 <button id="${PANEL_ID}-toggle" style="
@@ -859,8 +870,8 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         `;
         
         for (const [fieldName, usage] of fields) {
-            const timeLabels = usage.slotTimes.map(t => t.label).join(', ') || 'Multiple times';
-            const divisionList = usage.divisions.join(', ');
+            const timeLabels = usage.slotTimes.map(t => _gflEsc(t.label)).join(', ') || 'Multiple times';
+            const divisionList = usage.divisions.map(_gflEsc).join(', ');
             const bunkCount = usage.bunks.length;
             
             html += `
@@ -871,7 +882,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                     padding: 12px;
                 ">
                     <div style="font-weight: 600; color: #78350F; margin-bottom: 6px;">
-                        🏟️ ${fieldName}
+                        🏟️ ${_gflEsc(fieldName)}
                     </div>
                     <div style="font-size: 0.85rem; color: #92400E;">
                         <div>📅 Times: ${timeLabels}</div>
@@ -935,7 +946,7 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
                     border: 1px solid #F59E0B;
                     margin-left: 6px;
                 `;
-                badge.innerHTML = `🔒 ${usage.divisions.join(', ')}`;
+                badge.innerHTML = `🔒 ${usage.divisions.map(_gflEsc).join(', ')}`;
                 badge.title = `In use by: ${usage.bunks.slice(0, 5).join(', ')}${usage.bunks.length > 5 ? '...' : ''}`;
                 nameEl.appendChild(badge);
             }
