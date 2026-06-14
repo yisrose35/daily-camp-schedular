@@ -1798,12 +1798,26 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     // Get the editing bunk's division and time range
     const editingDiv = getDivisionForBunk(bunk);
     const editingDivSlots = window.divisionTimes?.[editingDiv] || [];
-    
+
+    // ★★★ CB-33: when the editing division uses per-bunk geometry (auto mode),
+    // the `slots` indices index into THIS BUNK's _perBunkSlots — not the
+    // division-level slot table. Reading editingDivSlots[slots[i]] then yields
+    // the wrong time window (or undefined, when divisionTimes[div] is the
+    // per-bunk object), producing a wrong field-lock window + wrong smart-regen
+    // mapping. Resolve the claimed window from the bunk's per-bunk slots first,
+    // falling back to the (flat) division table for manual geometry.
+    const _divEntry33 = window.divisionTimes?.[editingDiv];
+    const _perBunkSlots33 =
+        (_divEntry33 && _divEntry33._isPerBunk && _divEntry33._perBunkSlots && _divEntry33._perBunkSlots[bunk]) ||
+        (window._perBunkSlots && window._perBunkSlots[editingDiv] && window._perBunkSlots[editingDiv][bunk]) ||
+        null;
+    const _claimSlots33 = (Array.isArray(_perBunkSlots33) && _perBunkSlots33.length) ? _perBunkSlots33 : editingDivSlots;
+
     // * Capture the actual TIME RANGE being claimed *
     let claimedStartMin = null, claimedEndMin = null;
-    if (slots.length > 0 && editingDivSlots[slots[0]]) {
-        claimedStartMin = editingDivSlots[slots[0]].startMin;
-        claimedEndMin = editingDivSlots[slots[slots.length - 1]].endMin;
+    if (slots.length > 0 && _claimSlots33[slots[0]]) {
+        claimedStartMin = _claimSlots33[slots[0]].startMin;
+        claimedEndMin = _claimSlots33[slots[slots.length - 1]].endMin;
     }
     
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
