@@ -872,10 +872,13 @@
         // keys like camperRoster, families, enrollments).  That re-read
         // then becomes the new _localCache — permanently losing those keys
         // until the next cloud hydration restores them.
-        const localSettings = getLocalSettings();
-        const allChanges = { ...localSettings, ..._pendingChanges };
-        _pendingChanges = allChanges;
-
+        // ★★★ CB-14: flush ONLY the keys this device actually changed
+        // (_pendingChanges, populated per-key by saveGlobalSettings →
+        // queueSettingChange). The previous code merged the ENTIRE local
+        // settings snapshot into _pendingChanges, so a force-sync re-upserted
+        // every camp_state_kv key with updated_at=NOW — clobbering newer values
+        // another device had written to keys this device never touched.
+        // "Force" means flush-now (bypass the debounce), not re-push everything.
         await executeBatchSync();
 
         return true;
