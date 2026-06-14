@@ -336,14 +336,22 @@
         var picker = document.getElementById('calendar-date-picker');
         var currentKey = (picker && picker.value) || window.currentScheduleDate || '';
 
-        window.currentScheduleDate = newKey;
-
         if (currentKey === newKey) {
-            // Same date — just trigger render directly
+            // Same date — no cross-date transition, safe to set + render directly.
+            window.currentScheduleDate = newKey;
             console.log(LOG, 'Date unchanged (' + newKey + '), calling updateTable');
             callOriginalUpdateTable();
             return;
         }
+
+        // ★★★ CB-61: do NOT eagerly set window.currentScheduleDate before the
+        // date-change handler runs. The handler saves the CURRENT date's
+        // in-memory schedule before switching; if currentScheduleDate already
+        // points at the NEW key, that pre-switch save targets the wrong date,
+        // the cross-date guard blocks it, and the old day's unsaved edits are
+        // silently lost. The picker 'change' → calendar.js onDateChanged →
+        // orchestrator chain persists the current date under its correct key,
+        // THEN sets currentScheduleDate to newKey and loads it.
 
         // Different date — set picker value, fire change event.
         // This triggers: calendar.js onDateChanged → campistry-date-changed

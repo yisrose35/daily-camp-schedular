@@ -19,7 +19,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-58 validator.js:937 — escMsg (escape + intentional-tag whitelist restore) at the <li> sink
 - ✅ CB-59 auto_validator.js:643 — _avEscMsg at both error+warning <li> sinks (twin of CB-58)
 - ✅ CB-60 campistry_me.js:141 — save() spreads existing campistryMe before overriding (preserves forms/customFields/locale/Stripe key)
-- ⬜ CB-61 schedule_calendar_views.js:339 [LIVE] — day-view nav defeats cross-date save guard
+- ✅ CB-61 [LIVE] schedule_calendar_views.js:339 — no eager currentScheduleDate set on cross-date nav (handler saves old date under correct key first). Owed: live date-nav-with-unsaved-edit verify
 - ⬜ CB-107 campistry_go.js:2348 [LIVE] — clearAll* wipes whole cloud state row
 
 ## MED (86) — after all HIGH
