@@ -705,6 +705,21 @@
                 return;
             }
             log('Skipping camp_state sync — role cannot access camp_state table (changes saved locally)');
+            // ★★★ CB-111 (+CB-67): v3.13 lets a scheduler EDIT camp config
+            // (facilities / specials / setup) in the UI with no permission toast,
+            // but the cloud write is dropped here by RLS — the edit looks like it
+            // took, yet is invisible on other devices and is overwritten on the
+            // owner's next sync. Surface it ONCE per session so the silent loss
+            // isn't mistaken for a successful save.
+            try {
+                if (!window.__cb111Warned) {
+                    window.__cb111Warned = true;
+                    var _m111 = 'Your role can’t save camp-setup changes to the cloud — edits stay on this device only and may be overwritten. Ask an owner/admin to make config changes.';
+                    if (typeof window.showToast === 'function') window.showToast(_m111, 'warning');
+                    else if (typeof window.toast === 'function') window.toast(_m111, 'warning');
+                    else console.warn('[Hooks] CB-111: ' + _m111);
+                }
+            } catch (_e111) { /* non-fatal */ }
             _pendingChanges = {};
             _lastSyncTime = Date.now();
             return;
