@@ -657,20 +657,21 @@
                 });
             }
             
-            // ★★★ FIX: Track unifiedTimes - use longest array ★★★
-            if (data.unifiedTimes && Array.isArray(data.unifiedTimes)) {
-                if (data.unifiedTimes.length > mergedUnifiedTimes.length) {
-                    mergedUnifiedTimes = data.unifiedTimes;
-                    maxSlots = data.unifiedTimes.length;
-                }
+            // ★★★ CB-16: unifiedTimes by RECENCY, not longest array. Records are
+            // sorted ascending by updated_at, so the newest non-empty value wins
+            // (overwrite as we go). The old "longest array" rule meant a REDUCED
+            // slot count (a period removed) could never propagate — the stale,
+            // longer grid was kept forever and re-persisted. A non-empty guard
+            // still prevents an empty array from clobbering a real grid.
+            if (data.unifiedTimes && Array.isArray(data.unifiedTimes) && data.unifiedTimes.length > 0) {
+                mergedUnifiedTimes = data.unifiedTimes;
+                maxSlots = data.unifiedTimes.length;
             }
-            
-            // Also check record.unified_times (separate column)
-            if (record.unified_times && Array.isArray(record.unified_times)) {
-                if (record.unified_times.length > mergedUnifiedTimes.length) {
-                    mergedUnifiedTimes = record.unified_times;
-                    maxSlots = record.unified_times.length;
-                }
+
+            // Also check record.unified_times (separate column) — newest non-empty wins
+            if (record.unified_times && Array.isArray(record.unified_times) && record.unified_times.length > 0) {
+                mergedUnifiedTimes = record.unified_times;
+                maxSlots = record.unified_times.length;
             }
 
             // Merge divisionTimes
