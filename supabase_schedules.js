@@ -1334,6 +1334,18 @@
                     log('  Skipping - no changes needed');
                     continue;
                 }
+                // ★★★ CB-12: NEVER write another scheduler's row from here. The
+                // original loop did a blind read-modify-write of every record,
+                // so a concurrent save by a foreign row's owner (between our
+                // SELECT and UPDATE) was clobbered with our stale snapshot. Bunks
+                // are per-row-owned (camp_id,date_key,scheduler_id), so my bunks
+                // live in MY row; any legacy leakage of my bunks into a foreign
+                // row is pruned by the per-bunk merge (#V2-25) on the next load.
+                // Only mutate the current user's own record.
+                if (String(record.scheduler_id) !== String(userId)) {
+                    log('  (skipping foreign scheduler row — not ours to rewrite; merge prunes any legacy leakage)');
+                    continue;
+                }
                 // If record is now empty, delete it entirely
                 if (bunksAfter === 0) {
                     log('  Record now empty, deleting...');
