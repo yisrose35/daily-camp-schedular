@@ -1453,7 +1453,15 @@
 
                     unsaved.forEach((dk, index) => {
                         setTimeout(() => {
-                            window.ScheduleDB.saveSchedule(dk, data[dk], { skipFilter: true, allowCrossDate: true })
+                            // ★★★ CB-19: do NOT skipFilter the secondary-date
+                            // fanout. data[dk] is the full local row (all
+                            // divisions, merged from cloud); skipFilter wrote that
+                            // whole-camp snapshot into a scheduler's OWN row for the
+                            // propagated date (stamped NOW), shadowing the owner.
+                            // Without skipFilter, filterScheduleToMyBunks scopes a
+                            // scheduler to their own bunks (owner = no-op). Empty
+                            // scope → empty-save guard blocks it (CB-6/18).
+                            window.ScheduleDB.saveSchedule(dk, data[dk], { allowCrossDate: true })
                                 .then(r => {
                                     if (r?.success) {
                                         window._secondarySaveLog[dk] = Date.now();
