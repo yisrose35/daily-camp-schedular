@@ -447,7 +447,9 @@
         console.log(`[PostEdit] 📅 Bypass save using date key: ${dateKey}`);
         
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped the write-only `scheduleAssignments_${dateKey}` mirror — it was
+            // never read anywhere (the recovery path reads campDailyData_v1[dateKey] below), so it
+            // only burned localStorage quota and hastened QuotaExceededError on the canonical write.
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -636,19 +638,10 @@
                            document.getElementById('datePicker')?.value ||
                            new Date().toISOString().split('T')[0];
         
-        const storageKey = `scheduleAssignments_${currentDate}`;
-        try {
-            localStorage.setItem(storageKey, JSON.stringify(window.scheduleAssignments));
-        } catch (e) { console.error('[PostEdit] Failed to save to localStorage:', e); }
-        
-        const unifiedKeyWithDate = `campDailyData_v1_${currentDate}`;
-        try {
-            const dailyData = JSON.parse(localStorage.getItem(unifiedKeyWithDate) || '{}');
-            dailyData.scheduleAssignments = window.scheduleAssignments;
-            dailyData._postEditAt = Date.now();
-            localStorage.setItem(unifiedKeyWithDate, JSON.stringify(dailyData));
-        } catch (e) { console.error('[PostEdit] Failed to save to unified storage (per-date):', e); }
-        
+        // ★ CB-52: removed the two write-only mirrors `scheduleAssignments_${currentDate}` and
+        // `campDailyData_v1_${currentDate}` — neither is read anywhere in the repo; they only burned
+        // localStorage quota and brought the canonical campDailyData_v1 write (below) closer to
+        // QuotaExceededError. The canonical map keyed by currentDate is the real read/recovery path.
         try {
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
@@ -2218,12 +2211,9 @@
             document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         // Save to localStorage
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
-            const perDateKey = `campDailyData_v1_${dateKey}`;
-            const perDateData = JSON.parse(localStorage.getItem(perDateKey) || '{}');
-            perDateData.scheduleAssignments = window.scheduleAssignments;
-            perDateData._postEditAt = Date.now();
-            localStorage.setItem(perDateKey, JSON.stringify(perDateData));
+            // ★ CB-52: removed the write-only `scheduleAssignments_${dateKey}` and
+            // `campDailyData_v1_${dateKey}` mirrors (never read anywhere) — only the canonical
+            // campDailyData_v1 map below is read. Drops two redundant per-edit quota writes.
             const allDaily = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDaily[dateKey]) allDaily[dateKey] = {};
             allDaily[dateKey].scheduleAssignments = window.scheduleAssignments;

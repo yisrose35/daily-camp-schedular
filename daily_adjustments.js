@@ -189,7 +189,7 @@ function daShowModal(config) {
             '<input type="checkbox" value="' + _escHtml(val) + '" data-group="' + _escHtml(field.name) + '"' + chk + (dis ? ' disabled' : '') + '>' +
             '<span>' + _escHtml(lbl) + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' + // ★ CB-55: escape group label (was raw)
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
         inputs[field.name] = function() {
           var checked = fieldEl.querySelectorAll('input[data-group="' + field.name + '"]:checked');
@@ -3795,6 +3795,13 @@ function _showTileActionBar(tileEl) {
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  // ★★★ CB-51: capture the date at open. editTile awaits a blocking modal and
+  // then mutates `ev` + saves; if the loaded date changed during the modal (calendar
+  // nav / realtime settle), dailyOverrideSkeleton was reassigned so `ev` is a stale
+  // detached object — the save would be a silent no-op (or worse, write under the
+  // wrong date). The drop handler was already hardened for this race; guard editTile
+  // the same way. (Checked at the tail save below.)
+  const _editStartDate = window.currentScheduleDate;
 
   if (ev.type === 'smart') {
     const result = await daShowModal({
@@ -4011,6 +4018,13 @@ async function editTile(id) {
     delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
+  // ★★★ CB-51: bail if the date changed during the edit modal — `ev` is now a
+  // stale detached object and saving would be a silent no-op (or cross-date write).
+  if (window.currentScheduleDate !== _editStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during edit — discarding stale edit (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed while editing — your change was not saved. Re-open the tile on the correct date.'); } catch (_) {}
+    return;
+  }
   saveDailySkeleton();
   renderGrid();
 }
@@ -4018,6 +4032,7 @@ async function editTile(id) {
 async function copyTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  const _copyStartDate = window.currentScheduleDate; // ★ CB-51: capture date for the post-modal guard
   const others = getColumnOrder().filter(d => d !== ev.division);
   if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
   const result = await daShowModal({
@@ -4026,6 +4041,13 @@ async function copyTile(id) {
     fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
   });
   if (!result || !result.targets?.length) return;
+  // ★★★ CB-51: date changed during the modal → the copies would land on the wrong
+  // date's skeleton; abort instead.
+  if (window.currentScheduleDate !== _copyStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during copy — aborting (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed — the copy was not saved.'); } catch (_) {}
+    return;
+  }
   result.targets.forEach(div => {
     dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
   });
@@ -5421,10 +5443,17 @@ function loadDailyTrips(dateKey) {
     }
   } catch (e) { /* ignore */ }
 
-  // Merge: use whichever has more trips (handles partial sync)
+  // ★ CB-53: merge precedence. This branch is only reached for LEGACY data (Source 3,
+  // app1.dailyTripsByDate, is absent) AND when both sources hold ≥1 trip. Any trip edit since
+  // the dailyTripsByDate mechanism shipped writes Source 3, so "Source 3 absent" ⟹ no fresh
+  // local edit exists — fromLS is then device-local-stale while fromCloud (daily_schedules) is
+  // the only cross-device-synced copy. The old "more trips wins" rule resurrected a deletion
+  // made on another device (stale fromLS had more). Prefer fromCloud here. The cloud-WIPE
+  // recovery case (fromCloud empty/null) never enters this branch — it falls to the else, where
+  // fromLS correctly wins — so this change can't undo local recovery.
   let result = [];
   if (fromLS && fromCloud) {
-    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+    result = fromCloud; // cross-device truth wins over stale device-local for legacy trips
   } else {
     result = fromLS || fromCloud || [];
   }

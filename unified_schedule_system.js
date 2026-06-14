@@ -3926,7 +3926,8 @@ if (bypassStatus.highlight) {
         
         // Step 1: Save to localStorage first (immediate backup)
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${dateKey}` mirror (never read) —
+            // canonical campDailyData_v1[dateKey] below is the real backup/read path.
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -4308,7 +4309,7 @@ if (bypassStatus.highlight) {
 
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         try {
-            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${currentDate}` mirror (never read).
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;

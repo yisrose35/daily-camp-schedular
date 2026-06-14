@@ -606,7 +606,21 @@ GlobalFieldLocks.isFieldAvailableByTime = function(fieldName, startMin, endMin, 
         this._otherSchedulerDateKey = dateKey;
         this._otherSchedulerFieldUsage = {};
         this._otherSchedulerSchedules = {};
-        
+
+        // ★★★ CB-50: drop the PRIOR date's other-scheduler locks from _locks. This
+        // reset cleared the usage maps but never _locks, so an 'other_scheduler'
+        // field/slot lock from date A persisted when viewing date B and falsely
+        // blocked a then-free field. Remove only 'other_scheduler'-tagged locks —
+        // this user's own / league / pinned / elective locks are untouched.
+        if (this._locks) {
+            for (const _slotIdx in this._locks) {
+                const _sl = this._locks[_slotIdx];
+                for (const _f in _sl) {
+                    if (_sl[_f] && _sl[_f].lockedBy === 'other_scheduler') delete _sl[_f];
+                }
+            }
+        }
+
         const role = window.AccessControl?.getCurrentRole?.() || 'viewer';
         
         // Owners/Admins/Schedulers don't need to see "other" schedulers - they have full access

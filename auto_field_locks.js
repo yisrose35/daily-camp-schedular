@@ -394,7 +394,12 @@
         const locked = new Set();
         _claims.forEach(c => {
             if (c.startMin >= endMin || c.endMin <= startMin) return;
-            if (c.lockType === 'exclusive') {
+            // ★ CB-54: mirror the FN-7 fix in isFieldLockedByTime. An `exclusive` lock blocks
+            //   EVERY division; a `division` lock blocks only OTHER divisions (the placing
+            //   division may still use the field). The old `c.lockType === 'division'` test sat
+            //   INSIDE the `=== 'exclusive'` guard — unreachable — so a future division lock would
+            //   never surface here at all. Now both types surface, with the same-division skip.
+            if (c.lockType === 'exclusive' || c.lockType === 'division') {
                 if (c.lockType === 'division' && c.grade === divisionContext) return;
                 locked.add(c.field);
             }

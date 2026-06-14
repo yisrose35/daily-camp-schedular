@@ -26,7 +26,12 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 CB-9✅..17✅,19-29✅,30✅,31✅,32✅,33✅,34✅,35✅,36✅,37✅,39✅,40✅(+41,49,86,87),12,13,14,15,16,17,18,19,20,21,22,38(done w/CB-1),23,24,25,26,27,28,29,39,30,31,32,33,34,35,36,37,40,62,63,64,65,66,67,68,90,69,70,71,72,73,74,75,76,77,78,79,80,81,91,82,83,84,85,86,87,88,89,92,93,94,108✅,109✅,110,111,112,125,121,122,123,124,128
 
 ## LOW (44) — last
-CB-41✅(w22),42✅,43✅,44✅,45✅,46✅,47✅,48✅,49✅,50,51,52,53,54,55,95,96,97,98,99,100,101,102,103,104,105,106,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145
+CB-41✅(w22),42✅,43✅,44✅,45✅,46✅,47✅,48✅,49✅,50✅,51✅,52✅,53✅,54✅,55✅,95,96,97,98,99,100,101,102,103,104,105,106,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145
+- ✅ CB-50 [LIVE] global_field_locks.js:610 — loadOtherSchedulerSchedules drops prior-date 'other_scheduler'-tagged locks from _locks before re-register (usage maps were reset but _locks leaked stale exclusive locks cross-date). Owed: 2-scheduler live verify
+- ✅ CB-51 daily_adjustments.js editTile/copyTile — capture date at modal open, bail on tail save if currentScheduleDate changed (stale detached ev → silent no-op / cross-date write). Mirrors Day-25b drop-race hardening
+- ✅ CB-52 post_edit_system.js:450,641,2214 + unified_schedule_system.js:3929,4311 — removed all 5 write-only `scheduleAssignments_<date>` + 2 `campDailyData_v1_<date>` mirrors (zero getItem reads repo-wide); canonical campDailyData_v1[date] map preserved as the real read/recovery path. Frees per-edit quota
+- ✅ CB-53 [LIVE] daily_adjustments.js:5446 — loadDailyTrips merge: when both LS+cloud non-empty (legacy, Source 3 absent) prefer fromCloud (cross-device truth) over count-based, fixing deletion-resurrection; cloud-wipe recovery unaffected (else branch). Owed: 2-device legacy-trips verify
+- ✅ CB-54 auto_field_locks.js:397 — getLockedFieldsAtTime mirrors FN-7: surface 'exclusive' OR 'division' locks with same-division skip (dead nested division-branch was unreachable). Inert today (no division locks created), correct for future
 
 ## Notes
 - CB-38 fixed together with CB-1 (same root cause: window state leaking onto cross-date saves).
