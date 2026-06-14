@@ -979,11 +979,19 @@ let _toastTimer = null;
                 const ckptRaw = localStorage.getItem(STORE + '_addr_ckpt');
                 if (ckptRaw) {
                     const ckpt = JSON.parse(ckptRaw);
-                    const ckptGeocoded = Object.values(ckpt).filter(a => a.geocoded).length;
-                    const mainGeocoded = Object.values(D.addresses || {}).filter(a => a.geocoded).length;
-                    if (ckptGeocoded > mainGeocoded) {
-                        D.addresses = ckpt;
-                        console.log('[Go] Recovered geocode checkpoint (' + ckptGeocoded + ' geocoded vs ' + mainGeocoded + ' in main store)');
+                    // ★ CB-137/CB-139: MERGE the checkpoint's geocode results into the already-
+                    // authoritative D.addresses (the cloud/local merge ran above) instead of the old
+                    // wholesale `D.addresses = ckpt` replace. Wholesale-replace decided purely on
+                    // geocoded-count dropped cloud-only keys grown on another device AND revived
+                    // addresses the user deleted. Now: only backfill onto keys that STILL EXIST and
+                    // are not yet geocoded — never add/revive a key, never clobber a fresher entry.
+                    if (D.addresses && typeof D.addresses === 'object') {
+                        let _recovered = 0;
+                        Object.keys(ckpt).forEach(function (k) {
+                            const c = ckpt[k], cur = D.addresses[k];
+                            if (cur && c && c.geocoded && !cur.geocoded) { D.addresses[k] = c; _recovered++; }
+                        });
+                        if (_recovered) console.log('[Go] Merged ' + _recovered + ' geocode checkpoint result(s) into existing addresses (no revive/drop)');
                     }
                     localStorage.removeItem(STORE + '_addr_ckpt');
                 }
@@ -1877,7 +1885,7 @@ let _toastTimer = null;
 
     // ── Staff assignment actions ──
     function acceptAllStaffSuggestions() {
-        let accepted = 0;
+        let accepted = 0, skipped = 0;
         const all = [
             ...D.monitors.map(m => ({ staff: m, type: 'monitor' })),
             ...D.counselors.map(c => ({ staff: c, type: 'counselor' }))
@@ -1885,6 +1893,13 @@ let _toastTimer = null;
         for (const { staff } of all) {
             if (!staff._suggestedBusId) continue;
             if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') continue;
+            // ★ CB-145: respect the same over-capacity guard the single-accept path enforces. The
+            // bulk path used to commit unconditionally, silently overfilling a near-full bus that
+            // single-accept would have blocked with the capacity-warning modal. Skip over-capacity
+            // suggestions (the user can single-accept to get the warning + override). Capacity is
+            // re-evaluated each iteration, so earlier accepts in this loop count toward the next.
+            const cap = _capacityAfterStaffAdd(staff._suggestedBusId);
+            if (cap && cap.overBy > 0) { skipped++; continue; }
             staff._assignStatus = 'accepted';
             staff._acceptedBus = staff._suggestedBus;
             staff._acceptedBusId = staff._suggestedBusId;
@@ -1893,9 +1908,11 @@ let _toastTimer = null;
             staff.assignedBus = staff._suggestedBusId;
             accepted++;
         }
-        if (!accepted) { toast('No pending suggestions to accept'); return; }
-        save(); renderStaff();
-        toast('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : ''));
+        if (!accepted && !skipped) { toast('No pending suggestions to accept'); return; }
+        if (accepted) { save(); renderStaff(); }
+        let msg = accepted ? ('Accepted ' + accepted + ' staff suggestion' + (accepted > 1 ? 's' : '')) : '';
+        if (skipped) msg += (msg ? '; ' : '') + skipped + ' skipped (would exceed bus capacity — accept individually to override)';
+        toast(msg);
     }
 
     // ── Capacity check helper ────────────────────────────────────────────────

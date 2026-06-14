@@ -1,5 +1,7 @@
 # Codebase Audit Fix Progress
 
+## ✅✅✅ ALL 145 CB FINDINGS FIXED (2026-06-14) — HIGH (15) + MED (86) + LOW (44), every one committed+pushed to DAW, all node --check clean. Ready for live testing.
+
 Fixing all 145 CB findings from CODEBASE_AUDIT_FINDINGS.md, highest severity first, one at a time, committed as we go. Resumable: if interrupted, continue from the first ⬜ below — do NOT restart.
 
 Branch: `Daily-Audit-Walkthrough` (commit/push DAW only; never main without authorization).
@@ -26,7 +28,26 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 CB-9✅..17✅,19-29✅,30✅,31✅,32✅,33✅,34✅,35✅,36✅,37✅,39✅,40✅(+41,49,86,87),12,13,14,15,16,17,18,19,20,21,22,38(done w/CB-1),23,24,25,26,27,28,29,39,30,31,32,33,34,35,36,37,40,62,63,64,65,66,67,68,90,69,70,71,72,73,74,75,76,77,78,79,80,81,91,82,83,84,85,86,87,88,89,92,93,94,108✅,109✅,110,111,112,125,121,122,123,124,128
 
 ## LOW (44) — last
-CB-41✅(w22),42✅,43✅,44✅,45✅,46✅,47✅,48✅,49✅,50✅,51✅,52✅,53✅,54✅,55✅,95✅,96✅,97✅,98✅,99✅,100✅,101✅,102✅,103✅,104✅(=CB-71),105✅,106✅,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,144,145
+CB-41✅(w22),42✅,43✅,44✅,45✅,46✅,47✅,48✅,49✅,50✅,51✅,52✅,53✅,54✅,55✅,95✅,96✅,97✅,98✅,99✅,100✅,101✅,102✅,103✅,104✅(=CB-71),105✅,106✅,129✅,130✅,131✅,132✅,133✅,134✅,135✅,136✅,137✅,138✅,139✅,140✅,141✅,142✅,143✅,144✅,145✅
+
+## 🎉 ALL 145 CB FINDINGS COMPLETE (2026-06-14)
+Final batch CB-129..145 (rbac/go/misc):
+- ✅ CB-129 subdivision_schedule_manager saveSubdivisionSchedules — resolve date fresh (window.currentScheduleDate) at save, not init-captured _currentDateKey (stale-date write + whole-blob cloud fan-out)
+- ✅ CB-130 access_control deleteMyDivisionsOnly — scope to _directDivisionAssignments not getEditableDivisions() (v3.13 returned ALL → wiped everyone's bunks); no all-divisions fallback
+- ✅ CB-131 supabase_permissions filterToMyDivisions — DOC dead write-filter (never wired; row-scoping covers it). Warn before relying on it
+- ✅ CB-132 demo_mode tryExit — also clear campistry_role/user_id/auth_user_id (owner identity leaked into real session on shared browser)
+- ✅ CB-133 access_control assignDivisionsToMember — also clear subdivision_ids (resolver is subdivision-first → direct assignment was silently ignored)
+- ✅ CB-134 subdivision_schedule_manager extractFieldUsageClaimsForSubdivision — DOC slot-index-space conflation (dead restore/register path; reconcile via _resolveSlotArray if revived)
+- ✅ CB-135 rbac_visual_restrictions createTabBanner — escape title/message (raw innerHTML; latent, shadowed by v3.13 bypass)
+- ✅ CB-136 supabase_permissions canEditBunk — add v3.13 scheduler full-edit bypass (matched AccessControl; divergence was scoping schedulers to _editableBunks)
+- ✅ CB-137 + CB-139 campistry_go load() — checkpoint recovery now key-gated per-entry merge (backfill geocode onto still-existing not-yet-geocoded keys) instead of wholesale D.addresses=ckpt (dropped cloud-only keys / revived deletions)
+- ✅ CB-138 campistry_go_persistence recordAssignment — collect ALL buses a split neighborhood's pieces land on (was overwriting → one bus); store lastBusIds[], keep lastBusId=primary for single-bus consumers
+- ✅ CB-140 campistry_go_ors_optimizer _cheapestInsert — subtract reserved monitor/counselor seats from capacity (was raw v.capacity → overfilled on unassigned-fallback path)
+- ✅ CB-141 campistry_go_stop_master — DOC dead-but-wired subsystem (full API, zero call sites; wire upsertStops/getGrandfatherMap if reviving)
+- ✅ CB-142 mobile_touch_drag — DOC orphan 'mobile-(resize|reposition)-complete' events (no listener, no global save; fires only on module-init failure → not persisted, acceptable)
+- ✅ CB-143 playoff_mode — DOC dead inline UI (PlayoffMode.render superseded by PlayoffHub; edit playoff_hub.js, not render*)
+- ✅ CB-144 access_control setupDivisionChangeObserver — capture interval handle + clearInterval before re-create (refresh() leaked a new 1s timer each realtime camp_users change)
+- ✅ CB-145 campistry_go acceptAllStaffSuggestions — apply the same _capacityAfterStaffAdd over-capacity guard the single-accept path has; skip + report over-capacity instead of silently overfilling
 - ✅ CB-95 scheduler_core_auto.js:21024 — Phase 4.9 prep-room geometry (_p49pbs) prefers durable window._perBunkSlots over clobbered window.divisionTimes._perBunkSlots (FN-14 pattern); was [] on 2nd+ in-session gen → prep recapture silently disabled
 - ✅ CB-96 scheduler_core_utils.js:2831 — DOC: incrementHistoricalCounts/reIncrementHistoricalCounts dead-but-wired (no live caller; rebuildHistoricalCounts is authority + counts league sports differently). Comment warns against re-wiring; not removed (test dep)
 - ✅ CB-97 dashboard.js:1152 — buildWeekMap emits week start/end via local-component fmtLocal (was toISOString → one-day-early in +UTC timezones)

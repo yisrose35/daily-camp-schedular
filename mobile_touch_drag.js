@@ -707,8 +707,13 @@ function finishTouchResize(module, wrapper) {
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        // Dispatch event for MS to handle
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: this is a defensive fallback for when MasterSchedulerInternal never initialized
+        // (master_schedule_builder.js threw at load). The 'mobile-resize-complete' event below has
+        // NO listener anywhere in the repo and there is no global save fn, so in that broken state
+        // the in-memory edit above is NOT persisted. That's acceptable — the editor module itself is
+        // down — but it is NOT a working save path. Do not rely on this event; if you need mobile
+        // edits to survive an MS-init failure, persist to the campManualSkeleton_<date> key here.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -740,7 +745,10 @@ function finishTouchResize(module, wrapper) {
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; fires only if DailyAdjustmentsInternal
+        // failed to init) — the resize is NOT persisted in that broken state. See the MS-resize
+        // branch above for the full note.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }
@@ -890,7 +898,8 @@ function finishTouchReposition(touch, module, wrapper) {
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; MS-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -902,7 +911,8 @@ function finishTouchReposition(touch, module, wrapper) {
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; DA-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }

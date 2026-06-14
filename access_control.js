@@ -454,9 +454,14 @@
     }
 
     let _subdivisionResolutionDone = false;
+    let _divisionObserverInterval = null; // ★ CB-144: hold the observer handle so refresh() can't leak a new 1s timer each call
 
     function setupDivisionChangeObserver() {
-        setInterval(() => {
+        // ★ CB-144: clear any prior interval first. initialize() calls this unconditionally and
+        // refresh() (fired on every realtime camp_users change) re-runs initialize(), so without
+        // this each refresh spawned another orphaned 1s timer that ran forever, compounding load.
+        if (_divisionObserverInterval) { clearInterval(_divisionObserverInterval); _divisionObserverInterval = null; }
+        _divisionObserverInterval = setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
             let recalculated = false;
 
@@ -1770,12 +1775,20 @@
             return null;
         }
         
-        const myDivisions = getEditableDivisions();
+        // ★ CB-130: scope to the scheduler's ASSIGNED divisions, NOT getEditableDivisions().
+        // Under v3.13 getEditableDivisions() returns ALL divisions for a scheduler, so
+        // "delete my divisions only" would wipe every bunk — including the owner's and other
+        // schedulers' — from in-memory scheduleAssignments/leagueAssignments. This is a
+        // scheduler-only path (owner/admin already returned above), so _directDivisionAssignments
+        // is the correct scoped set. No fallback to the all-divisions resolver: an empty
+        // assignment safely yields "No divisions assigned" rather than an over-delete.
+        const myDivisions = (_directDivisionAssignments && _directDivisionAssignments.length > 0)
+            ? [..._directDivisionAssignments] : [];
         if (myDivisions.length === 0) {
             return { error: "No divisions assigned" };
         }
-        
-        console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
+
+        console.log('🗑️ [AccessControl] Deleting divisions (scoped to assignments):', myDivisions);
         
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
@@ -2182,13 +2195,17 @@
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
-                .update({ assigned_divisions: divisionNames })
+                // ★ CB-133: also clear subdivision_ids. determineUserContext/verifyRoleFromDB
+                // resolve a scheduler's divisions subdivision-FIRST, so if the member already had
+                // subdivision_ids the new direct assignment was silently ignored on their next load.
+                // Assigning divisions directly is the explicit intent here → drop the stale subdivisions.
+                .update({ assigned_divisions: divisionNames, subdivision_ids: [] })
                 .eq('id', memberId)
                 .select()
                 .single();
-            
+
             if (error) throw error;
-            
+
             return { data };
         } catch (e) {
             console.error("🔐 Error assigning divisions:", e);

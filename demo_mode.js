@@ -672,6 +672,15 @@ console.log('%c🎭 CAMPISTRY DEMO MODE ACTIVE', 'color:#F59E0B;font-size:16px;f
                 _demoExitAuthorized = true;
                 localStorage.removeItem('campistry_demo_mode');
                 try { sessionStorage.removeItem('campistry_rbac_cache'); } catch(e) {}
+                // ★ CB-132: also clear the owner identity demo planted at boot. Demo writes
+                // campistry_role='owner' + campistry_user_id/auth_user_id; the exit path left them,
+                // so on a shared/kiosk browser the post-reload window could fast-path _currentRole=
+                // 'owner' from localStorage before verifyRoleFromDB resolves. Clear them on exit.
+                try {
+                    localStorage.removeItem('campistry_role');
+                    localStorage.removeItem('campistry_user_id');
+                    localStorage.removeItem('campistry_auth_user_id');
+                } catch(e) {}
                 if (document.exitFullscreen) document.exitFullscreen().catch(() => {});
                 else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
                console.log('🎭 Demo mode disabled. Closing...');

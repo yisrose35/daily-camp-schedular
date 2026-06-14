@@ -1,6 +1,15 @@
 // =============================================================================
 // campistry_go_stop_master.js — Canonical Stop Master + camper-stop history
 //
+// ★★★ CB-141 — DEAD-BUT-WIRED. window.GoStopMaster exposes a full public API
+// (loadStops/upsertStops/recordSeason/getGrandfatherMap/stopKey) and is loaded as a
+// production script, but a repo-wide grep shows ZERO call sites — nothing upserts to the
+// master library and getGrandfatherMap is never consulted during assignment, so the
+// advertised "stops survive roster/season churn" grandfathering does NOT happen. (Contrast:
+// the sibling GoNhPersistence/recordAssignment IS wired.) Left in place (not removed) — if you
+// intend this feature, wire upsertStops into the assignment save path + getGrandfatherMap into
+// the optimizer; until then treat it as inert.
+//
 // Persists corner-aware bus stops and per-camper stop history so that
 // assignments survive roster/season churn. Mirrors the Transfinder "Stop Master"
 // concept: a reusable library of intersection+corner stops keyed by label.

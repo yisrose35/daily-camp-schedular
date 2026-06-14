@@ -260,14 +260,17 @@
 
     function canEditBunk(bunkId) {
         const role = window.CampistryDB?.getRole?.() || 'viewer';
-        
-        // Owners and admins can edit everything
-        if (role === 'owner' || role === 'admin') return true;
-        
+
+        // ★ CB-136: v3.13 — schedulers have full edit access (matches AccessControl.canEditBunk).
+        // This duplicate had diverged: it still scoped schedulers to _editableBunks, so a scheduler
+        // editing a bunk outside their assignment got `false` here vs `true` from AccessControl.
+        // Owners/admins/schedulers all bypass; only viewers are blocked.
+        if (role === 'owner' || role === 'admin' || role === 'scheduler') return true;
+
         // Viewers can't edit
         if (role === 'viewer') return false;
-        
-        // Schedulers - check specific permissions
+
+        // Any other role - check specific permissions
         return _editableBunks.includes(String(bunkId));
     }
 
@@ -305,6 +308,14 @@
     /**
      * Filter schedule data to only include bunks this user can edit.
      * Used before saving to prevent overwriting other schedulers' work.
+     *
+     * ★★★ CB-131 — DEAD CODE (advertised but never wired). This + PermissionsGuard's
+     * validateScheduleWrite/validateLeagueWrite/assertCanWriteGrade are documented as the
+     * bunk-level write guard, but a repo-wide grep shows NO save path calls them (only
+     * rbac_diagnostics self-tests). The safety net is currently provided instead by
+     * scheduler_id row scoping + the v3.13 "scheduler = full edit by design" model. DO NOT
+     * assume this filter runs — if you relax row scoping or merge schedulers' rows, wire this
+     * (or an equivalent) into the save path FIRST. Left in place (not removed) for that future use.
      */
     function filterToMyDivisions(scheduleAssignments) {
         if (hasFullAccess()) {
