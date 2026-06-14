@@ -6,6 +6,43 @@ Bug classes hunted per subsystem: data loss/corruption, cloud/local desync, cros
 
 **[LIVE] = needs live browser/Supabase verification to fully confirm trigger.**
 
+## Summary — 145 findings (15 HIGH / 86 MED / 44 LOW), 66 flagged [LIVE]
+
+Three workflow phases, 9 subsystems (leagues/specialty were audited separately in LEAGUE_AUDIT_FINDINGS.md). 228 finder+verifier+critic agents total.
+
+**The 15 HIGH findings (data/cloud loss or scheduling breaks):**
+
+*Cross-date contamination + cache destruction (the biggest cluster — these silently lose user data):*
+- **CB-3** `schedule_orchestrator.js:381` — the rotation-history "slimming" pass rewrites **every** non-today date, **including future dates**, down to bare scheduleAssignments — permanently destroying divisionTimes/skeleton/leagues/trips you built ahead of time.
+- **CB-2** `supabase_schedules.js:485` — a transient Supabase query error is treated identically to "no records exist," so a network blip during a load **deletes the date's local cache** and tells downstream code the owner wiped everything.
+- **CB-1** `supabase_schedules.js:973` — `saveSchedule` reads divisionTimes/skeleton from **live window state** instead of the date being saved, so a cross-date save stamps the *viewed* day's grid geometry onto *another* day's cloud row.
+- **CB-56/57** (rotation) — `rebuildHistoricalCounts` whole-key-overwrites cloud rotation history from a partial local scan; "Erase ALL schedules" wipes cloud counts but leaves stale local `historicalCounts`/`rotationHistory` → next gen double-counts.
+- **CB-?** (solvers) — manual STEP 0f does the same future-date slimming as CB-3, and propagates the slim to cloud.
+
+*Multi-scheduler / role:*
+- **CB-4** `schedule_orchestrator.js:837` [LIVE] — a **second, parallel** cloud-merge (`mergeCloudRecords`) bypasses every MS-3/MS-4c/#V2-25 fix and its delayed re-apply can override the correct merge.
+- **CB-?** `supabase_schedules.js:336` [LIVE] — the MS-2 scheduler save filter falls back to `getEditableDivisions()` = ALL divisions, re-opening the exact "scheduler absorbs every division" bug MS-2 closed (a different code path).
+- **CB-? `campistry_go.js:2348`** [LIVE] — GO's "Clear all monitors/counselors/addresses" each wipe the **entire** cloud `state` row (buses, shifts, setup) to `{}`.
+
+*Config loss:*
+- **CB-? `campistry_me.js:141`** — the Me-page `save()` rebuilds `campistryMe` as a fixed object literal, **stripping forms, customFields, locale, and the Stripe publishable key** — every sibling feature's save is clobbered on the next unrelated save.
+
+*Scheduling correctness:*
+- **CB-8** `scheduler_core_main.js:3893` [LIVE] — manual STEP 7.55 room-capacity sweep **demotes off-site Trip blocks** (the FN-59 class, but in the manual builder), collapsing a division's trip to one bunk.
+
+*Stored XSS (camp-config names execute script):*
+- **CB-?** `validator.js:937` + `auto_validator.js:643` — both validator modals render violation messages (with raw bunk/field/division names) as innerHTML with **no escaper**.
+- **CB-?** `post_edit_system.js:746` — the entire post-edit edit modal/conflict panel/tooltips have no escaper.
+
+**Dominant cross-cutting themes (apply to many MED/LOW too):**
+1. **Cross-date / cache-slimming** keeps recurring — multiple independent code paths rewrite "other dates" assuming only the past matters, destroying future-date local data.
+2. **Stale-local-wins load precedence** — several merges pick "more items" or "more geocoded" instead of newest (trips, GO addresses, rotation), the same anti-pattern as LG-1.
+3. **Role gate on UI but not on the write (or vice-versa)** — schedulers can trigger config/subdivision/camp-dates writes the UI says are read-only; some land, some silently no-op.
+4. **XSS: every render file is its own escaper island** — ~15 files interpolate camp-config names into innerHTML; several have no escaper at all (validator, auto_validator, post_edit, global_field_locks, edit_restrictions, team_subdivisions_ui).
+5. **Dead-but-wired code** — whole modules (division_selector, GoStopMaster, PlayoffMode inline UI, several permission guards) are loaded and look load-bearing but have zero callers.
+
+Remediation is a **separate** effort (this is the report). Suggested first batch: the cross-date cluster (CB-1/2/3 + manual STEP 0f) and the `campistry_me.js` config-clobber are the highest user-impact and mostly small fixes.
+
 ---
 
 ## Phase 1 — cloud sync/save/load/realtime, solvers (auto+manual), daily-adjustments+post-edit (55 findings: 8 HIGH / 32 MED / 15 LOW)
@@ -778,4 +815,293 @@ Run wf_d48fea74-39c. 81 agents.
 - Evidence: buildUsageData (L195-237): `const times = dTimes[divName] || [];` (L198) is the DIVISION-level slot array (dTimes = window.divisionTimes or the day snapshot, L190-192) — it never dereferences `._perBunkSlots[bunk]`. When an entry lacks inline times, the fallback reads by raw slot index: L206-216 `if (startMin===undefined||endMin===undefined){ const slotInfo = times[idx]; ... startMin=slotInfo.startMin; endMin=slotInfo.endMin; }`, and the continua
 - Scenario: Auto mode, a bunk whose _perBunkSlots has an injected leading slot so per-bunk index 3 ≠ division index 3. A block that lacks _startMin/_endMin (e.g. a legacy/edited entry) falls to L207 times[idx]=divisionTimes[div][3] and is painted at the division slot-3 window in the Field Availability Gantt, overlapping or mis-ordering against bunks rendered f
 - Verifier: The mechanism is real and correctly described, but the trigger is narrow and data-dependent, so it cannot be confirmed from code alone. STRUCTURAL PREMISE — TRUE: in analytics.js buildUsageData, `const times = dTimes[divName] || [];` (L198) is the flat DIVISION-level slot array (dTimes = window.divisionTimes or the day snapshot, L190-192). Per-bunk
+
+
+---
+
+## Phase 3 — access control/RBAC, Campistry GO (transport), shell/security/playoffs/mobile/misc (39 findings: 1 HIGH / 21 MED / 17 LOW)
+
+Run wf_c8a6f9ad-8ed. 65 agents.
+
+
+### HIGH
+
+#### CB-107 [CONFIRMED / LIVE] campistry_go.js:2348  _(go)_
+**clearAllMonitors / clearAllCounselors wipe the ENTIRE cloud 'state' row (buses, shifts, setup, the other staff list) to {}**
+
+- Evidence: clearAllMonitors (L2340-2352): `D.monitors = []; save(); _clearCloudDataType('state'); ...` and clearAllCounselors (L2354-2366) do the same with `_clearCloudDataType('state')` at L2362. `_clearCloudDataType` (L2315-2318) does `window.GoCloudSync.save(dataType, {})`, i.e. upserts an EMPTY object into the `(camp_id,'state')` row. But `save()` (L1148) builds `stateSnap` = { setup, buses, shifts, monitors, counselors, dismissal, arrival } and uncondi
+- Scenario: User has buses + shifts + monitors + counselors saved. They click 'Clear all monitors' (intending to remove only monitors). save() pushes full state with monitors=[]; then _clearCloudDataType('state') overwrites the cloud state row with {}. Locally everything still looks fine (localStorage retains D minus monitors), so nothing seems wrong. Later th
+- Verifier: The claim is accurate. clearAllMonitors (campistry_go.js L2340-2352) and clearAllCounselors (L2354-2366) both call save() then _clearCloudDataType('state') in that order. save() (L1148) builds stateSnap = {setup, activeMode, buses, shifts, monitors, counselors, dismissal, arrival} and upserts it to the ('state') row at L1221 via window.GoCloudSync.
+
+
+### MED
+
+#### CB-108 [CONFIRMED / LIVE] dashboard.js:312  _(rbac)_
+**Scheduler division scope read from stale denormalized camp_users.assigned_divisions snapshot, never re-resolved from live subdivisions table**
+
+- Evidence: dashboard.js cacheRBACContext writes `assignedDivisions: membership?.assigned_divisions || []` (L312) and `subdivisionIds: membership?.subdivision_ids || []` (L311) straight from the camp_users row read at L183-196 — it never re-resolves the subdivision's current `divisions` from the `subdivisions` table. `camp_users.assigned_divisions` is a DENORMALIZED snapshot: it is written only at invite (access_control.js L1973), when an owner edits a membe
+- Scenario: Scheduler S is assigned to subdivision 'Juniors' which contains division 'Majors'. S visits dashboard (cache written with assignedDivisions:['Majors']). Owner edits the 'Juniors' subdivision to REMOVE 'Majors'. The owner does NOT touch S's camp_users row, so assigned_divisions stays ['Majors']. S opens Flow (sessionStorage cache hit, or a fresh loa
+- Verifier: The claim is correct. Scenario: scheduler S in subdivision 'Juniors' (which contains 'Majors'); a prior dashboard visit cached assignedDivisions:['Majors'], subdivisionIds:['Juniors-uuid'] (dashboard.js cacheRBACContext L311-312 copies the denormalized camp_users row verbatim). Owner removes 'Majors' from the 'Juniors' subdivision via updateSubdivi
+
+#### CB-109 [CONFIRMED / LIVE] subdivision_schedule_manager.js:83  _(rbac)_
+**Cross-scheduler lock/draft state loads from local campDailyData_v1 only (never fresher cloud daily_schedules), but writes fan out to cloud — stale-local-wins**
+
+- Evidence: loadSubdivisionSchedules (L83-87) reads ONLY local: `const dailyData = window.loadCurrentDailyData?.() || {}; ... _subdivisionSchedules = dateData.subdivisionSchedules || {}`. There is no cloud fetch on this load path. The write path, however, pushes to cloud: saveSubdivisionSchedules (L125-143) writes localStorage `campDailyData_v1` then scheduleCloudSync (L146-164) calls `window.saveGlobalSettings('daily_schedules', dailyData)`. So scheduler A'
+- Scenario: Scheduler A locks subdivision 'Seniors' (writes status:locked + fieldUsageClaims to cloud via saveGlobalSettings('daily_schedules')). Scheduler B (different machine) loads the same date; their SubdivisionScheduleManager.loadSubdivisionSchedules reads B's local campDailyData_v1, which has no record of A's lock → _subdivisionSchedules['Seniors'].stat
+- Verifier: The claim's core thesis holds: SubdivisionScheduleManager lock/draft/fieldUsageClaims state never round-trips through the cloud, so scheduler B's gate operates on a stale local view and double-books fields scheduler A reserved. Verified end-to-end: LOAD is local-only. loadSubdivisionSchedules (subdivision_schedule_manager.js:83-87) reads ONLY `win
+
+#### CB-110 [PLAUSIBLE / LIVE] access_control.js:1046  _(rbac)_
+**canManageSubdivisions() returns true for SCHEDULER — scheduler can create/rewrite subdivisions (the division-assignment mechanism) with no client owner-gate**
+
+- Evidence: canManageSubdivisions() (L1044-1049): `if (_currentRole === ROLES.OWNER || ROLES.ADMIN || ROLES.SCHEDULER) return true;`. createSubdivision (L1824-1827) and updateSubdivision (L1857-1859) gate ONLY on canManageSubdivisions() before doing `supabase.from('subdivisions').insert(...)` / `.update(...)`. By contrast deleteSubdivision (L1883-1886) correctly checks `if (_currentRole !== ROLES.OWNER) return {error:'Only owner can delete subdivisions'}`. S
+- Scenario: Scheduler (role='scheduler') opens devtools/console and calls `window.AccessControl.updateSubdivision('<some-sub-id>', { divisions: ['DivisionTheyWant'] })` (or createSubdivision). The client check passes (canManageSubdivisions true for scheduler). Whether the write lands depends ENTIRELY on RLS on the `subdivisions` table — the only client guard i
+- Verifier: The client-side authorization asymmetry the claim describes is REAL in the actual code. canManageSubdivisions() returns true for SCHEDULER (access_control.js L1044-1049: `if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;`). createSubdivision (L1824-1827) and updateSubdivision (L1857-1
+
+#### CB-111 [CONFIRMED] integration_hooks.js:695  _(rbac)_
+**Scheduler is granted full UI edit of camp config (facilities/specials/setup) by v3.13, but the cloud write is silently dropped — config edits vanish, no error shown**
+
+- Evidence: v3.13 made canEditFields()/canEditSetup() (access_control.js L1116, L1122) and checkSetupAccess() return true for SCHEDULER. So scheduler-reachable config writers run: facilities.js:305 `if (!AccessControl.canEditSetup())` (passes), facilities.js:450 checkSetupAccess('add facilities') (passes), special_activities.js:662 checkSetupAccess('delete special activities') (passes). Each then mutates local state and calls window.saveGlobalSettings(...).
+- Scenario: Scheduler edits a facility's sharing rule or adds/deletes a special activity in the Flow setup tab (UI lets them — buttons enabled, no permission toast). Local save succeeds, the change appears to take. It never propagates to cloud, so it is invisible on any other device and is silently overwritten the next time the owner's client syncs camp_state.
+- Verifier: Every link in the chain is real code, and the affected surface (facility / special-activity / setup CONFIG writes) is NOT covered by the existing LG-2 exclusion (which is scoped to league saves) nor by the two other documented instances (rotation-event completions L500, scoped-delete error L552). The claim itself correctly distinguishes from LG-2.
+
+#### CB-112 [CONFIRMED / LIVE] supabase_schedules.js:389  _(rbac)_
+**filterScheduleToMyBunks fail-opens to the FULL camp schedule when a scheduler's editable-bunk set resolves empty — defeats MS-2 save scoping and shadows the owner; the empty-save guard can't catch it**
+
+- Evidence: filterScheduleToMyBunks (the live save filter — saveSchedule calls it at L925 when options.skipFilter is falsy, and the primary post-gen path verifiedScheduleSave→ScheduleDB.saveSchedule(dateKey,data) at integration_hooks.js:1030 passes NO options): `const myBunks = new Set(getMyEditableBunks()); if (myBunks.size === 0) { logError('WARNING: No editable bunks found!...'); /* Return original to avoid saving empty - let RLS handle it */ return sched
+- Scenario: A scheduler (assigned only a subset of divisions) opens flow.html and clicks Generate (or any save fires) before window.divisions has hydrated, or right after a divisions-clobber/realtime reassignment leaves window.divisions transiently empty. getMyEditableBunks() → [] → filterScheduleToMyBunks returns the full merged scheduleAssignments (all divis
+- Verifier: The fail-open is real and the cited guards provably do not cover it. (1) THE FAIL-OPEN EXISTS AS CLAIMED. supabase_schedules.js filterScheduleToMyBunks L384-390: when getMyEditableBunks() returns an empty set it returns the UNFILTERED full scheduleAssignments ("Return original to avoid saving empty - let RLS handle it"). This is the live save filt
+
+#### CB-113 [CONFIRMED / LIVE] campistry_go.js:1224  _(go)_
+**Deleting your last camper address and reloading resurrects it from the cloud (delete never propagates when the address map becomes empty)**
+
+- Evidence: deleteAddress (L2300), _quickDeleteAddress (L2306) and saveAddress's empty-street branch (L2270) all do `delete D.addresses[...]; save();` with NO _clearCloudDataType('addresses'). But save() only pushes addresses to cloud when non-empty: L1224 `if (D.addresses && Object.keys(D.addresses).length > 0) { window.GoCloudSync.save('addresses', D.addresses); }`. So when the map drops to {} the cloud 'addresses' row is left holding the OLD set. On the n
+- Scenario: Camp has 1 camper address (or the user deletes addresses one by one until none remain). They delete the last one (Delete button → confirm). D.addresses = {}; save() skips the cloud write; cloud still has the address. Reload the page → loadGoCloudData sees cloudCount(1) > localCount(0) → restores the deleted address. The deletion silently fails to p
+- Verifier: All three legs of the claim hold in the actual code (campistry_go.js). 1) The three delete paths delete from D.addresses and call save() with NO cloud clear: - deleteAddress L2300-2301: `delete D.addresses[_editCamper]; save();` - _quickDeleteAddress L2306-2307: `delete D.addresses[name]; save();` - saveAddress empty-street branch L2270: `if (!st)
+
+#### CB-114 [CONFIRMED / LIVE] campistry_go.js:1058  _(go)_
+**loadGoCloudData restores fleet/state only when the local field is empty — a fresher cloud config never replaces a stale-but-nonempty local one**
+
+- Evidence: State hydration is gated purely on local emptiness, never recency: `if (!D.buses?.length && s.buses?.length) { D.buses = s.buses; ... }` (L1058-1062); identical pattern for shifts (L1063), monitors (L1067), counselors (L1071), dismissal (`s.dismissal && (!D.dismissal || !D.dismissal.buses?.length)` L1077), arrival (L1081), and setup is gated on `!D.setup.campName` (L1051). The cloud 'state' row carries updated_at but it is discarded by loadAll();
+- Scenario: Device A edits the bus fleet (adds/removes buses, changes shift times) and cloud 'state' updates. Device B has an older, non-empty D.buses cached in STORE. B reloads: load() restores B's stale buses from localStorage (non-empty), so loadGoCloudData's `!D.buses?.length` guard is false and A's newer fleet is never pulled in. B keeps and re-saves the
+- Verifier: The defect is real and reachable. Ordering: the `campistry-cloud-hydrated` handler (campistry_go.js L7567-7576) calls `load()` FIRST, then `loadGoCloudData()`. `load()` populates module-level `D` from the localStorage STORE cache via `else if (local) { D = merge(local); }` (L933-935), and `merge()` (L1142) carries `buses/shifts/monitors/counselors`
+
+#### CB-115 [CONFIRMED / LIVE] campistry_go.js:7876  _(go)_
+**Route-flag cache is loaded once and never invalidated; every flag mutation writes the whole route_flags row, clobbering concurrent flag edits from another device**
+
+- Evidence: `async function _ensureFlags(){ if (_flagCache) return _flagCache; _flagCache = await window.GoFlagPersistence.load(); return _flagCache; }` (L7876-7880) — once `_flagCache` is set it is returned forever; a repo grep shows `_flagCache =` is assigned ONLY here (plus the `null` init L7874), never reset on realtime/focus. Every mutation (flagStop/unflagStop/flagRoute/unflagRoute/approveRoute/setAnchor…, L7891-7987) ends in `_persistFlags()` → `GoFla
+- Scenario: Dispatcher A (device A) flags Stop X for review; cloud route_flags row now has X. Dispatcher B opened the dashboard earlier so B's `_flagCache` was loaded before X existed and is never refreshed. B flags Route Y → _persistFlags writes B's whole stale cache (Y present, X absent) over the cloud row → A's flag on X is silently erased. Whoever clicks l
+- Verifier: All three legs of the claim hold against the actual code. (1) Cache loaded once, never invalidated. `_ensureFlags` (campistry_go.js L7876-7880) calls `GoFlagPersistence.load()` only when `_flagCache` is falsy and returns the cached object forever after. A full-file grep confirms `_flagCache` is assigned ONLY at the `null` init (L7874) and that one
+
+#### CB-116 [CONFIRMED / LIVE] campistry_go.js:1184  _(go)_
+**Campistry GO has zero role enforcement and no per-user row scoping — any camp member (incl. schedule-only 'scheduler' role) blindly overwrites the entire shared transportation dataset, and a stale tab silently stomps a concurrent editor's work**
+
+- Evidence: save() unconditionally upserts the whole camp's data: `window.GoCloudSync.save('state', stateSnap)` (L1221), `save('addresses', D.addresses)` (L1225), `save('routes', routePayload)` (L1234). GoCloudSync.save (campistry_go_cloud.js L83-91) does `client.from('go_standalone_data').upsert({camp_id, data_type, data}, {onConflict:'camp_id,data_type'})` — PK is (camp_id,data_type) with NO scheduler_id/owner dimension (unlike daily_schedules which keys o
+- Scenario: Two camp staff (e.g. an owner and a scheduler, or two admins) have Campistry GO open. Owner adds Bus 7 + 3 shifts and they save to the 'state' row. The scheduler's tab (opened earlier, stale D) edits one monitor's phone and clicks anything that triggers save() → their save('state', stateSnap) overwrites the whole row with their stale snapshot, sile
+- Verifier: All parts of the claim are borne out by the actual code, and the defect is not covered by either findings doc (WALKTHROUGH_AUDIT_FINDINGS.md has zero campistry_go matches; LEAGUE_AUDIT_FINDINGS.md is leagues-only). (1) NO ROLE ENFORCEMENT: grep of campistry_go.js for AccessControl|getRole|checkEditAccess|canEdit|isScheduler|assigned_divisions = No
+
+#### CB-117 [PLAUSIBLE] campistry_go.js:7492  _(go)_
+**moveCamperToBus drops camper entirely when destination bus not found (half-mutation on early return)**
+
+- Evidence: Line 7490 mutates the source route FIRST: `camperData = st.campers.splice(ci, 1)[0]` then recomputes `fromRoute.camperCount` and filters empty stops. THEN line 7492: `const toRoute = sr.routes.find(r => r.busId === toBusId); if (!toRoute) { toast('Bus not found', 'error'); return; }`. At this point the camper has already been removed from the source bus and is NOT re-added anywhere — there is no restore/rollback. The function returns having perma
+- Scenario: User opens the move-camper modal, then (in another tab / via realtime) the destination bus is removed or its busId changes; user confirms the move -> find(busId===toBusId) returns undefined -> camper is spliced out of the source bus and never re-added -> camper vanishes from the route (and from the saved cloud 'routes' payload on next save). Same o
+- Verifier: The half-mutation mechanism is real and matches the code exactly. In moveCamperToBus (campistry_go.js:7485), sr = D.savedRoutes[shiftIdx] is a live reference (line 7487). Line 7490 splices the camper out of the source route FIRST (camperData = st.campers.splice(ci,1)[0]), filters empty stops, and recomputes camperCount — mutating D.savedRoutes in p
+
+#### CB-118 [PLAUSIBLE] campistry_go.js:6137  _(go)_
+**reOptimizeBus never sets _matrixIdx, so road-distance matrix is silently ignored for ETA — times fall back to haversine**
+
+- Evidence: reOptimizeBus fetches a real road matrix at L6077 (`matrix = await fetchDistanceMatrix(...)`). The ETA helpers read it via a per-stop index: L6137 `driveMin(a,b){ if (matrix && a._matrixIdx != null && b._matrixIdx != null) { const v = matrix[a._matrixIdx]?.[b._matrixIdx]; ... } if (a.lat && b.lat) return drivingDist(...)/60; ...}` and L6138 `campToStopMin(s){ if (matrix && s._matrixIdx != null) { ... matrix[0]?.[s._matrixIdx] ... } ...}`. But `_m
+- Scenario: User clicks 'Re-optimize' on a single bus. The stop order is recomputed correctly, but every stop's displayed estimatedTime/estimatedMin (and route.totalDuration) is computed from haversine distance, not the road matrix that was just fetched — so the printed/displayed arrival times for that bus are wrong (typically too optimistic on winding/road-co
+- Verifier: The code-level core of the claim is CONFIRMED by exhaustive grep: `_matrixIdx` appears exactly 3 times in the whole repo — read at L6137 (driveMin), read at L6138 (campToStopMin), deleted at L6155 — and is NEVER assigned (no `._matrixIdx =` anywhere). So in reOptimizeBus the guards `a._matrixIdx != null` / `s._matrixIdx != null` are always false, a
+
+#### CB-119 [CONFIRMED / LIVE] campistry_go.js:6155  _(go)_
+**moveCamperToBus / reOptimizeBus mutate stop order but never evict _routeGeomCache, so the map draws the old polyline over the new stops**
+
+- Evidence: _routeGeomCache is keyed by `busId + '_' + shiftIdx` (L7180 cacheKey, populated L3737-3747 from r._roadPts) and the map render reads it FIRST: L7181-7184 `let roadCoords = _routeGeomCache[cacheKey]; if (roadCoords) { L.polyline(roadCoords...) }`. The cache is only cleared on switchMode (L1258) and full regen (L3713). reOptimizeBus reorders `route.stops` (L6127) and even does `delete route._roadPts` (L6155) but does NOT delete `_routeGeomCache[bus
+- Scenario: User re-optimizes a bus or moves a camper to a different bus, then views the map: the stop markers update to the new sequence/positions but the route line still traces the OLD road geometry from the stale `_routeGeomCache` entry, so the drawn path visibly disagrees with the stop order until a full regenerate or mode switch clears the cache.
+- Verifier: The mechanism is real and confirmed by reading the actual code. Render path reads the cache FIRST: campistry_go.js L7180-7185 `const cacheKey = route.busId + '_' + route.shiftIdx; let roadCoords = _routeGeomCache[cacheKey]; if (roadCoords) { L.polyline(roadCoords, ...).addTo(_map); }`. The cached value is a flat road-polyline array (set at L3739 `_
+
+#### CB-120 [CONFIRMED / LIVE] campistry_go.js:7197  _(go)_
+**Camper names injected raw into Leaflet stop-marker popup (stored XSS) — sibling lines escape the same value**
+
+- Evidence: Line 7197 in renderMap(): `const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');` — camper names are concatenated with NO escaper. `names` is then embedded at line 7199 `'<div style="font-size:12px;">' + names + '</div>'` and rendered via `marker.bindPopup(popup)` at line 7201 (Leaflet treats the string as raw HTML). Th
+- Scenario: A camper is named e.g. `<img src=x onerror=alert(document.cookie)>` (or any league/staff member with an HTML-bearing name). Routes are generated and the Routes-tab map is opened (renderMap runs). Clicking that camper's stop marker opens the popup, whose innerHTML now contains the raw `<img onerror>` → script executes in the camp's session. Counselo
+- Verifier: The claim is accurate in every load-bearing detail, verified against the actual code in campistry_go.js. SINK (line 7197, inside renderMap): `const names = stop.isMonitor ? '🛡️ ' + (stop.monitorName || 'Monitor') : stop.isCounselor ? '🎒 ' + (stop.counselorName || 'Counselor') : stop.campers.map(c => c.name).join('<br>');` — camper names are conc
+
+#### CB-121 [CONFIRMED] mobile_touch_drag.js:866  _(misc)_
+**Touch reposition of a league tile across grades corrupts the league reference and loses the source-grade tile (diverges from both desktop drop handlers)**
+
+- Evidence: In finishTouchReposition (mobile_touch_drag.js L858-892) the moved skeleton event is mutated IN PLACE for BOTH same-grade and cross-grade drops: ```js event.division = divName; event.startTime = minutesToTime(cellStartMin + snapMin); event.endTime = minutesToTime(cellStartMin + snapMin + duration); ``` It then calls (DA branch) bumpOverlappingTiles / saveDailySkeleton, or (MS branch) saveDraftToLocalStorage — but it NEVER calls window._mbRemapL
+- Scenario: On a tablet/phone, in Daily Adjustments (or Master Scheduler), long-press a League Game tile in division 'Majors' and drag it onto division 'Minors'. Result: the tile is REMOVED from Majors (desktop would keep it) and the now-in-Minors tile still has leagueName pointing at the Majors league. On generation, Minors bunks are scheduled against a leagu
+- Verifier: The touch reposition handler diverges from both desktop drop handlers on a cross-grade drop, and the divergence is exactly as claimed. (1) `event` is a LIVE reference into the skeleton array. findSkeletonEvent (mobile_touch_drag.js L925-951) returns `dailySkeleton.find(...)` / `dailyOverrideSkeleton.find(...)` — the actual stored object, not a cop
+
+#### CB-122 [PLAUSIBLE / LIVE] playoff_hub.js:64  _(misc)_
+**Playoff Hub save persists bracket only to cloud+IDB+_localCache, never to the `campistryGlobalSettings` localStorage mirror leagues.js reads first on cold load — bracket lost if a league save/gen fires before hydration**
+
+- Evidence: playoff_hub.js _save() (the ONLY persistence path for every bracket mutation — enable, generate R1, advance, pick winner, seeds, clear) writes solely through saveGlobalSettings: L57-65 regular: `var lbn = window.leaguesByName || {}; var liveR = _league && lbn[_league.name]; if (liveR && _league.playoff) { liveR.playoff = _league.playoff; _league = liveR; } ... window.saveGlobalSettings('leaguesByName', lbn);` L37-55 specialty: same via `saveG
+- Scenario: User opens Leagues > a league's 'Playoff Mode' (PlayoffHub.open), builds a bracket, picks winners. Every click's _save writes the bracket to cloud+IDB but NOT to `campistryGlobalSettings`. Later the page is reloaded (or opened on a 2nd device). On script-run, leagues.js loadLeaguesData() (L2863) runs BEFORE cloud hydration: fromGlobal (=_localCache
+- Verifier: Every code link in the chain is verified real, and not in EXCLUSIONS or LEAGUE_AUDIT_FINDINGS.md (LG-1..54 never mention playoff_hub/PlayoffHub). (1) PERSISTENCE PATH IS HUB-ONLY AND BYPASSES THE MIRROR. playoff_hub.js _save() (L31-67) is the sole save path — all ~24 bracket mutations (enable L124, generate/advance L269/314/325, seeds L509, clear,
+
+#### CB-123 [CONFIRMED / LIVE] playoff_hub.js:832  _(misc)_
+**Playoff Hub has NO role gating — a viewer/read-only user gets a fully interactive bracket editor whose mutations write to the local settings mirror (every sibling league control is role-gated)**
+
+- Evidence: PlayoffHub.open(league, kind) (playoff_hub.js:832-858) takes NO readOnly/role parameter and unconditionally renders fully-enabled controls: enable toggle (enableCb.onchange L121), bracket-style pills (L183), seed add/remove/reorder (L412/418/424/459/471), 'Generate Round 1' (genBtn.onclick L259), pick-winner (renderTeam btn.onclick L728), 'Generate Round N' (advBtn.onclick L319), and 'Clear bracket & start over' (clearBtn.onclick L348). Every one
+- Scenario: A viewer-role user (read-only) opens Leagues, clicks 'Playoff Mode' on any league -> the Hub overlay opens fully interactive. They toggle Playoff on, generate Round 1, and reserve activities. _save() fires on each action and writes the entire leaguesByName/specialtyLeagues object to the local settings mirror with no 'changes not saved' warning (unl
+- Verifier: Every link in the claim holds against the actual code, and the readOnly-aware path is provably dead. (1) The LIVE path passes NO role/readOnly flag: leagues.js:933-939 `playoffBtn.onclick = function () { ... window.PlayoffHub.open(league, 'regular'); }` and specialty_leagues.js:926-928 `window.PlayoffHub.open(league, 'specialty');`. PlayoffHub.ope
+
+#### CB-124 [CONFIRMED] mobile_touch_drag.js:682  _(misc)_
+**Mobile touch-RESIZE of a Daily-Adjustments tile never reconciles overlaps — recreates the exact silent-overlap bug the desktop resize path was explicitly patched to prevent**
+
+- Evidence: finishTouchResize() (mobile_touch_drag.js:682-749) computes new start/end, writes them onto the skeleton event, then only calls `saveDailySkeleton()` + `renderGrid()` — it NEVER calls bumpOverlappingTiles. Compare the DESKTOP DA resize, which was patched for precisely this: daily_adjustments.js onMouseUp L2806-2811 `// ★ Day 25 fix (#1): reconcile overlaps after a resize... Resize previously wrote the new times without bumping neighbors, leaving
+- Scenario: On a phone/tablet, a user drags a DA skeleton tile's bottom resize handle down so it now overlaps the next tile (e.g. extend 'Activity' 10:00–10:45 down to 11:15 while 'Swim' sits at 11:00–11:45). finishTouchResize writes startTime/endTime and saves, but bumpOverlappingTiles is never run, so dailyOverrideSkeleton now holds two tiles whose [start,en
+- Verifier: The mobile touch-resize path for Daily-Adjustments tiles writes new start/end times onto the live skeleton event but never reconciles overlaps, recreating exactly the silent-overlap defect the desktop resize path was explicitly patched to prevent. (1) Desktop resize was patched for this precise bug. daily_adjustments.js onMouseUp L2806-2811 has th
+
+#### CB-125 [CONFIRMED / LIVE] access_control.js:540  _(rbac)_
+**Remote team-member REMOVAL never revokes a live scheduler's session (subscription only handles UPDATE, not DELETE)**
+
+- Evidence: setupMembershipSubscription (L537-548) subscribes ONLY to `event: 'UPDATE'` on camp_users: `.on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'camp_users', filter: user_id=eq.${_currentUser.id} }, (payload)=>{ refresh(); })`. There is no DELETE handler. removeTeamMember (L2035-2083) deletes the row (RPC delete_team_member_full, or fallback `.from('camp_users').delete().eq('id',id)`). Meanwhile verifyBeforeWrite (L325-358) short-
+- Scenario: Owner removes a scheduler from the team (Team & Access → remove). The scheduler currently has the app open. No DELETE realtime event is delivered to that session, so refresh() never runs; _currentRole stays 'scheduler' and _roleVerifiedFromDB stays true. The removed user keeps full scheduler write/generate access (canSave/canEditDivision/verifyBefo
+- Verifier: The mechanism holds at every link, verified against the real code in access_control.js. 1) setupMembershipSubscription (L537-548) subscribes ONLY to `event: 'UPDATE'` on camp_users filtered by `user_id=eq.${_currentUser.id}`. There is no DELETE handler and no wildcard `event: '*'`. A Postgres row DELETE never produces an UPDATE realtime event, so
+
+#### CB-126 [CONFIRMED] campistry_go.js:8346  _(go)_
+**Dispatcher "Pin as anchor" button breaks (silent failure) when a stop address contains an apostrophe**
+
+- Evidence: In renderDispatcherDashboard the pin button is built as: ``` ' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' + esc(r.busId) + '\',\'' + esc(da.address) + '\',' + da.kidCount + ',' + 0 + ')">' + ``` `da.address` is an external geocoder-derived stop/street name (e.g. "O'Brien St", "Saint John's Pl"). It is passed through `esc()` only. `esc` (campistry_go.js:99) maps `'`->`&#x27;`. But the value is placed inside a SINGLE-QUOT
+- Scenario: A camp with a street whose name contains an apostrophe (very common: "O'Brien St", "St. John's Rd") generates routes; the mega-cluster anchor lands on that street. The dispatcher clicks "Pin as anchor". The JS string is corrupted by the decoded apostrophe -> click throws and nothing is pinned. The toast "Anchor pinned — will take effect on next reg
+- Verifier: The defect is real and concretely triggerable. In renderDispatcherDashboard the "Pin as anchor" onclick (campistry_go.js:8344-8347) embeds da.address into a single-quoted JS string literal that lives inside a double-quoted HTML onclick attribute, passing it through esc() ONLY: `' onclick="CampistryGo.pinAnchor(' + shiftData.shiftIdx + ',\'' + esc(r
+
+#### CB-127 [CONFIRMED] campistry_go.js:2332  _(go)_
+**clearAllAddresses() wipes the ENTIRE cloud 'state' row (buses/shifts/setup/staff), destroying fleet config that has nothing to do with addresses**
+
+- Evidence: clearAllAddresses() empties D.addresses and routes, then calls: ``` save(); _clearCloudDataType('addresses'); _clearCloudDataType('routes'); _clearCloudDataType('state'); // <-- line 2332 ``` `_clearCloudDataType('state')` (line 2315) does `window.GoCloudSync.save('state', {})`, overwriting the whole go_standalone_data 'state' row with `{}` — which holds setup, buses, shifts, monitors, counselors, and both mode snapshots. The function never cle
+- Scenario: User clicks "Clear all addresses" (intending only to wipe camper home addresses, e.g. to re-import a roster). Their buses, shifts, monitors and counselors survive locally (localStorage STORE still has them), so it looks fine. They later open Campistry Go on a second device / after a cache clear: loadGoCloudData reads the 'state' row = {} (s.buses u
+- Verifier: The claim is accurate end-to-end against the real code. clearAllAddresses (campistry_go.js:2320-2338) empties ONLY D.addresses / D.savedRoutes / mode savedRoutes / _goStandaloneRoster in memory — it never clears D.buses/D.shifts/D.monitors/D.counselors. It then runs, in order: save() at L2329, _clearCloudDataType('addresses'), _clearCloudDataType('
+
+#### CB-128 [CONFIRMED] scheduler_core_auto.js:25307  _(misc)_
+**Clean auto-gen never clears a stale red "unfilled Free slots" banner (event not dispatched on 0 impossibilities)**
+
+- Evidence: The post-gen impossibilities reporter early-returns BEFORE dispatching its event when the schedule is clean: ```js if (_impossibilities.length === 0) { log('\n✅ No unfilled slots — schedule is complete.'); return; // <-- returns WITHOUT dispatching campistry-schedule-impossibilities } ... window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', { detail: { count: _impossibilities.length, items: _impossibilities } }));
+- Scenario: User generates a day in Auto mode whose layers/fields leave Free holes → red banner '⛔ N unfilled (Free) slots in this schedule' appears. User widens a layer window / adds field capacity and re-generates the SAME day → the new gen has 0 impossibilities, so the event is never fired → the stale red banner keeps showing the OLD Free slots (wrong count
+- Verifier: All four load-bearing facts verified against the actual code. (1) The post-gen impossibilities reporter is an IIFE; on a clean schedule it hits `if (_impossibilities.length === 0) { log(...); return; }` (scheduler_core_auto.js:25307-25310) which returns BEFORE `window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', ...))` at L25
+
+
+### LOW
+
+#### CB-129 [PLAUSIBLE] subdivision_schedule_manager.js:64  _(rbac)_
+**SubdivisionScheduleManager captures _currentDateKey once at init and never updates it on date change; saveSubdivisionSchedules then writes subdivision schedules to the STALE date key and fans the entire campDailyData_v1 to cloud**
+
+- Evidence: `_currentDateKey` is set a single time in initialize(): L64 `_currentDateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];` and is never reassigned anywhere (grep shows reads only at L86/L89/L129/L133/L904). saveSubdivisionSchedules() keys the write off this stale value and persists the whole multi-date blob to cloud: L129-133 `if (!dailyData[_currentDateKey]) dailyData[_currentDateKey] = {}; dailyData[_currentDateKey].s
+- Scenario: If/when the multi-scheduler lock UI is wired: scheduler locks subdivision schedule on the init date (e.g. today), navigates to 06-25, edits/locks again → saveSubdivisionSchedules writes 06-25's subdivisionSchedules under today's key (wrong date) and re-uploads every date's campDailyData_v1 to cloud with NOW timestamps, overwriting other devices' ne
+- Verifier: The code matches every load-bearing assertion in the claim. (1) `_currentDateKey` (declared L34 `let _currentDateKey = null;`) is assigned exactly once — L64 in initialize() — and a grep for `_currentDateKey\s*=` returns only those two lines; the module has no date-change listener, re-init, or any other reassignment. So once init runs (via rbac_ini
+
+#### CB-130 [PLAUSIBLE] access_control.js:1745  _(rbac)_
+**deleteMyDivisionsOnly resolves 'my' bunks via getEditableDivisions() which (v3.13) returns ALL divisions for a scheduler, so it deletes EVERY bunk (including other schedulers'/owner's divisions) from in-memory scheduleAssignments/leagueAssignments before reload**
+
+- Evidence: deleteMyDivisionsOnly builds the bunk set from getEditableDivisions(): L1745 `const myDivisions = getEditableDivisions();` then L1787-1799 iterates those divisions, collects their bunks, and `bunksToRemove.forEach(bunk => { delete window.scheduleAssignments[bunk]; })` (+ leagueAssignments L1801-1805). But getEditableDivisions() for a SCHEDULER returns ALL current divisions, not the scoped set: L1219-1221 `if (_currentRole === OWNER || ADMIN || SC
+- Scenario: A future wiring (or an inline handler) calls AccessControl.deleteMyDivisionsOnly(dateKey) for a scheduler: getEditableDivisions() returns all 7 divisions, so all 35 bunks are deleted from window.scheduleAssignments — wiping the displayed schedule for divisions the scheduler doesn't own. The subsequent loadSchedule re-merges from cloud, but any unsa
+- Verifier: The over-clear mechanism is REAL and the quoted lines are accurate. access_control.js deleteMyDivisionsOnly (L1745) sources its bunk set from getEditableDivisions(), which under v3.13 (L1219-1221) returns Object.keys(window.divisions) — ALL divisions — for SCHEDULER as well as OWNER/ADMIN. It then collects every bunk across those divisions (L1787-1
+
+#### CB-131 [CONFIRMED] supabase_permissions.js:309  _(rbac)_
+**Per-bunk write-filters (filterToMyDivisions / validateScheduleWrite / validateLeagueWrite / assertCanWriteGrade) are dead code — never called by any save path**
+
+- Evidence: PermissionsDB.filterToMyDivisions (supabase_permissions.js L309) and PermissionsGuard.validateScheduleWrite (permissions_guard.js L253), validateLeagueWrite (L286), assertCanWriteGrade (L219) are documented as the layer that 'prevent[s] overwriting other schedulers' work' (comment L307-308). Grep across the whole repo shows the ONLY callers are rbac_diagnostics.js (L377-415, a self-test) — no scheduler/manual/orchestrator save path invokes them.
+- Scenario: These functions are advertised (and self-tested) as the bunk-level write guard, but no production code calls them. The system isn't actively broken (scheduler_id row scoping + v3.13 'scheduler = full edit by design' cover the gap), but the safety net the code claims to provide does not exist — a future change that relaxes row scoping or merges sche
+- Verifier: The claim is accurate on every load-bearing point. Whole-repo .js grep proves the 4 advertised write-guard functions are never called by any save path: (1) PermissionsDB.filterToMyDivisions (supabase_permissions.js:309) appears ONLY at its definition (L309) and export (L421) — zero callers anywhere, not even the self-test; (2) PermissionsGuard.asse
+
+#### CB-132 [CONFIRMED / LIVE] demo_mode.js:133  _(rbac)_
+**Demo mode writes localStorage.campistry_role='owner' and the exit path never clears it — relies solely on the auth-id match in tryRestoreFromLocalStorage to avoid leaking owner into a real session**
+
+- Evidence: demo_mode.js L133 `localStorage.setItem('campistry_role','owner')` (also sets campistry_user_id/auth_user_id to the reused real id at L118-132). The exit path promptDemoExit→tryExit (L669-679) removes only `campistry_demo_mode` and `campistry_rbac_cache`, then reload — it does NOT remove campistry_role / campistry_user_id / campistry_auth_user_id. On reload, access_control.tryRestoreFromLocalStorage (L170-194) fast-paths owner/admin: `if (cachedR
+- Scenario: On a shared/kiosk browser: user A runs demo (?demo=true) → campistry_role='owner', campistry_auth_user_id=<A's id> persisted. Demo exited via password (does not clear role/ids). The window between reload and verifyRoleFromDB resolving, a fresh tab for the same cached auth id boots with _currentRole='owner' from localStorage and _initialized=true (i
+- Verifier: The claim is accurate as a LOW-severity hygiene defect. Verified end-to-end in source: 1) demo_mode.js sets owner identity into localStorage at boot: L132-133 `localStorage.setItem('campistry_auth_user_id', DEMO_USER_ID); localStorage.setItem('campistry_role','owner');`, where DEMO_USER_ID (L118) is the reused prior REAL auth id `localStorage.getI
+
+#### CB-133 [CONFIRMED] access_control.js:2149  _(rbac)_
+**assignDivisionsToMember sets assigned_divisions but leaves subdivision_ids stale — and determineUserContext prioritizes subdivision_ids, silently ignoring the new assignment**
+
+- Evidence: assignDivisionsToMember (L2149-2169) does `update({ assigned_divisions: divisionNames })` ONLY — it never clears or updates subdivision_ids. But determineUserContext (L604-624) and verifyRoleFromDB (L241-256) resolve a scheduler's divisions subdivision-FIRST: `if (_userSubdivisionIds.length > 0) { ...resolve from subdivisions table... } else if (_directDivisionAssignments.length > 0) {...}`. So if the member already had subdivision_ids, the assig
+- Scenario: Code/integration that calls AccessControl.assignDivisionsToMember(memberId, ['DivA','DivB']) on a scheduler who already has subdivision_ids set: the DB row's assigned_divisions updates, the call returns success, but on that scheduler's next load their editable/generatable divisions are still derived from the old subdivision_ids — the reassignment s
+- Verifier: All three load-bearing facts verified in access_control.js. (1) assignDivisionsToMember (L2149-2169) updates ONLY assigned_divisions — L2157 `.update({ assigned_divisions: divisionNames })` — and never clears/writes subdivision_ids. (2) Both context resolvers prioritize subdivisions: determineUserContext (L604-619) and verifyRoleFromDB (L241-256) d
+
+#### CB-134 [CONFIRMED] subdivision_schedule_manager.js:685  _(rbac)_
+**Subdivision lock save/restore conflates two distinct slot-index spaces (per-bunk array index vs division-level fieldUsageBySlot index) — latent keying corruption, currently inert because the restore/register path is dead**
+
+- Evidence: extractScheduleDataForSubdivision copies scheduleAssignments[bunk] as a per-bunk array (`data[bunk] = bunkData` where bunkData = scheduleAssignments[bunk].map(...), L348-355) — indexed by that bunk's OWN per-bunk slot geometry. But extractFieldUsageClaimsForSubdivision builds claims[slotIdx][fieldName] from window.fieldUsageBySlot (L378-407) whose keys are the DIVISION-LEVEL unified slot index (fieldUsageBySlot is written by scheduler_core_main.j
+- Scenario: If the subdivision-lock multi-scheduler feature is re-enabled (today restoreLockedSchedules / registerLockedClaimsInGlobalLocks / getBunksToSchedule / markCurrentUserSubdivisionsAsDraft / isFieldClaimedByOthers / getLockedFieldUsageClaims have ZERO callers outside this module — grep-confirmed — and GlobalFieldLocks.loadOtherSchedulerSchedules short
+- Verifier: The claim is accurate on both axes and correctly self-limited to LOW/latent. (1) Dead-path: all six named functions are exported on window.SubdivisionScheduleManager (subdivision_schedule_manager.js L959-973) but a repo-wide grep for `.restoreLockedSchedules(` / `.registerLockedClaimsInGlobalLocks(` / `.getBunksToSchedule(` / `.markCurrentUserSubdi
+
+#### CB-135 [PLAUSIBLE] rbac_visual_restrictions.js:677  _(rbac)_
+**Dead-but-wired unescaped user-data path: createTabBanner injects division names raw; only the v3.13 scheduler-bypass keeps it from firing**
+
+- Evidence: createTabBanner builds a banner via raw innerHTML with no escaping (file has no escaper): L671-680: function createTabBanner(title, message) { const banner = document.createElement('div'); banner.className = 'rbac-tab-banner'; banner.innerHTML = ` <span ...>...</span> <div> <strong>${title}</strong> <div ...>${message}</div> </div>`; return banner; } The sched
+- Scenario: This is the bug-class 'dead code that still LOOKS load-bearing.' If the v3.13 scheduler-edits-everything bypass at rbac_visual_restrictions.js:44 (and the mirror logic in access_control.js) is ever reverted so that schedulers regain field-level restrictions, applyToFieldsTab's scheduler branch (L470-560) immediately becomes live and createTabBanner
+- Verifier: The claim is accurate on every checkable point, and correctly self-describes as a LATENT (presently dead) sink — so it cannot be CONFIRMED (no current trigger) but the mechanism is real, hence PLAUSIBLE. SINK IS REAL + UNESCAPED: createTabBanner (rbac_visual_restrictions.js L670-681) assigns banner.innerHTML with raw `${title}`/`${message}`. Grep
+
+#### CB-136 [CONFIRMED / LIVE] supabase_permissions.js:261  _(rbac)_
+**Divergent duplicate canEditBunk: supabase_permissions.js lacks the v3.13 scheduler full-edit bypass that access_control.js has**
+
+- Evidence: Two canEditBunk implementations have diverged. access_control.js:1006-1020 was updated for v3.13 so schedulers get full edit access: function canEditBunk(bunkName) { if (!bunkName) return false; if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true; // v3.13 bypass ... } The duplicate in supabase_permissions.js:261-272 never got that change — a scheduler is NOT bypa
+- Scenario: A scheduler tries to edit a bunk in a division they are not assigned to. Under v3.13 (schedulers edit everything) AccessControl.canEditBunk -> true; PermissionsDB.canEditBunk -> false. In practice the divergence is currently SHADOWED: the only consumer (scheduler_core_utils.js Utils.canEditBunk, L1994) calls PermissionsDB.canEditBunk only as a fall
+- Verifier: The divergence is real and the claim accurately describes BOTH the defect and its current dormancy. access_control.js:1006-1020 has the v3.13 scheduler bypass (line 1009: `if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;`, marked `// ★★★ v3.13: ... schedulers have full edit access ★★
+
+#### CB-137 [PLAUSIBLE / LIVE] campistry_go.js:975  _(go)_
+**Geocode checkpoint recovery replaces the whole address map, can drop cloud/loaded addresses absent from the checkpoint**
+
+- Evidence: load() L968-979: it reads `STORE+'_addr_ckpt'`, counts geocoded entries, and if `ckptGeocoded > mainGeocoded` does `D.addresses = ckpt;` — a WHOLESALE replacement of the address map, not a per-key merge. The checkpoint (written by _saveAddressesCheckpoint L2682 as just `JSON.stringify(D.addresses)`) reflects whatever D.addresses contained mid-geocode. If, by the time of the next load, the authoritative source (cloud / globalSettings, merged earli
+- Scenario: Device A starts geocoding 200 addresses, checkpoints at 175 geocoded, tab is killed mid-run. Meanwhile cloud has grown to 210 addresses (added on device B). On the next load on device A: cloud merge brings ~210 into D.addresses with, say, 50 geocoded; checkpoint has 175 geocoded but only the original 200 keys. ckptGeocoded(175) > mainGeocoded(50) →
+- Verifier: The mechanism is real and present in the code. In load() the cloud/local merge runs FIRST (campistry_go.js L928/931/934 `D = merge(cloud|local)`), so by the time checkpoint recovery executes (L968-980) D.addresses already contains the authoritative merged set, including any cloud-only keys grown on another device. The recovery then does a WHOLESALE
+
+#### CB-138 [CONFIRMED] campistry_go_persistence.js:112  _(go)_
+**recordAssignment collapses a split (oversize) neighborhood's two buses into one in the persisted year-over-year record**
+
+- Evidence: recordAssignment L107-114 builds `busByNh` by iterating each bus's neighborhoodIds and mapping `parentId = nhId.replace(/_p\d+$/, '')` → `busByNh[parentId] = bus.busId`. When packIntoBuses splits an oversize neighborhood into pieces `nh.id+'_p'+i` (campistry_go_neighborhoods.js L989-998) that land on DIFFERENT buses, both pieces share the same parentId, so the second iteration overwrites the first: `busByNh[parent]` keeps only the LAST bus seen.
+- Scenario: A large neighborhood exceeds one bus's capacity and packIntoBuses splits it: piece _p0 → bus RED, piece _p1 → bus BLUE. recordAssignment writes busByNh[parent] = (whichever of RED/BLUE is iterated last). Next season getPriorAssignments returns only that one bus for the neighborhood, so the grandfather/diff logic treats half the campers as 'reassign
+- Verifier: The claim is accurate and confirmed by the code. campistry_go_neighborhoods.js:989-998 (packIntoBuses) splits an oversize neighborhood into pieces with distinct ids `nh.id+'_p'+i`, each carrying `parentId: nh.id`. These pieces are placed INDEPENDENTLY: assignToBus pushes the PIECE id (`bus.neighborhoodIds.push(nh.id)`, L1013), and the three placeme
+
+#### CB-139 [CONFIRMED] campistry_go.js:968  _(go)_
+**Geocode-checkpoint recovery on load compares only geocoded COUNT and consumes the checkpoint regardless, so it can lose a fresher cloud address set or a deletion**
+
+- Evidence: `const ckptRaw = localStorage.getItem(STORE + '_addr_ckpt'); if (ckptRaw) { const ckpt = JSON.parse(ckptRaw); const ckptGeocoded = Object.values(ckpt).filter(a => a.geocoded).length; const mainGeocoded = Object.values(D.addresses || {}).filter(a => a.geocoded).length; if (ckptGeocoded > mainGeocoded) { D.addresses = ckpt; ... } localStorage.removeItem(STORE + '_addr_ckpt'); }` (L969-979). Recovery is decided solely by which has more GEOCODED entr
+- Scenario: A geocoding run is interrupted (tab closed mid-run), leaving STORE+'_addr_ckpt' with N geocoded entries. Meanwhile the user (or another device) deleted some campers, so the authoritative current set has fewer geocoded entries. On reload, ckptGeocoded(N) > mainGeocoded → D.addresses is overwritten wholesale by the stale checkpoint, reviving deleted
+- Verifier: The defect is real and present in the source. In load() (campistry_go.js:968-980) the checkpoint recovery decides solely by GEOCODED COUNT (ckptGeocoded > mainGeocoded), wholesale REPLACES D.addresses = ckpt (not a merge), and removes the checkpoint UNCONDITIONALLY (L978). The checkpoint is written raw with no timestamp/version (_saveAddressesCheck
+
+#### CB-140 [CONFIRMED] campistry_go_ors_optimizer.js:636  _(go)_
+**_cheapestInsert capacity check uses raw bus capacity, ignoring reserved monitor/counselor seats — overfills buses on the unassigned-fallback path**
+
+- Evidence: Everywhere else reserved seats are subtracted before comparing to demand: _recursiveSplit L264-266 `(v.capacity||44) - reserved`, _singleRequest L430-431 `realCap = Math.max(1,(v.capacity||44)-reservedSeats)`. But the unassigned-stop fallback _cheapestInsert L636 does `if (v && route.camperCount + stop.campers.length > v.capacity) continue;` against the RAW `v.capacity` with no monitor/counselor subtraction. So a bus that is full once its monitor
+- Scenario: VROOM leaves N stops unassigned (region over capacity); _cheapestInsert places them. A bus with capacity 44, a monitor and 2 counselors has only 41 camper seats but the check compares against 44 — it accepts up to 3 extra campers, producing a route the downstream getCapacityWarnings (L1275, which DOES subtract reserves) then flags as over capacity,
+- Verifier: The claim is accurate. In campistry_go_ors_optimizer.js, the unassigned-stop fallback _cheapestInsert gates insertion on RAW bus capacity with no reserved-seat subtraction: L636: `if (v && route.camperCount + stop.campers.length > v.capacity) continue;` where `route.camperCount` counts ONLY campers (built at L572-574 `orderedStops.reduce(... + st
+
+#### CB-141 [CONFIRMED] campistry_go_stop_master.js:42  _(go)_
+**Dead-but-wired GoStopMaster subsystem — loaded + full public API, zero call sites (sibling GoNhPersistence IS wired)**
+
+- Evidence: `window.GoStopMaster = (function () { ... return { loadStops, upsertStops, recordSeason, getGrandfatherMap, stopKey }; })();` (L42/L172) is a complete 'canonical Stop Master + camper-stop grandfathering history' feature with Supabase persistence to go_standalone_data (data_type='stop_master'/'camper_stop_history') and a documented public API (L34-39). It is loaded as a real production script — `<script src="campistry_go_stop_master.js"></script>`
+- Scenario: No runtime effect (functions are never invoked), but the loaded script advertises a working 'stops survive roster/season churn' grandfathering capability that does nothing: stops are never upserted to the master library and getGrandfatherMap is never consulted during assignment, so the documented year-over-year stop persistence silently does not ha
+- Verifier: Every factual claim verifies against the actual code. (1) campistry_go_stop_master.js defines a complete window.GoStopMaster IIFE with a 5-function public API (loadStops/upsertStops/recordSeason/getGrandfatherMap/stopKey) plus Supabase persistence via GoCloudSync to go_standalone_data and a documented API header at L34-39. (2) It is loaded as a rea
+
+#### CB-142 [PLAUSIBLE] mobile_touch_drag.js:709  _(misc)_
+**Mobile resize/reposition fallback dispatches 'mobile-resize-complete'/'mobile-reposition-complete' events that NOTHING listens for — on an internal-API load failure the mutated skeleton is silently never saved or re-rendered**
+
+- Evidence: Both finishTouchResize (L709-714, L735-739) and finishTouchReposition (L874-878, L886-890) mutate the live skeleton event in place, then in their else-branch do `window.dispatchEvent(new CustomEvent('mobile-resize-complete'/'mobile-reposition-complete', {...}))` as the fallback when `window.MasterSchedulerInternal`/`window.DailyAdjustmentsInternal` is absent. A repo-wide grep for those two event names returns ONLY the 4 dispatch sites — there is
+- Scenario: If master_schedule_builder.js or daily_adjustments.js throws during init (so window.MasterSchedulerInternal / window.DailyAdjustmentsInternal is never assigned at master_schedule_builder.js:4965 / daily_adjustments.js:8395) but mobile_touch_drag.js still binds, a mobile user resizes or repositions a tile: event.startTime/endTime are changed in the
+- Verifier: The claim's factual core is verified: the 4 dispatch sites exist (mobile_touch_drag.js:711/736/875/887), a repo-wide grep finds ZERO addEventListener for 'mobile-resize-complete' or 'mobile-reposition-complete' (only the 4 dispatches), and the actual save/render (saveDraftToLocalStorage/saveDailySkeleton/renderGrid) lives only inside the `if (windo
+
+#### CB-143 [CONFIRMED] playoff_mode.js:326  _(misc)_
+**Dead, diverged inline playoff UI (PlayoffMode.render) is exported and wired but unreachable — superseded by PlayoffHub**
+
+- Evidence: playoff_mode.js exports a full inline playoff UI: `render` (L326-568) plus `renderSeedList` (L570), `renderRoundCard` (L724), `renderMatchup` (L765), `_fieldsForSport`/`_fieldSupportsSport` (L887-904), the self-reassigning re-render hook `var _origRender = render; render = function(...){ _origRender(...); mountEl._reRender = ... }` (L909-913), and `injectStyles` (L918, injected at load via L987-990 → installs the unused `playoff-mode-styles` <sty
+- Scenario: A developer reads playoff_mode.js, sees `window.PlayoffMode.render` exported and called from `mountPlayoffUI`/`mountSpecialtyPlayoffUI`, and assumes it is the live playoff editor. They 'fix' or extend it (e.g. add a constraint to the inline seed/matchup UI), but the change never surfaces because that path is unreachable — the real UI is playoff_hub
+- Verifier: The inline playoff UI in playoff_mode.js is genuinely dead/unreachable, exactly as claimed. Reachability chain, verified by reading the code: 1. PlayoffMode.render is exported at playoff_mode.js:1005 and is called from exactly two places: mountPlayoffUI (leagues.js:952) and mountSpecialtyPlayoffUI (specialty_leagues.js:948). A repo-wide grep for `
+
+#### CB-144 [CONFIRMED] access_control.js:459  _(rbac)_
+**setupDivisionChangeObserver leaks a new 1-second setInterval on every refresh() (realtime membership change)**
+
+- Evidence: setupDivisionChangeObserver (L458) does `setInterval(() => { ... calculateEditableDivisions(); ... }, 1000)` and never stores the handle or clears it. initialize() calls it unconditionally at L423. refresh() (L978-990) sets `_initialized=false` then `await initialize()`, and the realtime UPDATE handler (L546) calls refresh() on every remote camp_users change. The SIGNED_OUT teardown (L2394-2424) and refresh() both clear the channel subscription b
+- Scenario: A scheduler's role/subdivisions are edited remotely several times in a session (or any flow that calls AccessControl.refresh repeatedly). Each refresh()->initialize() spawns another orphaned 1s interval; all prior ones keep running forever, each re-hashing Object.keys(window.divisions) and calling calculateEditableDivisions() every second. N refres
+- Verifier: The leak is real and reachable. setupDivisionChangeObserver (access_control.js L458-459) calls setInterval(...,1000) and discards the handle — a file-wide Grep for setInterval/clearInterval returns ONLY L459, so the timer is never captured and never cleared. initialize() does have an early-return guard `if (_initialized) return` (L365-368), but ref
+
+#### CB-145 [CONFIRMED] campistry_go.js:1838  _(go)_
+**acceptAllStaffSuggestions() bypasses the over-capacity guard that the single-accept path enforces**
+
+- Evidence: The single-accept path (acceptStaffAssign, line 1919) computes `_capacityAfterStaffAdd(busId)` and, if `cap.overBy > 0`, routes through `_showCapacityWarning` before committing. The bulk path does not: ``` function acceptAllStaffSuggestions() { ... for (const { staff } of all) { if (!staff._suggestedBusId) continue; if (staff._assignStatus === 'accepted' || staff._assignStatus === 'denied') continue; staff._assignStatus = 'accepte
+- Scenario: A near-full bus already has its monitor + counselors. The dispatcher clicks "Accept all" to confirm pending staff suggestions; one more counselor is suggested onto that bus. Single-accept would have popped the "Bus Over Capacity" modal; bulk-accept silently assigns it, leaving the bus over its real seat count with no indication.
+- Verifier: The asymmetry is real and the trigger is concrete. acceptStaffAssign (single-accept, campistry_go.js L1919-1932) computes _capacityAfterStaffAdd(staff._suggestedBusId) and, when cap.overBy > 0, diverts to _showCapacityWarning instead of committing. The bulk path acceptAllStaffSuggestions (L1838-1858) loops over every pending monitor/counselor and u
 
