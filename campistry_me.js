@@ -1492,6 +1492,35 @@ function _propagateDivisionRename(oldName, newName){
             });
         });
     }
+    // 4. ★★★ CB-92: propagate to the RBAC scheduler-scoping stores so a scheduler
+    //    scoped to the renamed unit BY NAME doesn't silently lose access on their
+    //    next login. The rename is owner-initiated (Me page), so the owner may
+    //    write these rows. subdivisions.divisions[] and camp_users.assigned_divisions[]
+    //    both store division/grade NAMES. Best-effort + non-fatal (a failure must
+    //    not block the rename). [LIVE] — needs a 2-account verify.
+    try{
+        var _rbClient=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+        var _rbCamp=(window.CampistryDB&&window.CampistryDB.getCampId)?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(_rbClient&&_rbCamp){
+            _rbClient.from('subdivisions').select('id,divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.divisions)||row.divisions.indexOf(oldName)===-1)return;
+                    var nd=row.divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('subdivisions').update({divisions:nd}).eq('id',row.id).then(function(r){if(r.error)console.error('[Me] CB-92 subdivision rename failed',row.id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 subdivisions migrate failed:',e);});
+            _rbClient.from('camp_users').select('user_id,assigned_divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.assigned_divisions)||row.assigned_divisions.indexOf(oldName)===-1)return;
+                    var nd=row.assigned_divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('camp_users').update({assigned_divisions:nd}).eq('camp_id',_rbCamp).eq('user_id',row.user_id).then(function(r){if(r.error)console.error('[Me] CB-92 camp_users rename failed',row.user_id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 camp_users migrate failed:',e);});
+        }
+    }catch(_eRb){console.warn('[Me] CB-92 RBAC rename propagate exception:',_eRb);}
+
     // 3. Propagate to cloud daily_schedules
     function _toast(msg, kind){
         try{
