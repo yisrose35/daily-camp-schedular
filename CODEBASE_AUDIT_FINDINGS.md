@@ -406,3 +406,376 @@ Run wf_d3cfa12c-d21 (resumed after session-limit). 82 agents.
 - Scenario: Latent. If any future or edited daShowModal caller derives a checkbox-group field.label from user data (e.g. an event/division name like other modals' titles do at L1805/L4025), it renders raw into innerHTML and executes; a field.name containing a quote would also break the L195 selector and silently return no checked values. No current caller trig
 - Verifier: The code divergence is real and verified. In the daShowModal field loop (daily_adjustments.js), the text/time branch (L163) and select branch (L175) both render the field label via `_escHtml(field.label)`, but the checkbox-group branch (L192) renders it raw: `fieldEl.innerHTML = '<label>' + field.label + '</label>' + ...`. `_escHtml` (L92) → `windo
 
+
+---
+
+## Phase 2 — rotation/frequency, calendar/dates, display layer, Me-page/config CRUD (51 findings: 6 HIGH / 33 MED / 12 LOW)
+
+Run wf_d48fea74-39c. 81 agents.
+
+
+### HIGH
+
+#### CB-56 [CONFIRMED / LIVE] scheduler_core_utils.js:2592  _(rotation)_
+**rebuildHistoricalCounts whole-key overwrites the shared cloud `historicalCounts` from an incomplete local scan — drops every bunk's cross-day rotation history when local cache is partial**
+
+- Evidence: `Utils.rebuildHistoricalCounts` builds a fresh object from scratch — `const counts = {}; ... Object.entries(allDaily).forEach(([dateKey, dayData]) => { ... counts[bunk][actName] = (counts[bunk][actName]||0)+1; })` (L2558-2587) — then `window.saveGlobalSettings('historicalCounts', counts)` (L2593), a COMPLETE cloud-KV overwrite (historicalCounts is a synced key — integration_hooks.js:528 strips it only from the localStorage lite snapshot, not from
+- Scenario: Documented reality (WALKTHROUGH_AUDIT_FINDINGS.md `WHY SO MANY FREES`/Day-40 notes): on a near-quota browser, daily schedules are NOT written to localStorage (`skipping auto-save (data is in cloud)`), so `loadAllDailyData()` is missing most dates. The owner generates one new day; `rebuildHistoricalCounts(true)` scans only the 1-2 dates that happen
+- Verifier: The whole-key-overwrite mechanism is real and the no-merge path is verified end to end. (1) `rebuildHistoricalCounts` (scheduler_core_utils.js L2554-2608) builds `counts` from scratch by scanning ONLY `window.loadAllDailyData()`, which reads only localStorage `campDailyData_v1` (calendar.js L184-202 — no cloud merge), then calls `window.saveGlobalS
+
+#### CB-57 [CONFIRMED] calendar.js:1430  _(rotation)_
+**"Erase ALL schedules" wipes cloud rotation_counts but leaves local historicalCounts / historicalCountedDates / rotationHistory stale**
+
+- Evidence: eraseAllDailyData (the function wired to flow.html's #eraseAllSchedulesBtn "Delete ALL schedules for ALL days" button, owner/admin path ~L1389-1448) does: cloud daily_schedules delete; `localStorage.removeItem(DAILY_DATA_KEY)`; `window.RotationCloud?.clearAll?.()` (L1431, wipes cloud rotation_counts); clears league state; then `window.location.reload()`. It NEVER clears `historicalCounts`, `historicalCountedDates`, `rotationHistory`, `manualUsage
+- Scenario: Owner clicks "Delete ALL schedules for ALL days" to start fresh. After reload: cloud rotation_counts = empty, all daily schedules gone, but globalSettings.historicalCounts still holds every bunk's full accumulated activity counts and historicalCountedDates still marks all deleted dates as counted (both in the local mirror and cloud KV). Next genera
+- Verifier: VERIFIED by reading the full functions. eraseAllDailyData (calendar.js L1389-1453) — the owner/admin path wired to flow.html #eraseAllSchedulesBtn — deletes cloud daily_schedules (L1396-1399), removes DAILY_DATA_KEY (L1409), and wipes cloud rotation_counts via RotationCloud.clearAll (L1431; clearAllRotationCounts at rotation_cloud.js L310-333 does
+
+#### CB-58 [CONFIRMED] validator.js:937  _(display)_
+**Manual-mode validator modal renders violation messages (embedding user-controlled bunk/field/division names) as raw innerHTML with NO escaper — stored XSS**
+
+- Evidence: validator.js has no esc/escapeHtml helper anywhere (unlike every other display-layer file, which delegate to window.CampUtils.escapeHtml). buildCategorySection interpolates each violation string raw into the <li> body: L935-937 `${items.map(item => `<li ...>${item}</li>`).join('')}`, injected via `overlay.innerHTML = content;` (L887). The violation strings embed user-controlled names unescaped, e.g. cross-division: L398 `<u>${fieldName}</u> ... B
+- Scenario: A field is named `Court<img src=x onerror=alert(document.cookie)>` (or a bunk/division is named with an <img onerror=...>). It is config that syncs to cloud (camp_state_kv), so it persists for every user of the camp. The owner (or any scheduler) generates a manual schedule that produces ANY validation violation involving that field/bunk/division (e
+- Verifier: Every load-bearing element checks out against the real code. (1) validator.js has NO escaper: Grep for `function esc|escapeHtml|escHtml|CampUtils` returns "No matches found" — unlike every other display file that delegates to window.CampUtils.escapeHtml. (2) Violation strings are interpolated raw into innerHTML: buildCategorySection L935-937 `${ite
+
+#### CB-59 [CONFIRMED] auto_validator.js:643  _(display)_
+**Auto-mode validator modal has the identical raw-innerHTML XSS (divergent twin of validator.js — neither file escapes), embedding field/bunk/grade names unescaped**
+
+- Evidence: auto_validator.js likewise defines no escaper (its only `function esc(e)` at L703 is an Escape-KEY keydown handler, not an HTML escaper — an excluded false match). showAutoValidatorModal interpolates each error/warning message raw: L641-644 `${items.map(item => `<li ...>${item.message}</li>`)}` and L661-664 `${warnings.map(w => `<li ...>${w.message}</li>`)}`, injected via `overlay.innerHTML = html;` (L680). The messages embed user-controlled name
+- Scenario: Same stored-XSS setup as the validator.js finding, but triggered in AUTO builder mode: a field named `Pool"><img src=x onerror=...>` (cloud-persisted config). After an auto generation, the post-gen auto-validator modal (or a manual Validate click in auto mode) lists a cross-division/capacity/staggered/repeat violation involving that field → `${item
+- Verifier: Verified the full chain in auto_validator.js. (1) No HTML escaper exists: grep shows the only `esc` is the Escape-KEY keydown handler at L703-704 (the documented excluded false-match); no CampUtils/escapeHtml/textContent is applied to user data anywhere in the file. (2) Violation messages embed user-controlled config names RAW: L247 `<u>${a.field}<
+
+#### CB-60 [CONFIRMED] campistry_me.js:141  _(config)_
+**save() rebuilds campistryMe as a fixed literal, stripping forms/customFields/locale/campSettings/stripePublishableKey — every sibling saver's edit is clobbered on the very next save() and lost from cloud + in-memory cache**
+
+- Evidence: save() (L121-167) reads the in-memory cache `g=Object.assign({},window.loadGlobalSettings())` then OVERWRITES campistryMe with a fresh object literal that lists only a fixed subset of sub-keys (L141-154): `g.campistryMe={families,payments,broadcasts,bunkAssignments,bunkManualCounts,nextCamperId,enrollments,sessions,enrollSettings,formConfig,promoCodes,finance}`. It does NOT spread the existing campistryMe, so the sub-keys `forms`, `customFields`,
+- Scenario: On the Me page: create a Form (Forms & Documents → + Create Form), OR add a Custom Field (Settings → Manage Custom Fields → + Add Field), OR change Display Language/RTL (Settings → Save Language Settings), OR set the Stripe Publishable Key. The toast confirms success and the UI shows it (rendered from the in-memory module var campForms/customFields
+- Verifier: The claim is accurate. save() (campistry_me.js L121-167) reads the in-memory cache via g=Object.assign({},window.loadGlobalSettings()) — loadGlobalSettings→getLocalSettings returns _localCache (integration_hooks.js L485-486), so g.campistryMe at that moment is the SAME object the sibling savers just mutated (it even reads g.campistryMe?.promoCodes
+
+#### CB-61 [CONFIRMED / LIVE] schedule_calendar_views.js:339  _(dates)_
+**Calendar day-view navigation eagerly sets window.currentScheduleDate, defeating the cross-date save guard → old day's unsaved edits lost + not cloud-saved**
+
+- Evidence: changeDateTo() at schedule_calendar_views.js:339 does `window.currentScheduleDate = newKey;` BEFORE firing the picker change event at line 354 (`picker.dispatchEvent(new Event('change', {bubbles:true}))`). That change event runs calendar.js onDateChanged(), whose whole point (per its own comment at calendar.js:137 'DO NOT update window.currentScheduleDate here … Setting it eagerly caused stale-memory saves to overwrite the new date's cloud row')
+- Scenario: User is on the Calendar day view for 06-12, makes an edit (or just has the generated 06-12 schedule in memory), then clicks the day-view next-arrow (or drills into another day). changeDateTo sets currentScheduleDate=06-13 first; onDateChanged then records _pendingDateTransition={from:06-13,to:06-13}; integration_hooks sees oldDateKey===newDateKey a
+- Verifier: Every link in the claimed chain is confirmed in actual code across 4 files, and the orchestrator path makes it strictly worse than the claim states (no fallback save). 1) schedule_calendar_views.js changeDateTo (line 334) sets `window.currentScheduleDate = newKey;` at line 339 BEFORE dispatching the picker change event at line 354. It is reached f
+
+
+### MED
+
+#### CB-62 [CONFIRMED / LIVE] rotation_engine.js:1482  _(rotation)_
+**mergeCloudData only ever RAISES a bunk's local count to the cloud total, never lowers it — a cross-device rotation_counts delete/decrement is silently ignored, leaving stale-high counts**
+
+- Evidence: In `RotationEngine.mergeCloudData`, the local-exists branch is one-directional: `if (cloudCount > local.count) { history.totalActivities += (cloudCount - local.count); local.count = cloudCount; }` (L1482-1485). There is no `else` to lower `local.count` when the authoritative cloud total is now LOWER than the local 14-day scan. `local` comes from `buildBunkActivityHistory` which scans `loadAllDailyData()` (localStorage), and that local schedule is
+- Scenario: Device A generated 06-14 (Soccer counted for Bunk X) and it sits in A's localStorage `campDailyData_v1`. On device B the owner deletes/erases 06-14, which calls RotationCloud.deleteDate (calendar.js:1209) → the cloud rotation_counts row for X/Soccer/06-14 is removed, lowering the cloud total. Back on device A a new generation runs: mergeCloudData r
+- Verifier: The claim is accurate end-to-end. CONTEXT: CODEBASE_AUDIT_FINDINGS.md (the actual audit doc, not WALKTHROUGH) has no match for this; not an EXCLUSION. CHAIN VERIFIED: (1) rotation_engine.js:1482-1485 — the local-exists branch is strictly one-directional: `if (cloudCount > local.count) { history.totalActivities += (cloudCount - local.count); local.c
+
+#### CB-63 [PLAUSIBLE / LIVE] scheduler_core_utils.js:2554  _(rotation)_
+**Post-gen rebuildHistoricalCounts rebuilds from local-only daily cache and persists to cloud KV, clobbering the more-complete cloud-rotation_counts-derived counts**
+
+- Evidence: rebuildHistoricalCounts(saveToCloud=true) (L2554) builds a fresh `counts` object purely from `window.loadAllDailyData()` (L2557), which reads LOCAL `campDailyData_v1` (calendar.js L184-187) or the in-memory override — never cloud. It then `saveGlobalSettings('historicalCounts', counts)` (L2593) and triggers forceSyncToCloud, so the local-derived value is pushed to cloud camp_state_kv and OVERWRITES whatever was there. It also resets historicalCou
+- Scenario: Near-quota or fresh-browser device: cloud rotation_counts has 4 weeks of history; local campDailyData_v1 holds only the last ~14 dates (or is on the memory-override path). User generates a day. Pre-gen merge correctly seeds historicalCounts from the full cloud history; the solver scores fairly. Post-gen rebuildHistoricalCounts re-scans loadAllDaily
+- Verifier: The data-flow mechanism is real and verified line-by-line. rebuildHistoricalCounts(true) (scheduler_core_utils.js L2554) builds `counts` purely from window.loadAllDailyData() (L2557), which reads only local campDailyData_v1 or the in-memory override (calendar.js L184-202) — never cloud. It then saveGlobalSettings('historicalCounts', counts) (L2593)
+
+#### CB-64 [PLAUSIBLE] integration_hooks.js:2797  _(rotation)_
+**window.eraseAllSchedules(dateKey) deletes the cloud schedule but never deletes the date's cloud rotation_counts nor rebuilds historicalCounts**
+
+- Evidence: The `window.eraseAllSchedules = async function(dateKey)` override (L2797-2838) deletes the date's cloud schedule (`ScheduleDB.deleteSchedule(dateKey)` for full-access, or deleteMyScheduleOnly), clears window.scheduleAssignments/leagueAssignments, reloads remaining cloud data, and stamps _scheduleAssignmentsDate. It does NOT call `window.RotationCloud.deleteDate(dateKey)` and does NOT call rebuildHistoricalCounts/reIncrementHistoricalCounts. Compa
+- Scenario: Any flow that invokes window.eraseAllSchedules('2026-07-15') (it is a public window API; not the path bound to flow.html's button, which calls eraseAllDailyData) deletes that day's schedule, but the cloud rotation_counts rows for 2026-07-15 survive and historicalCountedDates['2026-07-15'] stays true. A subsequent generation that pre-merges cloud ro
+- Verifier: The omission is REAL: window.eraseAllSchedules (integration_hooks.js L2797-2838) deletes the cloud schedule (L2814 deleteSchedule / L2819 deleteMyScheduleOnly), clears globals, reloads, stamps the date — but contains ZERO calls to RotationCloud.deleteDate or rebuildHistoricalCounts. Its single-date sibling eraseToday (calendar.js) does BOTH: Rotati
+
+#### CB-65 [PLAUSIBLE / LIVE] scheduler_core_auto.js:681  _(rotation)_
+**Auto partial-gen snapshots scheduleAssignments from in-memory only (no cloud force-load), unlike the manual path — so a scheduler-scoped auto regen can omit other schedulers' bunks at rotation-save time**
+
+- Evidence: In a scheduler-scoped (partial) auto gen, STEP 0 builds the preserve-snapshot purely from the in-memory map: `_preservedScheduleData = structuredClone(window.scheduleAssignments || {})` (scheduler_core_auto.js:681), and STEP 5 restores non-scoped bunks from that same in-memory snapshot (L22865-22895). There is NO cloud force-load. The MANUAL path explicitly does the opposite — when a partial gen lacks a snapshot it force-loads cloud to pull EVERY
+- Scenario: Scheduler B (Seniors) loads 06-15 in AUTO mode; another scheduler's Juniors rows are in cloud but not in B's in-memory scheduleAssignments. B scope-regenerates Seniors. Auto STEP 0 snapshots only B's local bunks (no cloud force-load), STEP 5 restores only those, STEP 6.9 RotationCloud.save deletes the whole 06-15 date and re-inserts only B's bunks
+- Verifier: The asymmetry is REAL and verified by direct reading. MANUAL partial gen force-loads cloud to merge ALL schedulers' bunks into window.scheduleAssignments before snapshotting (scheduler_core_main.js:1740-1829), with the author's own comment "Without this, Scheduler 2 won't see Scheduler 1's data and will overwrite it." AUTO has NO equivalent: a grep
+
+#### CB-66 [CONFIRMED / LIVE] scheduler_core_utils.js:2407  _(rotation)_
+**Period-scoped caps (maxUsage/exactFrequency per 'half'/'Nweek') are enforced from local campDailyData_v1 only — they ignore cloud rotation_counts and the cloud-merged history cache, so caps silently under-enforce on a second device or after the documented local-quota save-skip**
+
+- Evidence: getPeriodActivityCount scans ONLY localStorage daily data: `var allDaily = window.loadAllDailyData ? window.loadAllDailyData() : {}` then counts per-date entries (scheduler_core_utils.js:2407-2422). It never consults RotationCloud / rotation_counts nor the RotationEngine cloud-merged cache. The rotation engine's HARD period gates depend entirely on it: rotation_engine.js:1075 `maxCount = (_getPeriodCount && maxUsage>0) ? _getPeriodCount(bunkName,
+- Scenario: A special has maxUsage=2, maxUsagePeriod='half'. Device A generated several days this half that placed it; those daily records live in A's localStorage (and cloud daily_schedules) but device B's localStorage has none of them (or they were quota-skipped). On device B, getPeriodActivityCount returns 0-1 instead of 2, the `maxCount >= maxUsage` gate n
+- Verifier: The asymmetry the claim describes is real and decisive in code. (1) The hard period gate is wired exactly as claimed: rotation_engine.js:940 `var _getPeriodCount = window.SchedulerCoreUtils?.getPeriodActivityCount;` then L1075-1081 `maxCount = (_getPeriodCount && maxUsage>0) ? _getPeriodCount(bunkName, activityName, maxPeriod) : ...` and `if (maxCo
+
+#### CB-67 [CONFIRMED / LIVE] rotation_events.js:30  _(rotation)_
+**Scheduler-role rotation-event completions (markCompleted / clearCompletedForDate) are silently dropped at the camp_state role gate — a scheduler's auto-gen marks bunks done locally but the cloud write is discarded while the code reports success**
+
+- Evidence: saveRotationEvents writes the whole array via `window.saveGlobalSettings?.('rotationEvents', events)` (rotation_events.js:30). Rotation events are placed during auto generation (a scheduler CAN run auto): scheduler_core_auto.js:22802 `window.RotationEvents.markCompleted(eid, currentDate, bunks)` → markCompleted (rotation_events.js:564) → saveRotationEvents → saveGlobalSettings('rotationEvents'). That write is queued into integration_hooks _pendin
+- Scenario: A scheduler generates an auto day that schedules a 'Lice Check' rotation event for their bunks. The engine marks those bunks completed and saveRotationEvents runs, but the camp_state cloud write is dropped (scheduler role). The completion stamps live only in that scheduler's browser. The owner (or any other device) loads Daily Adjustments → Schedul
+- Verifier: Every link in the claimed chain is real, with no intervening guard. (1) WRITE PATH IS THE ONLY ONE: repo-wide grep shows `rotationEvents` is referenced in exactly two files — rotation_events.js (writes) and schedule_calendar_views.js (reads). saveRotationEvents (rotation_events.js:27-32) is the sole cloud writer: `g.rotationEvents = events; window.
+
+#### CB-68 [CONFIRMED] rotation_events.js:726  _(rotation)_
+**Stored XSS: Scheduled-Activity name rendered raw in daShowConfirm/daShowAlert (escaper applied inconsistently)**
+
+- Evidence: Three call sites interpolate the fully user-controlled event name UNESCAPED into messages that daShowConfirm/daShowAlert render as raw innerHTML: L726: `await window.daShowConfirm('Delete "' + evt.name + '"? This cannot be undone.', { danger:true, confirmText:'Delete' })` L739: `await confirmFn('Restart "' + evt.name + '"? This will clear all completion records and start from scratch.', ...)` L940: `alertFn('Created "' + result.name + '"<br
+- Scenario: In auto-builder mode the 'Scheduled Activities' subtab is injected into Daily Adjustments (rotation_events.js L1020-1074). A user creates a Scheduled Activity named `<img src=x onerror=alert(document.cookie)>`. Immediately on Create the daShowAlert summary (L940) renders the name raw and the onerror fires. Thereafter, every time anyone with the cam
+- Verifier: Verified the full source-to-sink chain in real code. SOURCE: the Scheduled Activity 'Name' is a free-text input (rotation_events.js L856 create, L964 edit), collected raw via `.value.trim()` with no escaping (daily_adjustments.js L166: `return fieldEl.querySelector('input').value.trim();`) and stored raw (rotation_events.js L911: `name: result.name
+
+#### CB-69 [CONFIRMED / LIVE] division_times_integration.js:273  _(dates)_
+**Debounced _perBunkSlotsData persist writes the OLD date's per-bunk slot geometry under the NEW date's record after a fast date switch (cross-date contamination)**
+
+- Evidence: The auto-persist of per-bunk slot geometry is debounced 250ms and NOT cancelled on date change: ``` let _pbsPersistTimer = null; function _schedulePerBunkSlotsPersist() { if (_pbsPersistTimer) return; // already queued _pbsPersistTimer = setTimeout(function() { _pbsPersistTimer = null; ... const dt = window.divisionTimes || {}; // live geometry = OLD date's ... originalSaveCurrentDailyData.call(wi
+- Scenario: Auto builder, per-bunk slots active. User edits a per-bunk slot (any post-build resize / daily-adjustment that triggers saveCurrentDailyData) on date A, then within ~250ms changes the calendar to date B. The queued timer fires after currentScheduleDate has flipped to B, reads window.divisionTimes (still holding A's per-bunk slot arrays because the
+- Verifier: The mechanism is real and matches the claim. (1) division_times_integration.js L272-290: _pbsPersistTimer is a 250ms setTimeout that reads live window.divisionTimes (L278) and writes spbs via originalSaveCurrentDailyData (L285). Grep over the whole file proves NO clearTimeout, NO _pendingDateTransition guard, and NO _scheduleAssignmentsDate owner-s
+
+#### CB-70 [CONFIRMED / LIVE] schedule_calendar_views.js:116  _(dates)_
+**Calendar month/week/year overview reads schedule-existence + camp/event markers ONLY from stale localStorage campDailyData_v1, never cloud — cloud-only or locally-pruned dates render "No schedule" (and lose trip/event/pin markers) even though a real schedule exists in Supabase**
+
+- Evidence: The entire calendar-views data layer reads only localStorage, with no cloud path. `getAllDailyData()` (L108-114) `var raw = localStorage.getItem('campDailyData_v1'); return raw ? JSON.parse(raw) : {};` and the render-scoped cache `beginRenderCache()` (L92-96) does the same. `getScheduleDataForDate(dateKey)` (L116-119) `var all = getAllDailyData(); return all[dateKey] || null;`. The thorough `hasSchedule(dateKey)` (L305-316) returns false whenever
+- Scenario: A camp that has generated >45 days (or is at localStorage quota) opens the calendar in Month or Year view and pages to an earlier month whose days were pruned from the local mirror but still live in Supabase. Every such day shows "No schedule" / no green check and no trip/event markers. The head counselor, believing those days are blank, clicks Gen
+- Verifier: All three load-bearing assertions hold in the actual code, and no guard prevents the scenario. (1) Calendar data layer is local-only. schedule_calendar_views.js: beginRenderCache (L92-96) and getAllDailyData (L108-114) read ONLY localStorage 'campDailyData_v1'. getScheduleDataForDate (L116-119) = all[dateKey]||null; hasSchedule (L305-316) returns
+
+#### CB-71 [CONFIRMED] calendar.js:466  _(dates)_
+**Scheduler 'Start New Half' silently fails to reset rotation/frequency — omits manualUsageOffsets + historicalCountedDates that the owner branch clears**
+
+- Evidence: In startNewHalf the SCHEDULER branch (calendar.js:466-549) only scrubs per-bunk: RotationCloud.clearForBunks (L523), rotationHistory.bunks (L527-529), historicalCounts (L531-533), smartTileHistory (L535-538). It NEVER touches `manualUsageOffsets` or `historicalCountedDates`. The OWNER branch clears both (L608-610 / L620-622). The same asymmetry exists in eraseRotationHistory: scheduler branch (L361-401) scrubs historicalCounts (L383-385)+smartTil
+- Scenario: Scheduler (assigned 'Seniors') has manualUsageOffsets['Senior A']['Swim']=5 (set via the analytics manual-count editor) and clicks Start New Half (or Reset Rotation History). The UI confirms 'New half started for your divisions!' and reloads. But getActivityCount('Senior A','Swim') still returns 0+5=5, so on the new half Swim is treated as already
+- Verifier: Verified every link of the claim against the actual code. (1) Asymmetry confirmed by full-file grep: in calendar.js, `manualUsageOffsets` and `historicalCountedDates` appear ONLY in the owner branches — startNewHalf owner at L608-610/620-622 and eraseRotationHistory owner at L419-428 (both pass them to clearCloudKeys / saveGlobalSettings). Neither
+
+#### CB-72 [PLAUSIBLE / LIVE] calendar.js:1238  _(dates)_
+**Scheduler 'Erase today' rebuilds GLOBAL historicalCounts + rotationHistory unscoped in the shared tail (non-league analog of the LG-5 fall-through)**
+
+- Evidence: eraseCurrentDailyData's scheduler branch (L1128-1160) does its scoped bunk delete and does NOT return on success (only the cloud-error path returns at 1150). It therefore falls through to the SHARED tail, which runs unconditionally for every role: `window.SchedulerCoreUtils.rebuildHistoricalCounts(true)` (L1238-1239) and a full `_rotHist.bunks = {}` rebuild from `window.loadAllDailyData()` then `window.saveRotationHistory(_rotHist)` (L1244-1266).
+- Scenario: Two schedulers, scoped local caches. Scheduler-A (divisions Seniors) clicks Erase Today for their division. After the scoped delete, the shared tail rebuilds historicalCounts and rotationHistory.bunks from A's local loadAllDailyData(), which contains only A's bunks. The truncated global maps (missing Scheduler-B's Juniors history) are saved to glob
+- Verifier: The structural fall-through and unscoped global rebuild are REAL and confirmed in code. calendar.js eraseCurrentDailyData's scheduler branch (L1128-1160) does its scoped bunk delete and returns ONLY on the cloud-error path (L1150) — on success it falls through to the shared tail that runs unconditionally for every role. The tail invokes window.Sche
+
+#### CB-73 [PLAUSIBLE / LIVE] scheduler_core_utils.js:1463  _(dates)_
+**getSlotTimeRange / findSlotForTime / getSlotAtIndex resolve slot index against the DIVISION-level times table, never the per-bunk geometry — wrong time/activity for auto-mode per-bunk schedules**
+
+- Evidence: getSlotTimeRange (L1463-1485): `const slot = window.divisionTimes[divNameStr]?.[slotIdx]; if (slot) return {startMin: slot.startMin, endMin: slot.endMin}; ... // No fallback - division context is required; return {startMin: null, endMin: null}`. getSlotAtIndex (L1450-1453): `return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;`. findSlotForTime (L1493-1503) and findSlotForTimeRange (L1512) both call `getSlotsForDivision(divisionName)`
+- Scenario: Auto-mode camp where bunk 'Minors 1' has a per-bunk timeline that differs from the division-level divisionTimes['Minors'] table (e.g. the division table is shorter, or a bunk has an extra/shifted slot from a custom pinned layer). A caller asks getAssignmentAtTime('Minors 1', 745min): findSlotForBunkAtTime→findSlotForTime scans divisionTimes['Minors
+- Verifier: The structural core of the claim is REAL and correctly diagnosed. The shared index→time helpers resolve slot index against the division-level `divisionTimes[div]` array: getSlotsForDivision (scheduler_core_utils.js:1441 `return window.divisionTimes?.[divNameStr] || []`), getSlotAtIndex (:1453), getSlotTimeRange (:1474), findSlotForTime (:1494), fin
+
+#### CB-74 [CONFIRMED / LIVE] calendar.js:830  _(dates)_
+**Scheduler scoped-delete (deleteBunksFromAllRecords) swallows mid-loop per-record cloud write errors and is non-atomic — partial cloud delete with success:true, or a throw after some records already deleted leaves cloud/local diverged with no surfaced error**
+
+- Evidence: Per-record loop L830-849: each record is committed individually — `const {error} = await client.from('daily_schedules').delete().eq('id', record.id); if (!error) recordsDeleted++;` (L841-842) and `const {error} = await client.from('daily_schedules').update({...}).eq('id', record.id); if (!error) recordsModified++;` (L844-847). A failed individual write is only counted-or-not; it is NOT collected, NOT re-thrown, and does NOT change the final `retu
+- Scenario: Scheduler owns 6 divisions whose bunks are spread across 3 cloud daily_schedules rows for 06-15. They click 'Delete schedule for your divisions'. The loop deletes row 1 (their bunk removed) then the row-2 update hits a transient network error: with inline `if(!error)` the error is silently dropped and the loop continues, success:true is returned, l
+- Verifier: The claim has two mechanisms, both verified in actual source and NOT covered by existing findings. MECHANISM 1 (error swallow → success:true): In deleteBunksFromAllRecords (calendar.js), the per-record loop commits each row individually and only counts the error, never collecting/rethrowing it: L841-842 `const { error } = await client.from('daily_
+
+#### CB-75 [CONFIRMED] dashboard.js:352  _(dates)_
+**Stored XSS: camp name + subdivision/division names rendered raw via innerHTML (no escaper in the whole file)**
+
+- Evidence: dashboard.js has NO escapeHtml helper anywhere (grep for escapeHtml in the file = 0 hits) yet interpolates owner-controlled names straight into innerHTML. updateWelcomeMessage L352: `welcomeTitle.innerHTML = \`Welcome back, <span>${displayName}</span>!\`;` where `displayName = campName || userName || ...` and campName is loaded from the camp owner's `camps.name` (L200-210 for team members, L270 for owner). Subdivision badge L450-452: `badgeElemen
+- Scenario: Camp owner (or any account that can write `camps.name` / a `subdivisions.name`) sets the camp name to `<img src=x onerror=alert(document.cookie)>`. Every team member (admin / scheduler / viewer) who opens the dashboard has campName loaded from the owner's camps.name (L210) and rendered via welcomeTitle.innerHTML (L352) → the payload executes in eac
+- Verifier: All four sinks and the full stored-XSS loop are confirmed in the actual code. dashboard.js has NO escaper (grep for escapeHtml|escHtml|_escHtml|esc = 0 matches), and dashboard.html loads it (L322), so the sinks are live. VECTOR 1 (camp name — conclusive cross-user stored XSS): - Write (raw, owner-controlled): saveCampProfile reads a free-form text
+
+#### CB-76 [CONFIRMED] period_editor.js:313  _(dates)_
+**Stored XSS: grade names interpolated raw into innerHTML in two headers (sidebar/rows correctly use textContent — escaping applied inconsistently)**
+
+- Evidence: period_editor.js has no escaper. renderGradeDetail L312-313: `hdr.innerHTML = \`<h3 ...>Grade ${activeGrade} — Bell Schedule</h3>...\`;` where activeGrade flows from `grades` = Object.keys(window.divisions) (L249-274). showCopyModal L151-156: `header.innerHTML = \`<h3...>Copy Bell Schedule</h3><p...>Copy <strong>${sourcePeriods.length}</strong>... from <strong>Grade ${sourceGrade}</strong> to:</p>\`;` — sourceGrade is also a grade name, raw. The
+- Scenario: A grade is named `<img src=x onerror=...>` in Camp Structure (grade names are free-text). Opening the Bell Schedule (period) editor and selecting that grade renders renderGradeDetail → L313 injects the grade name raw into the H3 → script executes. Clicking 'Copy to Grades…' from any grade renders the modal header (L155) with sourceGrade raw → secon
+- Verifier: All elements of the claim verified against the real code in C:\Users\yisro\daily-camp-schedular\period_editor.js. (1) NO ESCAPER: Grep for escapeHtml|escHtml|_escHtml|function esc\(|CampUtils in period_editor.js returns zero matches. The file has only minsToTimeStr/parseTimePicker/toTimeInput/uid helpers (L10-45). It never escapes HTML. (2) TWO R
+
+#### CB-77 [CONFIRMED / LIVE] analytics.js:177  _(display)_
+**Field Availability Gantt (buildUsageData) trusts dateKey===liveDate + non-empty memory WITHOUT the _scheduleAssignmentsDate coherence guard the rotation table in the SAME file requires — can show a prior date's field usage on the selected date**
+
+- Evidence: buildUsageData (analytics.js:171-186): ```js const liveDate = window.currentScheduleDate; let assignments; if (dateKey && dateKey === liveDate && window.scheduleAssignments && Object.keys(window.scheduleAssignments).length) { assignments = window.scheduleAssignments; // ← no stamp check } else if (dateKey && allDaily[dateKey]?.scheduleAssignments) { assignments = allDaily[dateKey].scheduleAssignments; } ``` The rotation-table
+- Scenario: User generates a schedule for 06-22 (memory now holds 06-22, _scheduleAssignmentsDate=06-22). They navigate to 06-23 via a path where the load returns a transient error (result.success false) — the orchestrator's clear-on-empty branch (integration_hooks.js:2214-2228) only fires on result.success===true, so window.scheduleAssignments keeps 06-22's d
+- Verifier: The asymmetry is real and decisive. buildUsageData (analytics.js:171-186) selects in-memory window.scheduleAssignments purely on `dateKey === liveDate && Object.keys(window.scheduleAssignments).length` with NO _scheduleAssignmentsDate stamp check. The rotation-table path in the SAME file (line 1383) was explicitly hardened against exactly this with
+
+#### CB-78 [CONFIRMED / LIVE] print_center.js:388  _(display)_
+**Print Center Week-at-a-Glance caches the anchor (current) day's in-memory schedule snapshot at view-open and never refreshes it for the live date — after an in-session regen/edit the week grid shows the stale snapshot the entire session**
+
+- Evidence: ensureWeekDataLoaded captures the CURRENT date's column as a point-in-time snapshot of window.scheduleAssignments (print_center.js:404-405): `if (k === anchor) { _weekData[k] = { scheduleAssignments: window.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || {} }; ... }`. The reload is short-circuited by a cache guard (line 388): `if (!force && _weekAnchor === weekId && Object.keys(_weekData).length === 7) return;`. renderWe
+- Scenario: User opens Print Center, switches to the 'Week' tab on 06-22 (ensureWeekDataLoaded snapshots 06-22's current in-memory schedule into _weekData['06-22']). Without leaving the page they edit a slot (daily adjustment) or regenerate 06-22; window.scheduleAssignments updates, every other view (Divisions/Bunks/Facilities, the grid, the calendar) reflects
+- Verifier: The mechanism is real and every link in the chain is present in code. (1) ensureWeekDataLoaded snapshots the anchor day at print_center.js:405 `_weekData[k] = { scheduleAssignments: window.scheduleAssignments || {}, leagueAssignments: window.leagueAssignments || {} }`. (2) The cache guard at L388 `if (!force && _weekAnchor === weekId && Object.keys
+
+#### CB-79 [CONFIRMED] analytics.js:1594  _(display)_
+**Report-tab rotation-offset editor writes generation-affecting manualUsageOffsets with NO role gate (whole-map clobber + scheduler silent no-op)**
+
+- Evidence: renderRotationTable renders an editable number input per bunk/activity (L1578-1581: `<input type="number" class="rotation-adj-input" ...>`), then wires it unconditionally for EVERY role: ``` cont.querySelectorAll('.rotation-adj-input').forEach(inp => { inp.onchange = (e) => { const b = e.target.dataset.bunk, a = e.target.dataset.act; const val = parseInt(e.target.value) || 0; const gs = window.loadGlobalSettings?.() || {}; if (!
+- Scenario: Owner on device A sets a rotation offset for Bunk1/Soccer (+3) → saved. Admin on device B had the Report tab open (stale loadGlobalSettings missing the +3), types an offset for Bunk2/Gaga and blurs → saveGlobalSettings writes B's whole manualUsageOffsets map (no Bunk1/+3) → cloud row replaced → Bunk1/Soccer offset silently lost, and the next genera
+- Verifier: All four legs of the claim hold against the actual code. (1) NO ROLE GATE + reachable by all roles. analytics.js has zero role/permission checks (grep for role|canEdit|isOwner|checkEditAccess|readonly|disabled|getRole in analytics.js → "No matches found"). The number input is rendered per bunk/activity (analytics.js:1578-1580 `<input type="number"
+
+#### CB-80 [CONFIRMED / LIVE] print_center.js:583  _(display)_
+**pcFindFieldSharers resolves the slot time-window from division-level divisionTimes[div] but auto-mode callers pass a PER-BUNK slot index → wrong/missing "vs Bunk" sharer annotations on auto printouts**
+
+- Evidence: L560 `function pcFindFieldSharers(bunk, slotIdx, divName){` then L561 `var myEntry = ...scheduleAssignments[bunk][slotIdx];` (per-bunk-indexed array, correct) but L583 `var mySlot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];` then L585 `var myStart = mySlot.startMin, myEnd = mySlot.endMin;`. `divisionTimes[divName]` is the DIVISION-level slot array, NOT `divisionTimes[divName]._perBunkSlots[bu
+- Scenario: Auto schedule where a bunk has a 10-min Change slot before swim that shifts its per-bunk slot boundaries away from the division-level grid (the exact divergence documented at auto_schedule_grid.js L330-336 and auto_validator.js L5-6). Bunk Minors-1 plays Basketball on Court A at per-bunk index 3 (actual 11:30-12:15). pcFindFieldSharers reads myEntr
+- Verifier: The bug is real and matches the code. `pcFindFieldSharers` (print_center.js:560) reads the ENTRY by per-bunk index — `myEntry = scheduleAssignments[bunk][slotIdx]` (L561) — but reads the TIME WINDOW from the DIVISION-level array with that SAME index — `mySlot = window.divisionTimes[divName][slotIdx]` (L583), `myStart=mySlot.startMin, myEnd=mySlot.e
+
+#### CB-81 [CONFIRMED / LIVE] print_center.js:3044  _(display)_
+**Cell hover tooltip (_pcBuildCellTipHtml) reads the slot time from division-level divisionTimes[div] using the per-bunk data-slot index → wrong "When" time shown in auto mode**
+
+- Evidence: L3042 `function _pcBuildCellTipHtml(bunk, slotIdx, divName){` L3043 `var entry = ...scheduleAssignments[bunk][slotIdx];` (per-bunk, correct) but L3044 `var slot = window.divisionTimes && window.divisionTimes[divName] && window.divisionTimes[divName][slotIdx];` and L3055-3056 render `When` from `slot.startMin`/`slot.endMin`. The `slotIdx` arrives from the cell's data-slot attribute which in auto mode is set to the PER-BUNK index: L2169 `... data-s
+- Scenario: Auto mode, inspect/hover a cell whose bunk has staggered geometry. The activity name (from entry) is right, but the tooltip 'When 12:15 – 13:00 (45 min)' is read from divisionTimes['Minors'][slotIdx] which is the wrong row for that per-bunk index, so the tooltip displays a time window that does not match the cell the user is hovering, and the 'With
+- Verifier: The per-bunk index → division-level-array mismatch is real and the claim correctly traces it. DATA STRUCTURE: In auto/per-bunk mode (division_times_system.js, hasBunkSpecificBlocks branch L266-339), window.divisionTimes[divName] is built with TWO decoupled index spaces: (a) numeric elements pushed at L285 from `sortedPoints` = the UNION of every bo
+
+#### CB-82 [CONFIRMED / LIVE] campistry_me.js:1436  _(config)_
+**Division/grade rename never migrates the cloud schedule_data `_perBunkSlotsData` key — per-bunk slot geometry is orphaned for the renamed unit on every saved date**
+
+- Evidence: _propagateDivisionRename renames only two division-keyed cloud sub-structures: `['divisionTimes','unifiedTimes'].forEach(function(k){ if(sd[k] && ... oldName in sd[k]){ sd[k][newName]=sd[k][oldName]; delete sd[k][oldName]; modified=true } });` (campistry_me.js:1436-1443). But cloud `schedule_data` ALSO carries a top-level, division/grade-keyed `_perBunkSlotsData` (supabase_schedules.js:736 `_perBunkSlotsData: ...`, written at 992, and consumed on
+- Scenario: Auto-mode camp has generated schedules for several dates. Owner renames grade 'Minors' to 'Minors A' in the division-edit modal. _propagateDivisionRename rewrites divisionTimes['Minors']->['Minors A'] in every cloud row but leaves _perBunkSlotsData['Minors'] untouched. On next load of any of those dates, MS-4c (supabase_schedules.js:583-588) looks
+- Verifier: The claim is accurate and identifies a real, uncovered gap. CHAIN VERIFIED END-TO-END: (1) WRITE: cloud schedule_data carries a top-level grade/division-keyed `_perBunkSlotsData` (supabase_schedules.js:987-992 keys it by `g` from window.divisionTimes; written into payload at L992). Also produced by mergeSchedules (L736), schedule_orchestrator (L85
+
+#### CB-83 [CONFIRMED] special_activities.js:119  _(config)_
+**Renaming a grade silently WIPES that grade from every special activity's per-grade config (sharing divisions, access restrictions, rotation cohort, per-grade frequency/usage maps) — the Me-page rename cascade never touches specialActivities**
+
+- Evidence: validateSpecialActivity rebuilds each special and filters all per-grade lists against the CURRENT grade set (window.divisions, line 108): `sharableWith.divisions = sharableWith.divisions.filter(d => ... validDivisions.has(d))` (119); access `Object.keys(accessRestrictions.divisions).forEach(divKey => { if (!validDivisions.has(divKey)) delete accessRestrictions.divisions[divKey] })` (146) + priorityList filter (149); `rotationCohort.grades ... raw
+- Scenario: A special 'Canteen' is configured cross_division-shared with grades ['Minors','Majors'] and has access restricted to those grades, plus a rotationCohort {grades:['Minors','Majors']}. Owner renames grade 'Minors' to 'Minors A' in Camp Structure. Nothing migrates the special. User opens the Special Activities tab (or generation runs) -> loadData -> v
+- Verifier: The claim holds against the actual code on every load-bearing point. (1) The ONLY grade-rename handler in the whole repo is the saveDiv cascade in campistry_me.js (grep for grade-rename across all *.js returns hits only there). When editingDiv detects a grade rename (gradeRenameMap, campistry_me.js:1235-1245) it propagates to exactly three targets
+
+#### CB-84 [CONFIRMED] zones.js:818  _(config)_
+**Zone "max concurrent" cap is saved + displayed but NEVER enforced — checkZoneCapacity/getZoneMaxConcurrent have zero solver call sites (silent no-op config)**
+
+- Evidence: zones.js:810 `window.getZoneMaxConcurrent = function(zoneName){...return parseInt(zone?.maxConcurrent)||99;}` and zones.js:818 `window.checkZoneCapacity = function(zoneName, slotIndex, currentCount){ const maxConcurrent = window.getZoneMaxConcurrent(zoneName); return (currentCount||0) < maxConcurrent; }`. The zone editor writes this via zones.js:583 `zone.maxConcurrent = Math.max(1,Math.min(99,parseInt(input.value)||99))` and saveData()→saveGloba
+- Scenario: Owner configures an off-campus zone 'Pool Complex' with 'max 2 at a time' (zones.js:575 number input, persisted as zone.maxConcurrent=2) to cap how many bunks can be at that zone simultaneously. Generate any day: the solver places as many bunks into fields in that zone as fit by field capacity/sharing rules, completely ignoring the zone-level cap o
+- Verifier: The claim is accurate. zones.js:575-587 shows the zone editor has a live number input ("Maximum number of activities that can run simultaneously in this zone") whose onchange writes zone.maxConcurrent and persists via saveData()→saveGlobalSettings('locationZones'), with the value surfaced in the UI as "N at a time" (lines 422, 586) — so this is a r
+
+#### CB-85 [CONFIRMED] campistry_me.js:1242  _(config)_
+**Grade rename does not propagate to facility/special access-restriction, sharing-division, priority-list, or rotation-cohort config — the special validator then silently prunes the now-orphaned grade name (FN-1 sibling, uncovered store)**
+
+- Evidence: saveDiv() handles a grade rename via campistry_me.js:1242 `_propagateDivisionRename(oldG,newG)` + 1243 `_propagateGradeRenameTiles(oldG,newG)` + 1244 camper.grade rewrite. `_propagateDivisionRename` (campistry_me.js:1378) renames ONLY scheduling keys (window.divisionTimes/unifiedTimes/divisions/availableDivisions at 1386-1388), slot `_division` fields (1394-1401), and cloud daily_schedules sub-structures (1436-1447 only `divisionTimes`/`unifiedTi
+- Scenario: A special activity 'Ropes Course' is access-restricted to ONLY grade 'Minors' (accessRestrictions.divisions={'Minors':[]}, enabled:true). Owner opens the Me page and renames grade 'Minors' to 'Minors A'. Grade rename propagates to schedule/skeleton/layer/campers, but the special's accessRestrictions still says 'Minors'. Next time special_activities
+- Verifier: The grade-rename path in campistry_me.js saveDiv() propagates ONLY to scheduling keys/slots/cloud (_propagateDivisionRename, ~L1242), manual-skeleton tiles + dailyAutoLayers + gradeLayerRules (_propagateGradeRenameTiles, ~L1243), and camper.grade (~L1244). A repo-wide grep proves campistry_me.js never references accessRestrictions / sharableWith /
+
+#### CB-86 [CONFIRMED] master_schedule_builder.js:3929  _(config)_
+**Manual skeleton tile renderer (renderEventTile) interpolates ~8 user-controlled names raw into innerHTML — broad stored XSS**
+
+- Evidence: renderEventTile (L3912) builds an HTML string that is assigned to grid.innerHTML at L3833 (`html += renderEventTile(...)` L3824 → `grid.innerHTML = html` L3833). NONE of the user-controlled names are escaped: L3929 `<strong>${ev.event}</strong>` (custom event name, set via the 'Event Name' field L1084), L3935 `📍 ${ev.location}`, L3937 `📍 ${ev.reservedFields.join(', ')}` (field names), L3942 `${ev.leagueName}`, L3955 `🎯 ${actList}` (ev.elective
+- Scenario: An admin/scheduler creates a custom skeleton tile and types the Event Name `<img src=x onerror=alert(document.cookie)>` (or names a field/league/elective/swim location that), saves the skeleton. Every time the manual skeleton grid renders (open the builder for that division/date), renderEventTile injects the payload into grid.innerHTML and it execu
+- Verifier: The claim is accurate in every link of the chain, verified by reading the actual code. (1) Input is user-controlled and stored RAW. The "Event Name" modal field (master_schedule_builder.js:1084 `{ name: 'eventName', label: 'Event Name', type: 'text', default: ev.event }`) is written back unescaped at L1114 `ev.event = result.eventName.trim();`. Ot
+
+#### CB-87 [CONFIRMED] master_schedule_builder.js:2031  _(config)_
+**Auto layer-editor grid (renderDAWGrid) band-label + data-grade attr interpolate custom-activity/league/grade names raw into innerHTML**
+
+- Evidence: In renderDAWGrid the band HTML is built into `html` and assigned `gridEl.innerHTML = html` (L2044). L2031 `<span class="band-label">${layer.customActivity || layer.leagueName || typeDef?.name || layer.type}</span>` interpolates the user-typed custom-layer activity name and league name RAW (body context). L2027 `data-grade="${gradeKey}"` interpolates the grade name RAW into a double-quoted attribute (breakout via `"`). The custom-tile drag-ghost a
+- Scenario: A custom auto layer named `<img src=x onerror=alert(1)>`, a league named that, or a grade named `x" onmouseover="alert(1)` (data-grade breakout) executes every time the Auto layer editor grid renders for that grade.
+- Verifier: All four sinks named in the claim are real and unescaped in renderDAWGrid (function starts L1791; the html string is assigned raw via gridEl.innerHTML=html at L2044, with no DOMPurify/sanitize anywhere in the file). (1) Band-label body XSS — L2031 interpolates `layer.customActivity || layer.leagueName || typeDef?.name || layer.type` raw into inner
+
+#### CB-88 [CONFIRMED] facilities.js:2332  _(config)_
+**Combined-field relationship box interpolates field names raw into innerHTML — inconsistent with textContent used 25 lines below for the same names**
+
+- Evidence: L2332-2333: `box.innerHTML = \`<div ...>${currentCombo.subFields.join(' + ')} = ${currentCombo.combinedField}</div><div ...>${isCombined ? '...' : 'This field is part of "' + currentCombo.combinedField + '"'}</div>\`` — subFields and combinedField are user-entered field names (set at L2391 `fieldCombos[id] = { combinedField: thisName, subFields: subs }`, where thisName/subs come from facility names) interpolated RAW. The SAME field names are re
+- Scenario: A facility/field named `<img src=x onerror=alert(1)>` that is part of a combined-field relationship executes when the user opens that field's 'Combined Field' configuration section.
+- Verifier: The claim is accurate. In facilities.js, renderComboSettings → renderContent() builds the combined-field relationship box via raw innerHTML at L2332-2333, interpolating currentCombo.subFields.join(' + ') and currentCombo.combinedField with no escaping. These values are user-controlled field names: combos are created at L2391 `fieldCombos[id] = { id
+
+#### CB-89 [CONFIRMED] team_subdivisions_ui.js:165  _(config)_
+**Subdivision/team UI (renderSubdivisionItem) interpolates user-typed subdivision and division names raw into innerHTML**
+
+- Evidence: renderSubdivisionItem (L159) returns HTML with `<div class="subdivision-name">${sub.name}</div>` (L165) and is assembled into `container.innerHTML` via renderSubdivisionsCard (L136 `_subdivisions.map(sub => renderSubdivisionItem(...)).join('')` → container.innerHTML at L111/298). `sub.name` is the user-typed subdivision name (modal input at L205 `value="${existingSubdivision.name}"`). Same gap at L429 and L520 (`<span>${sub.name}</span>`), L86 in
+- Scenario: An owner/admin creates a subdivision named `<img src=x onerror=alert(document.cookie)>` (Team Subdivisions card). Every render of the subdivisions card (dashboard) executes the payload; the div-pill path also fires if a division is named that.
+- Verifier: team_subdivisions_ui.js has NO escaper (grep for escapeHtml/escHtml/_escHtml/CampUtils/escape( returns zero matches in the file) and interpolates user-typed names raw into innerHTML. Full exploit chain verified: (1) renderSubdivisionItem L165 emits `<div class="subdivision-name">${sub.name}</div>`, assembled at L136 `_subdivisions.map(sub => render
+
+#### CB-90 [CONFIRMED] rotation_events.js:499  _(rotation)_
+**Rotation-event completedBunks is never cleared when a date's schedule is deleted or a New Half starts — affected bunks are permanently skipped**
+
+- Evidence: clearCompletedForDate (rotation_events.js:499) is the ONLY function that prunes evt.completedBunks, and the auto generator calls it for the CURRENT date only at STEP 0 (scheduler_core_auto.js:731). A grep for `completedBunks`/`clearCompletedForDate`/`RotationEvents` shows ZERO references in the schedule-delete/erase paths: calendar.js (window.eraseRotationHistory, window.startNewHalf owner+scheduler, the documented 'Erase ALL schedules' at ~1430)
+- Scenario: Owner sets up a 'Lice Check' rotation event (date range 06-10..06-14), auto-generates 06-10 → 06-12, marking ~25/35 bunks done. Owner then clicks 'Start New Half' (or 'Erase ALL schedules'), which deletes every schedule and resets all counters — but completedBunks for Lice Check is untouched. Owner regenerates the new half: the 25 already-marked bu
+- Verifier: The claim holds on every link of the chain, verified in the actual code. WRITE/ACCUMULATE: scheduler_core_auto.js:22781-22802 (`_markCompletionsFromFinalGrid`) calls `window.RotationEvents.markCompleted(eid, currentDate, bunks)` for every placed event at the end of each auto gen. markCompleted (rotation_events.js:474-486) pushes bunks into `evt.co
+
+#### CB-91 [CONFIRMED] coverage_warning.js:250  _(display)_
+**Red 'unfilled Free slots' banner never auto-clears on a clean auto-regeneration (producer early-returns before dispatching the empty clearing event)**
+
+- Evidence: coverage_warning.js's header comment promises the Free banner 'Clears automatically on a clean (zero-Free) generation.' and its handler relies on an empty dispatch to clear: onImpossibilities (L250-255) sets `_frees = d.items.slice()` and renderFree (L218-220) removes the widget when `!_frees.length`. The ONLY clear paths are (a) an empty `campistry-schedule-impossibilities` dispatch or (b) the user clicking ×. There is NO generation-start or dat
+- Scenario: Auto mode. User generates 06-15 and it leaves 4 Free slots → the big red top-center banner '⛔ 4 unfilled (Free) slots in this schedule' appears. User widens field capacity / fixes layers and regenerates 06-15 → this time 0 Free. The clean gen hits the L25307 early-return and dispatches nothing, so onImpossibilities is never called and the red banne
+- Verifier: The mechanism is exactly as claimed, confirmed by reading the actual code. In coverage_warning.js the Free banner's state array `_frees` is mutated in only three places: L252 `onImpossibilities` sets `_frees = d.items.slice()` (the sole event-driven path), L246 `.fw-close` click sets `_frees = []` (user clicks x), and L182 initial `[]`. A grep of e
+
+#### CB-92 [CONFIRMED / LIVE] campistry_me.js:1378  _(config)_
+**Division/grade rename never migrates the RBAC scheduler-scoping store (subdivisions.divisions[] + camp_users.assigned_divisions[]) — schedulers silently lose access to the renamed unit**
+
+- Evidence: saveDiv calls `_propagateDivisionRename(editingDiv, name)` (L1228) for divisions and `_propagateDivisionRename(oldG,newG)` (L1242) for grades. _propagateDivisionRename (L1378-1490) renames only in-memory divisionTimes/unifiedTimes/divisions/availableDivisions + slot._division, and cloud `daily_schedules` rows: `client.from('daily_schedules').select('id,schedule_data')` (L1428) — it issues NO query against the `subdivisions` table or `camp_users`.
+- Scenario: Owner creates subdivision 'North' = ['Neranina'] and assigns scheduler Sam to it. Owner later renames division 'Neranina' → 'Neranim' in the Me-page Camp Structure modal. _propagateDivisionRename rewrites schedules + window.divisions, but `subdivisions.divisions` still holds 'Neranina'. On Sam's next login getGeneratableDivisions/_editableDivisions
+- Verifier: The claim is correct: division/grade rename never migrates the RBAC scoping stores, and schedulers scoped to the renamed unit by name lose access. (1) `_propagateDivisionRename` (campistry_me.js L1378-1490) touches only in-memory `window.divisionTimes/unifiedTimes/divisions/availableDivisions` + slot `_division`, and cloud `daily_schedules` rows:
+
+#### CB-93 [CONFIRMED] master_schedule_builder.js:1438  _(config)_
+**Grade rename/delete never migrates the authoritative auto-layer editor store app1.autoLayerTemplates — renamed grade opens with an EMPTY layer editor and its configured layers are orphaned (delete leaves them forever)**
+
+- Evidence: The auto-layer editor content is grade-keyed: `let dawLayers = {}; // { gradeKey: [...] }` (L1381), pushed per grade at `dawLayers[grade].push(...)` (L3293). It persists into `g.app1.autoLayerTemplates[templateKey] = JSON.parse(JSON.stringify(dawLayers))` (saveDAWLayers L1438), and loadDAWLayers reads EXCLUSIVELY from there: `const autoTemplates = g.app1?.autoLayerTemplates || {}` ... `dawLayers = JSON.parse(JSON.stringify(autoTemplates[tmpl]))`
+- Scenario: Auto camp: owner builds layers for grade 'Majors' in the layer editor (saved into autoLayerTemplates['_current'] and/or a named template under key 'Majors'). Owner renames 'Majors' → 'Seniors' in the Me-page. dailyAutoLayers/gradeLayerRules are renamed, but autoLayerTemplates still keys the layers under 'Majors'. Next time the editor opens for 'Sen
+- Verifier: The claim is correct in every link, grounded in code. (1) The auto-layer editor store `dawLayers` is GRADE-keyed: seeded from non-parent divisions (grades) — master_schedule_builder.js L1421-1427 `Object.keys(divisions).forEach(d => { if (div.isParent) return; dawLayers[d] = []; })` — and written per grade at L3252/L3293 `dawLayers[grade].push(...
+
+#### CB-94 [CONFIRMED] campistry_me.js:1497  _(config)_
+**Bunk RENAME is treated as delete+create: there is no data-orig tracking on bunk chips, so _purgeOrphanedBunks destroys the old bunk's cloud schedule rows while the new name starts empty**
+
+- Evidence: Grade rows carry `data-orig` so saveDiv can detect a rename (L1120, L1236-1239), but bunk chips do NOT: `_renderBunkChipsHTML` emits `<span class="me-bunk-chip"><span class="me-bunk-name">'+esc(b)+'</span>...` with no data-orig (L1108-1110), and saveDiv harvests bunks purely by current text — `row.querySelectorAll('.me-bunk-chip .me-bunk-name'), s => s.textContent.trim()` (L1217). So an in-place rename of a bunk yields oldBunks=[...'Bunk A'], new
+- Scenario: Owner has a generated week for 'Bunk A'. They open the division Edit modal, fix a typo in the bunk's name to 'Bunk B' (the only editing affordance is to remove the chip and re-type, or the chip text is replaced), and Save. saveDiv sees 'Bunk A' missing from the new set and purges it: every saved daily_schedules row's 'Bunk A' entry is deleted from
+- Verifier: Both factual claims hold against the code, and the one refutation path (an in-place rename affordance that data-orig could anchor) does not exist for bunk chips. (1) Bunk chips carry NO data-orig. Grep confirms data-orig appears ONLY at campistry_me.js:1120 on the grade-name input (.dmGradeN). _renderBunkChipsHTML (L1109) and the dynamic addBunk (
+
+
+### LOW
+
+#### CB-95 [CONFIRMED / LIVE] scheduler_core_auto.js:20954  _(rotation)_
+**Phase 4.9 special-recapture reads per-bunk slot geometry from the clobbered window.divisionTimes table instead of the durable window._perBunkSlots — prep-room placement silently disabled on 2nd+ in-session gen**
+
+- Evidence: L20954: `const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];` then `_p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };` (L20956) feeds `_p49HasPrepRoomBefore` (L20957-20962) which gates prep-special recapture slot choice (L21037-21040). Every OTHER per-bunk-geometry read in this file uses the durable fallback with an explicit F
+- Scenario: User generates day A (1st gen of the session — divisionTimes[grade]._perBunkSlots still intact, works). Without reloading, user generates day B (2nd in-session gen): the patched loadCurrentDailyData has reassigned window.divisionTimes so divisionTimes[grade]._perBunkSlots is undefined → _p49pbs=[] → _p49GridDur returns 0 for every index → _p49HasPr
+- Verifier: The claim is factually exact. At scheduler_core_auto.js:20954 the Phase 4.9 prep-room geometry read is `const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];` — the ONLY per-bunk geometry read in this file that omits the durable `window._perBunkSlots` fallback. Every sibling read uses the FN-14 pattern `window.
+
+#### CB-96 [CONFIRMED] scheduler_core_utils.js:2759  _(rotation)_
+**Dead-but-wired rotation counters incrementHistoricalCounts / reIncrementHistoricalCounts (no live caller; divergent count rule vs the live authority)**
+
+- Evidence: `Utils.incrementHistoricalCounts` (L2759) and `Utils.reIncrementHistoricalCounts` (L2810) are exported as both `window.incrementHistoricalCounts`/`window.reIncrementHistoricalCounts` (L2878-2879) and `Utils.*`, so they look load-bearing. A repo-wide grep for non-test, non-comment callers returns NOTHING — every live generation/edit path instead calls `rebuildHistoricalCounts` (the full re-scan): scheduler_core_auto.js L25180-25181, scheduler_core
+- Scenario: No live impact today (functions are unreachable in production). The risk is latent: if any future code re-wires window.incrementHistoricalCounts / reIncrementHistoricalCounts back into a generation or post-edit path (their names strongly imply they are the incremental updaters), league-game sports would be added to historicalCounts via the sport fa
+- Verifier: Both halves of the claim hold against the real code. (1) NO LIVE CALLER. A repo-wide grep for incrementHistoricalCounts/reIncrementHistoricalCounts returns only: (a) the definitions + window exports inside scheduler_core_utils.js (L2759, L2810, L2853 internal tail-call, L2878-2879 exports), and (b) tests/post_edit_autogen.test.js. Critically, the
+
+#### CB-97 [CONFIRMED] dashboard.js:1130  _(dates)_
+**buildWeekMap derives week start/end via toISOString() on a local-midnight Date, shifting every week boundary one day earlier in all positive-UTC-offset timezones (camp-dates half/transition preview)**
+
+- Evidence: ``` var start = new Date(startDate + 'T00:00:00'); // L1116 — LOCAL midnight ... weeks.push({ week: weekNum, start: weekStart.toISOString().slice(0, 10), // L1130 — UTC conversion end: weekEnd.toISOString().slice(0, 10) // L1131 }); ``` Verified: with TZ=Asia/Kolkata (UTC+5:30), `new Date('2026-05-25T00:00:00').toISOString().slice(0,10)` === '2026-05-24'. Every w.start/w.end in the preview is shifted back one day. These va
+- Scenario: An owner in any timezone east of UTC (Europe/Asia/Australia/etc.) opens dashboard camp-dates and sets start 2026-05-25, half1End/half2Start. The 'Week breakdown' preview shows each week as 5/24–5/30 instead of 5/25–5/31 and may tag the transition/half boundary on the adjacent week, misleading their setup. NOT data loss: the persisted campDates (sav
+- Verifier: buildWeekMap in dashboard.js parses camp start as local midnight at L1116 but emits week boundaries via toISOString().slice(0,10) at L1130-1131. In positive UTC-offset timezones a local-midnight Date rolls back one day under toISOString. Reproduced with TZ=Asia/Kolkata (set via process.env.TZ before any Date construction; the Bash shell ignored a b
+
+#### CB-98 [CONFIRMED] dashboard.js:1184  _(dates)_
+**Camp-dates write functions have no role guard — only the UI is read-only for admin/scheduler**
+
+- Evidence: loadCampDates(true) only disables the inputs and hides #campDatesActions for admin/scheduler (dashboard.js:1102-1108), but the global writers window.saveCampDates (L1184-1214) and window.clearCampDates (L1216-1235) contain NO role/permission check — they upsert camp_state_kv key 'campDates' and call saveGlobalSettings('campDates', ...) for anyone who invokes them. Contrast saveProfile (camp name), which DOES gate the write: `if (isTeamMember) { .
+- Scenario: An admin (granted dashboard read-only camp dates by design) opens the console and calls saveCampDates() or clearCampDates() — or a stale UI where the disable didn't apply — and overwrites/clears the owner's half1End/half2Start. The change propagates to cloud (camp_state_kv) and to globalSettings, silently shifting every Per-Half rotation boundary a
+- Verifier: Every claim fact checks out against the code. (1) NO WRITE GUARD: window.saveCampDates (dashboard.js:1184) and window.clearCampDates (dashboard.js:1216) contain no role/permission check — both unconditionally upsert camp_state_kv key 'campDates' (L1200-1203 / L1225-1228) and call saveGlobalSettings('campDates', ...) (L1207 / L1229). (2) ENFORCEMENT
+
+#### CB-99 [PLAUSIBLE] division_times_integration.js:234  _(dates)_
+**migrateAssignmentsByTime drops multi-period continuation slots when remapping assignments by time — would leave spanned activities truncated to their first slot (currently unwired)**
+
+- Evidence: L234-235: `oldAssignments.forEach((assignment, oldIdx) => { if (!assignment || assignment.continuation) return; ...` then it matches the head slot's time to a new slot and writes only that one entry (L247-253: `if (newSlot.startMin === startMin) { window.scheduleAssignments[bunk][newIdx] = assignment; break; }`). Because continuation entries are skipped entirely, a 2-slot special that occupied old slots [3,4] (4 = `continuation:true`) migrates on
+- Scenario: If wired: a manual skeleton edit changes period boundaries, triggering a by-time migration. A bunk had Swim spanning slots 3-4 (slot 4 continuation). After migration only slot 3 (Swim head) is carried to the new index; the new slot 4 is null → the grid shows Swim for half its real duration and the pool field reads as free for the second half, allow
+- Verifier: The code matches the claim exactly. In migrateAssignmentsByTime (division_times_integration.js:229), L234-235 skip every continuation entry (`if (!assignment || assignment.continuation) return;`), and L247-253 write only the single head entry into the new array (`window.scheduleAssignments[bunk][newIdx] = assignment; break;`). There is NO second wr
+
+#### CB-100 [CONFIRMED] print_center.js:937  _(display)_
+**deleteTemplate lacks the canEditTemplates() gate its sibling mutators have, and returns true even when the persist silently no-ops for non-owner/admin**
+
+- Evidence: `function deleteTemplate(tid) { _savedTemplates = _savedTemplates.filter(function (t) { return t.id !== tid; }); saveTemplates(); return true; }` (L937). The three sibling mutators all gate first: saveTemplates (L911 `if (!canEditTemplates()) return false;`), saveCurrentAsTemplate (L921 same), updateTemplate (L929 same). deleteTemplate has no guard — it mutates the in-memory _savedTemplates, then calls saveTemplates() which DOES no-op the persist
+- Scenario: A scheduler opens Print Center, deletes a saved print template → it disappears from the dropdown and the call returns true → they assume it's gone. saveTemplates() silently skipped the cloud/local write (role gate), so on the next page load loadTemplates() re-reads the still-present printTemplates and the 'deleted' template is back.
+- Verifier: The code matches the claim exactly. At print_center.js:937 `deleteTemplate(tid)` mutates `_savedTemplates = _savedTemplates.filter(...)` for ALL callers (no role check), then calls `saveTemplates()` and unconditionally `return true`. The three sibling mutators DO gate first: `saveTemplates` (L911 `if (!canEditTemplates()) return false;`), `saveCurr
+
+#### CB-101 [CONFIRMED] print_center.js:5043  _(display)_
+**campistry_pc3_pack preference is written but never read back on load — selected print pack silently does not persist across reloads**
+
+- Evidence: On applying a pack the code persists it: L5004 `_activePack = pack.id;` then L5043 `try { localStorage.setItem('campistry_pc3_pack', packId); } catch (e) {}`. But `_activePack` is initialized to null (L93 `var _activePack = null;`) and the startup restore block (L4783-4806) reads back every other pc3_* pref — timeIncrement, activityAligned, hideDurations, hideLocations, highlightGaps, colorByCategory, quickFilter, pageBreakPerBunk, sidebarCollaps
+- Scenario: User selects a print pack (e.g. 'weekly') in Print Center; it is written to campistry_pc3_pack. They reload the page → _activePack stays null, the pack UI shows none active, and the previously-chosen pack must be re-selected. The persisted key is never consulted.
+- Verifier: The claim holds under full code inspection. In print_center.js, `_activePack` is initialized to null (L93 `var _activePack = null;`), assigned only on user apply (L5004 `_activePack = pack.id;` inside `window._pc3ApplyPack`), and read only at L1347 (`var active = _activePack === p.id;`) to mark the active pack card in the Packs popover. The apply p
+
+#### CB-102 [CONFIRMED] period_editor.js:49  _(config)_
+**Grade-keyed `campPeriods` config (read by the auto solver and outputs) is not migrated on a grade rename — renamed grade loses its custom period config, old key orphaned**
+
+- Evidence: campPeriods is keyed by division/grade name: `getPeriodsForDiv(divName){ return window.campPeriods[divName] || [] }` (period_editor.js:69-71), `setPeriodsForDiv` writes `window.campPeriods[divName]=periods` (73-74), persisted whole via `saveGlobalSettings('campPeriods', window.campPeriods)` (62). campPeriods is consumed by scheduler_core_auto.js, day_packer.js, master_schedule_builder.js, daily_adjustments.js, print_center.js (grep). The Me-page
+- Scenario: Owner sets custom periods for grade 'Trios' in the Period Editor, then renames 'Trios' to 'Trios B' in Camp Structure. campPeriods['Trios'] stays under the old key; campPeriods['Trios B'] does not exist, so getPeriodsForDiv('Trios B') returns [] and the renamed grade falls back to default periods. The stale 'Trios' entry persists in cloud config in
+- Verifier: The claim is accurate and describes a real gap not covered by the existing FN-1 fix. (1) campPeriods is grade/division-name-keyed: getPeriodsForDiv(divName) returns window.campPeriods[divName] (period_editor.js:69-71), persisted via saveGlobalSettings('campPeriods', ...) at L62. (2) It is load-bearing for the auto solver, which reads window.campPer
+
+#### CB-103 [CONFIRMED] division_selector.js:52  _(config)_
+**division_selector.js + rbac_integration.js are dead code — a fully wired generation-scope-picker module (window.DivisionSelector) that no HTML loads**
+
+- Evidence: division_selector.js defines `window.DivisionSelector` with renderDivisionSelector (L52) and appends a modal/styles to the DOM (L143/L517), looking fully load-bearing. Its ONLY caller is rbac_integration.js (L140 `window.DivisionSelector.renderDivisionSelector(...)`, plus initialize/saveLocks). But repo-wide grep shows NO .html loads `division_selector.js` OR `rbac_integration.js`, rbac_init.js (the one flow.html DOES load) never references Divis
+- Scenario: A future change wires `window.DivisionSelector` into a page (or someone copies the renderDivisionSelector pattern) and inherits the unescaped division/subdivision-name interpolation; meanwhile the module sits in the bundle as confusing dead weight that appears active because it self-registers on window and is referenced by rbac_integration.js.
+- Verifier: Every part of the claim checks out against the actual code. (1) division_selector.js self-registers window.DivisionSelector (L524-535) with renderDivisionSelector (L52) building a modal via modal.innerHTML (L63-143); its only caller is rbac_integration.js (calls .initialize L38, .renderDivisionSelector L140, .saveLocks L260). (2) Repo-wide grep for
+
+#### CB-104 [CONFIRMED] calendar.js:523  _(rotation)_
+**Scheduler-scoped 'Start New Half' and 'Erase rotation history' do not clear manualUsageOffsets — phantom counts survive into the new half**
+
+- Evidence: getActivityCount = historicalCounts + manualUsageOffsets (scheduler_core_utils.js:2270-2293; rotation_engine.js:536-561), and manualUsageOffsets is bunk-keyed `{ bunk: { activity: number } }`, set per-bunk by the rotation report's adjust input (analytics.js:1599-1603). The OWNER reset paths clear it: clearCloudKeys([... 'manualUsageOffsets' ...]) at calendar.js:419 (eraseRotationHistory) and 608 / saveGlobalSettings('manualUsageOffsets', {}) at 6
+- Scenario: An admin uses the rotation report's 'Adjust counts' field to set Trios 3's 'Baking' offset to +3 (e.g. to seed prior-season usage). Later a scheduler assigned to Trios runs 'Start New Half' (or 'Erase rotation history') for their divisions. historicalCounts/rotationHistory for Trios 3 are wiped to 0, but the +3 Baking offset survives. The new half
+- Verifier: Every link in the claim checks out against the actual code, with a concrete trigger and decisive quoted lines. (1) Consumption: getActivityCount returns historicalCounts[bunk][act] + manualUsageOffsets[bunk][act], bunk-keyed (scheduler_core_utils.js:2270-2293; rotation_engine.js:536-561 delegates to it). (2) Write: the rotation report's adjust inp
+
+#### CB-105 [CONFIRMED] campistry_me.js:1262  _(dates)_
+**Grade rename/removal cascade cleans skeletons + auto-layers + bunks but never touches campPeriods (Bell Schedule) → orphaned/lost per-grade periods**
+
+- Evidence: The structure-change cascade in campistry_me.js handles every per-grade config EXCEPT campPeriods. On removal: `_purgeOrphanedSkeletonTiles(removedGrades); _purgeOrphanedAutoLayers(removedGrades);` (lines 1262, 1275) plus `_purgeOrphanedBunks`. On rename: `_propagateGradeRenameTiles(oldG,newG)` (line 1243) renames dailySkeletons + dailyAutoLayers + gradeLayerRules. None of these read or write `gs.campPeriods`, which period_editor.js stores per gr
+- Scenario: Owner renames grade 'Minors' to 'Minors A' in the division-edit modal. The Bell Schedule periods configured for 'Minors' stay under key 'Minors' in campPeriods; the Period Editor now shows 'Minors A' with no periods, and any scheduler logic that reads period boundaries for 'Minors A' gets none — the user must reconfigure, and the orphaned 'Minors'
+- Verifier: The claim is accurate in every load-bearing detail. STORAGE/KEYING (confirmed): period_editor.js stores the Bell Schedule as window.campPeriods[<grade>] and persists via saveGlobalSettings('campPeriods', …). loadAll() reads gs.campPeriods (L54); save via saveGlobalSettings?.('campPeriods', …) (L62); per-grade keys at L70/74/79/86/92 (getPeriodsFor
+
+#### CB-106 [PLAUSIBLE] analytics.js:198  _(display)_
+**Field Availability Gantt resolves missing block times from division-level divisionTimes by raw index instead of the bunk's _perBunkSlots, mis-timing auto-mode entries that lack inline _startMin/_endMin**
+
+- Evidence: buildUsageData (L195-237): `const times = dTimes[divName] || [];` (L198) is the DIVISION-level slot array (dTimes = window.divisionTimes or the day snapshot, L190-192) — it never dereferences `._perBunkSlots[bunk]`. When an entry lacks inline times, the fallback reads by raw slot index: L206-216 `if (startMin===undefined||endMin===undefined){ const slotInfo = times[idx]; ... startMin=slotInfo.startMin; endMin=slotInfo.endMin; }`, and the continua
+- Scenario: Auto mode, a bunk whose _perBunkSlots has an injected leading slot so per-bunk index 3 ≠ division index 3. A block that lacks _startMin/_endMin (e.g. a legacy/edited entry) falls to L207 times[idx]=divisionTimes[div][3] and is painted at the division slot-3 window in the Field Availability Gantt, overlapping or mis-ordering against bunks rendered f
+- Verifier: The mechanism is real and correctly described, but the trigger is narrow and data-dependent, so it cannot be confirmed from code alone. STRUCTURAL PREMISE — TRUE: in analytics.js buildUsageData, `const times = dTimes[divName] || [];` (L198) is the flat DIVISION-level slot array (dTimes = window.divisionTimes or the day snapshot, L190-192). Per-bunk
+
