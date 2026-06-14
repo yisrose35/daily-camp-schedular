@@ -860,6 +860,12 @@ all[date].updated_at = new Date().toISOString();
 
             const bunkSet = new Set(bunksToDelete);
             let recordsModified = 0, recordsDeleted = 0, bunksRemoved = 0;
+            // ★★★ CB-74: track per-record write failures. Previously a mid-loop
+            // delete/update error was only counted-or-not and the function ALWAYS
+            // returned success:true, so the caller cleared local state and reported
+            // success while the cloud still held those bunks → cloud/local diverge
+            // and the "deleted" bunks resurrect from cloud on the next load.
+            let writeFailures = 0, firstWriteError = null;
 
             for (const record of allRecords) {
                 const scheduleData = record.schedule_data || {};
@@ -873,13 +879,20 @@ all[date].updated_at = new Date().toISOString();
                 if (!modified) continue;
                 if (Object.keys(assignments).length === 0) {
                     const { error } = await client.from('daily_schedules').delete().eq('id', record.id);
-                    if (!error) recordsDeleted++;
+                    if (!error) recordsDeleted++; else { writeFailures++; firstWriteError = firstWriteError || error.message; }
                 } else {
                     const { error } = await client.from('daily_schedules')
                         .update({ schedule_data: { ...scheduleData, scheduleAssignments: assignments, leagueAssignments: leagues }, updated_at: new Date().toISOString() })
                         .eq('id', record.id);
-                    if (!error) recordsModified++;
+                    if (!error) recordsModified++; else { writeFailures++; firstWriteError = firstWriteError || error.message; }
                 }
+            }
+            if (writeFailures > 0) {
+                return {
+                    success: false,
+                    error: (firstWriteError || 'Some records failed to update') + ' (' + writeFailures + ' record(s) failed — cloud may be partially deleted)',
+                    recordsModified, recordsDeleted, bunksRemoved, writeFailures
+                };
             }
             return { success: true, recordsModified, recordsDeleted, bunksRemoved };
         } catch (e) {
