@@ -89,6 +89,27 @@
     var _dataCache = null;
     var _rotCache = null;
 
+    // ★★★ CB-70: the calendar data layer reads ONLY localStorage campDailyData_v1,
+    // so a cloud-only date (created on another device) or a locally-pruned date
+    // rendered "No schedule" even though a real schedule exists in Supabase. This
+    // additive cloud-date index marks those days as having a schedule. It NEVER
+    // removes a local marker — worst case (offline / old bundle) it stays empty and
+    // behaviour is unchanged. Hydrated once per session, then one re-render.
+    var _cloudDateSet = null;        // Set<dateKey> once loaded
+    var _cloudDatesHydrating = false;
+    function _hydrateCloudScheduleDates() {
+        if (_cloudDateSet !== null || _cloudDatesHydrating) return; // once
+        if (!window.ScheduleDB || typeof window.ScheduleDB.listScheduleDates !== 'function') return;
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
+        _cloudDatesHydrating = true;
+        Promise.resolve(window.ScheduleDB.listScheduleDates()).then(function (dates) {
+            _cloudDateSet = new Set((dates || []).map(String));
+            _cloudDatesHydrating = false;
+            // One re-render so the freshly-known cloud dates get their markers.
+            if (_cloudDateSet.size > 0) { try { render(); } catch (e) {} }
+        }).catch(function () { _cloudDatesHydrating = false; _cloudDateSet = new Set(); });
+    }
+
     function beginRenderCache() {
         try {
             var raw = localStorage.getItem('campDailyData_v1');
@@ -304,14 +325,17 @@
     // Does this day have a generated schedule? (checks scheduleAssignments)
     function hasSchedule(dateKey) {
         var data = getScheduleDataForDate(dateKey);
-        if (!data || !data.scheduleAssignments) return false;
-        var bunks = Object.keys(data.scheduleAssignments);
-        if (bunks.length === 0) return false;
-        // Make sure at least one bunk has real slot data
-        for (var i = 0; i < bunks.length; i++) {
-            var slots = data.scheduleAssignments[bunks[i]];
-            if (Array.isArray(slots) && slots.length > 0) return true;
+        if (data && data.scheduleAssignments) {
+            var bunks = Object.keys(data.scheduleAssignments);
+            // Make sure at least one bunk has real slot data
+            for (var i = 0; i < bunks.length; i++) {
+                var slots = data.scheduleAssignments[bunks[i]];
+                if (Array.isArray(slots) && slots.length > 0) return true;
+            }
         }
+        // ★★★ CB-70: a cloud-only / locally-pruned date still has a real schedule
+        // in Supabase — mark it so the overview doesn't show a false "No schedule".
+        if (_cloudDateSet && _cloudDateSet.has(String(dateKey))) return true;
         return false;
     }
 
@@ -593,6 +617,10 @@
         }
         _calendarContainer.style.display = '';
         _calendarContainer.innerHTML = '';
+
+        // ★★★ CB-70: lazily hydrate the cloud schedule-date index (once); when it
+        // resolves it triggers one more render so cloud-only days show markers.
+        _hydrateCloudScheduleDates();
 
         // Parse localStorage ONCE for the entire render
         beginRenderCache();

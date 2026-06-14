@@ -522,6 +522,33 @@
             return _erroredResult();
         }
     }
+
+    /**
+     * ★★★ CB-70: list the distinct date_keys that have a cloud schedule for this
+     * camp. Lightweight (selects only date_key). Lets the calendar overview mark
+     * cloud-only / locally-pruned dates as "has schedule" instead of showing a
+     * false "No schedule". Returns [] on any error (caller treats as "no extra
+     * cloud dates" — purely additive, never removes local markers).
+     */
+    async function listScheduleDates() {
+        const client = getClient();
+        const campId = getCampId();
+        if (!client || !campId) return [];
+        try {
+            const { data, error } = await client
+                .from(CONFIG.TABLE_NAME)
+                .select('date_key')
+                .eq('camp_id', campId);
+            if (error) { logError('listScheduleDates query error:', error); return []; }
+            const seen = {};
+            (data || []).forEach(r => { if (r && r.date_key) seen[String(r.date_key).substring(0, 10)] = 1; });
+            return Object.keys(seen);
+        } catch (e) {
+            logError('listScheduleDates failed:', e);
+            return [];
+        }
+    }
+
     /**
      * Load schedules for a date range.
      */
@@ -1538,6 +1565,7 @@
         // Read
         loadSchedule,
         loadAllSchedulersForDate,
+        listScheduleDates, // ★ CB-70: distinct cloud schedule dates for the calendar overview
         loadDateRange,
         
         // Write
