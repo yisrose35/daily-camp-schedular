@@ -20,7 +20,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-59 auto_validator.js:643 — _avEscMsg at both error+warning <li> sinks (twin of CB-58)
 - ✅ CB-60 campistry_me.js:141 — save() spreads existing campistryMe before overriding (preserves forms/customFields/locale/Stripe key)
 - ✅ CB-61 [LIVE] schedule_calendar_views.js:339 — no eager currentScheduleDate set on cross-date nav (handler saves old date under correct key first). Owed: live date-nav-with-unsaved-edit verify
-- ⬜ CB-107 campistry_go.js:2348 [LIVE] — clearAll* wipes whole cloud state row
+- ✅ CB-107 + CB-127 [LIVE] campistry_go.js:2348 — clearAll monitors/counselors/addresses no longer wipe the whole cloud state row (save() already persists correct state). Owed: 2-device GO verify
 
 ## MED (86) — after all HIGH
 CB-9,10,11,12,13,14,15,16,17,18,19,20,21,22,38(done w/CB-1),23,24,25,26,27,28,29,39,30,31,32,33,34,35,36,37,40,62,63,64,65,66,67,68,90,69,70,71,72,73,74,75,76,77,78,79,80,81,91,82,83,84,85,86,87,88,89,92,93,94,108,109,110,111,112,125,121,122,123,124,128

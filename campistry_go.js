@@ -2329,7 +2329,10 @@ let _toastTimer = null;
         save();
         _clearCloudDataType('addresses');
         _clearCloudDataType('routes');
-        _clearCloudDataType('state');
+        // ★★★ CB-127: do NOT _clearCloudDataType('state') here. save() above
+        // already persisted the full current state row (buses/shifts/setup/
+        // monitors/counselors) to cloud — wiping it to {} destroyed all of that
+        // fleet config, which has nothing to do with addresses.
         _goStandaloneRoster = {};
         renderAddresses(); updateStats();
         document.getElementById('routeResults').style.display = 'none';
@@ -2345,7 +2348,10 @@ let _toastTimer = null;
         D.monitors.forEach(m => { if (D.addresses[m.name]?._isStaff) delete D.addresses[m.name]; });
         D.monitors = [];
         save();
-        _clearCloudDataType('state');
+        // ★★★ CB-107: do NOT _clearCloudDataType('state') — save() already
+        // persisted the updated state row (monitors emptied, buses/shifts/
+        // setup/counselors intact). Overwriting it with {} wiped the entire
+        // fleet config.
         if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
         renderStaff(); updateStats();
         toast(count + ' monitor(s) cleared');
@@ -2359,7 +2365,9 @@ let _toastTimer = null;
         D.counselors.forEach(c => { if (D.addresses[c.name]?._isStaff) delete D.addresses[c.name]; });
         D.counselors = [];
         save();
-        _clearCloudDataType('state');
+        // ★★★ CB-107: do NOT _clearCloudDataType('state') — save() already
+        // persisted the updated state row (counselors emptied, everything else
+        // intact). Overwriting it with {} wiped the entire fleet config.
         if (Object.keys(D.addresses).length > 0) _clearCloudDataType('addresses');
         renderStaff(); updateStats();
         toast(count + ' counselor(s) cleared');
