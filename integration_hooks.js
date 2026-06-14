@@ -2847,6 +2847,25 @@
                 // ★★★ CROSS-DATE GUARD: stamp the date this reloaded data belongs to.
                 window._scheduleAssignmentsDate = dateKey;
 
+                // ★★★ CB-64: also purge the date's rotation history, mirroring the
+                // single-date sibling (calendar.js eraseCurrentDailyData L1209/1238).
+                // Previously eraseAllSchedules deleted the schedule but left the
+                // date's cloud rotation_counts rows + historicalCountedDates intact,
+                // so a later generation re-merged phantom counts for the erased day
+                // (over-counting → unfair rotation). Delete the cloud counts (only on
+                // full access, so a scheduler erase doesn't drop other schedulers'
+                // counts) and rebuild historicalCounts from what remains.
+                try {
+                    if (hasFullAccess && window.RotationCloud?.deleteDate) {
+                        await window.RotationCloud.deleteDate(dateKey);
+                    }
+                    if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                        await window.SchedulerCoreUtils.rebuildHistoricalCounts(true);
+                    }
+                } catch (eRot64) {
+                    console.warn('🔗 [Hooks] CB-64 rotation cleanup failed (non-fatal):', eRot64);
+                }
+
                 if (window.updateTable) {
                     window.updateTable();
                 }
