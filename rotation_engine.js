@@ -1482,6 +1482,22 @@ window.invalidateBunkRotationCache = RotationEngine.invalidateBunkTodayCache;
                     if (cloudCount > local.count) {
                         history.totalActivities += (cloudCount - local.count);
                         local.count = cloudCount;
+                    } else if (cloudCount < local.count && cloudLastDate) {
+                        // ★★★ CB-62: cloud rotation_counts is the cumulative AUTHORITY.
+                        // The merge previously only ever RAISED the local 14-day-scan
+                        // count, so a cross-device delete/decrement (cloud total
+                        // dropped) was silently ignored → stale-high counts forever.
+                        // Lower to the cloud total, but ONLY when cloud is fully
+                        // caught up: its last-done date is no older than local's most
+                        // recent occurrence (cloudDays <= local.daysSinceLast). If
+                        // local has a MORE recent occurrence than cloud knows about, it
+                        // may be just-generated unsynced data, so keep the higher count.
+                        var _cloudDays62 = Math.max(1, Math.round((todayMs - new Date(cloudLastDate + 'T12:00:00').getTime()) / msPerDay));
+                        var _localRecent62 = (local.daysSinceLast == null) ? Infinity : local.daysSinceLast;
+                        if (_cloudDays62 <= _localRecent62) {
+                            history.totalActivities -= (local.count - cloudCount);
+                            local.count = cloudCount;
+                        }
                     }
                     // Cloud may have a more recent lastDone than local's 14-day window
                     if (cloudLastDate && cloudLastDate < today) {
