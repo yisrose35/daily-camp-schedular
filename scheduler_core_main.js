@@ -1680,11 +1680,20 @@
                                     return out;
                                 });
                             }
-                            return { scheduleAssignments: slimSched };
+                            const out = { scheduleAssignments: slimSched };
+                            // CB-5: preserve local-only per-day config on slimmed
+                            // entries (matches the hydrate carry-forward above).
+                            LOCAL_ONLY.forEach(f => { if (d[f] !== undefined) out[f] = d[f]; });
+                            return out;
                         };
                         for (const dk of Object.keys(allDaily)) {
                             if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
-                            if (dk === today) continue; // never slim today
+                            // ★★★ CB-5: only slim PAST, in-window dates. The old
+                            // `dk === today` guard slimmed every OTHER date —
+                            // including FUTURE dates the user built ahead —
+                            // stripping their leagues/divisionTimes/skeleton/
+                            // _perBunkSlotsData and propagating the slim to cloud.
+                            if (!(dk < today && dk >= startDate)) continue;
                             allDaily[dk] = _slimPastDate(allDaily[dk]);
                         }
                         // ★ Seed secondary-save hashes so the next saveGlobalSettings
