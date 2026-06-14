@@ -332,8 +332,13 @@
         let editableDivisions = [];
         if (role === 'scheduler') {
             try { editableDivisions = window.AccessControl?.getGeneratableDivisions?.() || []; } catch (e) {}
-        }
-        if (!editableDivisions.length) {
+            // ★★★ CB-6: do NOT fall back to getEditableDivisions() for a
+            // scheduler — under v3.13 that returns EVERY division, so an empty
+            // generatable set (AccessControl init race / no subdivisions yet)
+            // would make the scheduler's save absorb the whole camp and shadow
+            // the owner in the per-bunk merge. Leave it empty; the empty-set
+            // handling below blocks the save rather than uploading everything.
+        } else {
             editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
         }
         log('Editable divisions from AccessControl:', editableDivisions);
@@ -380,13 +385,19 @@
         }
         
         const myBunks = new Set(getMyEditableBunks());
-        
+
         if (myBunks.size === 0) {
             logError('WARNING: No editable bunks found! Cannot filter properly.');
             logError('AccessControl divisions:', window.AccessControl?.getEditableDivisions?.());
             logError('PermissionsDB bunks:', window.PermissionsDB?.getEditableBunks?.());
-            // Return original to avoid saving empty - let RLS handle it
-            return scheduleAssignments;
+            // ★★★ CB-18 / CB-112: do NOT fail open to the full camp schedule.
+            // RLS does not inspect schedule_data content, so returning everything
+            // here let a scheduler whose bunk set resolved empty (init race)
+            // upload ALL divisions with fresh stamps and shadow the owner. Return
+            // empty instead — the empty-save guard then blocks the write and
+            // leaves the cloud row intact; the save retries once AccessControl is
+            // initialized. (owner/admin already returned the full set above.)
+            return {};
         }
         
         const filtered = {};
