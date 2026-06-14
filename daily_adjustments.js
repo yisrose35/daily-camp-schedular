@@ -5442,6 +5442,17 @@ function loadDailyTrips(dateKey) {
 }
 
 function saveDailyTrips(dateKey, trips) {
+  // ★★★ CB-32: role gate. Every sibling write in this file (saveDailySkeleton,
+  // rainy-mode, optimizer) opens with a canEdit/checkEditAccess guard, but the
+  // Trips path had none — a viewer or out-of-scope scheduler could push
+  // camp-GLOBAL trip data (app1.dailyTripsByDate + daily_schedules) that both
+  // builders honor. This is the single write chokepoint (add/remove handlers +
+  // the render-time self-heal all route through here), so guarding it blocks
+  // every unauthorized trip write. Owners/admins/in-scope editors pass.
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[saveDailyTrips] blocked: user lacks edit permission');
+    return;
+  }
   if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
   // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
