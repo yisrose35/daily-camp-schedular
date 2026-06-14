@@ -4836,6 +4836,22 @@ async function runOptimizer() {
             _roleScope = _gd.map(String);
         }
     } catch (_eRS) { /* non-fatal — fall through unclamped */ }
+    // ★★★ CB-26: a SCHEDULER whose generatable set is EMPTY (subdivision not yet
+    // resolved — AccessControl init race) must NOT generate unscoped. The clamp
+    // above only sets _roleScope for a NON-empty partial set; an empty set left
+    // it null → generation ran over ALL divisions and stomped the owner's work.
+    // Block and ask the user to retry once scope resolves. Owner/admin unaffected
+    // (their generatable set is every division, never empty).
+    try {
+        const _roleNow = window.CampistryDB?.getRole?.() || window.AccessControl?.getCurrentRole?.();
+        if (_roleNow === 'scheduler') {
+            const _gdNow = window.AccessControl?.getGeneratableDivisions?.() || [];
+            if (!Array.isArray(_gdNow) || _gdNow.length === 0) {
+                await daShowAlert('Your assigned divisions are still loading — please try generating again in a moment.');
+                return;
+            }
+        }
+    } catch (_eRoleGuard) { /* non-fatal */ }
     let _effScope = (_generationScope && _generationScope.size > 0) ? [..._generationScope] : null;
     if (_roleScope) {
         _effScope = _effScope ? _effScope.filter(d => _roleScope.includes(String(d))) : [..._roleScope];
