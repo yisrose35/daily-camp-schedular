@@ -1907,7 +1907,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     const layerCount = Math.max(1, layers.length);
     const colWidth = Math.max(GRADE_COL_MIN, layerCount * (BAND_WIDTH + BAND_GAP) + BAND_PAD * 2);
 
-    html += `<div class="ms-daw-grade-col" data-grade="${gradeKey}" style="width:${colWidth}px;">`;
+    html += `<div class="ms-daw-grade-col" data-grade="${_mbEsc(gradeKey)}" style="width:${colWidth}px;">`;
 
     // ── Thin grade header (outside the scrolling track) ──
     // Count bunk overrides for any bunk in this grade so the user knows from
@@ -1923,11 +1923,11 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       ? ` <span class="ms-daw-grade-ov-badge" title="${_gradeOvCount} bunk override${_gradeOvCount === 1 ? '' : 's'} applied — open Daily Adjustments → Bunk Overrides" style="background:#f59e0b;color:#fff;font-size:9px;font-weight:700;border-radius:99px;padding:1px 5px;margin-left:3px;letter-spacing:0;">⚙ ${_gradeOvCount}</span>`
       : '';
     html += `<div class="ms-daw-grade-header">
-      <span class="ms-daw-grade-tag">${gradeKey}</span>${_ovBadge}
+      <span class="ms-daw-grade-tag">${_mbEsc(gradeKey)}</span>${_ovBadge}
       <span class="ms-daw-grade-info">${bunkCount} bunks</span>
-      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${gradeKey}" title="Add a new layer to this grade">+</button>
-      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${gradeKey}" title="Override individual bunks' activities (Day 24)">Bunks</button>
-      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${gradeKey}" title="Remove all layers from this grade">Clear</button>
+      <button class="ms-daw-grade-btn" data-action="add-layer" data-grade="${_mbEsc(gradeKey)}" title="Add a new layer to this grade">+</button>
+      <button class="ms-daw-grade-btn" data-action="bunk-overrides" data-grade="${_mbEsc(gradeKey)}" title="Override individual bunks' activities (Day 24)">Bunks</button>
+      <button class="ms-daw-grade-btn" data-action="clear-grade" data-grade="${_mbEsc(gradeKey)}" title="Remove all layers from this grade">Clear</button>
     </div>`;
 
     // Collect period boundary pixel positions for this grade (used by notch clip-paths)
@@ -1952,7 +1952,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
     }
 
     // ── Timeline track ──
-    html += `<div class="ms-daw-track" data-grade="${gradeKey}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
+    html += `<div class="ms-daw-track" data-grade="${_mbEsc(gradeKey)}" data-boundaries="${uniqueBoundaries.join(',')}" style="height:${totalHeight}px;width:100%;position:relative;">`;
 
     // Horizontal gridlines
     for (let m = globalStart; m < globalEnd; m += 30) {
@@ -2038,7 +2038,7 @@ function renderDAWGrid(externalEl, externalLayers, externalCallbacks) {
       }
 
       html += `<div class="ms-daw-band ${dawSelectedBand === layer.id ? 'selected' : ''}"
-        data-id="${layer.id}" data-type="${layer.type}" data-grade="${gradeKey}"
+        data-id="${layer.id}" data-type="${layer.type}" data-grade="${_mbEsc(gradeKey)}"
         style="top:${top}px; height:${height}px; left:${left}px; width:${BAND_WIDTH}px;${clipStyle}"
         draggable="true">
         <div class="band-resize band-resize-top"></div>
@@ -3946,14 +3946,14 @@ function renderEventTile(ev, top, height) {
   `;
 
   if (ev.location) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.location}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${_mbEsc(ev.location)}</div>`;
   } else if (ev.reservedFields?.length > 0 && ev.type !== 'elective') {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.join(', ')}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">📍 ${ev.reservedFields.map(_mbEsc).join(', ')}</div>`;
   }
-  
-  
+
+
   if (ev.leagueName) {
-    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.leagueName}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.leagueName)}</div>`;
   }
   if ((ev.type === 'league' || ev.type === 'specialty_league') && ev.leagueName) {
     const _gs = window.loadGlobalSettings?.() || {};
@@ -3964,7 +3964,7 @@ function renderEventTile(ev, top, height) {
   }
 
   if (ev.type === 'elective' && ev.electiveActivities?.length > 0) {
-    const actList = ev.electiveActivities.slice(0, 3).join(', ');
+    const actList = ev.electiveActivities.slice(0, 3).map(_mbEsc).join(', ');
     const more = ev.electiveActivities.length > 3 ? ` +${ev.electiveActivities.length - 3}` : '';
     innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">🎯 ${actList}${more}</div>`;
   }
@@ -3973,11 +3973,11 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'swim_elective') {
     const _seActs = ev.electiveActivities || [];
     if (_seActs.length > 0) {
-      const _seList = _seActs.slice(0, 3).join(', ');
+      const _seList = _seActs.slice(0, 3).map(_mbEsc).join(', ');
       const _seMore = _seActs.length > 3 ? ` +${_seActs.length - 3}` : '';
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + ${_seList}${_seMore}</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.swimLocation || 'Pool')} + ${_seList}${_seMore}</div>`;
     } else {
-      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${ev.swimLocation || 'Pool'} + Elective</div>`;
+      innerHtml += `<div style="font-size:9px;opacity:0.85;margin-top:2px;">${_mbEsc(ev.swimLocation || 'Pool')} + Elective</div>`;
     }
     if (ev._preChangeMin || ev._postChangeMin) {
       const _sePre = ev._preChangeMin || 0;
@@ -3988,7 +3988,7 @@ function renderEventTile(ev, top, height) {
   }
 
   if (ev.type === 'smart' && ev.smartData) {
-    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${ev.smartData.fallbackActivity}</div>`;
+    innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">Fallback: ${_mbEsc(ev.smartData.fallbackActivity)}</div>`;
   }
   
   // ★ v2.5: Show split tile sub-events
