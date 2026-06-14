@@ -957,7 +957,7 @@ function updateTemplate(tid) {
     t2.createdAt = _savedTemplates[idx].createdAt; t2.updatedAt = new Date().toISOString();
     _savedTemplates[idx] = t2; saveTemplates(); return true;
 }
-function deleteTemplate(tid) { _savedTemplates = _savedTemplates.filter(function (t) { return t.id !== tid; }); saveTemplates(); return true; }
+function deleteTemplate(tid) { if (!canEditTemplates()) return false; /* ★ CB-100: gate like sibling mutators (saveTemplates/saveCurrentAsTemplate/updateTemplate) — without it a scheduler's "delete" mutated _savedTemplates + returned true while saveTemplates() silently no-op'd the persist, so the template reappeared on next load */ _savedTemplates = _savedTemplates.filter(function (t) { return t.id !== tid; }); saveTemplates(); return true; }
 function loadTemplate(tid) {
     if (tid === 'default') _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE);
     else { _savedTemplates.forEach(function (t) { if (t.id === tid) _currentTemplate = Object.assign({}, DEFAULT_TEMPLATE, JSON.parse(JSON.stringify(t))); }); }
@@ -4819,6 +4819,11 @@ function initPrintCenter() {
     try { var savedQF = localStorage.getItem('campistry_pc3_quickFilter'); if (savedQF) _quickFilter = savedQF; } catch (e) {}
     try { var savedPB = localStorage.getItem('campistry_pc3_pageBreakPerBunk'); if (savedPB !== null) _pageBreakPerBunk = savedPB === '1'; } catch (e) {}
     try { var savedSC = localStorage.getItem('campistry_pc3_sidebarCollapsed'); if (savedSC !== null) _sidebarCollapsed = savedSC === '1'; } catch (e) {}
+    // ★ CB-101: restore the last-used print pack. It was written on apply (campistry_pc3_pack) but
+    // never read back on load — every other pc3_* pref above restores, this one was missed — so the
+    // Packs popover showed none active after reload. Setting _activePack marks it active (L~1370).
+    try { var savedPack = localStorage.getItem('campistry_pc3_pack'); if (savedPack) _activePack = savedPack; } catch (e) {}
+
     // Restore last-used style preset
     try {
         var savedPreset = localStorage.getItem('campistry_pc3_preset');

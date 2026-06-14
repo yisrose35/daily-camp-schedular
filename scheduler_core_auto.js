@@ -21021,7 +21021,11 @@
                 const _p49Pc = _p49PrepCfg && _p49PrepCfg.prepConfig;
                 const _p49PrepDur = (_p49Pc && _p49Pc.timing === 'flexible') ? (parseInt(_p49PrepCfg.prepDuration) || 0) : 0;
                 const _p49IsPrepSpecial = _p49PrepDur > 0;
-                const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
+                // ★ CB-95: prefer the durable window._perBunkSlots (reset+populated each run) over
+                // window.divisionTimes._perBunkSlots, which the patched loadCurrentDailyData clobbers
+                // on the 2nd+ in-session gen → it returned [] → _p49GridDur=0 → prep-room recapture
+                // silently disabled. Mirrors the FN-14 durable fallback used everywhere else here.
+                const _p49pbs = (window._perBunkSlots?.[def.grade]?.[String(def.bunk)]) || window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
                 const _p49Disp = (e) => !!e && !e.continuation && !!e.sport && !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep && !e._league && !e._isRotationEvent && !e._isTrip;
                 const _p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };
                 const _p49HasPrepRoomBefore = (idx) => {

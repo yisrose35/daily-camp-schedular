@@ -201,7 +201,15 @@
         Object.entries(assignments).forEach(([bunk, schedule]) => {
             if (!Array.isArray(schedule)) return;
             const divName = getDivisionForBunk(bunk) || 'Unknown';
-            const times = dTimes[divName] || [];
+            // ★ CB-106: prefer the bunk's OWN per-bunk slot geometry over the flat division-level
+            // array. In auto mode window.divisionTimes[div] carries a ._perBunkSlots[bunk] map whose
+            // index can differ from the division array (e.g. an injected leading slot), so resolving
+            // a missing-time entry by raw division index mis-timed the block in the Gantt. Resolve
+            // from the SAME source as dTimes (snapshot for historical, window._perBunkSlots for live).
+            const _pbs = (dTimes[divName] && dTimes[divName]._perBunkSlots && dTimes[divName]._perBunkSlots[String(bunk)])
+                || (dTimes === window.divisionTimes && window._perBunkSlots && window._perBunkSlots[divName] && window._perBunkSlots[divName][String(bunk)])
+                || null;
+            const times = _pbs || dTimes[divName] || [];
 
             schedule.forEach((entry, idx) => {
                 if (!entry || entry.continuation || entry._isTransition) return;

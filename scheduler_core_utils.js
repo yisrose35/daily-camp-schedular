@@ -2828,6 +2828,14 @@ Utils.getValidActivityNames = function() {
         Object.keys(g.app1?.sportMetaData || {}).forEach(s => { if (s) valid.add(s); });
         return valid;
     };
+    // ★★★ CB-96 — DEAD-BUT-WIRED. incrementHistoricalCounts / reIncrementHistoricalCounts have NO
+    //   live caller (repo-wide grep: only their defs, the window exports below, and a unit test).
+    //   Every live generation/edit path instead calls `rebuildHistoricalCounts` (full re-scan from
+    //   the final schedule), which is the authority and counts differently (it excludes league-game
+    //   sports from historicalCounts; these incremental adders include them via the sport fallback).
+    //   DO NOT re-wire these into a gen/post-edit path without first reconciling that divergence —
+    //   doing so would inflate sport counts and double-count on re-generation. Left in place (not
+    //   deleted) because a test depends on them and removal is out of scope for the audit pass.
     Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
         console.log(`📊 [SchedulerCoreUtils] Incrementing counts for ${dateKey}...`);
 

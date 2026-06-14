@@ -1307,7 +1307,7 @@ function saveDiv(){
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
     var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
-    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
 function deleteDiv(n){
     if(!confirm('Delete "'+n+'"?'))return;
@@ -1320,7 +1320,7 @@ function deleteDiv(n){
     delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
     // ★ Purge orphaned bunks from saved AUTO schedules + orphaned grade tiles from MANUAL skeletons
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
-    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
 // ★ Day 9 (manual-builder parity for the structure-change cascade): the auto schedule
 //   is cleaned by _purgeOrphanedBunks, but the saved MANUAL skeletons (app1.dailySkeletons
@@ -1463,7 +1463,45 @@ function _propagateGradeRenameTiles(oldG, newG){
             if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
             console.log('[Me] Propagated grade rename in skeletons/auto-layers/specials:',oldG,'→',newG);
         }
+        // ★★★ CB-102/CB-105: migrate the Bell Schedule (campPeriods) on grade rename. campPeriods is
+        // a TOP-LEVEL grade-keyed global setting (gs.campPeriods[grade]) — NOT under app1 — read by the
+        // auto solver, day_packer, master_schedule_builder, daily_adjustments + print_center. This
+        // cascade renamed skeletons/auto-layers/specials but never campPeriods, so a renamed grade lost
+        // its custom periods (fell back to defaults) and the old key orphaned in cloud config. Own save
+        // (separate key from the app1 block above).
+        try{
+            var cp=gs&&gs.campPeriods;
+            if(cp&&typeof cp==='object'&&(oldG in cp)&&!(newG in cp)){
+                cp[newG]=cp[oldG];delete cp[oldG];
+                try{if(window.campPeriods&&typeof window.campPeriods==='object'&&(oldG in window.campPeriods)&&!(newG in window.campPeriods)){window.campPeriods[newG]=window.campPeriods[oldG];delete window.campPeriods[oldG]}}catch(_){}
+                if(typeof window.saveGlobalSettings==='function'){
+                    window.saveGlobalSettings('campPeriods',cp);
+                    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+                }
+                console.log('[Me] CB-102/105: migrated campPeriods (Bell Schedule) on grade rename:',oldG,'→',newG);
+            }
+        }catch(_cpErr){console.warn('[Me] campPeriods rename:',_cpErr)}
     }catch(e){console.warn('[Me] _propagateGradeRenameTiles:',e)}
+}
+// ★★★ CB-102/CB-105: purge the Bell Schedule (campPeriods) for removed grades. Sibling of
+//   _purgeOrphanedAutoLayers — campPeriods is a top-level grade-keyed key, so it gets its own
+//   load/save. Without this, deleting a grade left its periods orphaned under the old key in cloud.
+function _purgeOrphanedCampPeriods(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var cp=gs&&gs.campPeriods; if(!cp||typeof cp!=='object')return;
+        var changed=false;
+        removedGrades.forEach(function(g){
+            if(g in cp){delete cp[g];changed=true}
+            try{if(window.campPeriods&&(g in window.campPeriods))delete window.campPeriods[g]}catch(_){}
+        });
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campPeriods',cp);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] CB-102/105: purged orphaned campPeriods (Bell Schedule) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedCampPeriods:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division

@@ -1151,6 +1151,13 @@
 
     function buildWeekMap(startDate, endDate) {
         if (!startDate) return null;
+        // ★ CB-97: format Dates from their LOCAL components. The dates are built as local midnight
+        // (new Date(s+'T00:00:00')); toISOString() converts to UTC, rolling the day back one in every
+        // positive-UTC-offset timezone (e.g. Asia/Kolkata showed week boundaries one day early).
+        var fmtLocal = function (d) {
+            var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+            return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+        };
         var start = new Date(startDate + 'T00:00:00');
         var end = endDate ? new Date(endDate + 'T00:00:00') : null;
         var weeks = [];
@@ -1165,8 +1172,8 @@
             weekEnd.setDate(weekEnd.getDate() - 1);
             weeks.push({
                 week: weekNum,
-                start: weekStart.toISOString().slice(0, 10),
-                end: weekEnd.toISOString().slice(0, 10)
+                start: fmtLocal(weekStart),
+                end: fmtLocal(weekEnd)
             });
             weekStart = new Date(nextSunday);
             weekNum++;
@@ -1220,11 +1227,19 @@
     }
 
     window.saveCampDates = async function() {
+        var status = document.getElementById('campDatesStatus');
+        // ★ CB-98: owner-only write guard. The UI is read-only for admin/scheduler (loadCampDates
+        // disables inputs + hides actions), but these global writers had NO role check — a console
+        // call or stale UI could overwrite the owner's half boundaries, silently shifting every
+        // Per-Half rotation boundary. Mirror saveProfile's isTeamMember gate.
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can edit camp dates.'; status.style.color = '#dc2626'; }
+            return;
+        }
         var startDate = document.getElementById('campStartDate')?.value || null;
         var h1End = document.getElementById('campHalf1End')?.value || null;
         var h2Start = document.getElementById('campHalf2Start')?.value || null;
         var endDate = document.getElementById('campEndDate')?.value || null;
-        var status = document.getElementById('campDatesStatus');
 
         var campDates = {
             startDate: startDate,
@@ -1252,6 +1267,12 @@
     };
 
     window.clearCampDates = async function() {
+        // ★ CB-98: owner-only write guard (see saveCampDates).
+        if (isTeamMember) {
+            var _st = document.getElementById('campDatesStatus');
+            if (_st) { _st.textContent = 'Only camp owners can edit camp dates.'; _st.style.color = '#dc2626'; }
+            return;
+        }
         document.getElementById('campStartDate').value = '';
         document.getElementById('campHalf1End').value = '';
         document.getElementById('campHalf2Start').value = '';
