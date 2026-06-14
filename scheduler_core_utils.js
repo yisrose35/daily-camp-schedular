@@ -2590,11 +2590,43 @@
 
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
-            window.saveGlobalSettings('historicalCounts', counts);
-            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
-            // guards stay consistent after a full rebuild.
+            // ★★★ CB-56 / CB-63: this rebuild scans ONLY local campDailyData_v1.
+            // On a near-quota browser daily schedules are not written to
+            // localStorage ("data is in cloud"), so loadAllDailyData() misses
+            // most dates and a whole-key overwrite of the SHARED cloud
+            // historicalCounts would DROP every bunk's history for the missing
+            // dates. Detect that: if the previously-counted date set
+            // (historicalCountedDates) contains dates not present in this scan,
+            // the scan is partial — merge raise-only against the previous counts
+            // (a partial scan can never LOWER the shared totals) and UNION the
+            // counted-dates set. Decrements are the job of the explicit
+            // erase / New-Half paths, not this passive rebuild.
+            let _finalCounts = counts;
             const _countedDates = {};
             Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _prevCounts = _gs.historicalCounts || {};
+                const _prevDates = _gs.historicalCountedDates || {};
+                const _scanned = new Set(Object.keys(allDaily));
+                const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
+                if (_partial && Object.keys(_prevCounts).length > 0) {
+                    console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan (cloud knew dates absent locally) — merging raise-only to avoid dropping rotation history');
+                    const _merged = JSON.parse(JSON.stringify(_prevCounts));
+                    Object.keys(counts).forEach(function (bunk) {
+                        _merged[bunk] = _merged[bunk] || {};
+                        Object.keys(counts[bunk]).forEach(function (act) {
+                            _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                        });
+                    });
+                    _finalCounts = _merged;
+                    // keep previously-counted dates too
+                    Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
+                }
+            } catch (_e) { /* fall back to authoritative overwrite */ }
+            window.saveGlobalSettings('historicalCounts', _finalCounts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
             window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
