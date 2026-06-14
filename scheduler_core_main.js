@@ -1680,11 +1680,20 @@
                                     return out;
                                 });
                             }
-                            return { scheduleAssignments: slimSched };
+                            const out = { scheduleAssignments: slimSched };
+                            // CB-5: preserve local-only per-day config on slimmed
+                            // entries (matches the hydrate carry-forward above).
+                            LOCAL_ONLY.forEach(f => { if (d[f] !== undefined) out[f] = d[f]; });
+                            return out;
                         };
                         for (const dk of Object.keys(allDaily)) {
                             if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
-                            if (dk === today) continue; // never slim today
+                            // ★★★ CB-5: only slim PAST, in-window dates. The old
+                            // `dk === today` guard slimmed every OTHER date —
+                            // including FUTURE dates the user built ahead —
+                            // stripping their leagues/divisionTimes/skeleton/
+                            // _perBunkSlotsData and propagating the slim to cloud.
+                            if (!(dk < today && dk >= startDate)) continue;
                             allDaily[dk] = _slimPastDate(allDaily[dk]);
                         }
                         // ★ Seed secondary-save hashes so the next saveGlobalSettings
@@ -3881,6 +3890,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 var g = _rb2g[String(bunk)] || '?';
                 slots.forEach(function (e, idx) {
                     if (!e || e.continuation) return;
+                    // ★★★ CB-8 (manual twin of FN-59): a Trip is OFF-SITE — it
+                    // occupies no on-campus field, so it must not participate in
+                    // the room-capacity / anti-stagger sweep. Including it let
+                    // the sweep treat N bunks on one trip as N occupants of a
+                    // cap-1 "field" and demote all but one bunk's trip to Free
+                    // (then STEP 7.6 refilled them with on-campus sports),
+                    // collapsing a whole division's trip. Skip trip entries —
+                    // matching auto_validator.buildFieldUsageIndex (FN-59).
+                    if (e._isTrip || (e.type || '').toLowerCase() === 'trip') return;
                     var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
                     // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
                     // field it can't resolve to {not_sharable, cap 1} and flags it — most often
@@ -4078,6 +4096,33 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 });
             });
             const _fieldFree76 = (fl, s, e) => { const arr = _occ76[fl] || []; for (let i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            // ★★★ CB-39: real per-slot timeRules availability gate. The candidate
+            // filter above uses `!(f.timeRules && f.timeRules.enabled)`, which is
+            // ALWAYS true (timeRules is an array and never has `.enabled`), so the
+            // free-fill would place a sport on a field inside its Unavailable
+            // window (or outside its Available windows). This mirrors the auto
+            // FN-22 gate (scheduler_core_auto.js ~L19049): an Unavailable rule
+            // overlapping [s,e) blocks the field; if any Available rules exist, the
+            // slot must sit fully inside one of them.
+            const _fieldTimeOk76 = (f, s, e) => {
+                const rules = Array.isArray(f.timeRules) ? f.timeRules : null;
+                if (!rules || rules.length === 0) return true;
+                let hasAvail = false, insideAvail = false;
+                for (let i = 0; i < rules.length; i++) {
+                    const r = rules[i]; if (!r) continue;
+                    const rs = (r.startMin != null) ? r.startMin : null;
+                    const re = (r.endMin != null) ? r.endMin : null;
+                    const isUnavail = String(r.type).toLowerCase() === 'unavailable' || r.available === false;
+                    if (isUnavail) {
+                        if (rs != null && re != null && rs < e && re > s) return false;
+                    } else {
+                        hasAvail = true;
+                        if (rs != null && re != null && s >= rs && e <= re) insideAvail = true;
+                    }
+                }
+                if (hasAvail && !insideAvail) return false;
+                return true;
+            };
             let _filled76 = 0;
             Object.keys(_sa76).forEach(b => {
                 if (_allowed76 && !_allowed76.has(String(b))) return;
@@ -4090,7 +4135,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
-                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g)) continue;
+                        if (_skip76[fl] || !_fieldFree76(fl, t.s, t.e) || !_access76(f, g) || !_fieldTimeOk76(f, t.s, t.e)) continue;
                         let act = null;
                         for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !_done76[b][String(c).toLowerCase()]) { act = c; break; } }
                         if (!act) continue;

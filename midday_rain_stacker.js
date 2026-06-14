@@ -1012,6 +1012,60 @@ function applyResourceOverrides(overrides, isRainStarting) {
 }
 
 // =========================================================================
+// ★★★ CB-34: reliable restore of pre-rainy field overrides.
+// applyResourceOverrides() clears field.timeRules=[] (and bumps capacity) and
+// cloud-syncs the change. The ONLY restore was the manual "rain cleared" click
+// (handleMidDayRainClear → applyResourceOverrides(_, false)). If the user
+// changed date / reloaded / closed the tab without clicking it, the camp config
+// kept timeRules=[] for EVERY future generation — silently dropping a field's
+// time restrictions (e.g. "Pool only 9-11am" became all-day). The true rules
+// are preserved durably in field._preRainyTimeRules (it serializes with the
+// field), so this idempotent revert brings the config back. Safe to over-call:
+// an actively-rainy date re-applies its override during the rainy generation,
+// and the already-saved rainy schedule is unaffected (only future RE-gen reads
+// the field config).
+// =========================================================================
+function restoreResourceOverrides() {
+    const g = window.loadGlobalSettings?.() || {};
+    const fields = g.app1?.fields || [];
+    let changed = false;
+    for (const field of fields) {
+        if (field._preRainyCapacity != null) {
+            if (field.sharableWith) field.sharableWith.capacity = field._preRainyCapacity;
+            delete field._preRainyCapacity;
+            changed = true;
+        }
+        if (field._preRainyTimeRules) {
+            field.timeRules = field._preRainyTimeRules;
+            delete field._preRainyTimeRules;
+            changed = true;
+        }
+    }
+    if (changed) {
+        window.saveGlobalSettings?.('app1', g.app1);
+        window.forceSyncToCloud?.();
+        console.log('[RainStacker] CB-34: restored pre-rainy field overrides (config had been left cleared)');
+    }
+    return changed;
+}
+
+// Auto-restore when the loaded date is NOT an active rainy day. Runs on date
+// change and once shortly after load. Reads the per-date persisted rainy flag
+// (not the volatile window.isRainyDay) so it doesn't fight an in-progress rainy
+// generation; also bails while a mid-day rain generation is running.
+function _cb34MaybeRestoreOverrides() {
+    try {
+        if (window._midDayRainGenerationInProgress) return;
+        const dd = window.loadCurrentDailyData?.() || {};
+        const dateIsRainy = dd.rainyDayMode === true || dd.isRainyDay === true;
+        if (!dateIsRainy) restoreResourceOverrides();
+    } catch (e) { /* non-fatal */ }
+}
+if (typeof window !== 'undefined' && window.addEventListener) {
+    window.addEventListener('campistry-date-changed', _cb34MaybeRestoreOverrides);
+}
+
+// =========================================================================
 // CONVENIENCE WRAPPERS (v2.0 — morning preserved via _pinned)
 // =========================================================================
 
@@ -1990,6 +2044,7 @@ window.MidDayRainStacker = {
     // Helpers
     calculateEffectiveStart,
     applyResourceOverrides,
+    restoreResourceOverrides, // ★ CB-34: idempotent revert (also auto-runs on non-rainy date load)
     buildRainyDayResourceOverrides,
     getFlexRange,
     

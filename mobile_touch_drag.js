@@ -707,8 +707,13 @@ function finishTouchResize(module, wrapper) {
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        // Dispatch event for MS to handle
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: this is a defensive fallback for when MasterSchedulerInternal never initialized
+        // (master_schedule_builder.js threw at load). The 'mobile-resize-complete' event below has
+        // NO listener anywhere in the repo and there is no global save fn, so in that broken state
+        // the in-memory edit above is NOT persisted. That's acceptable — the editor module itself is
+        // down — but it is NOT a working save path. Do not rely on this event; if you need mobile
+        // edits to survive an MS-init failure, persist to the campManualSkeleton_<date> key here.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -729,11 +734,21 @@ function finishTouchResize(module, wrapper) {
         event.endTime = minutesToTime(Math.min(divEndMin, Math.round(newEndMin / SNAP_MINS) * SNAP_MINS));
       }
 
+      // ★★★ CB-124: reconcile overlaps after the resize, exactly as the DESKTOP
+      // DA resize was patched to (daily_adjustments onMouseUp). Without this the
+      // touch-resized tile can overlap its neighbor with no bump, leaving two
+      // tiles whose [start,end) intersect (silent double-book). Run BEFORE save.
+      if (window.DailyAdjustmentsInternal?.bumpOverlappingTiles) {
+        try { window.DailyAdjustmentsInternal.bumpOverlappingTiles(event, event.division); } catch (_) {}
+      }
       // DA exposes saveDailySkeleton and renderGrid via window.DailyAdjustmentsInternal or as globals
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-resize-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; fires only if DailyAdjustmentsInternal
+        // failed to init) — the resize is NOT persisted in that broken state. See the MS-resize
+        // branch above for the full note.
+        window.dispatchEvent(new CustomEvent('mobile-resize-complete', {
           detail: { id: tileId, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }
@@ -863,16 +878,28 @@ function finishTouchReposition(touch, module, wrapper) {
     const y = touch.clientY - rect.top;
     const snapMin = Math.round(y / PIXELS_PER_MINUTE / SNAP_MINS) * SNAP_MINS;
 
+    const _prevDiv121 = event.division;
     event.division = divName;
     event.startTime = minutesToTime(cellStartMin + snapMin);
     event.endTime = minutesToTime(cellStartMin + snapMin + duration);
+
+    // ★★★ CB-121: a cross-grade reposition of a LEAGUE tile must remap its league
+    // reference to the destination grade's league. The desktop drop handlers call
+    // _mbRemapLeagueForGrade; this touch handler mutated event.division in place
+    // and NEVER remapped, so the moved tile still pointed at the SOURCE grade's
+    // league (e.g. Minors bunks scheduled against a Majors game). No-op for
+    // non-league tiles and same-grade moves.
+    if (_prevDiv121 !== divName && typeof window._mbRemapLeagueForGrade === 'function') {
+      try { window._mbRemapLeagueForGrade(event, divName); } catch (_) {}
+    }
 
     if (module === 'ms') {
       if (window.MasterSchedulerInternal?.markUnsavedChanges) window.MasterSchedulerInternal.markUnsavedChanges();
       if (window.MasterSchedulerInternal?.saveDraftToLocalStorage) window.MasterSchedulerInternal.saveDraftToLocalStorage();
       if (window.MasterSchedulerInternal?.renderGrid) window.MasterSchedulerInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; MS-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'ms' }
         }));
       }
@@ -884,7 +911,8 @@ function finishTouchReposition(touch, module, wrapper) {
       if (window.DailyAdjustmentsInternal?.saveDailySkeleton) window.DailyAdjustmentsInternal.saveDailySkeleton();
       if (window.DailyAdjustmentsInternal?.renderGrid) window.DailyAdjustmentsInternal.renderGrid();
       else {
-        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', { 
+        // ★ CB-142: orphan-event fallback (no listener; DA-init-failure only) — not persisted. See finishTouchResize MS branch.
+        window.dispatchEvent(new CustomEvent('mobile-reposition-complete', {
           detail: { id: repositionState.tileId, division: divName, startTime: event.startTime, endTime: event.endTime, module: 'da' }
         }));
       }

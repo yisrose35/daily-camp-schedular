@@ -918,6 +918,27 @@
         document.addEventListener('keydown', escHandler);
     }
 
+    // ★★★ CB-58: violation messages embed user-controlled field / bunk /
+    // division / activity names alongside intentional literal markup
+    // (<strong>, <u>, <small>, <br>) and were rendered raw into innerHTML —
+    // a field named with an <img onerror=> executed in the validator modal.
+    // Full-escape the message, then restore ONLY the fixed whitelist of
+    // attribute-free intentional tags. A malicious name like
+    // "<img src=x onerror=...>" or "<u onmouseover=...>" never matches the
+    // exact whitelisted tag strings, so it stays inert; the legitimate
+    // formatting tags display correctly.
+    function _valEsc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+            return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+    }
+    function escMsg(s) {
+        let e = _valEsc(s);
+        e = e.replace(/&lt;(\/?(?:strong|u|br|small))&gt;/g, '<$1>')
+             .replace(/&lt;small style=&quot;color:#666;&quot;&gt;/g, '<small style="color:#666;">');
+        return e;
+    }
+
     /**
      * Build a collapsible category section for the modal
      */
@@ -934,7 +955,7 @@
                 <ul style="list-style:none; padding:0; margin:4px 0 0 0; display:${collapsed ? 'none' : 'block'}; max-height:250px; overflow-y:auto;">
                     ${items.map(item => `
                         <li style="background:${bgColor}; color:${textColor}; padding:10px 12px; margin-bottom:4px; border-radius:6px; border-left:4px solid ${borderColor}; font-size:0.9em;">
-                            ${item}
+                            ${escMsg(item)}
                         </li>
                     `).join('')}
                 </ul>

@@ -567,6 +567,13 @@
             _fixed: true,
             _autoFilled: true,
             _editedAt: Date.now(),
+            // ★★★ CB-47: stamp the slot time on ORDINARY fills too (was only stamped
+            // for duration-best-fit specials). Without it, a reader that lacks
+            // division/per-bunk slot context for the index (e.g. camper locator on a
+            // freshly cloud-loaded manual day) couldn't resolve the fill's time. The
+            // special branch below still refines _endMin for best-fit durations.
+            _startMin: slotStart,
+            _endMin: slotEnd,
         };
         if (_afFeat) {
             if (_afFeat._partLabel) { _afEntry._partNumber = _afFeat._partNumber; _afEntry._totalParts = _afFeat._totalParts; _afEntry._partLabel = _afFeat._partLabel; }

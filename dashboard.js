@@ -26,6 +26,17 @@
 
 (function() {
     'use strict';
+
+    // ★★★ CB-75: camp name, subdivision names and division names are
+    // owner-controlled and were interpolated RAW into dashboard innerHTML
+    // (welcome title, scheduler role badge, subdivision list) → cross-user stored
+    // XSS (every team member who opens the dashboard executes the owner's payload).
+    // No escaper existed; add one (CampUtils delegate + complete &<>"' fallback).
+    const _dashEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     // ========================================
     // STATE
     // ========================================
@@ -315,7 +326,34 @@
                 cachedAt: Date.now()
             };
             sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(rbacCache));
-            
+
+            // ★★★ CB-108: assignedDivisions above is the DENORMALIZED
+            // camp_users.assigned_divisions snapshot, which goes STALE when an owner
+            // edits a subdivision's divisions[] (the member's row isn't touched).
+            // Re-resolve the scheduler's divisions from the LIVE subdivisions table
+            // by subdivision_ids and overwrite the cache, so Flow/Me read the current
+            // scope rather than a stale invite-time snapshot. Best-effort + async;
+            // the snapshot stands until this resolves.
+            try {
+                const _subIds108 = membership?.subdivision_ids || [];
+                if (window.supabase && _subIds108.length > 0) {
+                    window.supabase.from('subdivisions').select('divisions').in('id', _subIds108)
+                        .then(function (res) {
+                            if (res.error || !res.data) return;
+                            const _live = new Set();
+                            res.data.forEach(function (r) { (Array.isArray(r.divisions) ? r.divisions : []).forEach(function (d) { _live.add(d); }); });
+                            try {
+                                const _c = JSON.parse(sessionStorage.getItem('campistry_rbac_cache') || '{}');
+                                _c.assignedDivisions = [..._live];
+                                _c.cachedAt = Date.now();
+                                sessionStorage.setItem('campistry_rbac_cache', JSON.stringify(_c));
+                                console.log('[Dashboard] CB-108: refreshed assignedDivisions from live subdivisions:', _c.assignedDivisions.join(', '));
+                            } catch (_) {}
+                        })
+                        .catch(function () {});
+                }
+            } catch (_) {}
+
             // ★★★ v2.5: Also write to localStorage as durable fallback ★★★
             // sessionStorage is cleared on tab close. localStorage persists.
             // access_control.js reads localStorage as last-resort fallback.
@@ -349,7 +387,7 @@
         
         // Update the title — show camp name, not email
         if (welcomeTitle) {
-            welcomeTitle.innerHTML = `Welcome back, <span>${displayName}</span>!`;
+            welcomeTitle.innerHTML = `Welcome back, <span>${_dashEsc(displayName)}</span>!`;
         }
         
         // Update the subtitle
@@ -447,7 +485,7 @@
                 .in('id', membership.subdivision_ids);
             
             if (subdivisions && subdivisions.length > 0) {
-                const names = subdivisions.map(s => s.name).join(', ');
+                const names = subdivisions.map(s => _dashEsc(s.name)).join(', ');
                 badgeElement.innerHTML = `
                     <span class="role-text">Scheduler — generates ${names}</span>
                 `;
@@ -599,10 +637,10 @@
                 subdivisions.forEach(sub => {
                     html += `
                         <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border-left: 4px solid ${sub.color || '#6B7280'}; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                            <div style="font-weight: 600; color: var(--slate-800);">${sub.name}</div>
+                            <div style="font-weight: 600; color: var(--slate-800);">${_dashEsc(sub.name)}</div>
                             <div style="font-size: 0.85rem; color: var(--slate-500); margin-top: 4px;">
-                                ${sub.divisions && sub.divisions.length > 0 
-                                    ? sub.divisions.map(d => `<span class="division-tag">${d}</span>`).join('')
+                                ${sub.divisions && sub.divisions.length > 0
+                                    ? sub.divisions.map(d => `<span class="division-tag">${_dashEsc(d)}</span>`).join('')
                                     : '<em>No divisions assigned</em>'
                                 }
                             </div>
@@ -1113,6 +1151,13 @@
 
     function buildWeekMap(startDate, endDate) {
         if (!startDate) return null;
+        // ★ CB-97: format Dates from their LOCAL components. The dates are built as local midnight
+        // (new Date(s+'T00:00:00')); toISOString() converts to UTC, rolling the day back one in every
+        // positive-UTC-offset timezone (e.g. Asia/Kolkata showed week boundaries one day early).
+        var fmtLocal = function (d) {
+            var y = d.getFullYear(), m = d.getMonth() + 1, dd = d.getDate();
+            return y + '-' + (m < 10 ? '0' + m : m) + '-' + (dd < 10 ? '0' + dd : dd);
+        };
         var start = new Date(startDate + 'T00:00:00');
         var end = endDate ? new Date(endDate + 'T00:00:00') : null;
         var weeks = [];
@@ -1127,8 +1172,8 @@
             weekEnd.setDate(weekEnd.getDate() - 1);
             weeks.push({
                 week: weekNum,
-                start: weekStart.toISOString().slice(0, 10),
-                end: weekEnd.toISOString().slice(0, 10)
+                start: fmtLocal(weekStart),
+                end: fmtLocal(weekEnd)
             });
             weekStart = new Date(nextSunday);
             weekNum++;
@@ -1182,11 +1227,19 @@
     }
 
     window.saveCampDates = async function() {
+        var status = document.getElementById('campDatesStatus');
+        // ★ CB-98: owner-only write guard. The UI is read-only for admin/scheduler (loadCampDates
+        // disables inputs + hides actions), but these global writers had NO role check — a console
+        // call or stale UI could overwrite the owner's half boundaries, silently shifting every
+        // Per-Half rotation boundary. Mirror saveProfile's isTeamMember gate.
+        if (isTeamMember) {
+            if (status) { status.textContent = 'Only camp owners can edit camp dates.'; status.style.color = '#dc2626'; }
+            return;
+        }
         var startDate = document.getElementById('campStartDate')?.value || null;
         var h1End = document.getElementById('campHalf1End')?.value || null;
         var h2Start = document.getElementById('campHalf2Start')?.value || null;
         var endDate = document.getElementById('campEndDate')?.value || null;
-        var status = document.getElementById('campDatesStatus');
 
         var campDates = {
             startDate: startDate,
@@ -1214,6 +1267,12 @@
     };
 
     window.clearCampDates = async function() {
+        // ★ CB-98: owner-only write guard (see saveCampDates).
+        if (isTeamMember) {
+            var _st = document.getElementById('campDatesStatus');
+            if (_st) { _st.textContent = 'Only camp owners can edit camp dates.'; _st.style.color = '#dc2626'; }
+            return;
+        }
         document.getElementById('campStartDate').value = '';
         document.getElementById('campHalf1End').value = '';
         document.getElementById('campHalf2Start').value = '';

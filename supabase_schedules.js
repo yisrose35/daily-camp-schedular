@@ -332,8 +332,13 @@
         let editableDivisions = [];
         if (role === 'scheduler') {
             try { editableDivisions = window.AccessControl?.getGeneratableDivisions?.() || []; } catch (e) {}
-        }
-        if (!editableDivisions.length) {
+            // ★★★ CB-6: do NOT fall back to getEditableDivisions() for a
+            // scheduler — under v3.13 that returns EVERY division, so an empty
+            // generatable set (AccessControl init race / no subdivisions yet)
+            // would make the scheduler's save absorb the whole camp and shadow
+            // the owner in the per-bunk merge. Leave it empty; the empty-set
+            // handling below blocks the save rather than uploading everything.
+        } else {
             editableDivisions = window.AccessControl?.getEditableDivisions?.() || [];
         }
         log('Editable divisions from AccessControl:', editableDivisions);
@@ -380,13 +385,19 @@
         }
         
         const myBunks = new Set(getMyEditableBunks());
-        
+
         if (myBunks.size === 0) {
             logError('WARNING: No editable bunks found! Cannot filter properly.');
             logError('AccessControl divisions:', window.AccessControl?.getEditableDivisions?.());
             logError('PermissionsDB bunks:', window.PermissionsDB?.getEditableBunks?.());
-            // Return original to avoid saving empty - let RLS handle it
-            return scheduleAssignments;
+            // ★★★ CB-18 / CB-112: do NOT fail open to the full camp schedule.
+            // RLS does not inspect schedule_data content, so returning everything
+            // here let a scheduler whose bunk set resolved empty (init race)
+            // upload ALL divisions with fresh stamps and shadow the owner. Return
+            // empty instead — the empty-save guard then blocks the write and
+            // leaves the cloud row intact; the save retries once AccessControl is
+            // initialized. (owner/admin already returned the full set above.)
+            return {};
         }
         
         const filtered = {};
@@ -450,7 +461,16 @@
         }
         try {
             const records = await loadAllSchedulersForDate(dateKey);
-            
+
+            // CB-2: a transient query failure returns an empty array TAGGED
+            // _queryErrored. Do NOT treat that as "the date was deleted" — keep
+            // the local cache and surface a fallback so consumers don't wipe
+            // memory/localStorage on a momentary network/auth hiccup.
+            if (records && records._queryErrored) {
+                logError('Cloud query errored for', dateKey, '— preserving local cache (not treating as empty)');
+                return { success: false, error: 'query-failed', data: getLocalSchedule(dateKey), source: 'local-fallback' };
+            }
+
             if (!records || records.length === 0) {
                 log('No cloud records — clearing local cache for this date');
                 deleteLocalSchedule(dateKey);
@@ -475,7 +495,15 @@
         const client = getClient();
         const campId = getCampId();
         
-        if (!client || !campId) return [];
+        // CB-2: distinguish a TRANSIENT query failure from a genuinely-empty
+        // date. A bare [] for both let loadSchedule (and the delete paths)
+        // treat a network blip / mid-refresh auth error as "owner deleted
+        // everything" and wipe the local cache. We tag the failure array with
+        // a non-enumerable _queryErrored flag that rides on the returned
+        // instance (race-safe — no shared module state) and is invisible to
+        // the many callers that only read .length.
+        const _erroredResult = () => { const a = []; try { Object.defineProperty(a, '_queryErrored', { value: true, enumerable: false }); } catch (_) { a._queryErrored = true; } return a; };
+        if (!client || !campId) return _erroredResult();
         try {
             const { data, error } = await client
                 .from(CONFIG.TABLE_NAME)
@@ -484,16 +512,43 @@
                 .eq('date_key', dateKey);
             if (error) {
                 logError('Query error:', error);
-                return [];
+                return _erroredResult();
             }
             log(`Loaded ${data?.length || 0} records for ${dateKey}`);
             return data || [];
-            
+
         } catch (e) {
             logError('loadAllSchedulersForDate failed:', e);
+            return _erroredResult();
+        }
+    }
+
+    /**
+     * ★★★ CB-70: list the distinct date_keys that have a cloud schedule for this
+     * camp. Lightweight (selects only date_key). Lets the calendar overview mark
+     * cloud-only / locally-pruned dates as "has schedule" instead of showing a
+     * false "No schedule". Returns [] on any error (caller treats as "no extra
+     * cloud dates" — purely additive, never removes local markers).
+     */
+    async function listScheduleDates() {
+        const client = getClient();
+        const campId = getCampId();
+        if (!client || !campId) return [];
+        try {
+            const { data, error } = await client
+                .from(CONFIG.TABLE_NAME)
+                .select('date_key')
+                .eq('camp_id', campId);
+            if (error) { logError('listScheduleDates query error:', error); return []; }
+            const seen = {};
+            (data || []).forEach(r => { if (r && r.date_key) seen[String(r.date_key).substring(0, 10)] = 1; });
+            return Object.keys(seen);
+        } catch (e) {
+            logError('listScheduleDates failed:', e);
             return [];
         }
     }
+
     /**
      * Load schedules for a date range.
      */
@@ -538,6 +593,12 @@
         let mergedDivisionTimes = {};
         let maxSlots = 0;
         let isRainyDay = false;
+        // ★★★ CB-21: track the auto-mode signals so the PRIMARY load paths
+        // (date-change / realtime, which call mergeSchedules) keep them. They
+        // were dropped from the return, so post-edit gates / rebuild logic on
+        // those paths couldn't tell an auto build from a manual one.
+        let mergedAutoGenerated = false;
+        let mergedManualSkeleton = null;
 
         // Sort by updated_at ascending so the most recently saved record wins
         records.sort((a, b) => {
@@ -629,20 +690,21 @@
                 });
             }
             
-            // ★★★ FIX: Track unifiedTimes - use longest array ★★★
-            if (data.unifiedTimes && Array.isArray(data.unifiedTimes)) {
-                if (data.unifiedTimes.length > mergedUnifiedTimes.length) {
-                    mergedUnifiedTimes = data.unifiedTimes;
-                    maxSlots = data.unifiedTimes.length;
-                }
+            // ★★★ CB-16: unifiedTimes by RECENCY, not longest array. Records are
+            // sorted ascending by updated_at, so the newest non-empty value wins
+            // (overwrite as we go). The old "longest array" rule meant a REDUCED
+            // slot count (a period removed) could never propagate — the stale,
+            // longer grid was kept forever and re-persisted. A non-empty guard
+            // still prevents an empty array from clobbering a real grid.
+            if (data.unifiedTimes && Array.isArray(data.unifiedTimes) && data.unifiedTimes.length > 0) {
+                mergedUnifiedTimes = data.unifiedTimes;
+                maxSlots = data.unifiedTimes.length;
             }
-            
-            // Also check record.unified_times (separate column)
-            if (record.unified_times && Array.isArray(record.unified_times)) {
-                if (record.unified_times.length > mergedUnifiedTimes.length) {
-                    mergedUnifiedTimes = record.unified_times;
-                    maxSlots = record.unified_times.length;
-                }
+
+            // Also check record.unified_times (separate column) — newest non-empty wins
+            if (record.unified_times && Array.isArray(record.unified_times) && record.unified_times.length > 0) {
+                mergedUnifiedTimes = record.unified_times;
+                maxSlots = record.unified_times.length;
             }
 
             // Merge divisionTimes
@@ -658,6 +720,12 @@
             // Rainy day flag
             if (record.is_rainy_day) {
                 isRainyDay = true;
+            }
+
+            // CB-21: auto-mode signals (records sorted ascending → newest wins)
+            if (data._autoGenerated === true) mergedAutoGenerated = true;
+            if (Array.isArray(data.manualSkeleton) && data.manualSkeleton.length > 0) {
+                mergedManualSkeleton = data.manualSkeleton;
             }
         });
         
@@ -736,6 +804,9 @@
             _perBunkSlotsData: Object.keys(_divWinnerPBS).length > 0 ? _divWinnerPBS : undefined,
             slotCount: maxSlots,
             isRainyDay,
+            // CB-21: surface the auto-mode signals on the primary merge path
+            _autoGenerated: mergedAutoGenerated,
+            manualSkeleton: mergedManualSkeleton || undefined,
             _mergedAt: new Date().toISOString(),
             _recordCount: records.length
         };
@@ -957,9 +1028,22 @@
                 return { success: true, target: 'empty-blocked-by-filter', bunkCount: 0 };
             }
 
+            // ★★★ CB-1 / CB-38: grid geometry + mode flags must come from the
+            // PASSED payload, not live window state. On a cross-date save
+            // (allowCrossDate — propagation fanout, offline-queue replay) the
+            // window globals (divisionTimes/unifiedTimes/_autoGenerated/skeleton)
+            // belong to the date the user is VIEWING, not the date being saved;
+            // stamping them onto another date's cloud row contaminated its grid.
+            // The legitimate cross-date callers pass that date's own per-date
+            // payload (campDailyData_v1[dk] / the offline-queue captured payload),
+            // which setLocalSchedule populated with divisionTimes + the
+            // _perBunkSlotsData sidecar — so data.* is authoritative there.
+            // Same-date saves keep the window fallback (window IS the right date).
+            const _allowWindowFallback = !options.allowCrossDate;
+
             // Phase 4: persist scheduleSegments alongside assignments, filtered
             // by the same bunk-ownership rules so we never leak foreign data.
-            const rawSegments = data.scheduleSegments || window.scheduleSegments || {};
+            const rawSegments = data.scheduleSegments || (_allowWindowFallback ? window.scheduleSegments : null) || {};
             const filteredSegments = options.skipFilter ? rawSegments : filterScheduleToMyBunks(rawSegments);
 
             // Prepare payload
@@ -967,10 +1051,14 @@
                 scheduleAssignments: filteredAssignments,
                 scheduleSegments: filteredSegments,
                 leagueAssignments: data.leagueAssignments || {},
-                unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || window.unifiedTimes || []),
-                slotCount: data.unifiedTimes?.length || window.unifiedTimes?.length || 0,
-                // Include division-specific times
-                divisionTimes: window.DivisionTimesSystem?.serialize(window.divisionTimes) || {}
+                unifiedTimes: serializeUnifiedTimes(data.unifiedTimes || (_allowWindowFallback ? window.unifiedTimes : null) || []),
+                slotCount: data.unifiedTimes?.length || (_allowWindowFallback ? (window.unifiedTimes?.length || 0) : 0),
+                // Include division-specific times — prefer the passed payload's
+                // own divisionTimes (serialize handles the _perBunkSlots property);
+                // only fall back to live window on same-date saves.
+                divisionTimes: data.divisionTimes
+                    ? (window.DivisionTimesSystem?.serialize(data.divisionTimes) || data.divisionTimes)
+                    : (_allowWindowFallback ? (window.DivisionTimesSystem?.serialize(window.divisionTimes) || {}) : {})
             };
 
             // ★★★ DAY 16b FIX: Persist _perBunkSlotsData (per-grade per-bunk grid)
@@ -981,7 +1069,9 @@
             // Prefer caller-provided data._perBunkSlotsData (verifiedScheduleSave
             // builds this). Fall back to extracting from live window.divisionTimes.
             let pbSlotsData = data._perBunkSlotsData;
-            if (!pbSlotsData) {
+            if (!pbSlotsData && _allowWindowFallback) {
+                // CB-1: only harvest from live window on same-date saves —
+                // on a cross-date save window.divisionTimes is the viewed date's.
                 const dt = window.divisionTimes || {};
                 pbSlotsData = {};
                 Object.keys(dt).forEach(g => {
@@ -1061,10 +1151,13 @@
             // ★★★ DAY 16b FIX: Round-trip _autoGenerated + manualSkeleton too.
             // These tell the load-side code path "this was an auto build" so
             // post-edit gates / rebuild logic pick the right branch.
-            if (data._autoGenerated === true || window._autoGenerated === true) {
+            if (data._autoGenerated === true || (_allowWindowFallback && window._autoGenerated === true)) {
                 payload._autoGenerated = true;
             }
-            const ms = data.manualSkeleton || window._autoSkeleton || window.dailyOverrideSkeleton;
+            // CB-38: on cross-date saves do NOT read window._autoSkeleton/
+            // dailyOverrideSkeleton — those are the viewed date's skeleton and
+            // would leak onto the target date's row.
+            const ms = data.manualSkeleton || (_allowWindowFallback ? (window._autoSkeleton || window.dailyOverrideSkeleton) : null);
             if (Array.isArray(ms) && ms.length > 0) {
                 payload.manualSkeleton = ms;
             }
@@ -1243,9 +1336,22 @@
                 log('No bunks to delete');
                 return { success: true, message: 'No bunks assigned' };
             }
+            // ★★★ CB-42: leagueAssignments is DIVISION-keyed, not bunk-keyed, so the
+            // old `delete leagues[bunk]` never matched and a scheduler's league
+            // games survived their day-delete (then re-merged on reload). Resolve my
+            // divisions from my bunks so league entries can be deleted by division.
+            const _divResolver42 = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDivisionForBunk) || window.getDivisionForBunk;
+            const _myDivisions42 = new Set();
+            if (_divResolver42) myBunks.forEach(function (b) { const d = _divResolver42(b); if (d) _myDivisions42.add(String(d)); });
             // Step 2: Load ALL records for this date
             const allRecords = await loadAllSchedulersForDate(dateKey);
             log('Found', allRecords.length, 'records for', dateKey);
+            if (allRecords && allRecords._queryErrored) {
+                // CB-2: transient query failure — abort the delete rather than
+                // clearing local on a false "no records".
+                logError('deleteMyScheduleOnly: cloud query errored for', dateKey, '— aborting, local cache preserved');
+                return { success: false, error: 'query-failed', message: 'Cloud query failed — try again' };
+            }
             if (!allRecords || allRecords.length === 0) {
                 // No records in cloud, just clear local
                 deleteLocalSchedule(dateKey);
@@ -1268,14 +1374,27 @@
                         delete assignments[bunk];
                         modified = true;
                     }
-                    if (leagues[bunk] !== undefined) {
-                        delete leagues[bunk];
-                    }
                 }
+                // ★★★ CB-42: delete league matchups by DIVISION (the map's real key).
+                _myDivisions42.forEach(function (div) {
+                    if (leagues[div] !== undefined) { delete leagues[div]; modified = true; }
+                });
                 const bunksAfter = Object.keys(assignments).length;
                 log(`Record ${record.scheduler_name}: ${bunksBefore} → ${bunksAfter} bunks`);
                 if (!modified) {
                     log('  Skipping - no changes needed');
+                    continue;
+                }
+                // ★★★ CB-12: NEVER write another scheduler's row from here. The
+                // original loop did a blind read-modify-write of every record,
+                // so a concurrent save by a foreign row's owner (between our
+                // SELECT and UPDATE) was clobbered with our stale snapshot. Bunks
+                // are per-row-owned (camp_id,date_key,scheduler_id), so my bunks
+                // live in MY row; any legacy leakage of my bunks into a foreign
+                // row is pruned by the per-bunk merge (#V2-25) on the next load.
+                // Only mutate the current user's own record.
+                if (String(record.scheduler_id) !== String(userId)) {
+                    log('  (skipping foreign scheduler row — not ours to rewrite; merge prunes any legacy leakage)');
                     continue;
                 }
                 // If record is now empty, delete it entirely
@@ -1286,7 +1405,27 @@
                         .delete()
                         .eq('id', record.id);
                     if (error) {
-                        logError(`  Delete record ${record.id} failed:`, error);
+                        // ★★★ CB-17: a scheduler cannot DELETE rows under RLS
+                        // (delete is owner/admin-only), so the DELETE silently
+                        // no-ops and the old row resurrects on the next load.
+                        // Fall back to UPDATING the row to an empty schedule,
+                        // which the scheduler CAN do on their own row — an empty
+                        // row carries no bunks so the merge ignores it (effective
+                        // delete) and it can't resurrect stale assignments.
+                        logError(`  Delete record ${record.id} failed (likely RLS) — emptying row instead:`, error);
+                        const { error: upErr } = await client
+                            .from(CONFIG.TABLE_NAME)
+                            .update({
+                                schedule_data: { ...scheduleData, scheduleAssignments: {}, leagueAssignments: {} },
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('id', record.id);
+                        if (upErr) {
+                            logError(`  Empty-row fallback also failed for ${record.id}:`, upErr);
+                        } else {
+                            recordsModified++;
+                            log('  ✅ Emptied record (delete fallback)');
+                        }
                     } else {
                         recordsDeleted++;
                         log('  ✅ Deleted empty record');
@@ -1318,7 +1457,11 @@
             log(`Delete complete: ${recordsModified} modified, ${recordsDeleted} deleted`);
             // Step 4: Reload remaining data and update local storage
             const remaining = await loadAllSchedulersForDate(dateKey);
-            if (remaining.length > 0) {
+            if (remaining && remaining._queryErrored) {
+                // CB-2: re-read errored after a successful delete — leave local
+                // cache as-is rather than wiping it on a false empty.
+                log('Post-delete re-read errored — leaving local cache untouched');
+            } else if (remaining.length > 0) {
                 const merged = mergeSchedules(remaining);
                 setLocalSchedule(dateKey, merged);
                 log('Updated local storage with remaining data:', Object.keys(merged.scheduleAssignments || {}).length, 'bunks');
@@ -1430,6 +1573,7 @@
         // Read
         loadSchedule,
         loadAllSchedulersForDate,
+        listScheduleDates, // ★ CB-70: distinct cloud schedule dates for the calendar overview
         loadDateRange,
         
         // Write

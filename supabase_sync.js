@@ -200,6 +200,28 @@
                         }
                     });
 
+                    // ★★★ CB-15: the loop above only protects AUTO-mode in-flight
+                    // generations (_isPerBunk). In MANUAL mode a bunk has no
+                    // _isPerBunk marker, so myBunks stayed empty and a realtime
+                    // refresh full-REPLACED window.scheduleAssignments — wiping a
+                    // scheduler's unsaved manual edits. When this is a refresh of
+                    // the date ALREADY in memory (not a date-change load) and the
+                    // user is a SCHEDULER (scoped subset — owner/admin = all
+                    // divisions, so expanding would suppress every remote update;
+                    // their case is handled by integration_hooks' merge), also
+                    // protect that scheduler's editable bunks so remote updates
+                    // merge for OTHER bunks without clobbering the scheduler's own.
+                    try {
+                        var _role = window.CampistryDB?.getRole?.() || window.AccessControl?.getCurrentRole?.();
+                        if (_role === 'scheduler' && window._scheduleAssignmentsDate === dateKey) {
+                            var _myDivs = window.AccessControl?.getEditableDivisions?.() || [];
+                            _myDivs.forEach(function(dn) {
+                                var di = (window.divisions || {})[dn];
+                                if (di && di.bunks) di.bunks.forEach(function(b) { myBunks.add(b); });
+                            });
+                        }
+                    } catch (_e) { /* fall through to existing behavior */ }
+
                     if (myBunks.size === 0) {
                         // No live generation — full replace is safe
                         window.scheduleAssignments = JSON.parse(JSON.stringify(dateData.scheduleAssignments));
@@ -1262,6 +1284,10 @@
     });
 
     // Listen for realtime updates
+    // ★★★ CB-44: NOTE — 'campistry-realtime-update' is never dispatched anywhere
+    // (verified repo-wide), so this listener is currently DORMANT. Realtime
+    // multi-scheduler refresh is driven by integration_hooks' realtime handler,
+    // not this event. Kept as intended wiring; do not assume it fires today.
     window.addEventListener('campistry-realtime-update', (e) => {
         console.log('[Sync] Realtime update event received');
         refreshMultiSchedulerView(getCurrentDateKey(), true);

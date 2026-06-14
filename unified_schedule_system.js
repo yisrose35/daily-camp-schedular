@@ -1359,12 +1359,19 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
     const _perBunkData = window.divisionTimes?.[excludeBunkDiv]?._perBunkSlots?.[String(excludeBunk)];
     const excludeBunkSlots = _perBunkData || window.divisionTimes?.[excludeBunkDiv] || [];
     
-    // Build time ranges for the slots being claimed
+    // Build time ranges for the slots being claimed.
+    // MS-5: prefer the editing bunk's entry-stamped times (_startMin/_endMin)
+    // — per-bunk slot tables can be stale/degenerate after merges while the
+    // entries carry the solver's real times; mixing the two coordinate
+    // systems made real cross-division overlaps invisible.
     const claimedTimeRanges = [];
     for (const slotIdx of slots) {
         const slotInfo = excludeBunkSlots[slotIdx];
-        if (slotInfo && slotInfo.startMin !== undefined && slotInfo.endMin !== undefined) {
-            claimedTimeRanges.push({ slotIdx, startMin: slotInfo.startMin, endMin: slotInfo.endMin });
+        const ownEntry = (assignments[excludeBunk] || [])[slotIdx];
+        const cs = (ownEntry && typeof ownEntry._startMin === 'number') ? ownEntry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+        const ce = (ownEntry && typeof ownEntry._endMin === 'number') ? ownEntry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+        if (cs !== undefined && ce !== undefined) {
+            claimedTimeRanges.push({ slotIdx, startMin: cs, endMin: ce });
         }
     }
     
@@ -1403,33 +1410,39 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
                 const bunkAssignments = assignments[bunkName];
                 if (!bunkAssignments) continue;
                 
-                // Check each slot in THIS bunk's division for time overlap
-                for (let idx = 0; idx < divSlots.length; idx++) {
+                // Check each slot in THIS bunk's division for time overlap.
+                // MS-5: iterate the full assignment array (entries can exist
+                // past the division table's length) and prefer entry-stamped
+                // times over the table's — same reasoning as the claimed side.
+                const _scanLen = Math.max(divSlots.length, bunkAssignments.length);
+                for (let idx = 0; idx < _scanLen; idx++) {
                     const entry = bunkAssignments[idx];
                     if (!entry || entry.continuation) continue;
-                    
+
                     const entryField = fieldLabel(entry.field);
                     const entryActivity = entry._activity || entryField;
                     const entryLocation = entry._location || entryField;
-                    
+
                     // Check if this entry uses the same location
                     const matchesLocation = entryField?.toLowerCase() === locationName.toLowerCase() ||
                         entryLocation?.toLowerCase() === locationName.toLowerCase() ||
                         entryActivity?.toLowerCase() === locationName.toLowerCase();
-                    
+
                     if (!matchesLocation) continue;
-                    
+
                     // *** KEY FIX: Check TIME OVERLAP, not slot index ***
                     const slotInfo = divSlots[idx];
-                    if (!slotInfo || slotInfo.startMin === undefined) continue;
-                    
+                    const oS = (typeof entry._startMin === 'number') ? entry._startMin : (slotInfo ? slotInfo.startMin : undefined);
+                    const oE = (typeof entry._endMin === 'number') ? entry._endMin : (slotInfo ? slotInfo.endMin : undefined);
+                    if (oS === undefined || oE === undefined) continue;
+
                     for (const claimed of claimedTimeRanges) {
                         // Time overlap: NOT (end1 <= start2 OR start1 >= end2)
-                        const hasOverlap = !(slotInfo.endMin <= claimed.startMin || slotInfo.startMin >= claimed.endMin);
-                        
+                        const hasOverlap = !(oE <= claimed.startMin || oS >= claimed.endMin);
+
                         if (hasOverlap) {
                             if (!usageBySlot[claimed.slotIdx]) usageBySlot[claimed.slotIdx] = [];
-                            
+
                             // Avoid duplicate entries for same bunk in same claimed slot
                             if (!usageBySlot[claimed.slotIdx].find(u => u.bunk === String(bunkName))) {
                                 usageBySlot[claimed.slotIdx].push({
@@ -1439,8 +1452,8 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
                                     field: entryField,
                                     canEdit: editBunks.has(String(bunkName)),
                                     theirSlot: idx,
-                                    overlapStart: Math.max(slotInfo.startMin, claimed.startMin),
-                                    overlapEnd: Math.min(slotInfo.endMin, claimed.endMin)
+                                    overlapStart: Math.max(oS, claimed.startMin),
+                                    overlapEnd: Math.min(oE, claimed.endMin)
                                 });
                             }
                         }
@@ -1571,18 +1584,26 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
         return options;
     }
 
-    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps) {
+    function isFieldAvailable(fName, slots, bunk, fieldUsageBySlot, activityProps, timeWindow = null) {
         const divName = getDivisionForBunk(bunk);
         if (!divName || slots.length === 0) return false;
-        
-        // Get time range for these slots
+
+        // Get time range for these slots.
+        // MS-5b: when the caller already resolved the real window (entry
+        // times / per-bunk table), use it — the division-level table can be
+        // SHORTER than the bunk's slot index in auto mode, which made the
+        // guard below reject every candidate and park bunks at Free.
         const divSlots = window.divisionTimes?.[divName] || [];
-        if (slots[0] >= divSlots.length) return false;
-        
-        const startMin = divSlots[slots[0]]?.startMin;
-        const endMin = divSlots[slots[slots.length - 1]]?.endMin;
-        
-        if (startMin === undefined || endMin === undefined) return false;
+        let startMin, endMin;
+        if (timeWindow && typeof timeWindow.startMin === 'number' && typeof timeWindow.endMin === 'number') {
+            startMin = timeWindow.startMin;
+            endMin = timeWindow.endMin;
+        } else {
+            if (slots[0] >= divSlots.length) return false;
+            startMin = divSlots[slots[0]]?.startMin;
+            endMin = divSlots[slots[slots.length - 1]]?.endMin;
+            if (startMin === undefined || endMin === undefined) return false;
+        }
         
         // Use time-based availability check
         const props = activityProps[fName] || {};
@@ -1614,7 +1635,9 @@ const editBunks = _conflictOwnScope || (editBunksResult instanceof Set ? editBun
             const divSlots = window.divisionTimes?.[getDivisionForBunk(bunk)] || [];
             let slotIdx = divSlots.findIndex(s => s.startMin >= startMin);
             if (slotIdx < 0) slotIdx = 0;
-            const seqViolation = window.checkSequenceViolation(bunk, pick?.activityName || pick?._activity || pick?.sport || '', slotIdx, getDivisionForBunk(bunk));
+            // `pick` was never a parameter here — referencing it would throw
+            // a ReferenceError the moment checkSequenceViolation exists.
+            const seqViolation = window.checkSequenceViolation(bunk, fName, slotIdx, getDivisionForBunk(bunk));
             if (seqViolation?.violated) return false;
         }
 
@@ -1775,12 +1798,26 @@ async function resolveConflictsAndApply(bunk, slots, activity, location, editDat
     // Get the editing bunk's division and time range
     const editingDiv = getDivisionForBunk(bunk);
     const editingDivSlots = window.divisionTimes?.[editingDiv] || [];
-    
+
+    // ★★★ CB-33: when the editing division uses per-bunk geometry (auto mode),
+    // the `slots` indices index into THIS BUNK's _perBunkSlots — not the
+    // division-level slot table. Reading editingDivSlots[slots[i]] then yields
+    // the wrong time window (or undefined, when divisionTimes[div] is the
+    // per-bunk object), producing a wrong field-lock window + wrong smart-regen
+    // mapping. Resolve the claimed window from the bunk's per-bunk slots first,
+    // falling back to the (flat) division table for manual geometry.
+    const _divEntry33 = window.divisionTimes?.[editingDiv];
+    const _perBunkSlots33 =
+        (_divEntry33 && _divEntry33._isPerBunk && _divEntry33._perBunkSlots && _divEntry33._perBunkSlots[bunk]) ||
+        (window._perBunkSlots && window._perBunkSlots[editingDiv] && window._perBunkSlots[editingDiv][bunk]) ||
+        null;
+    const _claimSlots33 = (Array.isArray(_perBunkSlots33) && _perBunkSlots33.length) ? _perBunkSlots33 : editingDivSlots;
+
     // * Capture the actual TIME RANGE being claimed *
     let claimedStartMin = null, claimedEndMin = null;
-    if (slots.length > 0 && editingDivSlots[slots[0]]) {
-        claimedStartMin = editingDivSlots[slots[0]].startMin;
-        claimedEndMin = editingDivSlots[slots[slots.length - 1]].endMin;
+    if (slots.length > 0 && _claimSlots33[slots[0]]) {
+        claimedStartMin = _claimSlots33[slots[0]].startMin;
+        claimedEndMin = _claimSlots33[slots[slots.length - 1]].endMin;
     }
     
     console.log(`[resolveConflictsAndApply] Claiming ${location} for ${bunk} (${editingDiv}) at ${claimedStartMin}-${claimedEndMin}min`);
@@ -2144,6 +2181,29 @@ actualSlots.forEach((slotIdx, i) => {
 // =========================================================================
 // HELPER: Find Best Activity (DIVISION-AWARE)
 // =========================================================================
+
+// MS-5b: resolve the real time window for a bunk's slots. Prefer the
+// displaced entry's stamped _startMin/_endMin, then the bunk's per-bunk
+// slot table — the division-level table can disagree with both in auto
+// mode (per-bunk timelines), which stamped smart-regen replacements at
+// the wrong time (observed 850-855 vs the entry's real 905-945 slot).
+function _resolveSlotWindow(bunk, divName, slots) {
+    const first = window.scheduleAssignments?.[bunk]?.[slots[0]];
+    if (first && typeof first._startMin === 'number' && typeof first._endMin === 'number') {
+        const last = window.scheduleAssignments?.[bunk]?.[slots[slots.length - 1]];
+        return {
+            startMin: first._startMin,
+            endMin: (last && typeof last._endMin === 'number') ? last._endMin : first._endMin
+        };
+    }
+    const table = window.divisionTimes?.[divName]?._perBunkSlots?.[String(bunk)] || window.divisionTimes?.[divName] || [];
+    const s = table[slots[0]], l = table[slots[slots.length - 1]];
+    if (s && typeof s.startMin === 'number') {
+        return { startMin: s.startMin, endMin: (l && typeof l.endMin === 'number') ? l.endMin : s.startMin + 30 };
+    }
+    return { startMin: null, endMin: null };
+}
+
  function findBestActivityForBunkDivisionAware(bunk, slots, divName, fieldUsageBySlot, activityProperties, avoidFields = []) {
         const disabledFields = window.currentDisabledFields || [];
         const avoidSet = new Set(avoidFields.map(f => (f || '').toLowerCase()));
@@ -2158,15 +2218,10 @@ actualSlots.forEach((slotIdx, i) => {
         }
 
     
-    // Get time range for these slots
-    const divSlots = window.divisionTimes?.[divName] || [];
-    let startMin = null, endMin = null;
-    
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        endMin = divSlots[slots[slots.length - 1]]?.endMin || (startMin + 30);
-    }
-    
+    // Get time range for these slots (MS-5b: entry times > per-bunk table > division table)
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
+
     const candidates = buildCandidateOptions(slots, activityProperties, disabledFields, divName);
     const scoredPicks = [];
     
@@ -2179,8 +2234,8 @@ actualSlots.forEach((slotIdx, i) => {
        // Check field availability by TIME
         if (!checkFieldAvailableByTime(cand.field, startMin, endMin, bunk, activityProperties)) continue;
         
-        // Also check slot-based for backwards compat
-        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties)) continue;
+        // Also check slot-based for backwards compat (MS-5b: pass the real window)
+        if (!isFieldAvailable(cand.field, slots, bunk, fieldUsageBySlot, activityProperties, { startMin, endMin })) continue;
         
         // *** v4.1.2 FIX: Enforce accessRestrictions, timeRules & preferences ***
         // Without this, bumped bunks get assigned fields/specials their division can't access
@@ -2294,13 +2349,11 @@ function checkFieldAvailableByTime(fieldName, startMin, endMin, excludeBunk, act
 // =========================================================================
 function applyPickToBunkDivisionAware(bunk, slots, divName, pick, fieldUsageBySlot, activityProperties, bypassInfo = {}) {
     const divSlots = window.divisionTimes?.[divName] || [];
-    
-    let startMin = null, endMin = null;
-    if (slots.length > 0 && divSlots[slots[0]]) {
-        startMin = divSlots[slots[0]].startMin;
-        const lastSlot = divSlots[slots[slots.length - 1]];
-        endMin = lastSlot ? lastSlot.endMin : (startMin + 30);
-    }
+
+    // MS-5b: read the window BEFORE overwriting the entry below —
+    // the displaced entry's stamped times are the truest source.
+    const _win = slots.length > 0 ? _resolveSlotWindow(bunk, divName, slots) : { startMin: null, endMin: null };
+    let startMin = _win.startMin, endMin = _win.endMin;
     
     const currentUserId = window.AccessControl?.getCurrentUserId?.() || 'unknown';
     const currentUserName = window.AccessControl?.getCurrentUserName?.() || 'Another scheduler';
@@ -3873,7 +3926,8 @@ if (bypassStatus.highlight) {
         
         // Step 1: Save to localStorage first (immediate backup)
         try {
-            localStorage.setItem(`scheduleAssignments_${dateKey}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${dateKey}` mirror (never read) —
+            // canonical campDailyData_v1[dateKey] below is the real backup/read path.
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[dateKey]) allDailyData[dateKey] = {};
             allDailyData[dateKey].scheduleAssignments = window.scheduleAssignments;
@@ -4255,7 +4309,7 @@ if (bypassStatus.highlight) {
 
         const currentDate = window.currentScheduleDate || window.currentDate || document.getElementById('datePicker')?.value || new Date().toISOString().split('T')[0];
         try {
-            localStorage.setItem(`scheduleAssignments_${currentDate}`, JSON.stringify(window.scheduleAssignments));
+            // ★ CB-52: dropped write-only `scheduleAssignments_${currentDate}` mirror (never read).
             const allDailyData = JSON.parse(localStorage.getItem('campDailyData_v1') || '{}');
             if (!allDailyData[currentDate]) allDailyData[currentDate] = {};
             allDailyData[currentDate].scheduleAssignments = window.scheduleAssignments;
@@ -4687,8 +4741,8 @@ if (bypassStatus.highlight) {
                 let html = allAutoResolvable && !conflictCheck.globalLock
                     ? `<div style="background:#dbeafe;border:1px solid #3b82f6;border-radius:8px;padding:12px;"><strong style="color:#1e40af;">Will Auto-Reassign</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#1e3a5f;">${escapeHtml(location)} is in use — affected bunks will be auto-moved:</p>`
                     : `<div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:12px;"><strong style="color:#92400e;">Field Conflict</strong><p style="margin:6px 0 0;font-size:0.85rem;color:#78350f;">${escapeHtml(location)} is already in use:</p>`;
-                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">Can auto-reassign: ${editableBunks.join(', ')}</div>`;
-                if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.join(', ')}</div>
+                if (editableBunks.length)    html += `<div style="margin-top:8px;padding:6px 8px;background:#d1fae5;border-radius:6px;font-size:0.8rem;color:#065f46;">Can auto-reassign: ${editableBunks.map(escapeHtml).join(', ')}</div>`;
+                if (nonEditableBunks.length) html += `<div style="margin-top:6px;padding:6px 8px;background:#fee2e2;border-radius:6px;font-size:0.8rem;color:#991b1b;">✗ Other scheduler's bunks: ${nonEditableBunks.map(escapeHtml).join(', ')}</div>
                     <div style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">
                         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="notify" checked style="margin-top:2px;"><div><div style="font-weight:500;">Override &amp; flag the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflicting activity is flagged and they're notified</div></div></label>
                         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;padding:8px;background:white;border-radius:6px;border:2px solid #d1d5db;"><input type="radio" name="conflict-resolution" value="bypass" style="margin-top:2px;"><div><div style="font-weight:500;">Override &amp; reschedule the other scheduler</div><div style="font-size:0.75rem;color:#6b7280;">Take the slot; their conflict is auto-rescheduled and they're notified</div></div></label>

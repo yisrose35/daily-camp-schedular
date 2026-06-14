@@ -2329,8 +2329,8 @@ function renderComboSettings(fieldItem) {
 
             const box = document.createElement('div');
             box.style.cssText = 'background:#e6f4f7; border:1px solid #b2dce6; border-radius:10px; padding:16px; margin-bottom:12px;';
-            box.innerHTML = `<div style="font-size:1rem; font-weight:600; color:#0A4A56; text-align:center;">${currentCombo.subFields.join(' + ')}  =  ${currentCombo.combinedField}</div>
-                <div style="font-size:0.82rem; color:#0F5F6E; text-align:center; margin-top:6px;">${isCombined ? 'This is the combined (full) field' : 'This field is part of "' + currentCombo.combinedField + '"'}</div>`;
+            box.innerHTML = `<div style="font-size:1rem; font-weight:600; color:#0A4A56; text-align:center;">${currentCombo.subFields.map(escapeHtml).join(' + ')}  =  ${escapeHtml(currentCombo.combinedField)}</div>
+                <div style="font-size:0.82rem; color:#0F5F6E; text-align:center; margin-top:6px;">${isCombined ? 'This is the combined (full) field' : 'This field is part of "' + escapeHtml(currentCombo.combinedField) + '"'}</div>`;
             container.appendChild(box);
 
             const removeBtn = document.createElement('button');

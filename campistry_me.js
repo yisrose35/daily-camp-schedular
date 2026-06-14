@@ -138,7 +138,12 @@ function save(){
         // entries built from campStructure (startTime, endTime, parentDivision, etc.).
         // campStructure is the authoritative source for division/grade/bunk structure;
         // app1.loadData() derives everything from it, so we must not overwrite it here.
-        g.campistryMe={
+        // ★★★ CB-60: SPREAD the existing campistryMe first, then override only
+        // the keys this save() owns. The previous fixed object literal dropped
+        // every sub-key NOT listed here — forms, customFields, locale,
+        // campSettings, stripePublishableKey, etc. (each written by a sibling
+        // saver) — so an unrelated save() silently wiped them from cache + cloud.
+        g.campistryMe=Object.assign({},(g.campistryMe&&typeof g.campistryMe==='object')?g.campistryMe:{},{
             families:families,
             payments:payments,
             broadcasts:broadcasts,
@@ -151,7 +156,7 @@ function save(){
             formConfig:formConfig,
             promoCodes:enrollSettings.promoCodes||(g.campistryMe?.promoCodes)||{},
             finance:{staff:finStaff,expenses:finExpenses,payments:finPayments,budget:finBudget,integrations:finIntegrations}
-        };
+        });
         g.updated_at=new Date().toISOString();
 
         // saveGlobalSettings → setLocalSettings handles ALL persistence:
@@ -1106,7 +1111,7 @@ function _meAttachItemDrag(itemEl){
 function _renderBunkChipsHTML(bunks){
     var inner='';
     (bunks||[]).forEach(function(b){
-        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
+        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name" data-orig="'+esc(b)+'">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
     });
     return '<div class="fg"><label class="fl">Bunks <span style="font-weight:400;color:var(--s400);font-size:.7rem">(drag to reorder)</span></label>'
         +'<div class="me-bunk-list dmGradeBunks">'+inner+'</div>'
@@ -1142,7 +1147,7 @@ function _wireGradeRow(rowEl){
         v.split(',').map(function(s){return s.trim()}).filter(Boolean).forEach(function(name){
             var span=document.createElement('span');
             span.className='me-bunk-chip';span.draggable=true;
-            span.innerHTML='<span class="me-bunk-name">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
+            span.innerHTML='<span class="me-bunk-name" data-orig="'+esc(name)+'">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
             bunkList.appendChild(span);
             _wireBunkChip(span);
         });
@@ -1155,6 +1160,35 @@ function _wireBunkChip(chip){
     _meAttachItemDrag(chip);
     var x=chip.querySelector('.me-bunk-x');
     if(x)x.onclick=function(){chip.remove()};
+    // ★★★ CB-94: in-place rename affordance. Double-click the bunk name → inline
+    // input; on commit the visible text changes but the span's data-orig keeps the
+    // ORIGINAL name, so saveDiv can detect the rename and MIGRATE the bunk's
+    // schedules (instead of purge-old + create-new, which destroyed the old bunk's
+    // cloud schedule rows on a simple typo fix).
+    var nameEl=chip.querySelector('.me-bunk-name');
+    if(nameEl){
+        if(!nameEl.title)nameEl.title='Double-click to rename';
+        nameEl.addEventListener('dblclick',function(ev){
+            ev.stopPropagation();
+            if(chip.querySelector('.me-bunk-rename-inp'))return;
+            var cur=nameEl.textContent.trim();
+            var inp=document.createElement('input');
+            inp.type='text';inp.value=cur;inp.className='me-bunk-rename-inp';
+            inp.style.cssText='width:96px;font:inherit;padding:0 2px;';
+            chip.insertBefore(inp,nameEl);nameEl.style.display='none';inp.focus();inp.select();
+            var done=false;
+            function commit(keep){
+                if(done)return;done=true;
+                if(keep){var nv=(inp.value||'').trim();if(nv)nameEl.textContent=nv;} // data-orig stays = original
+                nameEl.style.display='';if(inp.parentNode)inp.parentNode.removeChild(inp);
+            }
+            inp.addEventListener('blur',function(){commit(true)});
+            inp.addEventListener('keydown',function(e){
+                if(e.key==='Enter'){e.preventDefault();commit(true);}
+                else if(e.key==='Escape'){e.preventDefault();commit(false);}
+            });
+        });
+    }
 }
 
 // Division create/edit
@@ -1254,12 +1288,26 @@ function saveDiv(){
     // ★ Purge orphaned bunks from saved AUTO schedules
     var newBunks=[];
     Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
-    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
+    // ★★★ CB-94: detect bunk RENAMES (a chip whose data-orig differs from its new
+    //   text) and MIGRATE the bunk's schedules to the new name instead of letting
+    //   the old name fall through to _purgeOrphanedBunks, which DESTROYED the old
+    //   bunk's cloud schedule rows while the new name started empty. Mirrors the
+    //   grade-rename handling above.
+    var bunkRenameMap={};
+    document.querySelectorAll('#dmGrades .dm-grade-row .me-bunk-chip .me-bunk-name').forEach(function(el){
+        var orig=(el.dataset.orig||'').trim(), cur=(el.textContent||'').trim();
+        if(orig&&cur&&orig!==cur&&oldBunks.indexOf(orig)!==-1&&oldBunks.indexOf(cur)===-1&&newBunks.indexOf(cur)!==-1){
+            bunkRenameMap[orig]=cur;
+        }
+    });
+    var _renamedOrigBunks=Object.keys(bunkRenameMap);
+    _renamedOrigBunks.forEach(function(oldB){ _propagateBunkRename(oldB, bunkRenameMap[oldB]); });
+    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1 && _renamedOrigBunks.indexOf(b)===-1;});
     if(removed.length>0)_purgeOrphanedBunks(removed);
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
     var removedGrades=oldGrades.filter(function(g){return !(g in grades)&&!(g in gradeRenameMap)});
-    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
 function deleteDiv(n){
     if(!confirm('Delete "'+n+'"?'))return;
@@ -1272,7 +1320,7 @@ function deleteDiv(n){
     delete structure[n];Object.values(roster).forEach(function(c){if(c.division===n){c.division='';c.grade='';c.bunk=''}});save();render(curPage);toast('Deleted');
     // ★ Purge orphaned bunks from saved AUTO schedules + orphaned grade tiles from MANUAL skeletons
     if(removedBunks.length>0)_purgeOrphanedBunks(removedBunks);
-    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);}
+    if(removedGrades.length>0){_purgeOrphanedSkeletonTiles(removedGrades);_purgeOrphanedAutoLayers(removedGrades);_purgeOrphanedCampPeriods(removedGrades);/* ★ CB-102/105 */}
 }
 // ★ Day 9 (manual-builder parity for the structure-change cascade): the auto schedule
 //   is cleaned by _purgeOrphanedBunks, but the saved MANUAL skeletons (app1.dailySkeletons
@@ -1365,12 +1413,95 @@ function _propagateGradeRenameTiles(oldG, newG){
         if(app1.gradeLayerRules&&typeof app1.gradeLayerRules==='object'&&(oldG in app1.gradeLayerRules)&&!(newG in app1.gradeLayerRules)){
             app1.gradeLayerRules[newG]=app1.gradeLayerRules[oldG];delete app1.gradeLayerRules[oldG];changed=true;
         }
+        // ★★★ CB-93: autoLayerTemplates[tmpl][oldG] → [newG]. The auto-layer editor
+        // store (master_schedule_builder dawLayers) persists into
+        // app1.autoLayerTemplates, GRADE-keyed inside each template, and
+        // loadDAWLayers reads EXCLUSIVELY from there — so a grade rename previously
+        // left the renamed grade opening with an EMPTY layer editor and its
+        // configured layers orphaned (a delete lost them forever). Rename the grade
+        // key inside every template.
+        if(app1.autoLayerTemplates&&typeof app1.autoLayerTemplates==='object'){
+            Object.keys(app1.autoLayerTemplates).forEach(function(tmpl){
+                var byGrade=app1.autoLayerTemplates[tmpl];
+                if(byGrade&&typeof byGrade==='object'&&!Array.isArray(byGrade)&&(oldG in byGrade)&&!(newG in byGrade)){
+                    byGrade[newG]=byGrade[oldG];delete byGrade[oldG];changed=true;
+                }
+            });
+        }
+        // ★★★ CB-83/CB-85: migrate the grade rename into special-activity per-grade
+        // config. The special validator filters every per-grade list against the
+        // CURRENT grade set, so a rename (which never touched specials) made it
+        // silently PRUNE the now-orphaned grade from sharing divisions, access
+        // restrictions + priority list, rotation cohort and the per-grade
+        // full-grade map. Rename oldG → newG in each (guarded so absent grades
+        // don't force a needless save).
+        if(Array.isArray(app1.specialActivities)){
+            app1.specialActivities.forEach(function(sp){
+                if(!sp||typeof sp!=='object')return;
+                if(sp.sharableWith&&Array.isArray(sp.sharableWith.divisions)&&sp.sharableWith.divisions.indexOf(oldG)!==-1){
+                    sp.sharableWith.divisions=sp.sharableWith.divisions.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                var ar=sp.accessRestrictions;
+                if(ar&&typeof ar==='object'){
+                    if(ar.divisions&&typeof ar.divisions==='object'&&(oldG in ar.divisions)&&!(newG in ar.divisions)){
+                        ar.divisions[newG]=ar.divisions[oldG];delete ar.divisions[oldG];changed=true;
+                    }
+                    if(Array.isArray(ar.priorityList)&&ar.priorityList.indexOf(oldG)!==-1){
+                        ar.priorityList=ar.priorityList.map(function(d){return d===oldG?newG:d});changed=true;
+                    }
+                }
+                if(sp.rotationCohort&&Array.isArray(sp.rotationCohort.grades)&&sp.rotationCohort.grades.indexOf(oldG)!==-1){
+                    sp.rotationCohort.grades=sp.rotationCohort.grades.map(function(d){return d===oldG?newG:d});changed=true;
+                }
+                if(sp.fullGradePerGrade&&typeof sp.fullGradePerGrade==='object'&&(oldG in sp.fullGradePerGrade)&&!(newG in sp.fullGradePerGrade)){
+                    sp.fullGradePerGrade[newG]=sp.fullGradePerGrade[oldG];delete sp.fullGradePerGrade[oldG];changed=true;
+                }
+            });
+        }
         if(changed&&typeof window.saveGlobalSettings==='function'){
             window.saveGlobalSettings('app1',app1);
             if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
-            console.log('[Me] Propagated grade rename in skeletons/auto-layers:',oldG,'→',newG);
+            console.log('[Me] Propagated grade rename in skeletons/auto-layers/specials:',oldG,'→',newG);
         }
+        // ★★★ CB-102/CB-105: migrate the Bell Schedule (campPeriods) on grade rename. campPeriods is
+        // a TOP-LEVEL grade-keyed global setting (gs.campPeriods[grade]) — NOT under app1 — read by the
+        // auto solver, day_packer, master_schedule_builder, daily_adjustments + print_center. This
+        // cascade renamed skeletons/auto-layers/specials but never campPeriods, so a renamed grade lost
+        // its custom periods (fell back to defaults) and the old key orphaned in cloud config. Own save
+        // (separate key from the app1 block above).
+        try{
+            var cp=gs&&gs.campPeriods;
+            if(cp&&typeof cp==='object'&&(oldG in cp)&&!(newG in cp)){
+                cp[newG]=cp[oldG];delete cp[oldG];
+                try{if(window.campPeriods&&typeof window.campPeriods==='object'&&(oldG in window.campPeriods)&&!(newG in window.campPeriods)){window.campPeriods[newG]=window.campPeriods[oldG];delete window.campPeriods[oldG]}}catch(_){}
+                if(typeof window.saveGlobalSettings==='function'){
+                    window.saveGlobalSettings('campPeriods',cp);
+                    if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+                }
+                console.log('[Me] CB-102/105: migrated campPeriods (Bell Schedule) on grade rename:',oldG,'→',newG);
+            }
+        }catch(_cpErr){console.warn('[Me] campPeriods rename:',_cpErr)}
     }catch(e){console.warn('[Me] _propagateGradeRenameTiles:',e)}
+}
+// ★★★ CB-102/CB-105: purge the Bell Schedule (campPeriods) for removed grades. Sibling of
+//   _purgeOrphanedAutoLayers — campPeriods is a top-level grade-keyed key, so it gets its own
+//   load/save. Without this, deleting a grade left its periods orphaned under the old key in cloud.
+function _purgeOrphanedCampPeriods(removedGrades){
+    if(!removedGrades||!removedGrades.length)return;
+    try{
+        var gs=window.loadGlobalSettings&&window.loadGlobalSettings();
+        var cp=gs&&gs.campPeriods; if(!cp||typeof cp!=='object')return;
+        var changed=false;
+        removedGrades.forEach(function(g){
+            if(g in cp){delete cp[g];changed=true}
+            try{if(window.campPeriods&&(g in window.campPeriods))delete window.campPeriods[g]}catch(_){}
+        });
+        if(changed&&typeof window.saveGlobalSettings==='function'){
+            window.saveGlobalSettings('campPeriods',cp);
+            if(typeof window.forceSyncToCloud==='function'){try{window.forceSyncToCloud()}catch(_){}}
+            console.log('[Me] CB-102/105: purged orphaned campPeriods (Bell Schedule) for removed grade(s):',removedGrades);
+        }
+    }catch(e){console.warn('[Me] _purgeOrphanedCampPeriods:',e)}
 }
 // ★ Propagate a division rename to all schedule references.
 //   Renames in-memory divisionTimes / unifiedTimes keys, rewrites _division
@@ -1399,6 +1530,35 @@ function _propagateDivisionRename(oldName, newName){
             });
         });
     }
+    // 4. ★★★ CB-92: propagate to the RBAC scheduler-scoping stores so a scheduler
+    //    scoped to the renamed unit BY NAME doesn't silently lose access on their
+    //    next login. The rename is owner-initiated (Me page), so the owner may
+    //    write these rows. subdivisions.divisions[] and camp_users.assigned_divisions[]
+    //    both store division/grade NAMES. Best-effort + non-fatal (a failure must
+    //    not block the rename). [LIVE] — needs a 2-account verify.
+    try{
+        var _rbClient=(window.CampistryDB&&window.CampistryDB.getClient)?window.CampistryDB.getClient():window.supabase;
+        var _rbCamp=(window.CampistryDB&&window.CampistryDB.getCampId)?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(_rbClient&&_rbCamp){
+            _rbClient.from('subdivisions').select('id,divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.divisions)||row.divisions.indexOf(oldName)===-1)return;
+                    var nd=row.divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('subdivisions').update({divisions:nd}).eq('id',row.id).then(function(r){if(r.error)console.error('[Me] CB-92 subdivision rename failed',row.id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 subdivisions migrate failed:',e);});
+            _rbClient.from('camp_users').select('user_id,assigned_divisions').eq('camp_id',_rbCamp).then(function(res){
+                if(res.error||!res.data)return;
+                res.data.forEach(function(row){
+                    if(!Array.isArray(row.assigned_divisions)||row.assigned_divisions.indexOf(oldName)===-1)return;
+                    var nd=row.assigned_divisions.map(function(d){return d===oldName?newName:d});
+                    _rbClient.from('camp_users').update({assigned_divisions:nd}).eq('camp_id',_rbCamp).eq('user_id',row.user_id).then(function(r){if(r.error)console.error('[Me] CB-92 camp_users rename failed',row.user_id,r.error);});
+                });
+            }).catch(function(e){console.warn('[Me] CB-92 camp_users migrate failed:',e);});
+        }
+    }catch(_eRb){console.warn('[Me] CB-92 RBAC rename propagate exception:',_eRb);}
+
     // 3. Propagate to cloud daily_schedules
     function _toast(msg, kind){
         try{
@@ -1432,8 +1592,13 @@ function _propagateDivisionRename(oldName, newName){
             records.forEach(function(record){
                 var sd=record.schedule_data||{};
                 var modified=false;
-                // Rename division-keyed sub-structures
-                ['divisionTimes','unifiedTimes'].forEach(function(k){
+                // Rename division-keyed sub-structures.
+                // ★★★ CB-82: include _perBunkSlotsData — cloud schedule_data carries
+                // a top-level division/grade-keyed _perBunkSlotsData (the auto-mode
+                // per-bunk slot geometry, consumed on load by MS-4c). The rename
+                // previously migrated only divisionTimes/unifiedTimes, orphaning the
+                // renamed unit's per-bunk geometry on every saved date.
+                ['divisionTimes','unifiedTimes','_perBunkSlotsData'].forEach(function(k){
                     if(sd[k]&&typeof sd[k]==='object'&&oldName in sd[k]){
                         sd[k]=Object.assign({},sd[k]);
                         sd[k][newName]=sd[k][oldName];
@@ -1583,6 +1748,46 @@ function _purgeOrphanedBunks(removedBunks){
         console.error('[Me] Purge exception:',e);
         _toast('⚠️ Bunk removed locally but cloud cleanup hit an error. Refresh and try again.','error');
     }
+}
+
+// ★★★ CB-94: rename a bunk's schedule data instead of destroying it. A bunk
+// rename was treated as delete(old)+create(new): _purgeOrphanedBunks hard-deleted
+// the old bunk's cloud schedule rows while the new name started empty. This
+// migrates the bunk key in memory + every cloud daily_schedules row
+// (scheduleAssignments + leagueAssignments) so the schedule survives the rename.
+function _propagateBunkRename(oldB,newB){
+    if(!oldB||!newB||oldB===newB)return;
+    console.log('[Me] Propagating bunk rename in schedules:',oldB,'→',newB);
+    // 1. in-memory maps
+    try{
+        ['scheduleAssignments','scheduleSegments','leagueAssignments'].forEach(function(k){
+            var m=window[k];
+            if(m&&m[oldB]!==undefined&&m[newB]===undefined){m[newB]=m[oldB];delete m[oldB];}
+        });
+    }catch(_){}
+    // 2. cloud daily_schedules (best-effort; non-fatal on error)
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId).then(function(res){
+            if(res.error)throw res.error;
+            (res.data||[]).forEach(function(record){
+                var sd=record.schedule_data||{};
+                var sa=Object.assign({},sd.scheduleAssignments||{});
+                var la=Object.assign({},sd.leagueAssignments||{});
+                var modified=false;
+                if(sa[oldB]!==undefined){if(sa[newB]===undefined)sa[newB]=sa[oldB];delete sa[oldB];modified=true;}
+                if(la[oldB]!==undefined){if(la[newB]===undefined)la[newB]=la[oldB];delete la[oldB];modified=true;}
+                if(modified){
+                    client.from('daily_schedules')
+                        .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                        .eq('id',record.id)
+                        .then(function(r){if(r.error)console.error('[Me] bunk-rename update failed',record.id,r.error);});
+                }
+            });
+        }).catch(function(err){console.error('[Me] bunk-rename cloud propagate failed:',err);});
+    }catch(e){console.error('[Me] bunk-rename exception:',e);}
 }
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────

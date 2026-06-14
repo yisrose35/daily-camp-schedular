@@ -243,12 +243,25 @@
 
             if (startMin === null) return;
 
+            // ★ CB-99: count the continuation slots spanning off this head. Previously continuation
+            // entries were skipped entirely and only the head was carried, so a 2-slot special
+            // (head + continuation) migrated to a single slot — the activity showed half its real
+            // duration and the field read free for the second half. Carry the span forward too.
+            let _contRun = 0;
+            for (let k = oldIdx + 1; k < oldAssignments.length; k++) {
+                if (oldAssignments[k] && oldAssignments[k].continuation) _contRun++; else break;
+            }
+
             // Find matching new slot by time
             for (let newIdx = 0; newIdx < newDivSlots.length; newIdx++) {
                 const newSlot = newDivSlots[newIdx];
                 if (newSlot.startMin === startMin) {
                     window.scheduleAssignments[bunk][newIdx] = assignment;
-                    log(`  Migrated slot ${oldIdx} → ${newIdx} (${startMin} min)`);
+                    // carry the spanned continuation slots into newIdx+1.. so the span isn't truncated
+                    for (let c = 1; c <= _contRun && (newIdx + c) < newDivSlots.length; c++) {
+                        window.scheduleAssignments[bunk][newIdx + c] = oldAssignments[oldIdx + c];
+                    }
+                    log(`  Migrated slot ${oldIdx} → ${newIdx} (${startMin} min)${_contRun ? ' +' + _contRun + ' continuation' : ''}`);
                     break;
                 }
             }
@@ -272,9 +285,21 @@
             let _pbsPersistTimer = null;
             function _schedulePerBunkSlotsPersist() {
                 if (_pbsPersistTimer) return; // already queued
+                // ★★★ CB-69: capture the date this geometry belongs to NOW. The 250ms
+                // timer is not cancelled on date change, so a fast date switch would
+                // otherwise fire after currentScheduleDate flipped and
+                // saveCurrentDailyData would write the OLD date's _perBunkSlots under
+                // the NEW date's record (cross-date geometry contamination).
+                const _pbsScheduledForDate = window.currentScheduleDate || window._scheduleAssignmentsDate || null;
                 _pbsPersistTimer = setTimeout(function() {
                     _pbsPersistTimer = null;
                     try {
+                        const _pbsNowDate = window.currentScheduleDate || window._scheduleAssignmentsDate || null;
+                        if (_pbsScheduledForDate && _pbsNowDate && _pbsScheduledForDate !== _pbsNowDate) {
+                            console.warn('[DivTimesIntegration] CB-69: skipping _perBunkSlotsData persist — date changed '
+                                + _pbsScheduledForDate + ' → ' + _pbsNowDate);
+                            return;
+                        }
                         const dt = window.divisionTimes || {};
                         const hasLivePerBunk = Object.values(dt).some(function(d) { return d && d._isPerBunk && d._perBunkSlots; });
                         if (!hasLivePerBunk) return;

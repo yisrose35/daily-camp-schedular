@@ -1,6 +1,13 @@
 // =============================================================================
 // playoff_mode.js — shared playoff/bracket module for Leagues + Specialty Leagues
 // =============================================================================
+// ★★★ CB-143 — the INLINE PLAYOFF UI in this file (PlayoffMode.render + renderSeedList/
+// renderRoundCard/renderMatchup + injectStyles) is DEAD/UNREACHABLE. It is superseded by
+// PlayoffHub (playoff_hub.js), which is what mountPlayoffUI/mountSpecialtyPlayoffUI actually
+// render. The data model below (the `playoff` sub-object + helpers) is still used; only the
+// inline rendering UI is dead. DO NOT "fix"/extend the render* functions expecting UI changes —
+// edit playoff_hub.js. Left in place (not removed) to avoid touching the live data-model exports.
+// =============================================================================
 // Adds a `playoff` sub-object to each league/specialty-league:
 //   league.playoff = {
 //     enabled: bool,

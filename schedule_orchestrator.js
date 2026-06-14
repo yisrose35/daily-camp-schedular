@@ -158,7 +158,10 @@
             gap: 8px;
             animation: orchestratorSlideIn 0.3s ease;
         `;
-        notification.innerHTML = `<span>${icons[type] || ''}</span><span>${message}</span>`;
+        // ★★★ CB-45: escape the user-controllable message (icons[type] is a static
+        // emoji map). Latent XSS sink — exported on window.ScheduleOrchestrator and
+        // a sibling global hook of this name can receive user-controlled reasons.
+        notification.innerHTML = `<span>${icons[type] || ''}</span><span>${String(message == null ? '' : message).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')}</span>`;
 
         // Add animation keyframes if not present
         if (!document.querySelector('#orchestrator-notification-styles')) {
@@ -343,7 +346,17 @@
                 const existing = allDaily[dk] || {};
                 if (existing.scheduleAssignments && Object.keys(existing.scheduleAssignments).length > 0) continue;
                 const merged = {};
-                for (const rec of recs) {
+                // ★★★ CB-20: merge multiple scheduler rows for a past date in
+                // updated_at ASCENDING order so the NEWEST row wins shared bunks.
+                // The query returns rows in arbitrary order, so a stale row could
+                // otherwise overwrite a fresher one via Object.assign and poison
+                // up to 14 days of rotation history.
+                const _recsSorted = recs.slice().sort((a, b) => {
+                    const ta = a.updated_at || a.created_at || '';
+                    const tb = b.updated_at || b.created_at || '';
+                    return ta < tb ? -1 : ta > tb ? 1 : 0;
+                });
+                for (const rec of _recsSorted) {
                     const sd = rec.schedule_data || {};
                     if (sd.scheduleAssignments) Object.assign(merged, sd.scheduleAssignments);
                 }
@@ -354,13 +367,22 @@
                 }
             }
             if (hydrated > 0) {
-                // Slim past-date entries before persisting — rotation history
+                // Slim PAST-date entries before persisting — rotation history
                 // only needs _activity/sport/field per slot, so strip the rest.
                 // This keeps 14 days of allDaily under the localStorage quota.
+                //
+                // ★★★ CB-3: ONLY slim dates strictly inside the rotation-history
+                // window [startDate, todayKey). The previous `dk === todayKey`
+                // guard slimmed EVERY other date — including FUTURE dates the
+                // user had built ahead (skeleton/leagues/trips/divisionTimes/
+                // _perBunkSlotsData), permanently destroying that local data.
+                // Future dates and out-of-window past dates are left untouched;
+                // and even within the window we carry forward LOCAL_ONLY_FIELDS
+                // so historical per-day config (leagueRoundState etc.) survives.
                 try {
                     for (const dk of Object.keys(allDaily)) {
                         if (!/^\d{4}-\d{2}-\d{2}$/.test(dk)) continue;
-                        if (dk === todayKey) continue;
+                        if (!(dk < todayKey && dk >= startDate)) continue; // past, in-window only
                         const d = allDaily[dk];
                         if (!d || !d.scheduleAssignments) continue;
                         const slim = {};
@@ -378,7 +400,9 @@
                                 return out;
                             });
                         }
-                        allDaily[dk] = { scheduleAssignments: slim };
+                        const slimmed = { scheduleAssignments: slim };
+                        LOCAL_ONLY_FIELDS.forEach(f => { if (d[f] !== undefined) slimmed[f] = d[f]; });
+                        allDaily[dk] = slimmed;
                     }
                 } catch (_) {}
                 // Seed save hashes BEFORE writing to localStorage. This way
@@ -613,6 +637,10 @@
             data: null,
             bunkCount: 0
         };
+        // CB-13: set when the cloud query authoritatively returns 0 records with
+        // no error (date genuinely empty/deleted) — distinguishes that from a
+        // cloud failure so STEP 2 doesn't resurrect a deleted date from local.
+        let cloudConfirmedEmpty = false;
 
         try {
             // ═══════════════════════════════════════════════════════════════
@@ -666,7 +694,12 @@
                             logWarn('Cloud query error:', error.message);
                         }
                     } else {
-                        log('No cloud records for', dateKey);
+                        // ★★★ CB-13: cloud returned 0 records with NO error while
+                        // online+authenticated — the date is authoritatively empty
+                        // (e.g. it was deleted). Flag it so STEP 2 does NOT
+                        // resurrect it from stale localStorage.
+                        log('No cloud records for', dateKey, '— confirmed empty');
+                        cloudConfirmedEmpty = true;
                     }
                 } catch (cloudErr) {
                     if (cloudErr.name === 'AbortError') {
@@ -685,10 +718,28 @@
             // STEP 2: Fall back to localStorage if cloud failed
             // ═══════════════════════════════════════════════════════════════
             
+            if (!result.success && cloudConfirmedEmpty) {
+                // ★★★ CB-13: the cloud authoritatively has no records for this
+                // date — treat it as genuinely empty. Clear the stale local cache
+                // (so it can't resurrect the deleted date now or on a later
+                // offline load) and load empty, rather than falling through to
+                // the localStorage fallback below.
+                log('Step 2: cloud confirmed empty — clearing stale local cache for', dateKey);
+                try { deleteLocalData(dateKey); } catch (_) {}
+                result = {
+                    success: true,
+                    source: 'cloud-empty',
+                    dateKey,
+                    data: { scheduleAssignments: {}, leagueAssignments: {}, unifiedTimes: [] },
+                    bunkCount: 0,
+                    recordCount: 0
+                };
+            }
+
             if (!result.success) {
                 log('Step 2: Checking localStorage...');
                 const localData = getLocalData(dateKey);
-                
+
                 if (localData) {
                     result = {
                         success: true,
@@ -776,6 +827,15 @@
                 const stableResult = result.data;
                 const reApply = (label) => {
                     try {
+                        // ★★★ CB-11: bail if the user navigated to a different date
+                        // since this load fired. Without this, the 500ms/2s/5s
+                        // timers re-hydrate the OLD date's schedule (stableResult)
+                        // over whatever date is now in view.
+                        const _liveDate = window._scheduleAssignmentsDate || window.currentScheduleDate;
+                        if (_liveDate && dateKey && _liveDate !== dateKey) {
+                            log('[load re-apply ' + label + '] date changed (' + dateKey + ' -> ' + _liveDate + ') — skipping stale re-apply');
+                            return;
+                        }
                         const currentActs = (() => {
                             let n = 0;
                             const sa = window.scheduleAssignments || {};
@@ -835,6 +895,44 @@
      * ★★★ v1.5 FIX: Also properly merge rainy day state from schedule_data ★★★
      */
     function mergeCloudRecords(records) {
+        // ★★★ CB-4: delegate the core per-bunk / per-division merge to the
+        // canonical ScheduleDB.mergeSchedules, which carries the multi-scheduler
+        // fixes (MS-3 per-division recency stamps, MS-4c grid/content-winner
+        // pairing, #V2-25 deleted-bunk structural prune). This function's own
+        // loop below is a stale duplicate that bypassed every one of them and
+        // could resurrect deleted bunks / serve a stale division's grid on the
+        // initial flow-page load. Fall back to the local loop only if
+        // ScheduleDB is unavailable. mergeSchedules doesn't surface the
+        // orchestrator-only signals (_autoGenerated / manualSkeleton /
+        // rainyDayStartTime), so layer those back from the records.
+        if (window.ScheduleDB?.mergeSchedules && Array.isArray(records) && records.length > 0) {
+            try {
+                const m = window.ScheduleDB.mergeSchedules(records) || {};
+                const sorted = records.slice().sort((a, b) => {
+                    const ta = a.updated_at || a.created_at || '';
+                    const tb = b.updated_at || b.created_at || '';
+                    return ta < tb ? -1 : ta > tb ? 1 : 0;
+                });
+                let autoGen = m._autoGenerated === true;
+                let manualSkel = (Array.isArray(m.manualSkeleton) && m.manualSkeleton.length > 0) ? m.manualSkeleton : null;
+                let rdStart = (m.rainyDayStartTime !== undefined && m.rainyDayStartTime !== null) ? m.rainyDayStartTime : null;
+                let isRainy = m.isRainyDay === true;
+                for (const rec of sorted) {
+                    const d = rec.schedule_data || {};
+                    if (d._autoGenerated === true) autoGen = true;
+                    if (Array.isArray(d.manualSkeleton) && d.manualSkeleton.length > 0) manualSkel = d.manualSkeleton;
+                    if (d.rainyDayStartTime !== null && d.rainyDayStartTime !== undefined) rdStart = d.rainyDayStartTime;
+                    if (rec.is_rainy_day || d.isRainyDay === true || d.rainyDayMode === true) isRainy = true;
+                }
+                m._autoGenerated = autoGen;
+                m.manualSkeleton = manualSkel;
+                m.rainyDayStartTime = rdStart;
+                m.isRainyDay = isRainy;
+                return m;
+            } catch (e) {
+                logWarn('ScheduleDB.mergeSchedules failed, falling back to orchestrator local merge:', e);
+            }
+        }
         const merged = {
             scheduleAssignments: {},
             leagueAssignments: {},
@@ -1701,6 +1799,11 @@
         });
 
         // Listen for realtime updates from other schedulers
+        // ★★★ CB-44: NOTE — 'campistry-realtime-update' is NOT dispatched anywhere
+        // in the codebase (verified repo-wide), so this listener is currently
+        // DORMANT. Realtime refresh is handled by integration_hooks' own realtime
+        // merge, not this event. Kept as the intended wiring should a dispatch ever
+        // be added; do not assume it fires today.
         window.addEventListener('campistry-realtime-update', (e) => {
             log('Realtime update received, reloading...');
             loadSchedule(getCurrentDateKey(), { force: true });

@@ -663,6 +663,43 @@
                 log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + (_step0AllowedDivs || []).join(', ') + ']');
             }
             _partialGenBunks = myBunks;
+
+            // ★★★ CB-65: force-load cloud BEFORE the wipe + snapshot so a
+            // scheduler-scoped AUTO regen preserves OTHER schedulers' bunks. The
+            // MANUAL path does this (scheduler_core_main.js ~L1748: "Without this,
+            // Scheduler 2 won't see Scheduler 1's data and will overwrite it") but
+            // AUTO only snapshotted the in-memory map — so STEP 6.9
+            // RotationCloud/ScheduleDB save (which deletes the whole date then
+            // re-inserts only this scheduler's bunks) dropped the others. Merge
+            // cloud's non-scoped bunks into memory; keep local for my own bunks
+            // (which are about to be regenerated anyway).
+            if (typeof window.ScheduleDB?.loadSchedule === 'function'
+                && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+                try {
+                    const _dk65 = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    const _cloud65 = await window.ScheduleDB.loadSchedule(_dk65);
+                    if (_cloud65 && _cloud65.success && _cloud65.data && _cloud65.data.scheduleAssignments) {
+                        const _ca65 = _cloud65.data.scheduleAssignments;
+                        const _la65 = window.scheduleAssignments || {};
+                        const _merged65 = {};
+                        for (const _b in _ca65) { _merged65[_b] = _ca65[_b]; }              // other schedulers' bunks
+                        for (const _b in _la65) { if (myBunks.has(String(_b)) || myBunks.has(_b)) _merged65[_b] = _la65[_b]; } // my unsaved local wins
+                        window.scheduleAssignments = _merged65;
+                        if (_cloud65.data.leagueAssignments) {
+                            const _cl65 = _cloud65.data.leagueAssignments || {};
+                            const _ll65 = window.leagueAssignments || {};
+                            const _myDivs65 = new Set(window.AccessControl?.getEditableDivisions?.() || []);
+                            const _ml65 = Object.assign({}, _cl65);
+                            for (const _dv in _ll65) { if (_myDivs65.has(_dv)) _ml65[_dv] = _ll65[_dv]; }
+                            window.leagueAssignments = _ml65;
+                        }
+                        log('[STEP 0] CB-65: merged cloud snapshot — ' + Object.keys(_merged65).length + ' total bunks before partial wipe');
+                    }
+                } catch (_e65) {
+                    log('[STEP 0] CB-65: cloud force-load failed (non-fatal) — ' + (_e65 && _e65.message));
+                }
+            }
+
             myBunks.forEach(bunk => {
                 delete window.scheduleAssignments?.[bunk];
                 delete window.leagueAssignments?.[bunk];
@@ -2270,6 +2307,34 @@
             //   (No-op when there are no override claims, so normal generation is unaffected.)
             if (overlapping.some(c => c._bunkOverride && String(c.bunk) !== String(bunk))) return false;
             if (overlapping.length >= ledger.capacity) return false;
+
+            // ★★★ CB-84: zone max-concurrent enforcement. The zone editor saves a
+            // per-zone maxConcurrent cap but NO solver consulted it (silent no-op
+            // config). When the field's zone has a REAL cap (< 99), count the
+            // DISTINCT bunks already claiming ANY field in that zone at an
+            // overlapping time — reusing the same per-field claim ledgers the
+            // capacity check above uses — and block this field if the zone is at
+            // its cap. Guarded to capped zones, so the default (99 = unlimited) is
+            // byte-unchanged; fails open on any error so a zone-config glitch never
+            // blocks generation.
+            try {
+                const _zoneName84 = window.getZoneForField && window.getZoneForField(fieldName);
+                const _zoneCap84 = _zoneName84 ? (window.getZoneMaxConcurrent ? (window.getZoneMaxConcurrent(_zoneName84) || 99) : 99) : 99;
+                if (_zoneCap84 < 99) {
+                    const _zoneFields84 = (window.getFieldsInZone && window.getFieldsInZone(_zoneName84)) || [];
+                    const _busy84 = new Set();
+                    for (let _zi = 0; _zi < _zoneFields84.length; _zi++) {
+                        const _zl = fieldLedger[_zoneFields84[_zi]];
+                        if (!_zl || !_zl.claims) continue;
+                        for (let _ci = 0; _ci < _zl.claims.length; _ci++) {
+                            const _c = _zl.claims[_ci];
+                            if (_c.startMin < endMin && _c.endMin > startMin) _busy84.add(String(_c.bunk));
+                        }
+                    }
+                    _busy84.delete(String(bunk)); // this bunk does not count against itself
+                    if (_busy84.size >= _zoneCap84) return false;
+                }
+            } catch (_e84) { /* non-fatal — never block generation on a zone-check error */ }
 
             // ★ PRIORITY ENFORCEMENT: if field uses priority order and this grade has lower
             // priority than a grade that is already at capacity, or if a higher-priority grade
@@ -13050,7 +13115,11 @@
                 const gs = getGlobalSettings();
                 if (gs.app1) gs.app1.swimRotationHistory = swimHistory;
                 localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
-                if (window.IntegrationHooks?.queueChange) window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
+                // ★ CB-24: persist to cloud for real. window.IntegrationHooks.queueChange
+                // does not exist (dead no-op), so swim partial-rotation history never
+                // reached the cloud and a stale cloud copy could shadow fresh local on
+                // another device. saveGlobalSettings is the actual per-key cloud writer.
+                if (window.saveGlobalSettings) window.saveGlobalSettings('swimRotationHistory', swimHistory);
             } catch (e) { /* ignore */ }
         }
 
@@ -13098,8 +13167,9 @@
                 var gs = getGlobalSettings();
                 if (gs.app1) gs.app1.activityHistory = weekActivityHistory;
                 localStorage.setItem('campistry_activityHistory', JSON.stringify(weekActivityHistory));
-                if (window.IntegrationHooks && window.IntegrationHooks.queueChange) {
-                    window.IntegrationHooks.queueChange('activityHistory', weekActivityHistory);
+                // ★ CB-25: persist to cloud for real (same dead-hook bug as CB-24).
+                if (window.saveGlobalSettings) {
+                    window.saveGlobalSettings('activityHistory', weekActivityHistory);
                 }
             } catch (e) { /* ignore */ }
         }
@@ -20951,7 +21021,11 @@
                 const _p49Pc = _p49PrepCfg && _p49PrepCfg.prepConfig;
                 const _p49PrepDur = (_p49Pc && _p49Pc.timing === 'flexible') ? (parseInt(_p49PrepCfg.prepDuration) || 0) : 0;
                 const _p49IsPrepSpecial = _p49PrepDur > 0;
-                const _p49pbs = window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
+                // ★ CB-95: prefer the durable window._perBunkSlots (reset+populated each run) over
+                // window.divisionTimes._perBunkSlots, which the patched loadCurrentDailyData clobbers
+                // on the 2nd+ in-session gen → it returned [] → _p49GridDur=0 → prep-room recapture
+                // silently disabled. Mirrors the FN-14 durable fallback used everywhere else here.
+                const _p49pbs = (window._perBunkSlots?.[def.grade]?.[String(def.bunk)]) || window.divisionTimes?.[def.grade]?._perBunkSlots?.[String(def.bunk)] || [];
                 const _p49Disp = (e) => !!e && !e.continuation && !!e.sport && !e._pinned && !e._pairLock && !e._autoSpecial && !e._isPrep && !e._league && !e._isRotationEvent && !e._isTrip;
                 const _p49GridDur = (i) => { const g = _p49pbs[i]; return (g && g.endMin != null && g.startMin != null) ? (g.endMin - g.startMin) : 0; };
                 const _p49HasPrepRoomBefore = (idx) => {
@@ -22909,7 +22983,12 @@
                     });
                 });
 
-                const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                // ★ CB-23: key off the FN-14 hardened gen-date (window._activeGenDate,
+                // snapshotted at runOptimizer entry) — NOT raw window.currentScheduleDate.
+                // A mid-gen date revert (date-change race) flips currentScheduleDate, and
+                // this Step-5/FN-59 save would then write the just-generated schedule onto
+                // the PREVIOUS date's localStorage row. _activeGenDate is immune to that.
+                const dateKey = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
                 const DAILY_KEY = 'campDailyData_v1';
                 const allDaily = JSON.parse(localStorage.getItem(DAILY_KEY) || '{}');
                 if (!allDaily[dateKey]) allDaily[dateKey] = {};
@@ -25306,6 +25385,16 @@
 
             if (_impossibilities.length === 0) {
                 log('\n✅ No unfilled slots — schedule is complete.');
+                // ★★★ CB-91: dispatch an EMPTY impossibilities event so the
+                // coverage-warning Free banner auto-clears on a clean regen.
+                // Previously this clean-path early-return dispatched nothing, so a
+                // red "N unfilled (Free) slots" banner from a prior gen persisted
+                // the whole session until the user closed it or reloaded.
+                try {
+                    window.dispatchEvent(new CustomEvent('campistry-schedule-impossibilities', {
+                        detail: { count: 0, items: [] }
+                    }));
+                } catch (_e91) { /* non-fatal */ }
                 return;
             }
 
@@ -25790,10 +25879,16 @@
                     _allT[_dkT]._savedAt = Date.now();
                     localStorage.setItem(DAILY_KEY_T, JSON.stringify(_allT));
                 } catch (_eLt) {}
-                window.ScheduleDB?.saveSchedule?.(_dkT, {
+                // ★★★ CB-48: saveSchedule is async — attach a .catch so a cloud-write
+                // rejection is logged, not swallowed (the surrounding sync try/catch
+                // can't trap a Promise rejection). Still fire-and-forget (local re-save
+                // already succeeded); this just surfaces a stale-cloud failure.
+                Promise.resolve(window.ScheduleDB?.saveSchedule?.(_dkT, {
                     scheduleAssignments: window.scheduleAssignments || {},
                     leagueAssignments: window.leagueAssignments || {}
-                }, { skipFilter: true });
+                }, { skipFilter: true })).catch(function (_eSvAsync) {
+                    try { warn('[FN-59] authoritative final save (cloud) rejected: ' + (_eSvAsync && _eSvAsync.message)); } catch (_e7) {}
+                });
                 log('[FN-59] authoritative final save (' + tripWriteCount + ' trip slot(s) in payload)');
             } catch (_eSv) { try { warn('[FN-59] authoritative final save: ' + (_eSv && _eSv.message)); } catch (_e6) {} }
         }

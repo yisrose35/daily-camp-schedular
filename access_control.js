@@ -454,9 +454,14 @@
     }
 
     let _subdivisionResolutionDone = false;
+    let _divisionObserverInterval = null; // ★ CB-144: hold the observer handle so refresh() can't leak a new 1s timer each call
 
     function setupDivisionChangeObserver() {
-        setInterval(() => {
+        // ★ CB-144: clear any prior interval first. initialize() calls this unconditionally and
+        // refresh() (fired on every realtime camp_users change) re-runs initialize(), so without
+        // this each refresh spawned another orphaned 1s timer that ran forever, compounding load.
+        if (_divisionObserverInterval) { clearInterval(_divisionObserverInterval); _divisionObserverInterval = null; }
+        _divisionObserverInterval = setInterval(() => {
             const currentHash = JSON.stringify(Object.keys(window.divisions || {}).sort());
             let recalculated = false;
 
@@ -537,13 +542,36 @@
             _membershipSubscription = window.supabase
                 .channel('my-membership-' + _currentUser.id)
                 .on('postgres_changes', {
-                    event: 'UPDATE',
+                    // ★★★ CB-125: was 'UPDATE' only, so a remote member REMOVAL (row
+                    // DELETE) never reached this session — a removed scheduler kept
+                    // full write/generate access until reload. Subscribe to ALL events
+                    // ('*') so a DELETE also fires refresh(), which re-checks
+                    // membership, finds none, and revokes access. (Filtered DELETE
+                    // delivery needs REPLICA IDENTITY FULL on camp_users; the
+                    // unfiltered DELETE handler below is the backstop.)
+                    event: '*',
                     schema: 'public',
                     table: 'camp_users',
                     filter: `user_id=eq.${_currentUser.id}`
                 }, (payload) => {
-                    console.log('🔐 Membership updated remotely, refreshing permissions...');
+                    console.log('🔐 Membership change (' + (payload && payload.eventType) + ') — refreshing permissions...');
                     refresh();
+                })
+                // Backstop: unfiltered DELETE (covers tables without REPLICA IDENTITY
+                // FULL, where a filtered DELETE payload carries only the PK). Match the
+                // removed row by id/user_id before refreshing.
+                .on('postgres_changes', {
+                    event: 'DELETE',
+                    schema: 'public',
+                    table: 'camp_users'
+                }, (payload) => {
+                    try {
+                        const gone = payload && payload.old;
+                        if (gone && (String(gone.user_id) === String(_currentUser.id))) {
+                            console.log('🔐 This membership was deleted remotely — revoking access...');
+                            refresh();
+                        }
+                    } catch (_) { refresh(); }
                 })
                 .subscribe();
             
@@ -1042,9 +1070,14 @@
     }
 
     function canManageSubdivisions() {
-        // ★★★ v3.13: Owner/Admin/Scheduler bypass ★★★
-        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN || _currentRole === ROLES.SCHEDULER) return true;
-        if (!_initialized) return false;
+        // ★★★ CB-110: owner/admin ONLY. Subdivisions ARE the scheduler-scoping
+        // mechanism (a subdivision's divisions[] define what a scheduler may
+        // generate), so letting a SCHEDULER create/rewrite them is a privilege-
+        // escalation path — a scheduler could grant itself any division. This
+        // function gates ONLY createSubdivision/updateSubdivision (no UI-read
+        // callers), and deleteSubdivision is already owner-only, so dropping
+        // scheduler here closes the write path without affecting scheduler reads.
+        if (_currentRole === ROLES.OWNER || _currentRole === ROLES.ADMIN) return true;
         return false;
     }
 
@@ -1742,12 +1775,20 @@
             return null;
         }
         
-        const myDivisions = getEditableDivisions();
+        // ★ CB-130: scope to the scheduler's ASSIGNED divisions, NOT getEditableDivisions().
+        // Under v3.13 getEditableDivisions() returns ALL divisions for a scheduler, so
+        // "delete my divisions only" would wipe every bunk — including the owner's and other
+        // schedulers' — from in-memory scheduleAssignments/leagueAssignments. This is a
+        // scheduler-only path (owner/admin already returned above), so _directDivisionAssignments
+        // is the correct scoped set. No fallback to the all-divisions resolver: an empty
+        // assignment safely yields "No divisions assigned" rather than an over-delete.
+        const myDivisions = (_directDivisionAssignments && _directDivisionAssignments.length > 0)
+            ? [..._directDivisionAssignments] : [];
         if (myDivisions.length === 0) {
             return { error: "No divisions assigned" };
         }
-        
-        console.log('🗑️ [AccessControl] Deleting divisions:', myDivisions);
+
+        console.log('🗑️ [AccessControl] Deleting divisions (scoped to assignments):', myDivisions);
         
         try {
             if (window.ScheduleDB?.deleteMyScheduleOnly) {
@@ -2154,13 +2195,17 @@
         try {
             const { data, error } = await window.supabase
                 .from('camp_users')
-                .update({ assigned_divisions: divisionNames })
+                // ★ CB-133: also clear subdivision_ids. determineUserContext/verifyRoleFromDB
+                // resolve a scheduler's divisions subdivision-FIRST, so if the member already had
+                // subdivision_ids the new direct assignment was silently ignored on their next load.
+                // Assigning divisions directly is the explicit intent here → drop the stale subdivisions.
+                .update({ assigned_divisions: divisionNames, subdivision_ids: [] })
                 .eq('id', memberId)
                 .select()
                 .single();
-            
+
             if (error) throw error;
-            
+
             return { data };
         } catch (e) {
             console.error("🔐 Error assigning divisions:", e);

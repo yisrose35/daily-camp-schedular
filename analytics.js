@@ -174,8 +174,14 @@
         let assignments;
         // Prefer live in-memory state for the current date so freshly generated
         // schedules (manual or auto) show immediately without a save round-trip.
-        if (dateKey && dateKey === liveDate && window.scheduleAssignments &&
-            Object.keys(window.scheduleAssignments).length) {
+        // ★★★ CB-77: require the _scheduleAssignmentsDate coherence stamp too (the
+        // rotation table in this same file already does, L1383). Without it, a
+        // transient load error on date-nav leaves window.scheduleAssignments
+        // holding the PRIOR date's data (its non-empty length passes), so the
+        // Field Availability gantt showed a different date's field usage on the
+        // selected date.
+        if (dateKey && dateKey === liveDate && window._scheduleAssignmentsDate === liveDate &&
+            window.scheduleAssignments && Object.keys(window.scheduleAssignments).length) {
             assignments = window.scheduleAssignments;
         } else if (dateKey && allDaily[dateKey]?.scheduleAssignments) {
             assignments = allDaily[dateKey].scheduleAssignments;
@@ -195,7 +201,15 @@
         Object.entries(assignments).forEach(([bunk, schedule]) => {
             if (!Array.isArray(schedule)) return;
             const divName = getDivisionForBunk(bunk) || 'Unknown';
-            const times = dTimes[divName] || [];
+            // ★ CB-106: prefer the bunk's OWN per-bunk slot geometry over the flat division-level
+            // array. In auto mode window.divisionTimes[div] carries a ._perBunkSlots[bunk] map whose
+            // index can differ from the division array (e.g. an injected leading slot), so resolving
+            // a missing-time entry by raw division index mis-timed the block in the Gantt. Resolve
+            // from the SAME source as dTimes (snapshot for historical, window._perBunkSlots for live).
+            const _pbs = (dTimes[divName] && dTimes[divName]._perBunkSlots && dTimes[divName]._perBunkSlots[String(bunk)])
+                || (dTimes === window.divisionTimes && window._perBunkSlots && window._perBunkSlots[divName] && window._perBunkSlots[divName][String(bunk)])
+                || null;
+            const times = _pbs || dTimes[divName] || [];
 
             schedule.forEach((entry, idx) => {
                 if (!entry || entry.continuation || entry._isTransition) return;
@@ -1593,6 +1607,16 @@
 
         cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
             inp.onchange = (e) => {
+                // ★★★ CB-79: role-gate this generation-affecting write.
+                // manualUsageOffsets lives in camp_state_kv (owner/admin-write-only
+                // by RLS), so a scheduler's write was silently dropped, and any
+                // non-editor could trigger the whole-offsets-map replacement. Block
+                // non-full-access and revert the typed value.
+                if (window.CloudPermissions?.hasFullAccess?.() === false) {
+                    (window.daShowAlert || window.alert)('Only an owner or admin can adjust rotation offsets.');
+                    renderRotationTable(divName);
+                    return;
+                }
                 const b = e.target.dataset.bunk, a = e.target.dataset.act;
                 const val = parseInt(e.target.value) || 0;
                 const gs = window.loadGlobalSettings?.() || {};

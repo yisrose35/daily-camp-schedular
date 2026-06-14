@@ -1435,10 +1435,33 @@
      * * @param {string} divisionName - Division name
      * @returns {Array} Array of slot objects with startMin, endMin, label
      */
+    // ★★★ CB-73: resolve the correct slot array for a bunk-OR-division. When a
+    // BUNK with per-bunk geometry (auto mode) is given, return THAT bunk's
+    // _perBunkSlots timeline; otherwise the division-level array. The index→time
+    // helpers below used to always read divisionTimes[div], so for a per-bunk
+    // schedule whose timeline differs from the division table they returned the
+    // wrong slot / time / activity. Falls back to the flat division array (manual
+    // geometry) and to [] for a per-bunk object addressed without a bunk (which
+    // was never validly iterable anyway).
+    Utils._resolveSlotArray = function(bunkOrDiv) {
+        if (bunkOrDiv == null) return [];
+        const key = String(bunkOrDiv);
+        const dt = window.divisionTimes || {};
+        const grade = Utils.getDivisionForBunk ? Utils.getDivisionForBunk(key) : null;
+        if (grade) {
+            const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][key])
+                || (dt[grade] && dt[grade]._perBunkSlots && dt[grade]._perBunkSlots[key]);
+            if (Array.isArray(pbs) && pbs.length) return pbs;
+            if (Array.isArray(dt[grade])) return dt[grade];
+            return [];
+        }
+        if (Array.isArray(dt[key])) return dt[key];
+        return [];
+    };
+
     Utils.getSlotsForDivision = function(divisionName) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr] || [];
+        // ★★★ CB-73: per-bunk aware (was: divisionTimes[div] || []).
+        return Utils._resolveSlotArray(divisionName);
     };
 
     /**
@@ -1448,9 +1471,8 @@
      * @returns {Object|null} Slot object or null
      */
     Utils.getSlotAtIndex = function(divisionName, slotIndex) {
-        // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-        const divNameStr = String(divisionName);
-        return window.divisionTimes?.[divNameStr]?.[slotIndex] || null;
+        // ★★★ CB-73: per-bunk aware when a bunk is passed (else division-level).
+        return Utils._resolveSlotArray(divisionName)[slotIndex] || null;
     };
 
     /**
@@ -1461,26 +1483,18 @@
      * @returns {Object} { startMin, endMin } or { startMin: null, endMin: null }
      */
     Utils.getSlotTimeRange = function(slotIdx, bunkOrDiv) {
-        // Try division-specific lookup first
-        if (bunkOrDiv && window.divisionTimes) {
-            let divName = bunkOrDiv;
-            
-            // Check if it's a bunk name, convert to division
-            const possibleDiv = Utils.getDivisionForBunk(bunkOrDiv);
-            if (possibleDiv) divName = possibleDiv;
-            
-            // ★★★ FIX v7.2: Convert to string for divisionTimes lookup ★★★
-            const divNameStr = String(divName);
-            const slot = window.divisionTimes[divNameStr]?.[slotIdx];
+        // ★★★ CB-73: per-bunk aware. _resolveSlotArray returns the bunk's own
+        // _perBunkSlots timeline when bunkOrDiv is a per-bunk auto-mode bunk,
+        // else the division-level array. Previously it converted a bunk to its
+        // division and read divisionTimes[div][slotIdx] — wrong window for a
+        // per-bunk schedule whose timeline differs from the division table.
+        if (bunkOrDiv) {
+            const slot = Utils._resolveSlotArray(bunkOrDiv)[slotIdx];
             if (slot) {
-                return {
-                    startMin: slot.startMin,
-                    endMin: slot.endMin
-                };
+                return { startMin: slot.startMin, endMin: slot.endMin };
             }
         }
-        
-        // No fallback - division context is required
+        // No fallback - division/bunk context is required
         return { startMin: null, endMin: null };
     };
 
@@ -1658,7 +1672,11 @@
     Utils.findSlotForBunkAtTime = function(bunkName, targetMin) {
         const divName = Utils.getDivisionForBunk(bunkName);
         if (!divName) return -1;
-        return Utils.findSlotForTime(divName, targetMin);
+        // ★★★ CB-73: pass the BUNK (not its division) so findSlotForTime →
+        // getSlotsForDivision → _resolveSlotArray uses the bunk's own per-bunk
+        // timeline in auto mode. _resolveSlotArray falls back to the division
+        // array when there's no per-bunk geometry, so manual mode is unchanged.
+        return Utils.findSlotForTime(bunkName, targetMin);
     };
 
     // =================================================================
@@ -2418,6 +2436,28 @@
             if (!Array.isArray(slots)) return;
             if (slots.some(function(e) { return e && !e.continuation && (e._activity === activityName || e.field === activityName); })) count++;
         });
+        // ★★★ CB-66: also consult cloud rotation_counts (per-date). The local scan
+        // above reads only campDailyData_v1, so on a SECOND DEVICE (no local dates)
+        // or after the documented local-quota save-skip, period caps
+        // (maxUsage/exactFrequency per 'half'/'Nweek') silently UNDER-enforce. Take
+        // the MAX of local and a cloud period-count (count of distinct in-window
+        // dates where rotation_counts has this bunk+activity). MAX avoids
+        // double-counting dates present in both sources; it never lowers the local
+        // count, so it can only tighten (never loosen) the hard cap.
+        try {
+            var _cbd66 = (window.RotationCloud && window.RotationCloud.getCachedCountsByDate)
+                ? window.RotationCloud.getCachedCountsByDate() : null;
+            if (_cbd66) {
+                var _cloudCount66 = 0;
+                Object.keys(_cbd66).forEach(function(dateKey) {
+                    if (dateKey >= today) return;
+                    if (periodStart && dateKey < periodStart) return;
+                    var _byB = _cbd66[dateKey] && _cbd66[dateKey][bunk];
+                    if (_byB && (_byB[activityName] || 0) > 0) _cloudCount66++;
+                });
+                if (_cloudCount66 > count) count = _cloudCount66;
+            }
+        } catch (_e66) { /* non-fatal — local count stands */ }
         return count;
     };
 
@@ -2590,11 +2630,43 @@
 
         // Save to globalSettings if requested
         if (saveToCloud && window.saveGlobalSettings) {
-            window.saveGlobalSettings('historicalCounts', counts);
-            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
-            // guards stay consistent after a full rebuild.
+            // ★★★ CB-56 / CB-63: this rebuild scans ONLY local campDailyData_v1.
+            // On a near-quota browser daily schedules are not written to
+            // localStorage ("data is in cloud"), so loadAllDailyData() misses
+            // most dates and a whole-key overwrite of the SHARED cloud
+            // historicalCounts would DROP every bunk's history for the missing
+            // dates. Detect that: if the previously-counted date set
+            // (historicalCountedDates) contains dates not present in this scan,
+            // the scan is partial — merge raise-only against the previous counts
+            // (a partial scan can never LOWER the shared totals) and UNION the
+            // counted-dates set. Decrements are the job of the explicit
+            // erase / New-Half paths, not this passive rebuild.
+            let _finalCounts = counts;
             const _countedDates = {};
             Object.keys(allDaily).forEach(function (dk) { _countedDates[dk] = true; });
+            try {
+                const _gs = window.loadGlobalSettings?.() || {};
+                const _prevCounts = _gs.historicalCounts || {};
+                const _prevDates = _gs.historicalCountedDates || {};
+                const _scanned = new Set(Object.keys(allDaily));
+                const _partial = Object.keys(_prevDates).some(dk => !_scanned.has(dk));
+                if (_partial && Object.keys(_prevCounts).length > 0) {
+                    console.warn('📊 [SchedulerCoreUtils] PARTIAL local scan (cloud knew dates absent locally) — merging raise-only to avoid dropping rotation history');
+                    const _merged = JSON.parse(JSON.stringify(_prevCounts));
+                    Object.keys(counts).forEach(function (bunk) {
+                        _merged[bunk] = _merged[bunk] || {};
+                        Object.keys(counts[bunk]).forEach(function (act) {
+                            _merged[bunk][act] = Math.max(_merged[bunk][act] || 0, counts[bunk][act]);
+                        });
+                    });
+                    _finalCounts = _merged;
+                    // keep previously-counted dates too
+                    Object.keys(_prevDates).forEach(function (dk) { _countedDates[dk] = true; });
+                }
+            } catch (_e) { /* fall back to authoritative overwrite */ }
+            window.saveGlobalSettings('historicalCounts', _finalCounts);
+            // Rebuild historicalCountedDates to match so incrementHistoricalCounts
+            // guards stay consistent after a full rebuild.
             window.saveGlobalSettings('historicalCountedDates', _countedDates);
             console.log('📊 [SchedulerCoreUtils] Saved historical counts to globalSettings');
 
@@ -2756,6 +2828,14 @@ Utils.getValidActivityNames = function() {
         Object.keys(g.app1?.sportMetaData || {}).forEach(s => { if (s) valid.add(s); });
         return valid;
     };
+    // ★★★ CB-96 — DEAD-BUT-WIRED. incrementHistoricalCounts / reIncrementHistoricalCounts have NO
+    //   live caller (repo-wide grep: only their defs, the window exports below, and a unit test).
+    //   Every live generation/edit path instead calls `rebuildHistoricalCounts` (full re-scan from
+    //   the final schedule), which is the authority and counts differently (it excludes league-game
+    //   sports from historicalCounts; these incremental adders include them via the sport fallback).
+    //   DO NOT re-wire these into a gen/post-edit path without first reconciling that divergence —
+    //   doing so would inflate sport counts and double-count on re-generation. Left in place (not
+    //   deleted) because a test depends on them and removal is out of scope for the audit pass.
     Utils.incrementHistoricalCounts = function(dateKey, scheduleAssignments, saveToCloud = true) {
         console.log(`📊 [SchedulerCoreUtils] Incrementing counts for ${dateKey}...`);
 

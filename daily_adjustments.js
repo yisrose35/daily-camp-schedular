@@ -189,7 +189,7 @@ function daShowModal(config) {
             '<input type="checkbox" value="' + _escHtml(val) + '" data-group="' + _escHtml(field.name) + '"' + chk + (dis ? ' disabled' : '') + '>' +
             '<span>' + _escHtml(lbl) + (dis ? ' <em style="font-size:9px;">(taken)</em>' : '') + '</span></label>';
         }).join('');
-        fieldEl.innerHTML = '<label>' + field.label + '</label>' +
+        fieldEl.innerHTML = '<label>' + _escHtml(field.label) + '</label>' + // ★ CB-55: escape group label (was raw)
           '<div class="da-modal-cb-group">' + checkboxes + '</div>';
         inputs[field.name] = function() {
           var checked = fieldEl.querySelectorAll('input[data-group="' + field.name + '"]:checked');
@@ -3795,6 +3795,13 @@ function _showTileActionBar(tileEl) {
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  // ★★★ CB-51: capture the date at open. editTile awaits a blocking modal and
+  // then mutates `ev` + saves; if the loaded date changed during the modal (calendar
+  // nav / realtime settle), dailyOverrideSkeleton was reassigned so `ev` is a stale
+  // detached object — the save would be a silent no-op (or worse, write under the
+  // wrong date). The drop handler was already hardened for this race; guard editTile
+  // the same way. (Checked at the tail save below.)
+  const _editStartDate = window.currentScheduleDate;
 
   if (ev.type === 'smart') {
     const result = await daShowModal({
@@ -4011,6 +4018,13 @@ async function editTile(id) {
     delete ev._travelPre; delete ev._travelPost; delete ev._travelZone; delete ev._travelMode;
   }
 
+  // ★★★ CB-51: bail if the date changed during the edit modal — `ev` is now a
+  // stale detached object and saving would be a silent no-op (or cross-date write).
+  if (window.currentScheduleDate !== _editStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during edit — discarding stale edit (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed while editing — your change was not saved. Re-open the tile on the correct date.'); } catch (_) {}
+    return;
+  }
   saveDailySkeleton();
   renderGrid();
 }
@@ -4018,6 +4032,7 @@ async function editTile(id) {
 async function copyTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
+  const _copyStartDate = window.currentScheduleDate; // ★ CB-51: capture date for the post-modal guard
   const others = getColumnOrder().filter(d => d !== ev.division);
   if (others.length === 0) { await daShowAlert('No other grades to copy to.'); return; }
   const result = await daShowModal({
@@ -4026,6 +4041,13 @@ async function copyTile(id) {
     fields: [{ name: 'targets', label: 'Select target grades', type: 'checkbox-group', options: others }]
   });
   if (!result || !result.targets?.length) return;
+  // ★★★ CB-51: date changed during the modal → the copies would land on the wrong
+  // date's skeleton; abort instead.
+  if (window.currentScheduleDate !== _copyStartDate) {
+    console.warn('[DailyAdj] CB-51: date changed during copy — aborting (not saved)');
+    try { (window.daShowAlert || window.alert)('The date changed — the copy was not saved.'); } catch (_) {}
+    return;
+  }
   result.targets.forEach(div => {
     dailyOverrideSkeleton.push({ ...ev, id: 'evt_' + Math.random().toString(36).slice(2, 9), division: div });
   });
@@ -4159,11 +4181,19 @@ function saveDAAutoLayers() {
   //   newer (another device/scheduler saved it) prefer cloud so a stale local copy
   //   can't shadow a teammate's update. Backward-compatible: no timestamps →
   //   _cloudIsNewer is false → unchanged local-first.
+  // ★★★ CB-31: read a FRESH copy of global settings for the cloud branch, the
+  // same way the auto twin loadDAAutoLayers() does (loadGlobalSettings()). The
+  // module-level `masterSettings` is an init-time snapshot — on device B (or
+  // after a sync that never refreshed the snapshot) it can be stale, so a
+  // skeleton created/edited on device A would be missed and the loader would
+  // fall through to a template. Fall back to the snapshot only if the fresh load
+  // is unavailable.
+  const _freshApp1_31 = ((window.loadGlobalSettings ? window.loadGlobalSettings() : null) || {}).app1 || masterSettings?.app1 || {};
   let _cloudIsNewer = false;
   try {
     const _lTs = localStorage.getItem(`campManualSkeleton_ts_${dateKey}`) || null;
-    const _cTs = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey] || null;
-    const _cData = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    const _cTs = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey] || null;
+    const _cData = _freshApp1_31?.dailySkeletons?.[dateKey];
     // ★ #7 (re-audit): only prefer cloud when it ACTUALLY has data. A cleared-but-
     //   timestamped cloud (another device hit "Clear All") would otherwise skip local
     //   then fall through to a template, silently discarding good local data.
@@ -4193,15 +4223,15 @@ function saveDAAutoLayers() {
 
   // Priority 2: Cloud
   try {
-    const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    const cloudSkeleton = _freshApp1_31?.dailySkeletons?.[dateKey];
     if (cloudSkeleton && cloudSkeleton.length > 0) {
       dailyOverrideSkeleton = JSON.parse(JSON.stringify(cloudSkeleton));
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
       // ★ #10: sync local recency stamp to the cloud's so we don't re-prefer cloud forever
-      try { const _cTs2 = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
-      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      try { const _cTs2 = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
+      const cloudOrder = _freshApp1_31?.dailyColumnOrders?.[dateKey];
       if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
         saveColumnOrder(cloudOrder);
         localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
@@ -4836,6 +4866,22 @@ async function runOptimizer() {
             _roleScope = _gd.map(String);
         }
     } catch (_eRS) { /* non-fatal — fall through unclamped */ }
+    // ★★★ CB-26: a SCHEDULER whose generatable set is EMPTY (subdivision not yet
+    // resolved — AccessControl init race) must NOT generate unscoped. The clamp
+    // above only sets _roleScope for a NON-empty partial set; an empty set left
+    // it null → generation ran over ALL divisions and stomped the owner's work.
+    // Block and ask the user to retry once scope resolves. Owner/admin unaffected
+    // (their generatable set is every division, never empty).
+    try {
+        const _roleNow = window.CampistryDB?.getRole?.() || window.AccessControl?.getCurrentRole?.();
+        if (_roleNow === 'scheduler') {
+            const _gdNow = window.AccessControl?.getGeneratableDivisions?.() || [];
+            if (!Array.isArray(_gdNow) || _gdNow.length === 0) {
+                await daShowAlert('Your assigned divisions are still loading — please try generating again in a moment.');
+                return;
+            }
+        }
+    } catch (_eRoleGuard) { /* non-fatal */ }
     let _effScope = (_generationScope && _generationScope.size > 0) ? [..._generationScope] : null;
     if (_roleScope) {
         _effScope = _effScope ? _effScope.filter(d => _roleScope.includes(String(d))) : [..._roleScope];
@@ -5111,7 +5157,9 @@ async function runOptimizer() {
 
     // ★★★ PRE-GENERATION CLEAR (v4 — scope-aware wipe) ★★★
   const dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
-  const scopeDivsForWipe = _generationScope ? [..._generationScope] : null;
+  // ★★★ CB-46: use the ROLE-CLAMPED _effScope (matches the auto branch), not the
+  // raw picker — a scheduler who makes no pick must not take the full-camp wipe.
+  const scopeDivsForWipe = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null);
   // ★ Day 22.5: If user picked bunks (not whole divisions), the wipe is partial.
   const scopeBunksForWipe = _generationBunkScope ? [..._generationBunkScope] : null;
   const allDivKeys = Object.keys(window.divisions || {});
@@ -5257,7 +5305,7 @@ async function runOptimizer() {
   window.invalidateSmartLogicSpecialsCache?.();
   let success = false;
   try {
-    const scopeDivsManual = _generationScope ? [..._generationScope] : null;
+    const scopeDivsManual = _effScope ? [..._effScope] : (_generationScope ? [..._generationScope] : null); // ★ CB-46: role-clamped scope (matches auto)
     const scopeBunksManual = _generationBunkScope ? [..._generationBunkScope] : null;
     // ★ Day 22.5: install per-bunk gate for manual solver (same hook as auto)
     if (scopeBunksManual) window.__allowedBunkSet = new Set(scopeBunksManual.map(String));
@@ -5395,10 +5443,17 @@ function loadDailyTrips(dateKey) {
     }
   } catch (e) { /* ignore */ }
 
-  // Merge: use whichever has more trips (handles partial sync)
+  // ★ CB-53: merge precedence. This branch is only reached for LEGACY data (Source 3,
+  // app1.dailyTripsByDate, is absent) AND when both sources hold ≥1 trip. Any trip edit since
+  // the dailyTripsByDate mechanism shipped writes Source 3, so "Source 3 absent" ⟹ no fresh
+  // local edit exists — fromLS is then device-local-stale while fromCloud (daily_schedules) is
+  // the only cross-device-synced copy. The old "more trips wins" rule resurrected a deletion
+  // made on another device (stale fromLS had more). Prefer fromCloud here. The cloud-WIPE
+  // recovery case (fromCloud empty/null) never enters this branch — it falls to the else, where
+  // fromLS correctly wins — so this change can't undo local recovery.
   let result = [];
   if (fromLS && fromCloud) {
-    result = fromLS.length >= fromCloud.length ? fromLS : fromCloud;
+    result = fromCloud; // cross-device truth wins over stale device-local for legacy trips
   } else {
     result = fromLS || fromCloud || [];
   }
@@ -5426,6 +5481,17 @@ function loadDailyTrips(dateKey) {
 }
 
 function saveDailyTrips(dateKey, trips) {
+  // ★★★ CB-32: role gate. Every sibling write in this file (saveDailySkeleton,
+  // rainy-mode, optimizer) opens with a canEdit/checkEditAccess guard, but the
+  // Trips path had none — a viewer or out-of-scope scheduler could push
+  // camp-GLOBAL trip data (app1.dailyTripsByDate + daily_schedules) that both
+  // builders honor. This is the single write chokepoint (add/remove handlers +
+  // the render-time self-heal all route through here), so guarding it blocks
+  // every unauthorized trip write. Owners/admins/in-scope editors pass.
+  if (!window.AccessControl?.canEdit?.()) {
+    console.warn('[saveDailyTrips] blocked: user lacks edit permission');
+    return;
+  }
   if (!dateKey) dateKey = window.currentScheduleDate || new Date().toISOString().split('T')[0];
 
   // 1. Save to dedicated localStorage key (fast, survives cloud overwrites)
@@ -5620,10 +5686,19 @@ function _renderTripsPopoverContent(pop) {
       }
       _tripEditId = null;
     } else {
-      // Add new trip(s) — one per division, always save to trips store
+      // Add new trip(s) — one per division, always save to trips store.
+      // ★★★ CB-30: compute each division's trip id ONCE and reuse it for BOTH
+      // the trips-store record AND the skeleton pinned tile. Previously two
+      // independent Date.now() calls (store vs tile), separated by the
+      // synchronous saveDailyTrips() write, produced DIFFERENT ids. Remove
+      // matches by exact id equality (store id == btn.dataset.tripId), so the
+      // skeleton tile's mismatched id was never cleared → an orphaned,
+      // un-removable ghost trip plus a duplicate in the list.
       const trips = loadDailyTrips(dateKey);
+      const _tripIdByDiv = {};
       selDivs.forEach(div => {
         const tripId = 'trip_' + Date.now() + '_' + div;
+        _tripIdByDiv[div] = tripId;
         trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
       });
       saveDailyTrips(dateKey, trips);
@@ -5631,7 +5706,7 @@ function _renderTripsPopoverContent(pop) {
       if (window._daBuilderMode !== 'auto') {
         loadDailySkeleton();
         selDivs.forEach(div => {
-          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          const newEvent = { id: _tripIdByDiv[div], type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
           eraseOverlappingTiles(newEvent, div);
           dailyOverrideSkeleton.push(newEvent);
         });

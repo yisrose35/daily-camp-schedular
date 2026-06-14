@@ -151,11 +151,24 @@
     // ─────────────────────────────────────────────
     // ACTIVITY COLOR PALETTE
     // ─────────────────────────────────────────────
-    function blockStyle(entry) {
+    // MS-4g: grid re-renders rebuild entry objects, so an in-memory
+    // _conflictFlagged mark dies with them. The notification receiver keeps
+    // window.__conflictFlagMap (dateKey|bunk|location → true) built from
+    // unread conflict notifications; consulting it keeps the red flag alive
+    // across repaints.
+    function _msConflictFlagged(entry, bunk) {
+        var m = window.__conflictFlagMap;
+        if (!m || !bunk) return false;
+        var f = (typeof entry.field === 'object') ? (entry.field && entry.field.name) : entry.field;
+        var dk = window.currentScheduleDate;
+        return !!(f && dk && m[dk + '|' + bunk + '|' + f]);
+    }
+
+    function blockStyle(entry, bunk) {
         if (!entry) return { bg: '#f3f4f6', border: '#d1d5db', text: '#9ca3af', label: 'Free' };
         // Cross-scheduler conflict flag (MS-4) — another user double-booked
         // this entry's location and chose "notify"; outranks all other styles
-        if (entry._conflictFlagged) return { bg: '#fef2f2', border: '#dc2626', text: '#991b1b', accent: '#ef4444' };
+        if (entry._conflictFlagged || _msConflictFlagged(entry, bunk)) return { bg: '#fef2f2', border: '#dc2626', text: '#991b1b', accent: '#ef4444' };
         var act = (entry._activity || entry.field || '').toLowerCase();
 
         // Trip — green theme (off-campus)
@@ -879,7 +892,7 @@
 
                 if (act.duration < 1) return;
 
-                var style = blockStyle(act.entry);
+                var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
@@ -1336,7 +1349,7 @@
                 var blockH   = act.duration * PX_PER_MIN;
                 if (blockH < 2) return;
 
-                var style = blockStyle(act.entry);
+                var style = blockStyle(act.entry, bunk);
                 var name  = (window.getActivityDisplayName ? window.getActivityDisplayName(act.entry) : (act.entry?._activity || act.entry?.field || ''));
                 var fieldName = act.entry?.field || '';
                 var sub   = (fieldName && fieldName !== name && fieldName !== 'Free') ? fieldName : '';
