@@ -13,7 +13,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-5 [LIVE] scheduler_core_main.js:1665 — STEP 0f slim restricted to past in-window dates; LOCAL_ONLY preserved on slim. Owed: live manual-gen verify
 - ✅ CB-6 + CB-18 + CB-112 [LIVE] supabase_schedules.js — scheduler save scope hardened (no ALL-divisions fallback; empty set returns {})
 - ✅ CB-7 post_edit_system.js — added escHtml (CampUtils delegate + fallback); wrapped bunk/activity/field/location/conflict-bunk names in edit modal, conflict panel, drag tooltips, availability banner, add modal
-- ⬜ CB-8 scheduler_core_main.js:3893 [LIVE] — STEP 7.55 demotes off-site trips
+- ✅ CB-8 [LIVE] scheduler_core_main.js:3891 — STEP 7.55 capacity sweep skips _isTrip entries (manual twin of FN-59). Owed: live manual trip-day gen
 - ⬜ CB-56 scheduler_core_utils.js:2592 [LIVE] — rebuildHistoricalCounts whole-key overwrite from partial scan
 - ⬜ CB-57 calendar.js:1430 — Erase ALL leaves stale local historicalCounts/rotationHistory
 - ⬜ CB-58 validator.js:937 — manual validator modal XSS

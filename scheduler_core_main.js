@@ -3890,6 +3890,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 var g = _rb2g[String(bunk)] || '?';
                 slots.forEach(function (e, idx) {
                     if (!e || e.continuation) return;
+                    // ★★★ CB-8 (manual twin of FN-59): a Trip is OFF-SITE — it
+                    // occupies no on-campus field, so it must not participate in
+                    // the room-capacity / anti-stagger sweep. Including it let
+                    // the sweep treat N bunks on one trip as N occupants of a
+                    // cap-1 "field" and demote all but one bunk's trip to Free
+                    // (then STEP 7.6 refilled them with on-campus sports),
+                    // collapsing a whole division's trip. Skip trip entries —
+                    // matching auto_validator.buildFieldUsageIndex (FN-59).
+                    if (e._isTrip || (e.type || '').toLowerCase() === 'trip') return;
                     var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
                     // NOTE: do NOT skip rooms missing from _rcfg. auto_validator defaults any
                     // field it can't resolve to {not_sharable, cap 1} and flags it — most often
