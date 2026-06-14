@@ -4159,11 +4159,19 @@ function saveDAAutoLayers() {
   //   newer (another device/scheduler saved it) prefer cloud so a stale local copy
   //   can't shadow a teammate's update. Backward-compatible: no timestamps →
   //   _cloudIsNewer is false → unchanged local-first.
+  // ★★★ CB-31: read a FRESH copy of global settings for the cloud branch, the
+  // same way the auto twin loadDAAutoLayers() does (loadGlobalSettings()). The
+  // module-level `masterSettings` is an init-time snapshot — on device B (or
+  // after a sync that never refreshed the snapshot) it can be stale, so a
+  // skeleton created/edited on device A would be missed and the loader would
+  // fall through to a template. Fall back to the snapshot only if the fresh load
+  // is unavailable.
+  const _freshApp1_31 = ((window.loadGlobalSettings ? window.loadGlobalSettings() : null) || {}).app1 || masterSettings?.app1 || {};
   let _cloudIsNewer = false;
   try {
     const _lTs = localStorage.getItem(`campManualSkeleton_ts_${dateKey}`) || null;
-    const _cTs = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey] || null;
-    const _cData = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    const _cTs = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey] || null;
+    const _cData = _freshApp1_31?.dailySkeletons?.[dateKey];
     // ★ #7 (re-audit): only prefer cloud when it ACTUALLY has data. A cleared-but-
     //   timestamped cloud (another device hit "Clear All") would otherwise skip local
     //   then fall through to a template, silently discarding good local data.
@@ -4193,15 +4201,15 @@ function saveDAAutoLayers() {
 
   // Priority 2: Cloud
   try {
-    const cloudSkeleton = masterSettings?.app1?.dailySkeletons?.[dateKey];
+    const cloudSkeleton = _freshApp1_31?.dailySkeletons?.[dateKey];
     if (cloudSkeleton && cloudSkeleton.length > 0) {
       dailyOverrideSkeleton = JSON.parse(JSON.stringify(cloudSkeleton));
       window.dailyOverrideSkeleton = dailyOverrideSkeleton;
       const storageKey = `campManualSkeleton_${dateKey}`;
       localStorage.setItem(storageKey, JSON.stringify(dailyOverrideSkeleton));
       // ★ #10: sync local recency stamp to the cloud's so we don't re-prefer cloud forever
-      try { const _cTs2 = (masterSettings?.app1?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
-      const cloudOrder = masterSettings?.app1?.dailyColumnOrders?.[dateKey];
+      try { const _cTs2 = (_freshApp1_31?.dailySkeletonsTs || {})[dateKey]; if (_cTs2) localStorage.setItem(`campManualSkeleton_ts_${dateKey}`, _cTs2); } catch (e) {}
+      const cloudOrder = _freshApp1_31?.dailyColumnOrders?.[dateKey];
       if (Array.isArray(cloudOrder) && cloudOrder.length > 0) {
         saveColumnOrder(cloudOrder);
         localStorage.setItem(`campManualColumnOrder_${dateKey}`, JSON.stringify(cloudOrder));
