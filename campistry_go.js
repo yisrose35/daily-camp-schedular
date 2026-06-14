@@ -1057,38 +1057,55 @@ let _toastTimer = null;
             if (cloud.state && typeof cloud.state === 'object') {
                 const s = cloud.state;
 
-                // Setup: restore if local campName is empty but cloud has one
-                if (s.setup && !D.setup.campName && s.setup.campName) {
+                // ★★★ CB-114: prefer a FRESHER cloud 'state' row over a stale-but-
+                // nonempty local one. Previously hydration was gated purely on local
+                // emptiness, so device B's older non-empty fleet/shifts/setup never
+                // accepted device A's newer cloud edits (A's changes silently lost,
+                // then re-saved stale). Compare the cloud row's updated_at to the
+                // last one we applied (persisted in localStorage); when newer, accept
+                // cloud even if local is non-empty. Falls back to the empty-only
+                // behaviour when no timestamp is available.
+                let _cloudStateNewer = false;
+                try {
+                    const _cua = cloud._updatedAt && cloud._updatedAt.state;
+                    if (_cua) {
+                        const _lastUA = localStorage.getItem('go_state_lastAppliedUA') || '';
+                        if (_cua > _lastUA) { _cloudStateNewer = true; localStorage.setItem('go_state_lastAppliedUA', _cua); }
+                    }
+                } catch (_) {}
+
+                // Setup: restore if local campName is empty OR cloud is newer
+                if (s.setup && s.setup.campName && (!D.setup.campName || _cloudStateNewer)) {
                     D.setup = Object.assign({}, D.setup, s.setup);
                     changed = true;
                     console.log('[Go] Restored setup from GoCloud (campName:', s.setup.campName + ')');
                 }
 
-                // Fleet config: restore if local is empty
-                if (!D.buses?.length && s.buses?.length) {
+                // Fleet config: restore if local is empty OR cloud is newer
+                if (s.buses?.length && (!D.buses?.length || _cloudStateNewer)) {
                     D.buses = s.buses;
                     changed = true;
-                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud');
+                    console.log('[Go] Restored', s.buses.length, 'buses from GoCloud' + (_cloudStateNewer ? ' (cloud newer)' : ''));
                 }
-                if (!D.shifts?.length && s.shifts?.length) {
+                if (s.shifts?.length && (!D.shifts?.length || _cloudStateNewer)) {
                     D.shifts = s.shifts;
                     changed = true;
                 }
-                if (!D.monitors?.length && s.monitors?.length) {
+                if (s.monitors?.length && (!D.monitors?.length || _cloudStateNewer)) {
                     D.monitors = s.monitors;
                     changed = true;
                 }
-                if (!D.counselors?.length && s.counselors?.length) {
+                if (s.counselors?.length && (!D.counselors?.length || _cloudStateNewer)) {
                     D.counselors = s.counselors;
                     changed = true;
                 }
 
                 // Mode snapshots
-                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length)) {
+                if (s.dismissal && (!D.dismissal || !D.dismissal.buses?.length || _cloudStateNewer)) {
                     D.dismissal = Object.assign(D.dismissal || {}, s.dismissal);
                     changed = true;
                 }
-                if (s.arrival && (!D.arrival || !D.arrival.buses?.length)) {
+                if (s.arrival && (!D.arrival || !D.arrival.buses?.length || _cloudStateNewer)) {
                     D.arrival = Object.assign(D.arrival || {}, s.arrival);
                     changed = true;
                 }
@@ -7921,6 +7938,19 @@ window.GoFlagPersistence = (function () {
 // hitting Supabase.
 // =============================================================================
 let _flagCache = null;
+
+// ★★★ CB-115: the flag cache was loaded once and NEVER invalidated, so every
+// mutation wrote the whole stale route_flags row, clobbering another device's
+// concurrent flag edits (last-clicker-wins). Invalidate on focus / visibility so
+// a returning dispatcher re-loads fresh flags before mutating (_ensureFlags
+// reloads when _flagCache is null), shrinking the clobber window to a single
+// focused session.
+if (typeof window !== 'undefined' && window.addEventListener) {
+    try {
+        window.addEventListener('focus', function () { _flagCache = null; });
+        document.addEventListener('visibilitychange', function () { if (!document.hidden) _flagCache = null; });
+    } catch (_) {}
+}
 
 async function _ensureFlags() {
     if (_flagCache) return _flagCache;
