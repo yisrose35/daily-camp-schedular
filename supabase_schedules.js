@@ -1355,7 +1355,27 @@
                         .delete()
                         .eq('id', record.id);
                     if (error) {
-                        logError(`  Delete record ${record.id} failed:`, error);
+                        // ★★★ CB-17: a scheduler cannot DELETE rows under RLS
+                        // (delete is owner/admin-only), so the DELETE silently
+                        // no-ops and the old row resurrects on the next load.
+                        // Fall back to UPDATING the row to an empty schedule,
+                        // which the scheduler CAN do on their own row — an empty
+                        // row carries no bunks so the merge ignores it (effective
+                        // delete) and it can't resurrect stale assignments.
+                        logError(`  Delete record ${record.id} failed (likely RLS) — emptying row instead:`, error);
+                        const { error: upErr } = await client
+                            .from(CONFIG.TABLE_NAME)
+                            .update({
+                                schedule_data: { ...scheduleData, scheduleAssignments: {}, leagueAssignments: {} },
+                                updated_at: new Date().toISOString()
+                            })
+                            .eq('id', record.id);
+                        if (upErr) {
+                            logError(`  Empty-row fallback also failed for ${record.id}:`, upErr);
+                        } else {
+                            recordsModified++;
+                            log('  ✅ Emptied record (delete fallback)');
+                        }
                     } else {
                         recordsDeleted++;
                         log('  ✅ Deleted empty record');
