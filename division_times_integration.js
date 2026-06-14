@@ -272,9 +272,21 @@
             let _pbsPersistTimer = null;
             function _schedulePerBunkSlotsPersist() {
                 if (_pbsPersistTimer) return; // already queued
+                // ★★★ CB-69: capture the date this geometry belongs to NOW. The 250ms
+                // timer is not cancelled on date change, so a fast date switch would
+                // otherwise fire after currentScheduleDate flipped and
+                // saveCurrentDailyData would write the OLD date's _perBunkSlots under
+                // the NEW date's record (cross-date geometry contamination).
+                const _pbsScheduledForDate = window.currentScheduleDate || window._scheduleAssignmentsDate || null;
                 _pbsPersistTimer = setTimeout(function() {
                     _pbsPersistTimer = null;
                     try {
+                        const _pbsNowDate = window.currentScheduleDate || window._scheduleAssignmentsDate || null;
+                        if (_pbsScheduledForDate && _pbsNowDate && _pbsScheduledForDate !== _pbsNowDate) {
+                            console.warn('[DivTimesIntegration] CB-69: skipping _perBunkSlotsData persist — date changed '
+                                + _pbsScheduledForDate + ' → ' + _pbsNowDate);
+                            return;
+                        }
                         const dt = window.divisionTimes || {};
                         const hasLivePerBunk = Object.values(dt).some(function(d) { return d && d._isPerBunk && d._perBunkSlots; });
                         if (!hasLivePerBunk) return;
