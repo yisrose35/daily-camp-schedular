@@ -15,7 +15,7 @@ Verify each fix with `node --check`. Mark ✅ when committed. `[LIVE]` items get
 - ✅ CB-7 post_edit_system.js — added escHtml (CampUtils delegate + fallback); wrapped bunk/activity/field/location/conflict-bunk names in edit modal, conflict panel, drag tooltips, availability banner, add modal
 - ✅ CB-8 [LIVE] scheduler_core_main.js:3891 — STEP 7.55 capacity sweep skips _isTrip entries (manual twin of FN-59). Owed: live manual trip-day gen
 - ✅ CB-56 + CB-63 [LIVE] scheduler_core_utils.js:2592 — rebuild detects partial local scan (cloud counted dates absent locally) → merges raise-only + unions counted-dates instead of overwriting. Owed: quota/2-device verify
-- ⬜ CB-57 calendar.js:1430 — Erase ALL leaves stale local historicalCounts/rotationHistory
+- ✅ CB-57 calendar.js:1430 — Erase-ALL now clears historicalCounts/historicalCountedDates/rotationHistory/manualUsageOffsets/swim+activity history (mem + globalSettings)
 - ⬜ CB-58 validator.js:937 — manual validator modal XSS
 - ⬜ CB-59 auto_validator.js:643 — auto validator modal XSS
 - ⬜ CB-60 campistry_me.js:141 — save() strips forms/customFields/locale/Stripe key

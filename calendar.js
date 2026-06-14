@@ -1436,6 +1436,19 @@ all[date].updated_at = new Date().toISOString();
                 window.saveGlobalSettings('leagueRoundState', {});
             }
 
+            // ★★★ CB-57: clear the rotation-history globalSettings keys too.
+            // Erase-ALL wiped cloud rotation_counts + every daily schedule but
+            // left historicalCounts / historicalCountedDates / rotationHistory /
+            // manualUsageOffsets (and the swim/activity history mirrors) intact,
+            // so the next generation double-counts against phantom history from
+            // now-deleted days. Clear them in memory AND in globalSettings
+            // (which mirrors to localStorage + queues the cloud KV write).
+            ['historicalCounts', 'historicalCountedDates', 'rotationHistory', 'manualUsageOffsets', 'swimRotationHistory', 'activityHistory'].forEach(function (k) {
+                try { window[k] = {}; } catch (_) {}
+                try { if (typeof window.saveGlobalSettings === 'function') window.saveGlobalSettings(k, {}); } catch (_) {}
+            });
+            try { window.RotationEngine?.clearAllHistory?.(); } catch (_) {}
+
             console.log("✅ All daily data erased");
 
             // Notify other modules
