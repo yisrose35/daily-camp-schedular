@@ -143,6 +143,30 @@
         }
     }
 
+    /**
+     * ★★★ CB-22: Delete a version by id. This was REFERENCED by the auto-backup
+     * cleanup loop (unified_schedule_system.cleanupOldAutoBackups) but never
+     * existed/exported, so MAX_AUTO_BACKUPS_PER_DATE was silently unenforced and
+     * the schedule_versions table grew without bound. Now implemented + exported.
+     */
+    async function deleteVersion(versionId) {
+        console.log(`📋 [DB] Deleting version ${versionId}...`);
+        const supabase = await getSupabase();
+        if (!supabase) return { success: false, error: 'Supabase not initialized' };
+        try {
+            const { error } = await supabase
+                .from(VERSIONS_TABLE)
+                .delete()
+                .eq('id', versionId);
+            if (error) throw error;
+            console.log(`📋 [DB] ✅ Deleted version ${versionId}`);
+            return { success: true };
+        } catch (e) {
+            console.error("📋 [DB] Delete Exception:", e);
+            return { success: false, error: e.message };
+        }
+    }
+
     async function createBasedOn(sourceVersionId, newName) {
         const source = await getVersion(sourceVersionId);
         if (!source) return { success: false, error: "Source version not found" };
@@ -167,6 +191,7 @@
         createVersion,
         saveVersion: createVersion, // Alias
         updateVersion, // ★ NEW: Added for overwrite support
+        deleteVersion, // ★ CB-22: enables auto-backup cleanup (was referenced but missing)
         createBasedOn
     };
 
