@@ -56,7 +56,7 @@ html, body {
     font-size: 0.72rem !important;
     padding: 6px 10px !important;
     gap: 6px !important;
-    --promo-banner-height: 32px !important;
+    --promo-banner-height: 0px !important;
     height: 32px !important;
   }
   .promo-banner span {
@@ -241,7 +241,7 @@ html, body {
    2. DASHBOARD HEADER + LAYOUT
    ============================================ */
 @media (max-width: 768px) {
-  :root { --promo-banner-height: 32px; }
+  :root { --promo-banner-height: 0px; }
   /* NAV */
   .dashboard .nav, .dashboard-nav, body > .nav { padding: 10px 12px !important; }
   .nav-inner { position: relative !important; gap: 10px !important; }

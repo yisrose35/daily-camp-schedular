@@ -54,7 +54,7 @@
     --radius-xl: 20px;
     
     /* Promo Banner */
-    --promo-banner-height: 44px;
+    --promo-banner-height: 0px;
     
     /* Transitions */
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
@@ -190,7 +190,7 @@ ul {
 /* ============================================= */
 .nav {
     position: fixed;
-    top: var(--promo-banner-height);    
+    top: 0;
     left: 0;
     right: 0;
     z-index: 100;
@@ -199,10 +199,9 @@ ul {
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-bottom: 1px solid rgba(0, 0, 0, 0.04);
-    transition: padding 0.3s ease, box-shadow 0.3s ease;
+    transition: box-shadow 0.3s ease;
 }
 .nav.nav-scrolled {
-    padding: 10px 24px;
     box-shadow: 0 1px 8px rgba(0, 0, 0, 0.06);
 }
 .nav-inner {
