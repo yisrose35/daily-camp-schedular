@@ -450,7 +450,16 @@
         }
         try {
             const records = await loadAllSchedulersForDate(dateKey);
-            
+
+            // CB-2: a transient query failure returns an empty array TAGGED
+            // _queryErrored. Do NOT treat that as "the date was deleted" — keep
+            // the local cache and surface a fallback so consumers don't wipe
+            // memory/localStorage on a momentary network/auth hiccup.
+            if (records && records._queryErrored) {
+                logError('Cloud query errored for', dateKey, '— preserving local cache (not treating as empty)');
+                return { success: false, error: 'query-failed', data: getLocalSchedule(dateKey), source: 'local-fallback' };
+            }
+
             if (!records || records.length === 0) {
                 log('No cloud records — clearing local cache for this date');
                 deleteLocalSchedule(dateKey);
@@ -475,7 +484,15 @@
         const client = getClient();
         const campId = getCampId();
         
-        if (!client || !campId) return [];
+        // CB-2: distinguish a TRANSIENT query failure from a genuinely-empty
+        // date. A bare [] for both let loadSchedule (and the delete paths)
+        // treat a network blip / mid-refresh auth error as "owner deleted
+        // everything" and wipe the local cache. We tag the failure array with
+        // a non-enumerable _queryErrored flag that rides on the returned
+        // instance (race-safe — no shared module state) and is invisible to
+        // the many callers that only read .length.
+        const _erroredResult = () => { const a = []; try { Object.defineProperty(a, '_queryErrored', { value: true, enumerable: false }); } catch (_) { a._queryErrored = true; } return a; };
+        if (!client || !campId) return _erroredResult();
         try {
             const { data, error } = await client
                 .from(CONFIG.TABLE_NAME)
@@ -484,14 +501,14 @@
                 .eq('date_key', dateKey);
             if (error) {
                 logError('Query error:', error);
-                return [];
+                return _erroredResult();
             }
             log(`Loaded ${data?.length || 0} records for ${dateKey}`);
             return data || [];
-            
+
         } catch (e) {
             logError('loadAllSchedulersForDate failed:', e);
-            return [];
+            return _erroredResult();
         }
     }
     /**
@@ -1268,6 +1285,12 @@
             // Step 2: Load ALL records for this date
             const allRecords = await loadAllSchedulersForDate(dateKey);
             log('Found', allRecords.length, 'records for', dateKey);
+            if (allRecords && allRecords._queryErrored) {
+                // CB-2: transient query failure — abort the delete rather than
+                // clearing local on a false "no records".
+                logError('deleteMyScheduleOnly: cloud query errored for', dateKey, '— aborting, local cache preserved');
+                return { success: false, error: 'query-failed', message: 'Cloud query failed — try again' };
+            }
             if (!allRecords || allRecords.length === 0) {
                 // No records in cloud, just clear local
                 deleteLocalSchedule(dateKey);
@@ -1340,7 +1363,11 @@
             log(`Delete complete: ${recordsModified} modified, ${recordsDeleted} deleted`);
             // Step 4: Reload remaining data and update local storage
             const remaining = await loadAllSchedulersForDate(dateKey);
-            if (remaining.length > 0) {
+            if (remaining && remaining._queryErrored) {
+                // CB-2: re-read errored after a successful delete — leave local
+                // cache as-is rather than wiping it on a false empty.
+                log('Post-delete re-read errored — leaving local cache untouched');
+            } else if (remaining.length > 0) {
                 const merged = mergeSchedules(remaining);
                 setLocalSchedule(dateKey, merged);
                 log('Updated local storage with remaining data:', Object.keys(merged.scheduleAssignments || {}).length, 'bunks');
