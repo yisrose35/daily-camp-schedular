@@ -5647,10 +5647,19 @@ function _renderTripsPopoverContent(pop) {
       }
       _tripEditId = null;
     } else {
-      // Add new trip(s) — one per division, always save to trips store
+      // Add new trip(s) — one per division, always save to trips store.
+      // ★★★ CB-30: compute each division's trip id ONCE and reuse it for BOTH
+      // the trips-store record AND the skeleton pinned tile. Previously two
+      // independent Date.now() calls (store vs tile), separated by the
+      // synchronous saveDailyTrips() write, produced DIFFERENT ids. Remove
+      // matches by exact id equality (store id == btn.dataset.tripId), so the
+      // skeleton tile's mismatched id was never cleared → an orphaned,
+      // un-removable ghost trip plus a duplicate in the list.
       const trips = loadDailyTrips(dateKey);
+      const _tripIdByDiv = {};
       selDivs.forEach(div => {
         const tripId = 'trip_' + Date.now() + '_' + div;
+        _tripIdByDiv[div] = tripId;
         trips.push({ id: tripId, event: tripName, division: div, startTime, endTime, startMin, endMin });
       });
       saveDailyTrips(dateKey, trips);
@@ -5658,7 +5667,7 @@ function _renderTripsPopoverContent(pop) {
       if (window._daBuilderMode !== 'auto') {
         loadDailySkeleton();
         selDivs.forEach(div => {
-          const newEvent = { id: 'trip_' + Date.now() + '_' + div, type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
+          const newEvent = { id: _tripIdByDiv[div], type: "pinned", event: tripName, division: div, startTime, endTime, reservedFields: [] };
           eraseOverlappingTiles(newEvent, div);
           dailyOverrideSkeleton.push(newEvent);
         });
