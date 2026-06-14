@@ -663,6 +663,43 @@
                 log('[STEP 0] Partial wipe: clearing ' + myBunks.size + ' bunks from [' + (_step0AllowedDivs || []).join(', ') + ']');
             }
             _partialGenBunks = myBunks;
+
+            // ★★★ CB-65: force-load cloud BEFORE the wipe + snapshot so a
+            // scheduler-scoped AUTO regen preserves OTHER schedulers' bunks. The
+            // MANUAL path does this (scheduler_core_main.js ~L1748: "Without this,
+            // Scheduler 2 won't see Scheduler 1's data and will overwrite it") but
+            // AUTO only snapshotted the in-memory map — so STEP 6.9
+            // RotationCloud/ScheduleDB save (which deletes the whole date then
+            // re-inserts only this scheduler's bunks) dropped the others. Merge
+            // cloud's non-scoped bunks into memory; keep local for my own bunks
+            // (which are about to be regenerated anyway).
+            if (typeof window.ScheduleDB?.loadSchedule === 'function'
+                && (typeof navigator === 'undefined' || navigator.onLine !== false)) {
+                try {
+                    const _dk65 = window._activeGenDate || window.currentScheduleDate || new Date().toISOString().split('T')[0];
+                    const _cloud65 = await window.ScheduleDB.loadSchedule(_dk65);
+                    if (_cloud65 && _cloud65.success && _cloud65.data && _cloud65.data.scheduleAssignments) {
+                        const _ca65 = _cloud65.data.scheduleAssignments;
+                        const _la65 = window.scheduleAssignments || {};
+                        const _merged65 = {};
+                        for (const _b in _ca65) { _merged65[_b] = _ca65[_b]; }              // other schedulers' bunks
+                        for (const _b in _la65) { if (myBunks.has(String(_b)) || myBunks.has(_b)) _merged65[_b] = _la65[_b]; } // my unsaved local wins
+                        window.scheduleAssignments = _merged65;
+                        if (_cloud65.data.leagueAssignments) {
+                            const _cl65 = _cloud65.data.leagueAssignments || {};
+                            const _ll65 = window.leagueAssignments || {};
+                            const _myDivs65 = new Set(window.AccessControl?.getEditableDivisions?.() || []);
+                            const _ml65 = Object.assign({}, _cl65);
+                            for (const _dv in _ll65) { if (_myDivs65.has(_dv)) _ml65[_dv] = _ll65[_dv]; }
+                            window.leagueAssignments = _ml65;
+                        }
+                        log('[STEP 0] CB-65: merged cloud snapshot — ' + Object.keys(_merged65).length + ' total bunks before partial wipe');
+                    }
+                } catch (_e65) {
+                    log('[STEP 0] CB-65: cloud force-load failed (non-fatal) — ' + (_e65 && _e65.message));
+                }
+            }
+
             myBunks.forEach(bunk => {
                 delete window.scheduleAssignments?.[bunk];
                 delete window.leagueAssignments?.[bunk];
