@@ -5,6 +5,16 @@
 (function() {
   'use strict';
 
+  // ★★★ CB-76: grade names are user-typed (Camp Structure) and were interpolated
+  // RAW into the Bell-Schedule editor header and the copy-modal header innerHTML
+  // → stored XSS (a grade named <img onerror> fires on open). No escaper existed;
+  // add one (CampUtils delegate + complete &<>"' fallback).
+  const _peEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+    ? window.CampUtils.escapeHtml(s)
+    : String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
 
   function minsToTimeStr(min) {
@@ -152,7 +162,7 @@
       <h3 style="margin:0 0 4px;font-size:16px;color:#1e293b;">Copy Bell Schedule</h3>
       <p style="margin:0;font-size:13px;color:#64748b;">
         Copy <strong>${sourcePeriods.length}</strong> period${sourcePeriods.length !== 1 ? 's' : ''}
-        from <strong>Grade ${sourceGrade}</strong> to:
+        from <strong>Grade ${_peEsc(sourceGrade)}</strong> to:
       </p>
     `;
     modal.appendChild(header);
@@ -310,7 +320,7 @@
       const hdr = document.createElement('div');
       hdr.style.cssText = 'display:flex;align-items:center;gap:12px;margin-bottom:20px;';
       hdr.innerHTML = `
-        <h3 style="margin:0;font-size:16px;color:#1e293b;">Grade ${activeGrade} — Bell Schedule</h3>
+        <h3 style="margin:0;font-size:16px;color:#1e293b;">Grade ${_peEsc(activeGrade)} — Bell Schedule</h3>
         <span style="font-size:12px;color:#64748b;">${minsToTimeStr(divStartMin)} – ${minsToTimeStr(divEndMin)}</span>
       `;
       detail.appendChild(hdr);

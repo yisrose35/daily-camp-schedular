@@ -26,6 +26,17 @@
 
 (function() {
     'use strict';
+
+    // ★★★ CB-75: camp name, subdivision names and division names are
+    // owner-controlled and were interpolated RAW into dashboard innerHTML
+    // (welcome title, scheduler role badge, subdivision list) → cross-user stored
+    // XSS (every team member who opens the dashboard executes the owner's payload).
+    // No escaper existed; add one (CampUtils delegate + complete &<>"' fallback).
+    const _dashEsc = (s) => (window.CampUtils && window.CampUtils.escapeHtml)
+        ? window.CampUtils.escapeHtml(s)
+        : String(s == null ? '' : s)
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     // ========================================
     // STATE
     // ========================================
@@ -349,7 +360,7 @@
         
         // Update the title — show camp name, not email
         if (welcomeTitle) {
-            welcomeTitle.innerHTML = `Welcome back, <span>${displayName}</span>!`;
+            welcomeTitle.innerHTML = `Welcome back, <span>${_dashEsc(displayName)}</span>!`;
         }
         
         // Update the subtitle
@@ -447,7 +458,7 @@
                 .in('id', membership.subdivision_ids);
             
             if (subdivisions && subdivisions.length > 0) {
-                const names = subdivisions.map(s => s.name).join(', ');
+                const names = subdivisions.map(s => _dashEsc(s.name)).join(', ');
                 badgeElement.innerHTML = `
                     <span class="role-text">Scheduler — generates ${names}</span>
                 `;
@@ -599,10 +610,10 @@
                 subdivisions.forEach(sub => {
                     html += `
                         <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border-left: 4px solid ${sub.color || '#6B7280'}; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                            <div style="font-weight: 600; color: var(--slate-800);">${sub.name}</div>
+                            <div style="font-weight: 600; color: var(--slate-800);">${_dashEsc(sub.name)}</div>
                             <div style="font-size: 0.85rem; color: var(--slate-500); margin-top: 4px;">
-                                ${sub.divisions && sub.divisions.length > 0 
-                                    ? sub.divisions.map(d => `<span class="division-tag">${d}</span>`).join('')
+                                ${sub.divisions && sub.divisions.length > 0
+                                    ? sub.divisions.map(d => `<span class="division-tag">${_dashEsc(d)}</span>`).join('')
                                     : '<em>No divisions assigned</em>'
                                 }
                             </div>
