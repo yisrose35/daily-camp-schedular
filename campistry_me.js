@@ -1111,7 +1111,7 @@ function _meAttachItemDrag(itemEl){
 function _renderBunkChipsHTML(bunks){
     var inner='';
     (bunks||[]).forEach(function(b){
-        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
+        inner+='<span class="me-bunk-chip" draggable="true"><span class="me-bunk-name" data-orig="'+esc(b)+'">'+esc(b)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button></span>';
     });
     return '<div class="fg"><label class="fl">Bunks <span style="font-weight:400;color:var(--s400);font-size:.7rem">(drag to reorder)</span></label>'
         +'<div class="me-bunk-list dmGradeBunks">'+inner+'</div>'
@@ -1147,7 +1147,7 @@ function _wireGradeRow(rowEl){
         v.split(',').map(function(s){return s.trim()}).filter(Boolean).forEach(function(name){
             var span=document.createElement('span');
             span.className='me-bunk-chip';span.draggable=true;
-            span.innerHTML='<span class="me-bunk-name">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
+            span.innerHTML='<span class="me-bunk-name" data-orig="'+esc(name)+'">'+esc(name)+'</span><button type="button" class="me-bunk-x" title="Remove">×</button>';
             bunkList.appendChild(span);
             _wireBunkChip(span);
         });
@@ -1160,6 +1160,35 @@ function _wireBunkChip(chip){
     _meAttachItemDrag(chip);
     var x=chip.querySelector('.me-bunk-x');
     if(x)x.onclick=function(){chip.remove()};
+    // ★★★ CB-94: in-place rename affordance. Double-click the bunk name → inline
+    // input; on commit the visible text changes but the span's data-orig keeps the
+    // ORIGINAL name, so saveDiv can detect the rename and MIGRATE the bunk's
+    // schedules (instead of purge-old + create-new, which destroyed the old bunk's
+    // cloud schedule rows on a simple typo fix).
+    var nameEl=chip.querySelector('.me-bunk-name');
+    if(nameEl){
+        if(!nameEl.title)nameEl.title='Double-click to rename';
+        nameEl.addEventListener('dblclick',function(ev){
+            ev.stopPropagation();
+            if(chip.querySelector('.me-bunk-rename-inp'))return;
+            var cur=nameEl.textContent.trim();
+            var inp=document.createElement('input');
+            inp.type='text';inp.value=cur;inp.className='me-bunk-rename-inp';
+            inp.style.cssText='width:96px;font:inherit;padding:0 2px;';
+            chip.insertBefore(inp,nameEl);nameEl.style.display='none';inp.focus();inp.select();
+            var done=false;
+            function commit(keep){
+                if(done)return;done=true;
+                if(keep){var nv=(inp.value||'').trim();if(nv)nameEl.textContent=nv;} // data-orig stays = original
+                nameEl.style.display='';if(inp.parentNode)inp.parentNode.removeChild(inp);
+            }
+            inp.addEventListener('blur',function(){commit(true)});
+            inp.addEventListener('keydown',function(e){
+                if(e.key==='Enter'){e.preventDefault();commit(true);}
+                else if(e.key==='Escape'){e.preventDefault();commit(false);}
+            });
+        });
+    }
 }
 
 // Division create/edit
@@ -1259,7 +1288,21 @@ function saveDiv(){
     // ★ Purge orphaned bunks from saved AUTO schedules
     var newBunks=[];
     Object.values(grades).forEach(function(g){(g.bunks||[]).forEach(function(b){newBunks.push(b)})});
-    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1});
+    // ★★★ CB-94: detect bunk RENAMES (a chip whose data-orig differs from its new
+    //   text) and MIGRATE the bunk's schedules to the new name instead of letting
+    //   the old name fall through to _purgeOrphanedBunks, which DESTROYED the old
+    //   bunk's cloud schedule rows while the new name started empty. Mirrors the
+    //   grade-rename handling above.
+    var bunkRenameMap={};
+    document.querySelectorAll('#dmGrades .dm-grade-row .me-bunk-chip .me-bunk-name').forEach(function(el){
+        var orig=(el.dataset.orig||'').trim(), cur=(el.textContent||'').trim();
+        if(orig&&cur&&orig!==cur&&oldBunks.indexOf(orig)!==-1&&oldBunks.indexOf(cur)===-1&&newBunks.indexOf(cur)!==-1){
+            bunkRenameMap[orig]=cur;
+        }
+    });
+    var _renamedOrigBunks=Object.keys(bunkRenameMap);
+    _renamedOrigBunks.forEach(function(oldB){ _propagateBunkRename(oldB, bunkRenameMap[oldB]); });
+    var removed=oldBunks.filter(function(b){return newBunks.indexOf(b)===-1 && _renamedOrigBunks.indexOf(b)===-1;});
     if(removed.length>0)_purgeOrphanedBunks(removed);
     // ★ Day 9 (manual-builder parity): purge removed scheduling-unit (grade) tiles from
     //   the saved MANUAL skeletons too — previously only the auto schedule was cleaned.
@@ -1638,6 +1681,46 @@ function _purgeOrphanedBunks(removedBunks){
         console.error('[Me] Purge exception:',e);
         _toast('⚠️ Bunk removed locally but cloud cleanup hit an error. Refresh and try again.','error');
     }
+}
+
+// ★★★ CB-94: rename a bunk's schedule data instead of destroying it. A bunk
+// rename was treated as delete(old)+create(new): _purgeOrphanedBunks hard-deleted
+// the old bunk's cloud schedule rows while the new name started empty. This
+// migrates the bunk key in memory + every cloud daily_schedules row
+// (scheduleAssignments + leagueAssignments) so the schedule survives the rename.
+function _propagateBunkRename(oldB,newB){
+    if(!oldB||!newB||oldB===newB)return;
+    console.log('[Me] Propagating bunk rename in schedules:',oldB,'→',newB);
+    // 1. in-memory maps
+    try{
+        ['scheduleAssignments','scheduleSegments','leagueAssignments'].forEach(function(k){
+            var m=window[k];
+            if(m&&m[oldB]!==undefined&&m[newB]===undefined){m[newB]=m[oldB];delete m[oldB];}
+        });
+    }catch(_){}
+    // 2. cloud daily_schedules (best-effort; non-fatal on error)
+    try{
+        var client=window.CampistryDB&&window.CampistryDB.getClient?window.CampistryDB.getClient():window.supabase;
+        var campId=window.CampistryDB&&window.CampistryDB.getCampId?window.CampistryDB.getCampId():(window.getCampId?window.getCampId():null);
+        if(!client||!campId)return;
+        client.from('daily_schedules').select('id,schedule_data').eq('camp_id',campId).then(function(res){
+            if(res.error)throw res.error;
+            (res.data||[]).forEach(function(record){
+                var sd=record.schedule_data||{};
+                var sa=Object.assign({},sd.scheduleAssignments||{});
+                var la=Object.assign({},sd.leagueAssignments||{});
+                var modified=false;
+                if(sa[oldB]!==undefined){if(sa[newB]===undefined)sa[newB]=sa[oldB];delete sa[oldB];modified=true;}
+                if(la[oldB]!==undefined){if(la[newB]===undefined)la[newB]=la[oldB];delete la[oldB];modified=true;}
+                if(modified){
+                    client.from('daily_schedules')
+                        .update({schedule_data:Object.assign({},sd,{scheduleAssignments:sa,leagueAssignments:la}),updated_at:new Date().toISOString()})
+                        .eq('id',record.id)
+                        .then(function(r){if(r.error)console.error('[Me] bunk-rename update failed',record.id,r.error);});
+                }
+            });
+        }).catch(function(err){console.error('[Me] bunk-rename cloud propagate failed:',err);});
+    }catch(e){console.error('[Me] bunk-rename exception:',e);}
 }
 
 // ── BUNK BUILDER ─────────────────────────────────────────────────
