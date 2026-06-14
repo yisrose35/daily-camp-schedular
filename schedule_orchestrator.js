@@ -787,6 +787,15 @@
                 const stableResult = result.data;
                 const reApply = (label) => {
                     try {
+                        // ★★★ CB-11: bail if the user navigated to a different date
+                        // since this load fired. Without this, the 500ms/2s/5s
+                        // timers re-hydrate the OLD date's schedule (stableResult)
+                        // over whatever date is now in view.
+                        const _liveDate = window._scheduleAssignmentsDate || window.currentScheduleDate;
+                        if (_liveDate && dateKey && _liveDate !== dateKey) {
+                            log('[load re-apply ' + label + '] date changed (' + dateKey + ' -> ' + _liveDate + ') — skipping stale re-apply');
+                            return;
+                        }
                         const currentActs = (() => {
                             let n = 0;
                             const sa = window.scheduleAssignments || {};
