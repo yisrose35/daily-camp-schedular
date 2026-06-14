@@ -624,6 +624,10 @@
             data: null,
             bunkCount: 0
         };
+        // CB-13: set when the cloud query authoritatively returns 0 records with
+        // no error (date genuinely empty/deleted) — distinguishes that from a
+        // cloud failure so STEP 2 doesn't resurrect a deleted date from local.
+        let cloudConfirmedEmpty = false;
 
         try {
             // ═══════════════════════════════════════════════════════════════
@@ -677,7 +681,12 @@
                             logWarn('Cloud query error:', error.message);
                         }
                     } else {
-                        log('No cloud records for', dateKey);
+                        // ★★★ CB-13: cloud returned 0 records with NO error while
+                        // online+authenticated — the date is authoritatively empty
+                        // (e.g. it was deleted). Flag it so STEP 2 does NOT
+                        // resurrect it from stale localStorage.
+                        log('No cloud records for', dateKey, '— confirmed empty');
+                        cloudConfirmedEmpty = true;
                     }
                 } catch (cloudErr) {
                     if (cloudErr.name === 'AbortError') {
@@ -696,10 +705,28 @@
             // STEP 2: Fall back to localStorage if cloud failed
             // ═══════════════════════════════════════════════════════════════
             
+            if (!result.success && cloudConfirmedEmpty) {
+                // ★★★ CB-13: the cloud authoritatively has no records for this
+                // date — treat it as genuinely empty. Clear the stale local cache
+                // (so it can't resurrect the deleted date now or on a later
+                // offline load) and load empty, rather than falling through to
+                // the localStorage fallback below.
+                log('Step 2: cloud confirmed empty — clearing stale local cache for', dateKey);
+                try { deleteLocalData(dateKey); } catch (_) {}
+                result = {
+                    success: true,
+                    source: 'cloud-empty',
+                    dateKey,
+                    data: { scheduleAssignments: {}, leagueAssignments: {}, unifiedTimes: [] },
+                    bunkCount: 0,
+                    recordCount: 0
+                };
+            }
+
             if (!result.success) {
                 log('Step 2: Checking localStorage...');
                 const localData = getLocalData(dateKey);
-                
+
                 if (localData) {
                     result = {
                         success: true,
