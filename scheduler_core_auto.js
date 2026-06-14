@@ -13050,7 +13050,11 @@
                 const gs = getGlobalSettings();
                 if (gs.app1) gs.app1.swimRotationHistory = swimHistory;
                 localStorage.setItem('campistry_swimRotationHistory', JSON.stringify(swimHistory));
-                if (window.IntegrationHooks?.queueChange) window.IntegrationHooks.queueChange('swimRotationHistory', swimHistory);
+                // ★ CB-24: persist to cloud for real. window.IntegrationHooks.queueChange
+                // does not exist (dead no-op), so swim partial-rotation history never
+                // reached the cloud and a stale cloud copy could shadow fresh local on
+                // another device. saveGlobalSettings is the actual per-key cloud writer.
+                if (window.saveGlobalSettings) window.saveGlobalSettings('swimRotationHistory', swimHistory);
             } catch (e) { /* ignore */ }
         }
 
@@ -13098,8 +13102,9 @@
                 var gs = getGlobalSettings();
                 if (gs.app1) gs.app1.activityHistory = weekActivityHistory;
                 localStorage.setItem('campistry_activityHistory', JSON.stringify(weekActivityHistory));
-                if (window.IntegrationHooks && window.IntegrationHooks.queueChange) {
-                    window.IntegrationHooks.queueChange('activityHistory', weekActivityHistory);
+                // ★ CB-25: persist to cloud for real (same dead-hook bug as CB-24).
+                if (window.saveGlobalSettings) {
+                    window.saveGlobalSettings('activityHistory', weekActivityHistory);
                 }
             } catch (e) { /* ignore */ }
         }
