@@ -1235,32 +1235,34 @@ function getStyles() {
     /* ── League Matchups ── */
     '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:rgba(30,64,175,.06);border:1px solid rgba(30,64,175,.1);border-radius:3px;font-size:10px;white-space:nowrap;}' +
 
-    /* ── Live Mode ── */
-    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#111827;display:flex;flex-direction:column;overflow:hidden;}' +
-    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;padding:12px 24px;background:rgba(0,0,0,.3);flex-shrink:0;}' +
-    '.pc3-live-title{font-size:24px;font-weight:800;color:#fff;}' +
-    '.pc3-live-clock{font-size:36px;font-weight:300;color:#fbbf24;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.2);border-radius:8px;background:rgba(255,255,255,.1);color:#fff;font-size:13px;cursor:pointer;}' +
-    '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
+    /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
+    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;}' +
+    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:#060a16;border-bottom:2px solid #1e293b;flex-shrink:0;}' +
+    '.pc3-live-title{font-size:30px;font-weight:800;color:#ffffff;letter-spacing:.3px;}' +
+    '.pc3-live-clock{font-size:42px;font-weight:400;color:#fbbf24;font-variant-numeric:tabular-nums;}' +
+    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.25);border-radius:8px;background:rgba(255,255,255,.12);color:#fff;font-size:14px;cursor:pointer;}' +
+    '.pc3-live-close:hover{background:rgba(255,255,255,.22);}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
     '.pc3-live-page-inner{padding:16px 24px;}' +
-    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.55);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
+    '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
-    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:auto;}' +
-    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #374151;padding:8px 12px;text-align:left;white-space:nowrap;font-size:14px;}' +
-    '.pc3-live-tbl th{background:#1f2937;color:#e5e7eb;font-weight:600;position:sticky;top:0;z-index:2;}' +
-    '.pc3-live-tbl th.corner{z-index:3;left:0;top:0;}' +
-    '.pc3-live-tbl th.row-head{position:sticky;left:0;z-index:2;background:#1f2937;}' +
-    '.pc3-live-tbl td{color:#e5e7eb;background:#111827;}' +
-    '.pc3-live-tbl tr:nth-child(even) td{background:#0f172a;}' +
-    '.pc3-live-tbl .cell-current{background:#164e63 !important;box-shadow:inset 0 0 0 2px #06b6d4;}' +
+    '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
+    '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:10px 12px;text-align:center;white-space:normal;word-break:break-word;font-size:16px;}' +
+    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;position:sticky;top:0;z-index:2;}' +
+    /* First column (Bunk / Time label) — fixed width + clip so a long name can NEVER bleed into the schedule cells */
+    '.pc3-live-tbl th.corner{z-index:3;left:0;top:0;width:155px;min-width:155px;max-width:155px;}' +
+    '.pc3-live-tbl th.row-head{position:sticky;left:0;z-index:2;background:#16233e;color:#fcd34d;font-weight:800;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;}' +
+    '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:600;}' +
+    '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
+    '.pc3-live-tbl .cell-free{color:#7c8aa3 !important;font-style:italic;background:#111c30 !important;font-weight:500;}' +
+    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee;color:#ffffff !important;font-weight:800 !important;}' +
     '.pc3-live-tbl .cell-past{opacity:.4;}' +
-    '.pc3-live-tbl .cell-pinned{background:#422006 !important;color:#fbbf24;}' +
-    '.pc3-live-tbl .cell-league{background:#1e1b4b !important;color:#818cf8;}' +
+    '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
+    '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
     '.pc3-live-cursor-v{position:absolute;top:0;bottom:0;width:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:left .8s linear;}' +
     '.pc3-live-cursor-h{position:absolute;left:0;right:0;height:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:top .8s linear;}' +
-    '.pc3-live-now-tag{position:absolute;background:#fbbf24;color:#111;font-size:11px;font-weight:800;padding:3px 8px;border-radius:4px;font-variant-numeric:tabular-nums;z-index:51;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);}' +
+    '.pc3-live-now-tag{position:absolute;background:#fbbf24;color:#111;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;font-variant-numeric:tabular-nums;z-index:51;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);}' +
     '.pc3-live-now-tag.tag-v{top:-2px;transform:translateX(-50%);}' +
     '.pc3-live-now-tag.tag-h{left:8px;transform:translateY(-50%);}' +
     '.pc3-live-section{position:relative;}' +
@@ -3515,6 +3517,26 @@ function runLiveStandalone() {
         positionAllLiveCursors();
     }
 
+    // Show a loading state up front so the viewer never sees a stale cached
+    // schedule flash by before the cloud-authoritative one arrives.
+    var liveBodyEl = document.getElementById('pc3-live-body');
+    if (liveBodyEl) liveBodyEl.innerHTML = '<div style="color:#94a3b8;padding:60px;text-align:center;font-size:22px;font-weight:600;">Loading schedule…</div>';
+
+    // Track whether the cloud has delivered fresh data. The popup re-runs the
+    // whole app boot (including integration_hooks), which fires these once the
+    // authoritative schedule has been hydrated/refreshed from Supabase.
+    var _cloudFresh = false;
+    var _liveBooted = false;
+    function _markCloudFresh() {
+        _cloudFresh = true;
+        // If we've already started, the cache→cloud swap could change the
+        // picture — drop the signature so the next tick re-renders, and nudge
+        // it immediately so the correct schedule shows without waiting 5s.
+        if (_liveBooted) { _liveRenderSig = ''; try { tickAll(); } catch (e) {} }
+    }
+    window.addEventListener('campistry-cloud-hydrated', _markCloudFresh);
+    window.addEventListener('campistry-schedule-refreshed', _markCloudFresh);
+
     // Trigger normal app initialization so divisions + schedule data load.
     // (initApp1 loads global settings; initDailyAdjustments loads per-date schedule data.)
     setTimeout(function () {
@@ -3522,7 +3544,9 @@ function runLiveStandalone() {
         try { window.initDailyAdjustments && window.initDailyAdjustments(); } catch (e) {}
     }, 100);
 
-    // Wait until divisions/scheduling data are populated, then start.
+    // Wait until divisions/scheduling data are populated AND the cloud has
+    // confirmed fresh data, then start. Falls back to whatever's loaded after
+    // ~7s so a slow/offline cloud never leaves the screen stuck on "Loading…".
     function whenReady(cb) {
         var attempts = 0;
         var iv = setInterval(function () {
@@ -3530,7 +3554,8 @@ function runLiveStandalone() {
             var hasDivs = window.divisions && Object.keys(window.divisions).length > 0;
             var hasSched = (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0)
                 || (window.divisionTimes && Object.keys(window.divisionTimes).length > 0);
-            if ((hasDivs && hasSched) || attempts > 80) {
+            var freshEnough = _cloudFresh || attempts > 28; // ~7s grace for the cloud
+            if ((hasDivs && hasSched && freshEnough) || attempts > 80) {
                 clearInterval(iv);
                 cb();
             }
@@ -3538,8 +3563,9 @@ function runLiveStandalone() {
     }
 
     whenReady(function () {
+        _liveBooted = true;
         tickAll();
-        // Re-render content every 30s, reposition cursor every 15s, clock every 1s
+        // Re-render content on a short interval, reposition cursor, tick clock.
         if (_liveInterval) clearInterval(_liveInterval);
         if (_liveCursorInterval) clearInterval(_liveCursorInterval);
         // Tick often (cheap — renderLiveContent is signature-gated and only does
@@ -3643,7 +3669,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     if (sectionEnd === -Infinity) sectionEnd = 960;
 
     html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:20px;position:relative;">';
-    html += '<div style="font-size:18px;font-weight:700;color:#fbbf24;margin-bottom:8px;padding-left:4px;">' + escHtml(divName) + '</div>';
+    html += '<div style="font-size:24px;font-weight:800;color:#fbbf24;margin-bottom:8px;padding-left:4px;letter-spacing:.3px;">' + escHtml(divName) + '</div>';
     html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
     html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
 
@@ -3674,10 +3700,10 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
         }
 
         html += '<div style="overflow-x:hidden;"><table class="pc3-live-tbl" style="table-layout:fixed;width:100%;">';
-        html += '<thead><tr><th class="corner" style="min-width:80px;">Bunk</th>';
+        html += '<thead><tr><th class="corner">Bunk</th>';
         lTimeCols.forEach(function (tc) {
             var isCurCol = nowMin >= tc.startMin && nowMin < tc.endMin;
-            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="min-width:50px;font-size:9px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#164e63;color:#67e8f9;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
+            html += '<th data-time-start="' + tc.startMin + '" data-time-end="' + tc.endMin + '" style="font-size:12px;text-align:center;white-space:nowrap;' + (isCurCol ? 'background:#0e7490;color:#a5f3fc;box-shadow:inset 0 -3px 0 #fbbf24;' : '') + '">' + tc.label + '</th>';
         });
         html += '</tr></thead><tbody>';
 
@@ -3719,7 +3745,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                     var cls = (isLeagueAct || leagueInfo) ? 'cell-league' : 'cell-' + mAct.type;
                     if (isCur) cls += ' cell-current';
                     if (isPast) cls += ' cell-past';
-                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
+                    html += '<td' + (span > 1 ? ' colspan="' + span + '"' : '') + ' class="' + cls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(txt) + '</td>';
                     ci = nextCi;
                 } else {
                     var emptyLeague = pcLeagueInfoAt(divName, cStart);
@@ -3737,7 +3763,7 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
                         }
                         var lTxt = emptyLeague.label + (emptyLeague.matchups.length && !_currentTemplate.hideLeagueMatchups ? ' | ' + emptyLeague.matchups.join(', ') : '');
                         var lCls = 'cell-league' + (isCC ? ' cell-current' : '');
-                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:12px;line-height:1.35;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
+                        html += '<td' + (lspan > 1 ? ' colspan="' + lspan + '"' : '') + ' class="' + lCls + '" style="text-align:center;font-size:15px;line-height:1.3;padding:8px 6px;white-space:normal;word-break:break-word;">' + escHtml(lTxt) + '</td>';
                         ci = lnext;
                     } else {
                         html += '<td class="cell-free' + (isCC ? ' cell-current' : '') + '" style="text-align:center;">—</td>';
