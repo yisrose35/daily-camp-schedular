@@ -1284,6 +1284,10 @@
     });
 
     // Listen for realtime updates
+    // ★★★ CB-44: NOTE — 'campistry-realtime-update' is never dispatched anywhere
+    // (verified repo-wide), so this listener is currently DORMANT. Realtime
+    // multi-scheduler refresh is driven by integration_hooks' realtime handler,
+    // not this event. Kept as intended wiring; do not assume it fires today.
     window.addEventListener('campistry-realtime-update', (e) => {
         console.log('[Sync] Realtime update event received');
         refreshMultiSchedulerView(getCurrentDateKey(), true);

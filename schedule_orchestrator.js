@@ -158,7 +158,10 @@
             gap: 8px;
             animation: orchestratorSlideIn 0.3s ease;
         `;
-        notification.innerHTML = `<span>${icons[type] || ''}</span><span>${message}</span>`;
+        // ★★★ CB-45: escape the user-controllable message (icons[type] is a static
+        // emoji map). Latent XSS sink — exported on window.ScheduleOrchestrator and
+        // a sibling global hook of this name can receive user-controlled reasons.
+        notification.innerHTML = `<span>${icons[type] || ''}</span><span>${String(message == null ? '' : message).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;')}</span>`;
 
         // Add animation keyframes if not present
         if (!document.querySelector('#orchestrator-notification-styles')) {
@@ -1796,6 +1799,11 @@
         });
 
         // Listen for realtime updates from other schedulers
+        // ★★★ CB-44: NOTE — 'campistry-realtime-update' is NOT dispatched anywhere
+        // in the codebase (verified repo-wide), so this listener is currently
+        // DORMANT. Realtime refresh is handled by integration_hooks' own realtime
+        // merge, not this event. Kept as the intended wiring should a dispatch ever
+        // be added; do not assume it fires today.
         window.addEventListener('campistry-realtime-update', (e) => {
             log('Realtime update received, reloading...');
             loadSchedule(getCurrentDateKey(), { force: true });

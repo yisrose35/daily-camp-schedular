@@ -1336,6 +1336,13 @@
                 log('No bunks to delete');
                 return { success: true, message: 'No bunks assigned' };
             }
+            // ★★★ CB-42: leagueAssignments is DIVISION-keyed, not bunk-keyed, so the
+            // old `delete leagues[bunk]` never matched and a scheduler's league
+            // games survived their day-delete (then re-merged on reload). Resolve my
+            // divisions from my bunks so league entries can be deleted by division.
+            const _divResolver42 = (window.SchedulerCoreUtils && window.SchedulerCoreUtils.getDivisionForBunk) || window.getDivisionForBunk;
+            const _myDivisions42 = new Set();
+            if (_divResolver42) myBunks.forEach(function (b) { const d = _divResolver42(b); if (d) _myDivisions42.add(String(d)); });
             // Step 2: Load ALL records for this date
             const allRecords = await loadAllSchedulersForDate(dateKey);
             log('Found', allRecords.length, 'records for', dateKey);
@@ -1367,10 +1374,11 @@
                         delete assignments[bunk];
                         modified = true;
                     }
-                    if (leagues[bunk] !== undefined) {
-                        delete leagues[bunk];
-                    }
                 }
+                // ★★★ CB-42: delete league matchups by DIVISION (the map's real key).
+                _myDivisions42.forEach(function (div) {
+                    if (leagues[div] !== undefined) { delete leagues[div]; modified = true; }
+                });
                 const bunksAfter = Object.keys(assignments).length;
                 log(`Record ${record.scheduler_name}: ${bunksBefore} → ${bunksAfter} bunks`);
                 if (!modified) {

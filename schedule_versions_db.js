@@ -178,7 +178,10 @@
             clonedAt: new Date().toISOString()
         };
 
-        return createVersion(source.date, newName, newData, sourceVersionId);
+        // ★★★ CB-43: rows are written/read with `date_key`, never `date`, so
+        // `source.date` was always undefined → the clone inserted with a NULL/missing
+        // date key (NOT-NULL violation swallowed, or orphaned from listVersions).
+        return createVersion(source.date_key || source.date, newName, newData, sourceVersionId);
     }
 
     // =========================================================================
