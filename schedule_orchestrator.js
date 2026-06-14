@@ -343,7 +343,17 @@
                 const existing = allDaily[dk] || {};
                 if (existing.scheduleAssignments && Object.keys(existing.scheduleAssignments).length > 0) continue;
                 const merged = {};
-                for (const rec of recs) {
+                // ★★★ CB-20: merge multiple scheduler rows for a past date in
+                // updated_at ASCENDING order so the NEWEST row wins shared bunks.
+                // The query returns rows in arbitrary order, so a stale row could
+                // otherwise overwrite a fresher one via Object.assign and poison
+                // up to 14 days of rotation history.
+                const _recsSorted = recs.slice().sort((a, b) => {
+                    const ta = a.updated_at || a.created_at || '';
+                    const tb = b.updated_at || b.created_at || '';
+                    return ta < tb ? -1 : ta > tb ? 1 : 0;
+                });
+                for (const rec of _recsSorted) {
                     const sd = rec.schedule_data || {};
                     if (sd.scheduleAssignments) Object.assign(merged, sd.scheduleAssignments);
                 }
