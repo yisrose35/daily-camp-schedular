@@ -13,7 +13,7 @@
     
     /* Product Colors (unified) */
     --flow-color: #147D91;
-    --go-color: #0EA5E9;
+    --go-color: #10B981;
     --me-color: #F59E0B;
     --health-color: #5F1B8C;
     --live-color: #2151B5;
@@ -670,6 +670,9 @@ ul {
 }
 .product-badge.coming-soon {
     background: var(--slate-400);
+}
+.product-me .product-badge {
+    background: var(--me-color);
 }
 .product-name {
     font-family: var(--font-display);
