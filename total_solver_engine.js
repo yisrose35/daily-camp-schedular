@@ -1541,7 +1541,7 @@
                     var projectedPlayers = bunkSizes[aBunk] || 0;
                     for (var existBunk in allocated) { if (allocated[existBunk] === wish.activity) projectedPlayers += (bunkSizes[existBunk] || 0); }
                     var maxReqs = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(wish.activity);
-                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers) continue;
+                    if (maxReqs?.maxPlayers && projectedPlayers > maxReqs.maxPlayers + 2) continue; // ceiling = max+2
                     // ★ Min player check: allow if a partner could be pulled in by the repair pass
                     // Guard: skip enforcement when bunk size data is unconfigured (projectedPlayers === 0)
                     if (projectedPlayers > 0 && maxReqs?.minPlayers && projectedPlayers < maxReqs.minPlayers) {
@@ -1551,7 +1551,7 @@
                             var _mcB = sortedBunks[_mci];
                             if (_mcB === aBunk || allocated[_mcB]) continue;
                             var _mcTotal = projectedPlayers + (bunkSizes[_mcB] || 0);
-                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers)) { _canReachMin = true; break; }
+                            if (_mcTotal >= maxReqs.minPlayers && (!maxReqs.maxPlayers || _mcTotal <= maxReqs.maxPlayers + 2)) { _canReachMin = true; break; }
                         }
                         if (!_canReachMin) continue;
                     }
@@ -1585,7 +1585,7 @@
                     for (var rpUi = 0; rpUi < rpUnalloc.length; rpUi++) {
                         var rpCand = rpUnalloc[rpUi];
                         var rpNew = rpTotal + (bunkSizes[rpCand] || 0);
-                        if (rpReq.max && rpNew > rpReq.max) continue;
+                        if (rpReq.max && rpNew > rpReq.max + 2) continue; // ceiling = max+2 (sort above still prefers <=max)
                         // Check this bunk has the activity in its wish list
                         if (!(wishLists[rpCand] || []).some(function(w) { return w.activity === rpAct2; })) continue;
                         if ((activityUsed[rpAct2] || 0) >= (activitySupply[rpAct2] || 0)) break;
@@ -2228,7 +2228,7 @@
                         }
                         // Guard: skip enforcement when bunk size data is unconfigured (_pcTotal === 0)
                         if (_pcTotal > 0) {
-                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers) canFit = false;
+                            if (_pcSReqs.maxPlayers && _pcTotal > _pcSReqs.maxPlayers + 2) canFit = false; // ceiling = max+2
                             if (canFit && _pcSReqs.minPlayers && _pcTotal < _pcSReqs.minPlayers) {
                                 if ((_pcSReqs.minPlayers - _pcTotal) / _pcSReqs.minPlayers > 0.2) canFit = false;
                             }

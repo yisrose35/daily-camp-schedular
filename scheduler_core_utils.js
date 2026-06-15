@@ -399,12 +399,15 @@
 
         if (reqs.maxPlayers !== null && playerCount > reqs.maxPlayers) {
             const excess = playerCount - reqs.maxPlayers;
-            const percentageOver = excess / reqs.maxPlayers;
 
-            if (percentageOver > 0.3) {
+            // Absolute grace, not a percentage: over-max is allowed only up to +2
+            // (max+1 routine grace, max+2 last-resort). Anything beyond max+2 is a
+            // hard violation — there must never be more than 2 extra players over
+            // the maximum, even when two bunks play together on a shared field.
+            if (excess > 2) {
                 return {
                     valid: false,
-                    reason: `Maximum ${reqs.maxPlayers} players, have ${playerCount}`,
+                    reason: `Maximum ${reqs.maxPlayers} players (+2 grace), have ${playerCount}`,
                     severity: 'hard'
                 };
             }
@@ -1102,8 +1105,11 @@
                 if (_spMax > 0) {
                     let _combinedPlayers = mySize;
                     for (const _ob of allBunks) { _combinedPlayers += (bunkMeta[_ob]?.size || 0); }
-                    if (_combinedPlayers > _spMax) {
-                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport maxPlayers combined ${_combinedPlayers} > ${_spMax}`);
+                    // Absolute combined ceiling = maxPlayers + 2 (max+1 routine grace,
+                    // max+2 last-resort, never max+3+). Mirrors the auto engines and
+                    // auto_fill_slot so the shared fit-check doesn't hard-block legal grace.
+                    if (_combinedPlayers > _spMax + 2) {
+                        if (DEBUG_FITS) console.log(`[FIT] ${block.bunk} - ${fieldName}: REJECTED - sport maxPlayers combined ${_combinedPlayers} > ${_spMax}+2`);
                         return false;
                     }
                 }
