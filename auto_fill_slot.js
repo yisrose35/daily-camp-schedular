@@ -279,19 +279,35 @@
         });
 
         // Special activities (skipped entirely for a Sports-only slot)
-        if (_kind !== 'sport') (gs.app1?.specialActivities || []).forEach(s => {
-            if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
-            if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
-            // ★ Grade restriction
-            if (isDivisionRestricted(s, divName)) return;
-            const loc = s.location || null;
-            if (loc) {
-                if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
-                if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
-                if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
-            }
-            candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, maxUsagePeriod: s.maxUsagePeriod || 'half', exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
-        });
+        if (_kind !== 'sport') {
+            // ★ Valid-location set (facilities ∪ fields). A special whose `location`
+            //   isn't a real facility/field (e.g. "Canteen"/"Gameroom" with no such
+            //   facility) has nowhere to be held — drop it from fill candidates, matching
+            //   the loader + SmartTile gates. Fail-open if the registry is unreadable.
+            let _validLocs = null;
+            try {
+                const _facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+                const _facNames = Array.isArray(_facs) ? _facs.map(f => (f && f.name) || f) : (_facs ? Object.keys(_facs) : []);
+                const _fieldNames = (gs.app1?.fields || []).map(f => (f && f.name) || f);
+                const _names = _facNames.concat(_fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+                if (_names.length) _validLocs = new Set(_names);
+            } catch (_e) {}
+            (gs.app1?.specialActivities || []).forEach(s => {
+                if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
+                if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
+                // ★ Grade restriction
+                if (isDivisionRestricted(s, divName)) return;
+                const loc = s.location || null;
+                // ★ Facility-existence gate
+                if (_validLocs && loc && String(loc).trim() && !_validLocs.has(String(loc).trim().toLowerCase())) return;
+                if (loc) {
+                    if (isFieldBlockedByTimeRules(loc, slotStart, slotEnd, actProps, divName)) return;
+                    if (isFieldGloballyLocked(loc, slotStart, slotEnd, divName)) return;
+                    if (!isFieldAvailable(loc, bunk, divName, slotStart, slotEnd, actProps)) return;
+                }
+                candidates.push({ activity: s.name, field: loc, type: 'special', maxUsage: s.maxUsage || 0, maxUsagePeriod: s.maxUsagePeriod || 'half', exactFrequency: s.exactFrequency || 0, exactFrequencyPeriod: s.exactFrequencyPeriod || '1week' });
+            });
+        }
 
         return candidates;
     }
