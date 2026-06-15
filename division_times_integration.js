@@ -425,17 +425,30 @@
             const originalUpdateTable = window.updateTable;
 
             window.updateTable = function(...args) {
-                // Ensure divisionTimes is synced before rendering
-                if (!window.divisionTimes || Object.keys(window.divisionTimes).length === 0) {
-                    // ★★★ AUTO MODE: Don't rebuild from skeleton — it destroys per-bunk geometry ★★★
-                    var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-                    if (!_isAutoMode) {
-                        const skeleton = getSkeletonFromAnySource();
-                        const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-                        
-                        if (skeleton.length > 0) {
-                            window.divisionTimes = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions) || {};
+                // ★★★ AUTO MODE: Don't rebuild from skeleton — it destroys per-bunk geometry ★★★
+                var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+                // Ensure divisionTimes is synced before rendering. Rebuild from the
+                // skeleton when divisionTimes is empty OR — the bug — when a division
+                // that HAS skeleton events is missing its slots. A reload can restore a
+                // PARTIAL divisionTimes (all division keys present, but some division
+                // has 0 slots), so the old "all keys empty" guard never fired and that
+                // whole division rendered blank even though scheduleAssignments held its
+                // activities (e.g. a 5-6pm Sports tile for division 7 with 0 slots).
+                if (!_isAutoMode && !window._divisionTimesLocked) {
+                    const dt = window.divisionTimes || {};
+                    let _needRebuild = Object.keys(dt).length === 0;
+                    const skeleton = getSkeletonFromAnySource();
+                    if (!_needRebuild && skeleton.length > 0) {
+                        const _divsWithEvents = new Set(skeleton.map(e => e && e.division).filter(Boolean));
+                        for (const d of _divsWithEvents) {
+                            const arr = dt[d];
+                            if (!arr || (Array.isArray(arr) && arr.length === 0)) { _needRebuild = true; break; }
                         }
+                    }
+                    if (_needRebuild && skeleton.length > 0) {
+                        const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
+                        const _rebuilt = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions);
+                        if (_rebuilt && Object.keys(_rebuilt).length > 0) window.divisionTimes = _rebuilt;
                     }
                 }
 
