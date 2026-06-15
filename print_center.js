@@ -1200,20 +1200,26 @@ function getStyles() {
     '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
-    /* ── Spreadsheet Table ── */
+    /* ── Schedule Table — premium ── */
     '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
-    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #f1f5f9;border-bottom:1px solid #f1f5f9;padding:5px 8px;text-align:left;white-space:nowrap;position:relative;transition:background .1s;font-size:12px;}' +
+    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #eef0f2;border-bottom:1px solid #eef0f2;padding:10px 14px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#1f2933;}' +
     '.pc3-tbl tr:last-child td,.pc3-tbl tr:last-child th{border-bottom:none;}' +
     '.pc3-tbl th:last-child,.pc3-tbl td:last-child{border-right:none;}' +
-    '.pc3-tbl th{background:#fafaf9;font-weight:600;position:sticky;z-index:2;font-size:11px;color:#44403c;text-transform:uppercase;letter-spacing:.4px;border-bottom:1px solid #e7e5e4;}' +
+    /* Column header (bunk / division names) — teal-tinted, calm */
+    '.pc3-tbl th{background:#f1f6f7;font-weight:700;position:sticky;z-index:2;font-size:11px;color:#0f6678;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #d9e6e9;}' +
     '.pc3-tbl thead th{top:0;}' +
-    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#fafaf9;}' +
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fafaf9;font-weight:600;text-transform:none;letter-spacing:0;color:#1c1917;font-size:12px;}' +
-    '.pc3-tbl tr:nth-child(even) td{background:#fdfdfc;}' +
-    '.pc3-tbl .cell-free{color:#a8a29e;font-style:italic;}' +
-    '.pc3-tbl .cell-pinned{background:#fff8e1;color:#92400e;font-weight:500;}' +
-    '.pc3-tbl .cell-league{background:#eff6ff;color:#1e40af;font-weight:500;}' +
-    '.pc3-tbl .cell-transition{background:#f5f3ff;color:#6d28d9;font-size:10px;font-style:italic;}' +
+    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#f1f6f7;}' +
+    /* Time column — quiet, left-aligned, tabular */
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fafbfb;font-weight:600;text-transform:none;letter-spacing:0;color:#5b6570;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;}' +
+    /* Activity cells — the content the eye should land on */
+    '.pc3-tbl td{font-weight:600;color:#1f2933;}' +
+    '.pc3-tbl tr:nth-child(even) td{background:#fbfcfc;}' +
+    '.pc3-tbl tr:nth-child(even) th.row-head{background:#f6f8f8;}' +
+    /* Empty slots recede so the real activities stand out */
+    '.pc3-tbl .cell-free{color:#cdd3d8;font-weight:400;font-style:normal;}' +
+    '.pc3-tbl .cell-pinned{background:#fff7e8;color:#9a6a00;}' +
+    '.pc3-tbl .cell-league{background:#eef4ff;color:#1e40af;}' +
+    '.pc3-tbl .cell-transition{background:#f6f4fd;color:#7c54d6;font-size:11px;font-weight:500;font-style:italic;}' +
 
     /* ── Excel-style coordinate headers ── */
     '.pc3-tbl tr.pc3-coord-row th{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #94a3b8;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
@@ -1260,10 +1266,10 @@ function getStyles() {
     '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:10px 12px;text-align:center;white-space:normal;word-break:break-word;font-size:16px;}' +
     '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
     '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
-    '.pc3-live-tbl th.row-head{color:#fcd34d;font-weight:800;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;}' +
+    '.pc3-live-tbl th.row-head{color:#aab8cc;font-weight:700;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:600;}' +
     '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
-    '.pc3-live-tbl .cell-free{color:#7c8aa3 !important;font-style:italic;background:#111c30 !important;font-weight:500;}' +
+    '.pc3-live-tbl .cell-free{color:#42536c !important;font-style:normal;background:#131f33 !important;font-weight:400;}' +
     '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
     '.pc3-live-tbl .cell-past{opacity:.42;}' +
     '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
@@ -2930,15 +2936,18 @@ function liveRefresh() {
             if (allDivBunks.length) html += renderCombinedAutoTable(allDivBunks);
             html += '</div>';
         } else if (_currentTemplate.layoutMode === 'all-bunks') {
-            // Manual combined
-            html += '<div class="pc3-sheet">';
+            // Manual combined — each division gets its own clean, titled card
+            // (was all stacked into one card with repeated headers and no labels).
             sel.forEach(function (d) {
                 var bunks = (divs[d] && divs[d].bunks ? divs[d].bunks : []).slice();
                 if (!bunks.length) return;
                 var blocks = buildDivisionBlocks(d);
-                html += renderManualBunksTop(d, bunks, blocks);
+                html += '<div class="pc3-sheet"><div class="pc3-sheet-head">' +
+                    '<span class="pc3-sheet-title">' + escHtml(d) + '</span>' +
+                    (_currentTemplate.showDate ? '<span class="pc3-sheet-subtitle">' + formatDisplayDate(window.currentScheduleDate) + '</span>' : '') +
+                    '<span class="pc3-sheet-badge">' + (isAutoMode() ? 'Auto' : 'Manual') + '</span>' +
+                '</div>' + renderManualBunksTop(d, bunks, blocks) + '</div>';
             });
-            html += '</div>';
         } else {
             sel.forEach(function (d) { html += renderDivisionSheet(d); });
         }
