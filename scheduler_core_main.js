@@ -2480,7 +2480,6 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   (closes over fieldUsageBySlot / fieldsBySport / capacity + location
         //   helpers) so the chosen candidate then flows through the normal per-type
         //   placement branches below.
-        const _poolChoiceTally = {}; // per-generation count of how often each pool option got picked (within-pool balance)
         // Does this field's accessRestrictions DENY this division/bunk? Allow-list
         // semantics with dual string/number keys — mirrors the post-gen warn scan
         // and the solver's hard access check. Used to PREFER fields the bunk can
@@ -2535,28 +2534,49 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             }
             return true;
         };
+        // Can this pool candidate take THIS bunk without exceeding the sport's
+        // maxPlayers? (accessible, unlocked, field-capacity room, AND campers stay
+        // under max.) For non-sport candidates or sports with no max/sizes this is
+        // just "has an open field". Drives the pool pick so it STOPS choosing a sport
+        // once that sport's fields are full at max — routing the bunk to the other.
+        const _poolCandidatePlayerFit = (it, divName, slots, bunk, size) => {
+            const ty = it.type || 'sport';
+            if (ty !== 'sport') return _poolCandidateAvailable(it, divName, slots, bunk);
+            const maxP = (_ovSportReq(it.name).maxPlayers) || 0;
+            if (!maxP || !(size > 0)) return _poolCandidateAvailable(it, divName, slots, bunk);
+            const fs = (fieldsBySport || {})[it.name] || [];
+            if (fs.length === 0) return true; // no field list → falls back to sport-name field; can't reason about max
+            return fs.some(cf => {
+                if (window.GlobalFieldLocks?.isFieldLocked(cf, slots, divName)) return false;
+                if (_fieldAccessViolates(cf, divName, bunk)) return false;
+                const cap = getFieldCapacityLocal(cf, activityProperties);
+                for (const s of slots) { const u = fieldUsageBySlot[s]?.[cf]; if (u && u.count >= cap) return false; }
+                return (_ovCampersOn(cf, slots) + size) <= maxP;
+            });
+        };
         const _pickPoolCandidate = (override, bunk, divName, slots) => {
             let items = (override.poolItems && override.poolItems.length)
                 ? override.poolItems
                 : (override.sportPool || []).map(n => ({ name: n, type: 'sport', location: null }));
             items = items.filter(it => it && it.name);
             if (!items.length) return null;
+            const _size = _ovBunkSize(bunk);
             const getCount = (nm) => (window.RotationEngine && typeof window.RotationEngine.getActivityCount === 'function')
                 ? (window.RotationEngine.getActivityCount(bunk, nm) || 0) : 0;
             let best = null, bestScore = -Infinity;
             items.forEach((it, idx) => {
-                const avail = _poolCandidateAvailable(it, divName, slots, bunk);
+                const fit = _poolCandidatePlayerFit(it, divName, slots, bunk, _size); // open field UNDER maxPlayers
+                const avail = _poolCandidateAvailable(it, divName, slots, bunk);       // any open accessible field
                 const count = getCount(it.name);
-                const tally = _poolChoiceTally[it.name] || 0; // how often this option was already picked THIS gen
-                // Priority: AVAILABILITY (open field, +1000) > FAIRNESS (rotation
-                // history, least-done wins, -count*10) > within-gen BALANCE (spread
-                // evenly across the pool, -tally*5) > stable order (-idx*0.01). So
-                // when history & availability tie, picks alternate across the pool
-                // instead of always landing on the first-listed option.
-                const score = (avail ? 1000 : 0) - count * 10 - tally * 5 - idx * 0.01;
+                // ★ MIN/MAX FIRST: a candidate that fits under maxPlayers (+5000) far
+                // outranks one that doesn't — so once a sport's fields are full at max,
+                // the pool routes the bunk to the other option instead of overfilling.
+                // Then any-open-field (+1000), then rotation FAIRNESS (least-done wins,
+                // -count*10), then stable order. (The old even-split balancer is gone:
+                // distribution now comes from real capacity + rotation, not a forced 50/50.)
+                const score = (fit ? 5000 : 0) + (avail ? 1000 : 0) - count * 10 - idx * 0.01;
                 if (score > bestScore) { bestScore = score; best = it; }
             });
-            if (best) _poolChoiceTally[best.name] = (_poolChoiceTally[best.name] || 0) + 1;
             return best;
         };
 
