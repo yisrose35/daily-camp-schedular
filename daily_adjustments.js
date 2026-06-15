@@ -7592,6 +7592,11 @@ function getStyles() {
     .da-override-item { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; background:var(--da-surface); border:1px solid var(--da-border); border-radius:6px; margin-bottom:6px; }
     
     /* Resource Layout */
+    /* ★ Resources pane must scroll. The base .da-pane is overflow:hidden, which clipped the
+       facility list (55+ items, ~2455px tall) inside the height-bounded pane — the lower
+       facilities were unreachable with no scrollbar and the page itself doesn't scroll. An ID
+       selector (higher specificity than .da-pane / .ms-container .da-pane) restores scrolling. */
+    #da-pane-resources { overflow-y:auto; }
     .da-resource-layout { display:flex; gap:20px; flex-wrap:wrap; }
     .da-resource-list { flex:1; min-width:0; }
     .da-resource-detail { flex:2; min-width:0; background:var(--da-surface); border:1px solid var(--da-border); border-radius:8px; padding:16px; }
