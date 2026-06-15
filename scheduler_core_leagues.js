@@ -79,17 +79,26 @@
     }
 
     function saveLeagueHistory(history) {
-        try {
-            // Save to localStorage as backup
-            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
-            
-            // ★ CRITICAL: Also save to cloud via global settings
-            if (typeof window.saveGlobalSettings === 'function') {
+        // ★ Cloud save FIRST and in its OWN try — a full localStorage (quota) must
+        //   NEVER block the cloud write. Previously both writes shared one try block
+        //   with localStorage.setItem first, so a QuotaExceededError on the backup
+        //   skipped saveGlobalSettings entirely → that day's games never synced to
+        //   cloud → the next cold start hydrated the stale cloud row and the game
+        //   counter "reset" (works in-session, resets next day). The cloud is the
+        //   authoritative cross-session store, so it must not depend on localStorage.
+        if (typeof window.saveGlobalSettings === 'function') {
+            try {
                 window.saveGlobalSettings('leagueHistory', history);
                 console.log("[RegularLeagues] ✅ History saved to cloud");
+            } catch (e) {
+                console.error("Failed to save league history to cloud:", e);
             }
+        }
+        // localStorage backup — best-effort; a quota failure here is non-fatal.
+        try {
+            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
         } catch (e) {
-            console.error("Failed to save league history:", e);
+            console.warn("League history localStorage backup skipped (quota?):", e);
         }
     }
 

@@ -83,17 +83,23 @@
     }
 
     function saveSpecialtyHistory(history) {
-        try {
-            // Save to localStorage as backup
-            localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(history));
-            
-            // ★ CRITICAL: Also save to cloud via global settings
-            if (typeof window.saveGlobalSettings === 'function') {
+        // ★ Cloud save FIRST and in its OWN try — see saveLeagueHistory: a full
+        //   localStorage must never block the cloud write. Previously a quota error
+        //   on the localStorage backup skipped saveGlobalSettings, so the day's games
+        //   never synced and the counter reset on the next cold start.
+        if (typeof window.saveGlobalSettings === 'function') {
+            try {
                 window.saveGlobalSettings('specialtyLeagueHistory', history);
                 console.log("[SpecialtyLeagues] ✅ History saved to cloud");
+            } catch (e) {
+                console.error("[SpecialtyLeagues] Failed to save history to cloud:", e);
             }
+        }
+        // localStorage backup — best-effort; a quota failure here is non-fatal.
+        try {
+            localStorage.setItem(SPECIALTY_HISTORY_KEY, JSON.stringify(history));
         } catch (e) {
-            console.error("[SpecialtyLeagues] Failed to save history:", e);
+            console.warn("[SpecialtyLeagues] history localStorage backup skipped (quota?):", e);
         }
     }
 
