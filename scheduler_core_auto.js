@@ -24307,6 +24307,143 @@
                 //   in the selection loop, so feasibility/min-players/sharing are unaffected.
                 var _rhPair = (function () { try { var _h = window.loadRotationHistory && window.loadRotationHistory(); return (_h && _h.bunks) || {}; } catch (e) { return {}; } })();
                 var _rotTsPair = function (b, a) { try { var _m = _rhPair[b]; var _t = _m && _m[String(a)]; return (_t == null) ? 0 : _t; } catch (e) { return 0; } };
+
+                // ★ UNDER-MIN RESCUE (bounded ejection-chain). The last-ditch step before
+                //   an under-min slot is demoted to Free — it performs the multi-bunk
+                //   reshuffle a human would: find a SHAREABLE field hosting a sport this
+                //   bunk can play, FREE it by relocating every blocking (cross-grade)
+                //   occupant onto a filler SPECIAL it can take, then PAIR this bunk with a
+                //   same-grade partner so combined ∈ [min, max+2]. It is heavily bounded:
+                //   it only evicts non-protected, single-period occupants that can take a
+                //   sharable special; it only borrows a partner that is Free or a solo
+                //   sport (so vacating it can't drop anyone else below min); and EVERY
+                //   write is validated through _validateWritePlacement with full rollback
+                //   on any failure — so it can only ever turn a Free into a constraint-clean
+                //   paired sport, never make the schedule worse.
+                function _isProtectedSlotR(s) {
+                    return !!(s && (s._pinned || s._autoSpecial || s._isRotationEvent || s._isPrep || s._league || s._pairLock || s.continuation));
+                }
+                function _peerSlotIdxR(bunk, st, en) {
+                    var arr = sa[bunk] || [];
+                    for (var i = 0; i < arr.length; i++) {
+                        var s = arr[i];
+                        if (!s || s.continuation) continue;
+                        var ss = s._startMin != null ? s._startMin : s.startMin;
+                        var se = s._endMin != null ? s._endMin : s.endMin;
+                        if (ss === st && se === en) return i;
+                    }
+                    return -1;
+                }
+                function _rescueUnderMin(aBunk, grade, aSize, st, en, playedTodayA, aIdx) {
+                    if (typeof _validateWritePlacement !== 'function') return false;
+                    var dur = en - st;
+                    if (dur <= 0 || !aSize) return false;
+                    var peers = getBunksForGrade(grade, divisions).map(String).filter(function (b) { return b !== String(aBunk); });
+                    var pool = _candidatesForGrade(grade);
+                    for (var ci = 0; ci < pool.length; ci++) {
+                        var X = pool[ci];
+                        var Xlc = String(X).toLowerCase();
+                        if (skipActs.indexOf(Xlc) >= 0) continue;
+                        if (playedTodayA.has(Xlc)) continue;
+                        var rq = getReqs(X);
+                        if (!rq || !rq.minPlayers) continue;
+                        for (var fi = 0; fi < _flds.length; fi++) {
+                            var F = _flds[fi]; if (!F || !F.name) continue;
+                            var Fn = F.name;
+                            if (!_fieldHosts(Fn, X)) continue;
+                            var _sw = F.sharableWith || {};
+                            if ((_sw.type || _sw.shareType || 'not_sharable') === 'not_sharable') continue; // need a shareable field to pair
+                            // A itself must be legally able to play X on F at this time.
+                            if (_validateWritePlacement(Fn, X, grade, aBunk, st, en)) continue;
+                            var occ = _fieldOccupants(Fn, st, en, aBunk);
+                            var coShareSize = 0, coShareCount = 0, blockers = [], bad = false;
+                            for (var oi = 0; oi < occ.length; oi++) {
+                                var o = occ[oi];
+                                var oAct = String(o.slot._activity || o.slot.sport || '').toLowerCase();
+                                if (bunkGradeP[o.bunk] === grade && oAct === Xlc) { coShareSize += _sz(o.bunk); coShareCount++; continue; }
+                                // any other occupant must be evicted to free the field
+                                if (_isProtectedSlotR(o.slot)) { bad = true; break; }
+                                blockers.push(o);
+                            }
+                            if (bad) continue;
+                            var capF = _fieldCap(Fn);
+                            var baseCombined = aSize + coShareSize;
+                            var needPartner = baseCombined < rq.minPlayers;
+                            if (coShareCount + 1 + (needPartner ? 1 : 0) > capF) continue;
+                            if (rq.maxPlayers && !needPartner && baseCombined > rq.maxPlayers + 2) continue;
+                            // Plan a relocation special for EVERY blocker (else cannot free F).
+                            var relPlan = [], relOk = true;
+                            for (var bi = 0; bi < blockers.length; bi++) {
+                                var bk = blockers[bi];
+                                var bIdx = _peerSlotIdxR(bk.bunk, st, en);
+                                if (bIdx < 0) { relOk = false; break; }
+                                // never split a multi-period span
+                                if ((sa[bk.bunk][bIdx + 1] || {}).continuation) { relOk = false; break; }
+                                var bGrade = bunkGradeP[bk.bunk];
+                                var exMap = {};
+                                (sa[bk.bunk] || []).forEach(function (s2) { var n = s2 && (s2._activity || s2.sport); if (n) exMap[String(n).toLowerCase()] = true; });
+                                var filler = _pickSharableFiller(bGrade, bk.bunk, dur, exMap);
+                                if (!filler) { relOk = false; break; }
+                                relPlan.push({ bunk: bk.bunk, idx: bIdx, prev: sa[bk.bunk][bIdx], filler: filler });
+                            }
+                            if (!relOk) continue;
+                            // Borrow a same-grade partner if needed to reach min.
+                            var partner = null;
+                            if (needPartner) {
+                                for (var pi = 0; pi < peers.length; pi++) {
+                                    var P = peers[pi];
+                                    if (occ.some(function (o2) { return o2.bunk === P; })) continue; // already on F
+                                    var pIdx = _peerSlotIdxR(P, st, en);
+                                    if (pIdx < 0) continue;
+                                    var ps = sa[P][pIdx];
+                                    if (_isProtectedSlotR(ps)) continue;
+                                    var pAct = String(ps._activity || ps.sport || '').toLowerCase();
+                                    var pFree = (pAct === 'free' || pAct === '');
+                                    if (!pFree) {
+                                        if (skipActs.indexOf(pAct) >= 0) continue;           // don't disturb swim/lunch/etc
+                                        if (ps.field && ps.field !== 'Free' && _fieldOccupants(ps.field, st, en, P).length > 0) continue; // not a solo sport
+                                    }
+                                    var comb = baseCombined + _sz(P);
+                                    if (comb < rq.minPlayers) continue;
+                                    if (rq.maxPlayers && comb > rq.maxPlayers + 2) continue;
+                                    partner = { bunk: P, idx: pIdx, prev: ps };
+                                    break;
+                                }
+                                if (!partner) continue;
+                            }
+                            // ── tentative COMMIT with full rollback on validation failure ──
+                            var prevA = sa[aBunk][aIdx];
+                            var _mkSport = function () {
+                                return { field: Fn, sport: X, _activity: X, _fixed: true, _bunkOverride: true,
+                                    _autoMode: true, _autoSolved: true, _capacityChecked: true,
+                                    _startMin: st, _endMin: en, _source: 'under-min-rescue', continuation: false };
+                            };
+                            relPlan.forEach(function (r) {
+                                sa[r.bunk][r.idx] = { field: null, sport: null, _activity: r.filler, _autoSpecial: true,
+                                    _fixed: true, _autoMode: true, _autoSolved: true, _startMin: st, _endMin: en,
+                                    _source: 'under-min-rescue-evict', continuation: false };
+                            });
+                            sa[aBunk][aIdx] = _mkSport();
+                            if (partner) sa[partner.bunk][partner.idx] = _mkSport();
+                            var why = _validateWritePlacement(Fn, X, grade, aBunk, st, en);
+                            if (!why && partner) why = _validateWritePlacement(Fn, X, grade, partner.bunk, st, en);
+                            if (why) {
+                                relPlan.forEach(function (r) { sa[r.bunk][r.idx] = r.prev; });
+                                sa[aBunk][aIdx] = prevA;
+                                if (partner) sa[partner.bunk][partner.idx] = partner.prev;
+                                continue;
+                            }
+                            try {
+                                log('  🧩 Under-min rescue: ' + aBunk + ' → ' + X + ' @ ' + Fn +
+                                    (partner ? (' + ' + partner.bunk) : '') +
+                                    (relPlan.length ? (' (freed by ' + relPlan.map(function (r) { return r.bunk + '→' + r.filler; }).join(', ') + ')') : ''));
+                            } catch (_eLg) {}
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+
                 Object.keys(sa).forEach(function (aBunk) {
                     var aSlots = sa[aBunk] || [];
                     var grade = bunkGradeP[String(aBunk)];
@@ -24483,10 +24620,21 @@
                             replaced++;
                         }
                         if (!success) {
+                            // ★ Bounded ejection-chain rescue — reshuffle to keep a REAL
+                            //   paired sport instead of falling to a filler/Free (the "free
+                            //   a shareable field, then pair" reasoning). Fully validated +
+                            //   rolled back internally, so a false return left sa untouched.
+                            if (_rescueUnderMin(aBunk, grade, aSize, st, en, playedToday, aIdx)) {
+                                success = true;
+                                replaced++;
+                                warn('[DROP-REFILL] ' + aBunk + ' under-min ' + sport + ' (' + aSize + '<' + reqs.minPlayers + ') @' + st + '-' + en + ' → rescued via reshuffle');
+                            }
+                        }
+                        if (!success) {
                             // ★ FN-38: an under-min sport may NOT survive to the final
-                            //   schedule (hard rule). When no alternate sport validated,
-                            //   fall back to a sharable filler special; only when even
-                            //   that fails, demote to Free — rules outrank fullness.
+                            //   schedule (hard rule). When no alternate sport validated and
+                            //   the reshuffle rescue couldn't help, fall back to a sharable
+                            //   filler special; only when even that fails, demote to Free.
                             var _fnm38 = null;
                             try {
                                 var _exMap38 = {};
