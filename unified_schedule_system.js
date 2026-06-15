@@ -759,14 +759,42 @@ function shouldHighlightBunk(bunkName) {
     }
 
     function getSkeleton(dateKey) {
+        const dk = dateKey || getDateKey();
         const dailyData = loadDailyData();
-        const dateData = dailyData[dateKey || getDateKey()] || {};
-        return (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
+        const dateData = dailyData[dk] || {};
+        let base = (dateData.manualSkeleton?.length ? dateData.manualSkeleton : null)
             || (dateData.skeleton?.length ? dateData.skeleton : null)
             || (window.dailyOverrideSkeleton?.length ? window.dailyOverrideSkeleton : null)
             || (window.manualSkeleton?.length ? window.manualSkeleton : null)
             || window.skeleton
             || [];
+        // ★ Union the authoritative per-date Daily-Adjustments skeleton
+        //   (campManualSkeleton_<date> — exactly what saveDailySkeleton persists, also
+        //   mirrored to window.dailyOverrideSkeleton). dateData.manualSkeleton can lag
+        //   behind it (e.g. a division/tile added or edited ONLY in Daily Adjustments —
+        //   a 7th-grade 5-6pm tile that never made it into the base skeleton). Without
+        //   this, the manual render's divisionTimes rebuild (buildFromSkeleton below)
+        //   drops that division entirely and its bunks render blank on every reload.
+        //   Deduped by division+time+event+bunk so it's a no-op when base already has
+        //   them; read by dateKey from localStorage so it's date-safe (no stale window
+        //   global from another date).
+        try {
+            let daily = null;
+            try { const raw = localStorage.getItem('campManualSkeleton_' + dk); if (raw) daily = JSON.parse(raw); } catch (_eRaw) {}
+            if ((!Array.isArray(daily) || !daily.length)
+                && Array.isArray(window.dailyOverrideSkeleton) && window.dailyOverrideSkeleton.length
+                && (window.currentScheduleDate || getDateKey()) === dk) {
+                daily = window.dailyOverrideSkeleton;
+            }
+            if (Array.isArray(daily) && daily.length && daily !== base) {
+                const keyOf = b => [b && b.division, b && b.startTime, b && b.endTime, b && b.event, b && b.type, b && b._bunk].join('|');
+                const seen = new Set(base.map(keyOf));
+                const merged = base.slice();
+                daily.forEach(b => { const k = keyOf(b); if (b && !seen.has(k)) { seen.add(k); merged.push(b); } });
+                base = merged;
+            }
+        } catch (_eMerge) {}
+        return base;
     }
 
     /**
