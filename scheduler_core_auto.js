@@ -5867,23 +5867,6 @@
             Object.keys(phaseAByGrade).sort().forEach(function(g) {
                 log(GP + '   Grade ' + g + ': ' + phaseAByGrade[g].got + '/' + phaseAByGrade[g].total);
             });
-            // ★ DIAG: dump each special's planner-assigned time + room, grouped by room,
-            //   so we can see whether the planner is packing a room past capacity at
-            //   overlapping times (the cross-grade room-overlap we're chasing).
-            try {
-                var _byRoom = {};
-                Object.keys(draftResults).forEach(function (b) {
-                    var r = draftResults[b];
-                    (r.specials || []).forEach(function (sp) {
-                        var room = sp.claimedField || sp.location || sp.name;
-                        var t = sp.claimedTime || {};
-                        (_byRoom[room] = _byRoom[room] || []).push((b) + '(' + r.grade + ')@' + t.startMin + '-' + t.endMin + (sp.totalDuration && (t.endMin - t.startMin) !== sp.totalDuration ? ' [planDur=' + (t.endMin - t.startMin) + ' realDur=' + sp.totalDuration + ']' : ''));
-                    });
-                });
-                Object.keys(_byRoom).forEach(function (room) {
-                    log(GP + ' [PLAN-DIAG] room ' + room + ': ' + _byRoom[room].join(', '));
-                });
-            } catch (_ePlanDiag) {}
 
             // ═══════════════════════════════════════════════════════
             // PHASE B: TIME SWEEP — Chronological Sport Assignment
