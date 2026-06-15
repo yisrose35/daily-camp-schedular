@@ -16782,8 +16782,59 @@
                         // (Previous v14.0 behavior of reducing duration-on-failure has
                         // been removed to respect user configuration.)
 
+                        // ★ HONOR THE PLANNER'S TIME. The global planner (Phase A) already
+                        //   assigned this special a conflict-free slot that de-conflicts the
+                        //   grades across the SHARED rooms (e.g. Auto specials in period 1,
+                        //   Chair specials in period 2 — proven correct by [PLAN-DIAG]). The
+                        //   local gap-scan above re-optimizes per-bunk and collapses both
+                        //   grades into the same (earliest) period, overbooking the shared
+                        //   room. If the planner's exact slot is still clean — fits a gap, no
+                        //   boundary cross, rules + required layers OK, and the ROOM is free
+                        //   at that time per the AUTHORITATIVE live bunkTimelines (respecting
+                        //   the special's sharing capacity + allowed grade pairs) — use it
+                        //   verbatim. The live-timeline room check is used instead of the rt
+                        //   ledger so a stale/duplicate ledger entry can't falsely block the
+                        //   planner's de-conflicted slot (the observed RT=2 false-block).
+                        var _plannedBest = null;
+                        (function _honorPlannerTime() {
+                            if (draftStart == null) return;
+                            var pS = draftStart, pE = draftStart + specialDur;
+                            if (!allGapsForBunk.some(function (g) { return g.s <= pS && g.e >= pE; })) return;
+                            try { if (sp25CrossesBoundary(pS, pE)) return; } catch (e) {}
+                            if (!rulesAllow({ startMin: pS, endMin: pE, type: 'special', event: special.name, _assignedSpecial: special.name, _specialLocation: fieldName }, bunkTimelines[bunk] || [])) return;
+                            var _ws = existingWalls.concat([{ s: pS, e: pE }]);
+                            var _ga = spComputeGaps(_ws, gradeStart, gradeEnd);
+                            for (var _li = 0; _li < layersThatCurrentlyFit.length; _li++) {
+                                if (!spCanLayerFit(_ga, layersThatCurrentlyFit[_li])) return;
+                            }
+                            if (fieldName) {
+                                var _info = getSpecialSharingInfo(special.name, activityProperties, globalSettings);
+                                var _cap = (_info && _info.capacity) || 1;
+                                var _fnLc = String(fieldName).toLowerCase().trim();
+                                var _g2 = function (b) { var _dv = window.divisions || {}; for (var g in _dv) { if ((((_dv[g] || {}).bunks) || []).map(String).indexOf(String(b)) >= 0) return g; } return null; };
+                                var _occG = [];
+                                var _btAll = bunkTimelines || {};
+                                Object.keys(_btAll).forEach(function (ob) {
+                                    if (String(ob) === String(bunk)) return;
+                                    var _tl = _btAll[ob] || [];
+                                    for (var _ti = 0; _ti < _tl.length; _ti++) {
+                                        var _e = _tl[_ti];
+                                        if (!_e || _e.continuation) continue;
+                                        var _loc = String(_e._specialLocation || _e.field || '').toLowerCase().trim();
+                                        if (_loc !== _fnLc) continue;
+                                        if (_e.startMin != null && _e.endMin != null && _e.startMin < pE && _e.endMin > pS) { _occG.push(_g2(ob)); break; }
+                                    }
+                                });
+                                if (_occG.length + 1 > _cap) return;
+                                if (_info && _info.shareType === 'not_sharable' && _occG.length > 0) return;
+                                if (_info && _info.shareType === 'same_division' && _occG.some(function (g) { return g !== grade; })) return;
+                                if (_info && _info.shareType === 'cross_division' && typeof isCrossDivAllowed === 'function' && !isCrossDivAllowed(grade, _occG, _info.allowedPairs)) return;
+                            }
+                            _plannedBest = { pos: pS, score: 999999, deadGapCount: 0, _honoredPlan: true };
+                        })();
+
                         // Pick the best position
-                        if (candidatePositions.length === 0) {
+                        if (candidatePositions.length === 0 && !_plannedBest) {
                             // Fallback: no gap-safe position found. Re-scan without hard
                             // rejects, using score penalties only. This keeps placement in
                             // Phase 2.5's smarter framework instead of deferring to CSP,
@@ -16818,7 +16869,7 @@
                                     candidatePositions.push({ pos: _fbPos, score: _fbScore, deadGapCount: 1 });
                                 }
                             }
-                            if (candidatePositions.length === 0) {
+                            if (candidatePositions.length === 0 && !_plannedBest) {
                                 if (totalIters < 1) {
                                     var gapSummary = allGapsForBunk.map(function(g) { return (g.e - g.s) + 'min'; }).join(', ');
                                     warn('[Phase2.5] Cannot pre-place ' + special.name + ' (' + specialDur + 'min) for bunk ' + bunk + ' in ' + grade +
@@ -16848,7 +16899,8 @@
                             if (a.deadGapCount !== b.deadGapCount) return a.deadGapCount - b.deadGapCount;
                             return b.score - a.score;
                         });
-                        var best = candidatePositions[0];
+                        // Planner's de-conflicted slot wins outright when it's clean.
+                        var best = _plannedBest || candidatePositions[0];
 
                         // PLACEMENT-STUCK diagnostic — fires only when ALL positions leave a
                         // remainder < 5min that even the micro-slot post-gap closer can't fill.
