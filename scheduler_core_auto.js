@@ -5104,13 +5104,21 @@
                 if (!isFieldAvailable(fieldName, startMin, endMin, bunk, grade, activity)) return false;
                 var ledger = fieldLedger[fieldName];
                 if (!ledger) return false;
-                var plannerOverlap = globalFieldClaims.filter(function(c) {
-                    return c.field === fieldName && c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk;
-                });
-                var ledgerOverlap = ledger.claims.filter(function(c) {
-                    return c.startMin < endMin && c.endMin > startMin && c.bunk !== bunk;
-                });
-                return (ledgerOverlap.length + plannerOverlap.length) < ledger.capacity;
+                // ★ Count DISTINCT occupant bunks. claimFieldGlobal records every claim
+                //   in BOTH globalFieldClaims AND ledger.claims, so summing the two lists
+                //   double-counts each occupant — which made a capacity-2 field/special
+                //   read as full after a SINGLE bunk (the root cause of shared specials
+                //   only ever seating 1, e.g. VR/Gameroom/Canteen → 5/8 every run).
+                var occ = new Set();
+                for (var gi = 0; gi < globalFieldClaims.length; gi++) {
+                    var gc = globalFieldClaims[gi];
+                    if (gc.field === fieldName && gc.startMin < endMin && gc.endMin > startMin && gc.bunk !== bunk) occ.add(String(gc.bunk));
+                }
+                for (var li = 0; li < ledger.claims.length; li++) {
+                    var lc = ledger.claims[li];
+                    if (lc.startMin < endMin && lc.endMin > startMin && lc.bunk !== bunk) occ.add(String(lc.bunk));
+                }
+                return occ.size < ledger.capacity;
             }
 
             function claimFieldGlobal(fieldName, startMin, endMin, bunk, grade, activity) {
