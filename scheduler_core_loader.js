@@ -17,20 +17,51 @@
     }
 
     // ★★★ v2.2: Get ALL specials (filtering happens in loadAndFilterData) ★★★
+    // ★ v2.4: also drop specials whose configured location is not a real facility/field.
     function getSpecialActivities() {
-        // Try getAllSpecialActivities first (includes both regular and rainy-day-only)
+        let all;
         if (typeof window.getAllSpecialActivities === 'function') {
-            const all = window.getAllSpecialActivities();
-            const rainyOnly = (all || []).filter(s => s.rainyDayOnly || s.rainyDayExclusive);
-            console.log(`[LoadData] getSpecialActivities via getAllSpecialActivities: ${all?.length || 0} total, ${rainyOnly.length} rainy-only`);
-            return all;
+            all = window.getAllSpecialActivities() || [];
+        } else {
+            // Fallback: combine both arrays manually
+            all = [...(window.specialActivities || []), ...(window.rainyDayActivities || [])];
         }
-        // Fallback: combine both arrays manually
-        const regular = window.specialActivities || [];
-        const rainy = window.rainyDayActivities || [];
-        const combined = [...regular, ...rainy];
-        console.log(`[LoadData] getSpecialActivities fallback: ${regular.length} regular + ${rainy.length} rainy = ${combined.length} total`);
-        return combined;
+        all = filterSpecialsByFacility(all);
+        const rainyOnly = all.filter(s => s.rainyDayOnly || s.rainyDayExclusive);
+        console.log(`[LoadData] getSpecialActivities: ${all.length} schedulable, ${rainyOnly.length} rainy-only (after facility check)`);
+        return all;
+    }
+
+    // ★ A special whose `location` points at a facility/field that doesn't exist (a
+    //   deleted room, a typo, or "Canteen"/"Gameroom" that was never created) has
+    //   nowhere to be held. Left in the pool it would be pre-assigned / rotated in and
+    //   only incidentally swept out later — so the scheduler keeps emitting it. Drop it
+    //   at the source. Scheduler-only (the config UI uses window.getAllSpecialActivities
+    //   directly, so the activity still appears for editing). Fail-open: if the facility
+    //   registry can't be read, filter nothing (never silently drop everything).
+    function filterSpecialsByFacility(specials) {
+        if (!Array.isArray(specials) || specials.length === 0) return specials || [];
+        let valid;
+        try {
+            const facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+            const facNames = Array.isArray(facs) ? facs.map(f => (f && f.name) || f) : (facs ? Object.keys(facs) : []);
+            const fieldNames = (getApp1Settings().fields || []).map(f => (f && f.name) || f);
+            const names = facNames.concat(fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+            if (!names.length) return specials; // registry unavailable → fail open
+            valid = new Set(names);
+        } catch (_e) { return specials; }
+        const dropped = [];
+        const kept = specials.filter(s => {
+            const loc = s && s.location;
+            if (!loc || !String(loc).trim()) return true;                 // no location requirement → keep
+            if (valid.has(String(loc).trim().toLowerCase())) return true; // location exists → keep
+            dropped.push((s && s.name || '?') + ' → "' + loc + '"');
+            return false;                                                 // orphan location → drop
+        });
+        if (dropped.length) {
+            console.warn('[LoadData] ⚠️ Skipped ' + dropped.length + ' special activity(ies) with a missing facility — create the facility or remove the activity: ' + dropped.join(', '));
+        }
+        return kept;
     }
 
     function getDailyOverrides() {
