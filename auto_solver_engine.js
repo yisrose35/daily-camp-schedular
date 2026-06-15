@@ -383,7 +383,11 @@
             };
             let total = bunkSize(bunk);
             for (const e of overlapping) total += bunkSize(e.bunk);
-            if (total > candidate.maxPlayers) return false;
+            // ★ Absolute combined-player ceiling = maxPlayers + 2. Going over the
+            //   sport max is allowed only as grace: max+1 routine, max+2 last-resort,
+            //   never max+3+. The smallest-overage preference is applied via a score
+            //   penalty in the scorer below; this gate just blocks the hard ceiling.
+            if (total > candidate.maxPlayers + 2) return false;
         }
         // 4. Exact time alignment — MANDATORY for shared slots.
         //    When two or more bunks use the same field at the same time (sharing),
@@ -958,6 +962,32 @@
                     var _bs = parseInt(_bmd2[bunk] && _bmd2[bunk].size) || 0;
                     if (!_bs) { var _dv = window.divisions || {}; for (var _g in _dv) { var _dd = _dv[_g]; if (_dd && Array.isArray(_dd.bunks) && _dd.bunks.map(String).indexOf(String(bunk)) >= 0) { _bs = parseInt((_dd.bunkSizes || {})[bunk]) || parseInt(_dd.defaultBunkSize) || parseInt(_dd.bunkSize) || 0; break; } } }
                     if (_bs > 0 && _bs < cand.minPlayers) score += (cand.minPlayers - _bs) * 40;
+                }
+
+                // ★ rules.js SPORT MAX-PLAYERS overage preference. The hard ceiling
+                //   (maxPlayers + 2) is enforced in isFieldAvailableByTime; here we make
+                //   the solver PREFER the smallest overage so it stays at/under max when
+                //   possible, uses max+1 only when helpful, and max+2 only as a last
+                //   resort. Combined headcount = this bunk + same-activity sharers on the
+                //   field. Only active when sizes are configured (size 0 → skip).
+                if (cand.maxPlayers != null && cand.maxPlayers > 0) {
+                    var _bmd3 = (window.getBunkMetaData && window.getBunkMetaData()) || window.bunkMetaData || {};
+                    var _szOf = function (b) {
+                        var _s = parseInt(_bmd3[b] && _bmd3[b].size) || 0;
+                        if (_s) return _s;
+                        var _dv2 = window.divisions || {};
+                        for (var _gg in _dv2) { var _d2 = _dv2[_gg]; if (_d2 && Array.isArray(_d2.bunks) && _d2.bunks.map(String).indexOf(String(b)) >= 0) { return parseInt((_d2.bunkSizes || {})[b]) || parseInt(_d2.defaultBunkSize) || parseInt(_d2.bunkSize) || 0; } }
+                        return 0;
+                    };
+                    var _combined = _szOf(bunk);
+                    for (var _ei = 0; _ei < existing.length; _ei++) { if (existing[_ei].activity === cand.sportNorm) _combined += _szOf(existing[_ei].bunk); }
+                    if (_combined > 0) {
+                        var _over = _combined - cand.maxPlayers;
+                        // Escalating penalty: +1 over is a soft nudge, +2 over is heavily
+                        //   discouraged so it only wins when nothing under-max is feasible.
+                        if (_over === 1) score += 3000;
+                        else if (_over >= 2) score += 9000;
+                    }
                 }
 
                 scored.push({ cand, score });
