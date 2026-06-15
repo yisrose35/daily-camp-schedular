@@ -2466,6 +2466,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   (closes over fieldUsageBySlot / fieldsBySport / capacity + location
         //   helpers) so the chosen candidate then flows through the normal per-type
         //   placement branches below.
+        const _poolChoiceTally = {}; // per-generation count of how often each pool option got picked (within-pool balance)
         const _poolCandidateAvailable = (it, divName, slots) => {
             const nm = it.name;
             const ty = it.type || 'sport';
@@ -2509,11 +2510,16 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             items.forEach((it, idx) => {
                 const avail = _poolCandidateAvailable(it, divName, slots);
                 const count = getCount(it.name);
-                // available candidates strongly preferred (+1000); among them the
-                // least-done one wins (-count*10); stable order tiebreak (-idx*0.01).
-                const score = (avail ? 1000 : 0) - count * 10 - idx * 0.01;
+                const tally = _poolChoiceTally[it.name] || 0; // how often this option was already picked THIS gen
+                // Priority: AVAILABILITY (open field, +1000) > FAIRNESS (rotation
+                // history, least-done wins, -count*10) > within-gen BALANCE (spread
+                // evenly across the pool, -tally*5) > stable order (-idx*0.01). So
+                // when history & availability tie, picks alternate across the pool
+                // instead of always landing on the first-listed option.
+                const score = (avail ? 1000 : 0) - count * 10 - tally * 5 - idx * 0.01;
                 if (score > bestScore) { bestScore = score; best = it; }
             });
+            if (best) _poolChoiceTally[best.name] = (_poolChoiceTally[best.name] || 0) + 1;
             return best;
         };
 
