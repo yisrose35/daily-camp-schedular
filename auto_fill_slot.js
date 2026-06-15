@@ -180,7 +180,9 @@
         const capacity = (sharingType === 'not_sharable') ? 1 : (sharing.capacity || 1);
 
         let usageCount = 0;
+        let sharedPlayers = 0, sharedSport = null;   // ★ player-max gate accumulators
         const sa = window.scheduleAssignments || {};
+        const _bmMax = (window.getBunkMetaData && window.getBunkMetaData()) || {};
 
         for (const [otherBunk, slots] of Object.entries(sa)) {
             if (!Array.isArray(slots) || otherBunk === myBunk) continue;
@@ -222,7 +224,24 @@
                     if (!allowed.includes(myDiv) || !allowed.includes(otherDiv)) return false;
                 }
                 usageCount++;
+                // ★ accumulate combined players for the sport-max gate (this co-occupant
+                //   passed the sharing rules, so its campers join the shared-game total)
+                var _oActF = (oe && (oe.activity || oe.sport)) || null;
+                if (_oActF) { if (!sharedSport) sharedSport = _oActF; sharedPlayers += ((_bmMax[otherBunk] && _bmMax[otherBunk].size) || 0); }
                 if (usageCount >= capacity) return false;
+            }
+        }
+        // ★ Player-max co-occupancy gate (parity with the solver's
+        //   checkSharedPlayerMaxConflict): don't fill onto a SHARED field if the combined
+        //   campers would exceed the sport's maxPlayers + 2 grace (e.g. Basketball max 20:
+        //   two 15-bunks = 30 is rejected → the fill picks an empty court instead). Only
+        //   when the field is actually shared; a lone fill onto an empty field is untouched.
+        if (sharedPlayers > 0 && sharedSport) {
+            var _allMetaF = (window.getSportMetaData && window.getSportMetaData()) || null;
+            var _mxF = _allMetaF && _allMetaF[sharedSport] && _allMetaF[sharedSport].maxPlayers;
+            if (_mxF && _mxF > 0) {
+                var _mySizeF = (_bmMax[myBunk] && _bmMax[myBunk].size) || 0;
+                if (sharedPlayers + _mySizeF > _mxF + 2) return false;
             }
         }
         return true;
