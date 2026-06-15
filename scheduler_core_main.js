@@ -2448,7 +2448,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         // =========================================================================
 
         console.log("\n[STEP 2] Processing bunk overrides...");
-        const bunkOverrides = window.loadCurrentDailyData?.().bunkActivityOverrides || [];
+        // ★ BUNK-OVERRIDE WIPE FIX: prefer the overrides passed in externalOverrides (daily_adjustments
+        //   sets currentOverrides.bunkActivityOverrides in its restore-after-wipe, then passes it here).
+        //   loadCurrentDailyData() gets clobbered mid-run by the partial-mode force-load-from-cloud
+        //   (~L1760: re-hydrates currentDailyData from the just-wiped cloud → 0 overrides), so reading
+        //   it dropped the user's overrides entirely ("Restored 12 bunk override(s)" → "Processed 0").
+        //   The passed param is a live object reference that survives that reload.
+        const bunkOverrides = (externalOverrides && Array.isArray(externalOverrides.bunkActivityOverrides) && externalOverrides.bunkActivityOverrides.length)
+            ? externalOverrides.bunkActivityOverrides
+            : (window.loadCurrentDailyData?.().bunkActivityOverrides || []);
 
         bunkOverrides.forEach(override => {
             const activityName = override.activity;
