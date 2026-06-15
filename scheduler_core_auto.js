@@ -5775,6 +5775,77 @@
                 }
             });
 
+            // ─────────────────────────────────────────────────────────
+            // A4.5: SHARABLE-SPECIAL TOP-UP
+            // ─────────────────────────────────────────────────────────
+            // The greedy A1–A4 passes seat ~1 bunk per special, leaving a
+            //   sharable special's extra seats (e.g. VR capacity 2) empty — so a
+            //   camp with 5 specials seats only 5 bunks/band even though VR could
+            //   hold 2. This pass fills those remaining seats by pairing eligible
+            //   same-grade bunks onto an already-placed sharable special at the
+            //   existing occupant's exact slot. Fully gated (cap, availability via
+            //   isSpecialAvailableForBunk, pair-rule + capacity via
+            //   canAssignSpecialToGrade, field room via isFieldStillAvailableGP),
+            //   so it can only fill a legitimately-available seat — never a
+            //   violation. Logs the reason when a free seat can't be filled.
+            try {
+                var _topUp = 0;
+                Object.keys(globalSpecialUsage).forEach(function (sName) {
+                    var info = getSpecialSharingInfo(sName, activityProperties, globalSettings);
+                    if (!info || !(info.capacity > 1)) return; // only sharable (cap>1) specials
+                    globalSpecialUsage[sName].slice().forEach(function (slot) {
+                        var grade = slot.grade;
+                        var Ts = slot.startMin, Te = slot.endMin;
+                        var occ = globalSpecialUsage[sName].filter(function (e) {
+                            return e.grade === grade && e.startMin < Te && e.endMin > Ts;
+                        }).length;
+                        if (occ >= info.capacity) return; // already full at this slot
+                        var _why = '';
+                        for (var bi = 0; bi < allBunkList.length && occ < info.capacity; bi++) {
+                            var cand = allBunkList[bi];
+                            if (cand.grade !== grade) continue;
+                            var b = cand.bunk, r = draftResults[b], sl = shoppingLists[b];
+                            if (!r || !sl) continue;
+                            var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : ((sl.specials && sl.specials.required) || 0);
+                            if (r.specials.length >= cap) continue;
+                            if (r.usedActivities.has(sName)) continue;
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, grade, b, globalSettings)) { _why = 'availability/cooldown'; continue; } } catch (e) {}
+                            if (!canAssignSpecialToGrade(sName, grade, Ts, Te)) { _why = 'pair/capacity rule'; continue; }
+                            var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
+                            var loc = (item && item.location) || slot.location || sName;
+                            if (loc && !isFieldStillAvailableGP(loc, Ts, Te, b, grade, sName)) { _why = 'field "' + loc + '" full (capacity)'; continue; }
+                            if (!_canPickSpecialBySubcategory(item || { subcategory: '' }, sl, r)) { _why = 'subcategory cap'; continue; }
+                            // bunk must be free across the existing occupant's slot
+                            var fw = getUpdatedFreeWindowsForBunk(b, sl, r);
+                            if (!fw.some(function (w) { return w.start <= Ts && w.end >= Te; })) { _why = 'no free window at slot'; continue; }
+                            // seat it — share the existing occupant's exact slot
+                            if (loc) claimFieldGlobal(loc, Ts, Te, b, grade, sName);
+                            registerSpecialAssignment(sName, grade, Ts, Te);
+                            r.specials.push({
+                                name: sName, type: (item && item.type) || 'special',
+                                rotationScore: item && item.rotationScore, duration: item && item.duration,
+                                dMin: item && item.dMin, dMax: item && item.dMax, dIdeal: item && item.dIdeal,
+                                isFlexDuration: item && item.isFlexDuration, capacity: item && item.capacity,
+                                location: (item && item.location) || loc, isScarce: item && item.isScarce,
+                                isIndoor: item && item.isIndoor, prepDuration: item && item.prepDuration,
+                                totalDuration: item && item.totalDuration, timeWindow: item && item.timeWindow,
+                                subcategory: (item && item.subcategory) || '',
+                                claimedTime: { startMin: Ts, endMin: Te }, claimedField: (item && item.location) || loc,
+                                _sharedTopUp: true
+                            });
+                            r.usedActivities.add(sName);
+                            if (item) _markSpecialSubcategoryAssigned(item, r);
+                            occ++; _topUp++;
+                            log(GP + ' [A4.5] seated ' + b + ' on ' + sName + ' @' + Ts + '-' + Te + ' (shared ' + occ + '/' + info.capacity + ')');
+                        }
+                        if (occ < info.capacity && _why) {
+                            log(GP + ' [A4.5] ' + sName + ' ' + grade + ' has a free seat (' + occ + '/' + info.capacity + ') but no bunk could fill it — last reason: ' + _why);
+                        }
+                    });
+                });
+                if (_topUp > 0) log(GP + ' Phase A4.5 top-up: filled ' + _topUp + ' shared special seat(s)');
+            } catch (_eTopUp) { try { warn('[A4.5 top-up] ' + (_eTopUp && _eTopUp.message)); } catch (e) {} }
+
             // Log Phase A results
             var phaseASpecials = 0;
             var phaseAByGrade = {};
