@@ -1350,132 +1350,163 @@ function buildMainUI() {
     var mode = isAutoMode() ? 'auto' : 'manual';
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
-    return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + '" id="pc3-root">' +
 
-    /* -- Hero header: title + the three things you actually do (Live, Print & Export, Fullscreen) -- */
-    '<div class="pc3-hero no-print">' +
-        '<div class="pc3-hero-title-block">' +
-            '<h1>' + escHtml(t.campName || 'Camp Schedule') + '</h1>' +
-            '<div class="pc3-hero-meta">' +
-                (dateLabel ? '<span>' + escHtml(dateLabel) + '</span><span class="pc3-hero-meta-dot"></span>' : '') +
-                '<span class="pc3-hero-mode ' + mode + '">' + mode + ' builder</span>' +
-            '</div>' +
+    // Fresh, minimal chrome — one top bar + one control rail + the preview canvas.
+    // Reuses the proven sheet/table/live renderers and the .pc3-item list styling
+    // from getStyles(); everything below is new and self-contained (pcx-* classes).
+    var chrome = '<style id="pcx-styles">' +
+        '#pc3-root.pc3{background:#f4f4f2;}' +
+        '.pcx-bar{display:flex;align-items:center;gap:16px;padding:13px 20px;background:#fff;border-bottom:1px solid #ececea;flex-shrink:0;}' +
+        '.pcx-brand{flex:1;min-width:0;}' +
+        '.pcx-title{font-size:19px;font-weight:800;letter-spacing:-.02em;color:#16181c;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.pcx-sub{font-size:12px;color:#8b8b83;margin-top:2px;}' +
+        '.pcx-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}' +
+        '.pcx-btn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border:1px solid #e2e2dd;border-radius:10px;background:#fff;color:#23252a;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .12s,border-color .12s,transform .04s;}' +
+        '.pcx-btn:hover{background:#fafafa;border-color:#cfcfc8;}' +
+        '.pcx-btn:active{transform:translateY(1px);}' +
+        '.pcx-btn svg{width:16px;height:16px;}' +
+        '.pcx-primary{background:#147D91;border-color:#147D91;color:#fff;box-shadow:0 1px 2px rgba(20,125,145,.25);}' +
+        '.pcx-primary:hover{background:#0f6678;border-color:#0f6678;}' +
+        '#pc3-live-btn.live-on{background:#dc2626;border-color:#dc2626;color:#fff;}' +
+        '#pc3-live-btn.live-on:hover{background:#be1c1c;}' +
+        '#pc3-live-btn .pc3-live-dot{width:8px;height:8px;border-radius:50%;background:#fff;animation:pcx-pulse 1.6s infinite;}' +
+        '@keyframes pcx-pulse{0%,100%{opacity:1}50%{opacity:.45}}' +
+        '.pcx-iconbtn{width:38px;height:38px;display:inline-flex;align-items:center;justify-content:center;border:1px solid #e2e2dd;border-radius:10px;background:#fff;color:#6b6b62;cursor:pointer;}' +
+        '.pcx-iconbtn:hover{background:#fafafa;color:#23252a;}' +
+        '.pcx-menuwrap{position:relative;}' +
+        '.pcx-menu{display:none;position:absolute;top:calc(100% + 8px);right:0;min-width:210px;background:#fff;border:1px solid #e7e5e4;border-radius:12px;box-shadow:0 14px 36px rgba(0,0,0,.14);padding:6px;z-index:120;}' +
+        '.pcx-menu.open{display:block;}' +
+        '.pcx-menu button{display:flex;align-items:center;gap:10px;width:100%;padding:10px 11px;border:none;background:transparent;border-radius:8px;font-family:inherit;font-size:13px;font-weight:500;color:#23252a;cursor:pointer;text-align:left;}' +
+        '.pcx-menu button:hover{background:#f3f3f0;}' +
+        '.pcx-menu button svg{width:17px;height:17px;color:#78716c;}' +
+        '.pcx-menu .pcx-menu-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:#a3a39b;padding:6px 10px 3px;}' +
+        '.pcx-body{flex:1;display:flex;min-height:0;overflow:hidden;}' +
+        '.pcx-rail{width:284px;flex-shrink:0;background:#fff;border-right:1px solid #ececea;display:flex;flex-direction:column;overflow:hidden;}' +
+        '.pcx-section{padding:14px 16px;border-bottom:1px solid #f2f2ef;}' +
+        '.pcx-grow{flex:1;min-height:0;display:flex;flex-direction:column;}' +
+        '.pcx-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#a3a39b;margin-bottom:10px;display:flex;align-items:center;justify-content:space-between;}' +
+        '.pcx-count{font-size:10px;font-weight:600;color:#147D91;background:#e6f6f9;padding:2px 8px;border-radius:99px;text-transform:none;letter-spacing:0;}' +
+        '.pcx-seg{display:grid;grid-template-columns:1fr 1fr;gap:7px;}' +
+        '.pcx-seg button{height:40px;border:1px solid #e2e2dd;border-radius:10px;background:#fff;font-family:inherit;font-size:13px;font-weight:600;color:#55554d;cursor:pointer;transition:all .12s;}' +
+        '.pcx-seg button:hover{border-color:#147D91;color:#147D91;}' +
+        '.pcx-seg button.active{background:#147D91;border-color:#147D91;color:#fff;box-shadow:0 1px 3px rgba(20,125,145,.3);}' +
+        '.pcx-search{width:100%;height:36px;padding:0 12px;border:1px solid #e2e2dd;border-radius:10px;font-size:13px;font-family:inherit;background:#fafafa;color:#23252a;margin-bottom:8px;}' +
+        '.pcx-search:focus{outline:none;background:#fff;border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.12);}' +
+        '.pcx-search::placeholder{color:#a8a29e;}' +
+        '.pcx-list{flex:1;overflow-y:auto;margin:0 -6px;padding:0 6px;}' +
+        '.pcx-rowbtns{display:flex;gap:8px;margin-top:10px;}' +
+        '.pcx-rowbtns button{flex:1;height:34px;border:1px solid #e2e2dd;border-radius:9px;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#55554d;cursor:pointer;}' +
+        '.pcx-rowbtns button:hover{background:#fafafa;border-color:#cfcfc8;}' +
+        '.pcx-themes{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
+        '.pcx-theme{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid #e2e2dd;border-radius:10px;background:#fff;cursor:pointer;font-family:inherit;font-size:12px;font-weight:600;color:#55554d;text-align:left;}' +
+        '.pcx-theme:hover{border-color:#c7c7c0;}' +
+        '.pcx-theme.active{border-color:#147D91;background:#e6f6f9;color:#0f6678;}' +
+        '.pcx-theme-sw{display:flex;border-radius:5px;overflow:hidden;border:1px solid #e2e2dd;height:18px;flex-shrink:0;}' +
+        '.pcx-theme-sw span{width:8px;height:100%;}' +
+        '.pcx-opt{display:flex;align-items:center;gap:10px;padding:7px 2px;font-size:13px;color:#36373c;cursor:pointer;font-weight:500;}' +
+        '.pcx-opt input{width:16px;height:16px;accent-color:#147D91;cursor:pointer;}' +
+        '.pcx-paper{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;}' +
+        '.pcx-paper select{width:100%;height:34px;padding:0 8px;border:1px solid #e2e2dd;border-radius:9px;font-size:12px;font-family:inherit;background:#fff;color:#23252a;cursor:pointer;}' +
+        '.pcx-canvas{flex:1;overflow:auto;background:#ececea;padding:18px 18px 80px;position:relative;min-height:0;background-image:radial-gradient(rgba(150,150,140,.16) 1px,transparent 1px);background-size:18px 18px;}' +
+        '.pcx-empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;color:#8b8b83;}' +
+    '</style>';
+
+    return getStyles() + chrome +
+    '<div class="pc3" id="pc3-root">' +
+
+    /* -- Top bar: brand on the left, the actions on the right -- */
+    '<div class="pcx-bar no-print">' +
+        '<div class="pcx-brand">' +
+            '<div class="pcx-title">' + escHtml(t.campName || 'Camp Schedule') + '</div>' +
+            '<div class="pcx-sub">' + (dateLabel ? escHtml(dateLabel) + ' · ' : '') + mode + ' builder</div>' +
         '</div>' +
-        '<div class="pc3-hero-actions">' +
-            '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View on a screen') + '">' +
+        '<div class="pcx-actions">' +
+            '<button class="pcx-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="Open Live View on a screen">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Print &amp; Export <span style="opacity:.7;font-size:9px;">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-output-menu" style="min-width:260px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Print</div>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3Print()"><span class="pc3-popover-icon">' + ICO.print + '</span>Print this view</button>' +
-                        '<button class="pc3-popover-item" onclick="window.printAllDivisions()"><span class="pc3-popover-icon">' + ICO.grid + '</span>Print every division</button>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Download</div>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportExcel()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Excel (.xlsx)</button>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportCSV && window._pc3ExportCSV()"><span class="pc3-popover-icon">' + ICO.excel + '</span>CSV</button>' +
-                    '</div>' +
+            '<div class="pcx-menuwrap">' +
+                '<button class="pcx-btn" id="pc3-output-btn">' + ICO.download + ' Download <span style="opacity:.6;font-size:9px;">▼</span></button>' +
+                '<div class="pcx-menu" id="pc3-output-menu">' +
+                    '<div class="pcx-menu-label">Download</div>' +
+                    '<button onclick="window._pc3ExportExcel();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'Excel (.xlsx)</button>' +
+                    '<button onclick="window._pc3ExportCSV && window._pc3ExportCSV();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.excel + 'CSV</button>' +
+                    '<div class="pcx-menu-label">Print</div>' +
+                    '<button onclick="window.printAllDivisions();this.closest(\'.pcx-menu\').classList.remove(\'open\');">' + ICO.grid + 'Print every division</button>' +
                 '</div>' +
             '</div>' +
-            '<button class="pc3-hero-icon-btn" onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+            '<button class="pcx-btn pcx-primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
+            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFullscreen()" title="Fullscreen">' + ICO.expand + '</button>' +
         '</div>' +
     '</div>' +
 
-    /* -- Tab bar: the four views + one Style menu -- */
-    '<div class="pc3-tabbar no-print">' +
-        '<div class="pc3-tabs">' +
-            '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
-            '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
-            '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Facilities</button>' +
-            '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon-Sun at-a-glance">Week</button>' +
-        '</div>' +
-        '<div class="pc3-tab-actions">' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-tab-btn" id="pc3-style-btn">Style <span class="caret">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-style-menu" style="min-width:280px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Theme</div>' +
-                        STYLE_PRESETS.map(function (p) {
-                            var active = _activePreset === p.id;
-                            var sw = '<div class="pc3-preset-swatch">' +
-                                p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') +
-                            '</div>';
-                            return '<button class="pc3-preset-item' + (active ? ' active' : '') + '" data-preset="' + p.id + '">' +
-                                sw +
-                                '<div class="pc3-preset-text">' +
-                                    '<div class="pc3-preset-name">' + escHtml(p.name) + '</div>' +
-                                    '<div class="pc3-preset-desc">' + escHtml(p.description) + '</div>' +
-                                '</div>' +
-                                (active ? '<span class="pc3-preset-check">' + (ICO.check || '✓') + '</span>' : '') +
-                            '</button>';
-                        }).join('') +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Header</div>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Camp name</span><input type="text" id="pc3-hero-camp-name" value="' + escHtml(_currentTemplate.campName || '') + '" placeholder="Your Camp"></label>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Subtitle</span><input type="text" id="pc3-hero-subtitle" value="' + escHtml(_currentTemplate.customSubtitle || '') + '" placeholder="Daily Schedule"></label>' +
-                        '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Footer</span><input type="text" id="pc3-hero-footer" value="' + escHtml(_currentTemplate.footerText || '') + '" placeholder="Generated by Campistry"></label>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Options</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-show-date"' + (t.showDate !== false ? ' checked' : '') + '>Show date</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks into one sheet</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Print layout</div>' +
-                        '<div class="pc3-popover-field"><span class="pc3-popover-field-lbl">Orientation</span><select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select></div>' +
-                        '<div class="pc3-popover-field"><span class="pc3-popover-field-lbl">Paper</span><select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select></div>' +
-                    '</div>' +
+    /* -- Body: control rail + preview canvas -- */
+    '<div class="pcx-body">' +
+        '<aside class="pcx-rail no-print" id="pc3-sidebar">' +
+            /* View */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">View</div>' +
+                '<div class="pcx-seg">' +
+                    '<button data-view="division"' + (_activeView === 'division' ? ' class="active"' : '') + '>Divisions</button>' +
+                    '<button data-view="bunk"' + (_activeView === 'bunk' ? ' class="active"' : '') + '>Bunks</button>' +
+                    '<button data-view="location"' + (_activeView === 'location' ? ' class="active"' : '') + '>Facilities</button>' +
+                    '<button data-view="week"' + (_activeView === 'week' ? ' class="active"' : '') + '>Week</button>' +
                 '</div>' +
             '</div>' +
-            /* Hidden controls preserved for legacy JS bindings (zoom dock + cell selection) */
-            '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
-            '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range" style="display:none;">' +
-            '<span id="pc3-zoom-label" style="display:none;">' + _zoomLevel + '%</span>' +
-        '</div>' +
-    '</div>' +
-
-    /* -- Workspace -- */
-    '<div class="pc3-workspace">' +
-        /* Sidebar */
-        '<div class="pc3-sidebar' + (_sidebarCollapsed ? ' collapsed' : '') + '" id="pc3-sidebar">' +
-            '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span><span class="pc3-sidebar-count" id="pc3-sidebar-count">0 selected</span></div>' +
-            '<div class="pc3-sidebar-search">' +
-                '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search...">' +
+            /* Items to include */
+            '<div class="pcx-section pcx-grow">' +
+                '<div class="pcx-label"><span id="pc3-sidebar-title">Divisions</span><span class="pcx-count" id="pc3-sidebar-count">0 selected</span></div>' +
+                '<input type="text" id="pc3-sidebar-search" class="pcx-search" placeholder="Search...">' +
+                '<div class="pcx-list" id="pc3-sidebar-scroll"></div>' +
+                '<div class="pcx-rowbtns"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
             '</div>' +
-            '<div class="pc3-sidebar-scroll" id="pc3-sidebar-scroll"></div>' +
-            '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
-        '</div>' +
-        '<button class="pc3-sidebar-toggle no-print" id="pc3-sidebar-toggle" onclick="window._pc3ToggleSidebar()" title="' + (_sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + '" aria-label="Toggle sidebar">' +
-            '<span class="pc3-sidebar-toggle-arrow">' + (_sidebarCollapsed ? '›' : '‹') + '</span>' +
-        '</button>' +
+            /* Theme */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">Theme</div>' +
+                '<div class="pcx-themes">' +
+                    STYLE_PRESETS.map(function (p) {
+                        var active = _activePreset === p.id;
+                        return '<button class="pcx-theme' + (active ? ' active' : '') + '" data-preset="' + p.id + '" title="' + escHtml(p.description) + '">' +
+                            '<span class="pcx-theme-sw">' + p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
+                            escHtml(p.name) +
+                        '</button>';
+                    }).join('') +
+                '</div>' +
+            '</div>' +
+            /* Options */
+            '<div class="pcx-section">' +
+                '<div class="pcx-label">Options</div>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-show-date"' + (t.showDate !== false ? ' checked' : '') + '>Show date</label>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks</label>' +
+                '<label class="pcx-opt"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
+                '<div class="pcx-paper">' +
+                    '<select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select>' +
+                    '<select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select>' +
+                '</div>' +
+            '</div>' +
+        '</aside>' +
 
-        /* Grid Area */
-        '<div class="pc3-grid-area" id="pc3-grid-area">' +
-            '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;padding:40px 28px;">' +
-                '<div style="text-align:center;max-width:420px;">' +
-                    '<div style="font-size:34px;margin-bottom:12px;opacity:.3;color:#a8a29e;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 6px;font-size:17px;font-weight:700;color:#1c1917;">Pick what to print</p>' +
-                    '<p style="margin:0;font-size:13px;color:#78716c;line-height:1.5;">Choose divisions, bunks, or facilities on the left. Your printout previews here — then Print or Download from the top.</p>' +
+        /* Preview canvas */
+        '<main class="pcx-canvas" id="pc3-grid-area">' +
+            '<div id="pc3-preview-empty" class="pcx-empty">' +
+                '<div style="max-width:340px;">' +
+                    '<div style="font-size:30px;margin-bottom:12px;opacity:.3;">' + ICO.grid + '</div>' +
+                    '<div style="font-size:16px;font-weight:700;color:#3a3a34;margin-bottom:5px;">Pick what to print</div>' +
+                    '<div style="font-size:13px;line-height:1.5;">Choose a view and check the items on the left. Your printout previews here.</div>' +
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
-            /* Floating zoom dock -- bottom-right of preview */
             '<div class="pc3-zoom-dock no-print" id="pc3-zoom-dock">' +
-                '<button onclick="window._pc3Zoom(-10)" title="Zoom out" aria-label="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
+                '<button onclick="window._pc3Zoom(-10)" title="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
                 '<span class="pc3-zoom-dock-label" id="pc3-zoom-dock-label" onclick="window._pc3ZoomReset && window._pc3ZoomReset()" title="Reset to 100%">' + _zoomLevel + '%</span>' +
-                '<button onclick="window._pc3Zoom(10)" title="Zoom in" aria-label="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
-                '<span class="pc3-zoom-dock-sep"></span>' +
-                '<button onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
+                '<button onclick="window._pc3Zoom(10)" title="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
             '</div>' +
-        '</div>' +
+        '</main>' +
     '</div>' +
 
+    /* Hidden legacy controls (zoom + template state) */
+    '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
+    '<input type="range" min="50" max="200" value="' + _zoomLevel + '" id="pc3-zoom-range" style="display:none;">' +
+    '<span id="pc3-zoom-label" style="display:none;">' + _zoomLevel + '%</span>' +
     '<div id="printable-area" style="display:none;"></div>' +
     '</div>';
 }
@@ -4656,14 +4687,24 @@ function bindAll() {
     if (saveBtn) saveBtn.addEventListener('click', function () { window._pc3SaveLayout(); });
     renderSavedLayoutsList();
 
-    // Transpose / Combined / Hide Matchups
-    ['pc3-transpose', 'pc3-combined', 'pc3-hide-matchups'].forEach(function (id) {
+    // Rail options — every toggle/select re-reads design values and re-renders.
+    ['pc3-show-date', 'pc3-combined', 'pc3-hide-matchups', 'pc3-orientation', 'pc3-paper-size', 'pc3-transpose'].forEach(function (id) {
         var e = el(id);
         if (e) e.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
     });
 
-    // Style menu — any checkbox/select change (Show date, Combine, Hide matchups,
-    // Orientation, Paper) re-reads design values and re-renders the preview.
+    // Theme chips — apply the preset and move the active highlight.
+    document.querySelectorAll('.pcx-theme').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            var pid = this.getAttribute('data-preset');
+            if (window._pc3ApplyPreset) window._pc3ApplyPreset(pid);
+            document.querySelectorAll('.pcx-theme').forEach(function (b) {
+                b.classList.toggle('active', b.getAttribute('data-preset') === pid);
+            });
+        });
+    });
+
+    // Legacy Style menu (if present) — harmless no-op in the new shell.
     var styleMenu = el('pc3-style-menu');
     if (styleMenu) styleMenu.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
 
