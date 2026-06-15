@@ -2467,7 +2467,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   helpers) so the chosen candidate then flows through the normal per-type
         //   placement branches below.
         const _poolChoiceTally = {}; // per-generation count of how often each pool option got picked (within-pool balance)
-        const _poolCandidateAvailable = (it, divName, slots) => {
+        // Does this field's accessRestrictions DENY this division/bunk? Allow-list
+        // semantics with dual string/number keys — mirrors the post-gen warn scan
+        // and the solver's hard access check. Used to PREFER fields the bunk can
+        // actually access when an override auto-picks among a sport's fields.
+        const _fieldAccessViolates = (fieldName, dn, bk) => {
+            if (!fieldName || !dn) return false;
+            const _props = (typeof activityProperties !== 'undefined' && activityProperties) || window.activityProperties || {};
+            const ar = (_props[fieldName] || {}).accessRestrictions;
+            if (!ar || ar.enabled !== true) return false;
+            const divs = ar.divisions || {};
+            if (!(String(dn) in divs) && !(dn in divs)) return true;
+            const rule = (String(dn) in divs) ? divs[String(dn)] : divs[dn];
+            if (Array.isArray(rule) && rule.length > 0) {
+                const bs = String(bk), bn = parseInt(bk);
+                if (!rule.some(b => String(b) === bs || parseInt(b) === bn)) return true;
+            }
+            return false;
+        };
+        const _poolCandidateAvailable = (it, divName, slots, bunk) => {
             const nm = it.name;
             const ty = it.type || 'sport';
             const slotOpen = (key) => {
@@ -2480,19 +2498,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             if (ty === 'sport') {
                 const fs = (fieldsBySport || {})[nm] || [];
                 if (fs.length === 0) return true; // sport branch falls back to the sport name as its own field
+                // "available" = has an OPEN field the bunk can ACCESS, so a pool
+                // prefers the candidate that won't force an access-restricted court.
                 return fs.some(cf => {
                     if (window.GlobalFieldLocks?.isFieldLocked(cf, slots, divName)) return false;
+                    if (_fieldAccessViolates(cf, divName, bunk)) return false;
                     return slotOpen(cf);
                 });
             }
             if (ty === 'field') {
                 if (window.GlobalFieldLocks?.isFieldLocked(nm, slots, divName)) return false;
+                if (_fieldAccessViolates(nm, divName, bunk)) return false;
                 return slotOpen(nm);
             }
             // special / pinned → location-based
             if (window.GlobalFieldLocks?.isFieldLocked(nm, slots, divName)) return false;
             const loc = it.location || (typeof getLocationForActivity === 'function' ? getLocationForActivity(nm) : null);
             if (loc) {
+                if (_fieldAccessViolates(loc, divName, bunk)) return false;
                 if (typeof canScheduleAtLocation === 'function' && !canScheduleAtLocation(nm, loc, slots)) return false;
                 if (!slotOpen(loc)) return false;
             }
@@ -2508,7 +2531,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 ? (window.RotationEngine.getActivityCount(bunk, nm) || 0) : 0;
             let best = null, bestScore = -Infinity;
             items.forEach((it, idx) => {
-                const avail = _poolCandidateAvailable(it, divName, slots);
+                const avail = _poolCandidateAvailable(it, divName, slots, bunk);
                 const count = getCount(it.name);
                 const tally = _poolChoiceTally[it.name] || 0; // how often this option was already picked THIS gen
                 // Priority: AVAILABILITY (open field, +1000) > FAIRNESS (rotation
@@ -2616,27 +2639,30 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const fieldsForSport = fieldsBySportData[activityName] || [];
 
                 if (fieldsForSport.length > 0) {
-                    for (const candidateField of fieldsForSport) {
-                        if (window.GlobalFieldLocks?.isFieldLocked(candidateField, slots, divName)) {
-                            continue;
-                        }
-
-                        const maxCapacity = getFieldCapacityLocal(candidateField, activityProperties);
-
-                        let canUse = true;
+                    // A candidate field is usable if it's unlocked and has open capacity.
+                    const _sportFieldUsable = (cf) => {
+                        if (window.GlobalFieldLocks?.isFieldLocked(cf, slots, divName)) return false;
+                        const maxCapacity = getFieldCapacityLocal(cf, activityProperties);
                         for (const slotIdx of slots) {
-                            const usage = fieldUsageBySlot[slotIdx]?.[candidateField];
-                            if (usage && usage.count >= maxCapacity) {
-                                canUse = false;
-                                break;
-                            }
+                            const usage = fieldUsageBySlot[slotIdx]?.[cf];
+                            if (usage && usage.count >= maxCapacity) return false;
                         }
-
-                        if (canUse) {
-                            fieldName = candidateField;
-                            break;
+                        return true;
+                    };
+                    // ★ Prefer a field the bunk's division can ACCESS. Only fall back
+                    //   to an access-restricted field (warn-but-allow) when no
+                    //   accessible field is free — so an override never lands on a
+                    //   restricted court while an open, allowed one sits unused.
+                    let picked = null;
+                    for (const cf of fieldsForSport) {
+                        if (_sportFieldUsable(cf) && !_fieldAccessViolates(cf, divName, bunk)) { picked = cf; break; }
+                    }
+                    if (!picked) {
+                        for (const cf of fieldsForSport) {
+                            if (_sportFieldUsable(cf)) { picked = cf; break; }
                         }
                     }
+                    if (picked) fieldName = picked;
                 }
 
                 fillBlock({
@@ -2764,21 +2790,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
         //   Fires every manual gen (empty payload clears stale warnings).
         // =========================================================================
         try {
-            const _oaProps = (typeof activityProperties !== 'undefined' && activityProperties) || window.activityProperties || {};
-            const _oaViolates = (fieldName, divName, bunk) => {
-                if (!fieldName || !divName) return false;
-                const ar = (_oaProps[fieldName] || {}).accessRestrictions;
-                if (!ar || ar.enabled !== true) return false;
-                const divs = ar.divisions || {};
-                // division allow-list (dual-key: string "3" or original 3) — mirrors solver
-                if (!(String(divName) in divs) && !(divName in divs)) return true;
-                const rule = (String(divName) in divs) ? divs[String(divName)] : divs[divName];
-                if (Array.isArray(rule) && rule.length > 0) {
-                    const bs = String(bunk), bn = parseInt(bunk);
-                    if (!rule.some(b => String(b) === bs || parseInt(b) === bn)) return true;
-                }
-                return false;
-            };
+            // Reuse the hoisted access check (defined before the override loop) so
+            // the warn scan and the field-preference logic can never diverge.
+            const _oaViolates = _fieldAccessViolates;
             const _bunkDivOf = {};
             Object.keys(divisions).forEach(dn => ((divisions[dn] || {}).bunks || []).forEach(b => { _bunkDivOf[String(b)] = dn; }));
             const _oaWarn = [];
