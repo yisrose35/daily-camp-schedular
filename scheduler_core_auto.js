@@ -8074,11 +8074,47 @@
                         if (winEnd <= winStart) return;
                         var dur = cl.durationMin || cl.periodMin || 30;
                         if (winEnd - winStart < dur) return; // window too small
+                        // ★ Shared-room alignment anchor.
+                        //   When a custom layer is hosted in a SHARABLE room (e.g. an
+                        //   "auditorium" with shareType cross_division / same_division /
+                        //   custom / all / capacity>1), every bunk that uses that room at
+                        //   the same time must START/END at the IDENTICAL minute — partial
+                        //   (staggered) co-use of a shared room is illegal and the post-solve
+                        //   constraint sweep (STEP 4.5) demotes it, making the activity
+                        //   vanish. The per-bunk position scan below independently picks the
+                        //   first-fitting slot, which drifts (Auto1@630, Auto2@635…). To keep
+                        //   them aligned we compute a DETERMINISTIC anchor — the layer window
+                        //   start clamped to grade bounds — that every bunk of this grade
+                        //   computes identically, and bias the position search toward it.
+                        //   (Snapping an UNshared custom to its window start is harmless — it
+                        //   stays in-window and owns its own field — so we only gate on the
+                        //   room being sharable to avoid touching solo-room layouts.)
+                        var _clAlignAnchor = null;
+                        try {
+                            var _clFld = cl.customField || null;
+                            if (_clFld) {
+                                var _clFldCfg = getFields(globalSettings).find(function (f) {
+                                    return f && f.name && String(f.name).toLowerCase().trim() === String(_clFld).toLowerCase().trim();
+                                });
+                                var _clSw = (_clFldCfg && _clFldCfg.sharableWith) || null;
+                                var _clShareable = !!_clSw && (
+                                    (_clSw.type && _clSw.type !== 'not_sharable') ||
+                                    (parseInt(_clSw.capacity) || 0) > 1
+                                );
+                                if (_clShareable) {
+                                    // Snap anchor to a 5-min grid so it matches the position scan
+                                    // (which steps by 5) and the end-aligned candidate.
+                                    _clAlignAnchor = Math.round(winStart / 5) * 5;
+                                    if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
+                                }
+                            }
+                        } catch (_eAnchor) { _clAlignAnchor = null; }
                         needs.push({ type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
                             dMin: dur, dMax: cl.durationMax || dur,
                             windowStart: winStart, windowEnd: winEnd,
                             _activityLocked: true, _customActivity: cl.customActivity || null,
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null,
+                            _alignAnchor: _clAlignAnchor,
                             _shareEventId: _clShareEvtId, _shareConcurrency: _clShareConc, _source: 'need' });
                     });
 
@@ -8160,7 +8196,11 @@
                             var _needType15 = (need.type || '').toLowerCase();
                             var _rMeta15 = (_needType15 === 'rotation_event' && need._rotationEventId) ? _rotEventMeta[need._rotationEventId] : null;
                             var _isStaggeredNeed = _rMeta15 && _rMeta15.gradeMode === 'individual';
-                            var _isFixedDurNeed = (_needType15 === 'snacks' || _needType15 === 'snack' || _needType15 === 'swim');
+                            // ★ A sharable-room custom (carries _alignAnchor) is fixed-duration:
+                            //   negotiating duration per-bunk would make the END drift even when
+                            //   the START is anchored, re-introducing staggered shared-room use.
+                            var _isFixedDurNeed = (_needType15 === 'snacks' || _needType15 === 'snack' || _needType15 === 'swim' ||
+                                (_needType15 === 'custom' && need._alignAnchor != null));
                             var gapSize = gap.end - gap.start;
                             var dur;
                             if (_isFixedDurNeed) {
@@ -8450,6 +8490,27 @@
                         // Deduplicate
                         var seen = {};
                         positions = positions.filter(function(p) { var k = p.start; if (seen[k]) return false; seen[k] = true; return true; });
+                        // ── Shared-room custom alignment ────────────────────────
+                        // If this custom need carries an alignment anchor (its room is
+                        // sharable), force the anchored start to the FRONT so every bunk
+                        // of the grade lands on the IDENTICAL start/end and shares the
+                        // room cleanly. If no candidate sits on the anchor (the anchored
+                        // slot is occupied for this bunk), positions are left as-is so
+                        // coverage is not sacrificed — the worst case degrades to today's
+                        // behavior rather than dropping the activity.
+                        if ((need.type || '').toLowerCase() === 'custom' && need._alignAnchor != null) {
+                            var _anchorIdx = -1;
+                            for (var _api = 0; _api < positions.length; _api++) {
+                                if (positions[_api].start === need._alignAnchor) { _anchorIdx = _api; break; }
+                            }
+                            if (_anchorIdx > 0) {
+                                var _anchored = positions.splice(_anchorIdx, 1)[0];
+                                _anchored.deadGaps = -1; // ensure deadGaps-sort (CSP) also ranks it first
+                                positions.unshift(_anchored);
+                            } else if (_anchorIdx === 0) {
+                                positions[0].deadGaps = -1;
+                            }
+                        }
                         return positions;
                     }
 
@@ -8564,6 +8625,18 @@
                         }
                         if (iterationBias.category === 'missingLayers') {
                             if (['swim', 'snack', 'snacks', 'special'].indexOf(need.type) >= 0) score += 500;
+                        }
+
+                        // 6. ★ Shared-room custom alignment — strongly reward placing a
+                        //    sharable-room custom activity on its deterministic anchor so
+                        //    every bunk lands on the IDENTICAL start/end and shares the
+                        //    room legally (otherwise STEP 4.5 demotes the staggered uses).
+                        //    Bonus is large enough to win normal gap/balance scoring but is
+                        //    NOT applied if placing here would starve another need (that case
+                        //    already returns -99999 above), so coverage is never sacrificed.
+                        if ((need.type || '').toLowerCase() === 'custom' && need._alignAnchor != null &&
+                            pos.start === need._alignAnchor) {
+                            score += 100000;
                         }
 
                         return score;
