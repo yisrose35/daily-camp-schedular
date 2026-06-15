@@ -34,6 +34,18 @@
         return dt[slotIdx] || null;
     }
 
+    // A "Sports" tile slot (event "Sports Slot") only accepts sports; a "Special
+    // Activity" slot only accepts specials; everything else is flexible ('any').
+    // Mirrors slotKindOf in scheduler_core_main.js so the leftover-slot free-fill
+    // and the manual ⚡ Auto Fill button respect the same sport/special boundary
+    // the solver enforces.
+    function slotKindOf(ev) {
+        const s = String(ev || '').toLowerCase().trim();
+        if (s === 'sports slot' || s === 'sport slot') return 'sport';
+        if (s === 'special activity') return 'special';
+        return 'any';
+    }
+
     function getGlobalSettings() {
         return window.loadGlobalSettings?.() || {};
     }
@@ -221,14 +233,17 @@
     // Returns all activities that are physically available for the slot.
     // ========================================================================
 
-    function buildCandidates(bunk, slotStart, slotEnd, divName, actProps) {
+    function buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKind) {
         const gs = getGlobalSettings();
         const candidates = [];
         // ★ Respect rainy day: when not raining, skip rainyOnly activities/specials.
         const isRainy = !!window.isRainyDay;
+        // ★ Tile-kind gate: a Sports-only slot skips specials; a Special-only slot
+        //   skips sports. 'any' (or unset) keeps both, the pre-existing behavior.
+        const _kind = slotKind || 'any';
 
-        // Sports / field activities
-        (gs.app1?.fields || []).forEach(f => {
+        // Sports / field activities (skipped entirely for a Special-only slot)
+        if (_kind !== 'special') (gs.app1?.fields || []).forEach(f => {
             if (!isRainy && (f.rainyOnly || f.rainyDayOnly)) return;
             if (isRainy && (f.dryOnly || f.dryDayOnly)) return;
             // ★ Grade restriction — skip if this field excludes our division
@@ -244,8 +259,8 @@
             });
         });
 
-        // Special activities
-        (gs.app1?.specialActivities || []).forEach(s => {
+        // Special activities (skipped entirely for a Sports-only slot)
+        if (_kind !== 'sport') (gs.app1?.specialActivities || []).forEach(s => {
             if (!isRainy && (s.rainyOnly || s.rainyDayOnly)) return;
             if (isRainy && (s.dryOnly || s.dryDayOnly)) return;
             // ★ Grade restriction
@@ -419,9 +434,9 @@
             return;
         }
 
-        // 3. Build candidates
+        // 3. Build candidates (honoring the slot's Sports-only / Special-only kind)
         const actProps = getActivityProperties();
-        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps);
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKindOf(slot.event));
         if (!candidates.length) { toast('No available activities found for this slot', 'warning'); return; }
 
         // 4. Score and pick
@@ -542,7 +557,7 @@
         if (entry && !isFreeEntry(entry) && entry._fixed) return false;
 
         const actProps = getActivityProperties();
-        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps);
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKindOf(slot.event));
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');

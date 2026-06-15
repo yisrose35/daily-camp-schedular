@@ -1808,6 +1808,16 @@
         for (var ci = 0; ci < numCands; ci++) { var c = allCands[ci]; if (disabledSet.has(c.field)) continue; if (!actProps[c.field] && !actProps[c.activityName] && c.type !== 'special') continue; var fieldSportBlock = dailyDisabledSports[c.field]; if (fieldSportBlock && fieldSportBlock.length > 0 && c.activityName && fieldSportBlock.indexOf(c.activityName) !== -1) continue; globallyValid[ci] = 1; }
         for (var bi = 0; bi < numBlocks; bi++) {
             var block = activityBlocks[bi]; block._blockIdx = bi;
+            // ★ Sport/Special tile-kind: a Sports tile takes only sports, a Special
+            //   tile only specials, a flexible Activity tile ('any') either. _slotKind
+            //   is stamped at the manual skeleton source; derive it from the event
+            //   label as a fallback (e.g. smart-tile sport-fallback blocks).
+            if (block._slotKind === undefined) {
+                var _bev = String(block.event || '').toLowerCase().trim();
+                block._slotKind = (_bev === 'sports slot' || _bev === 'sport slot') ? 'sport'
+                                : (_bev === 'special activity') ? 'special' : 'any';
+            }
+            var _blkKind = block._slotKind;
             var domain = new Set(), bunk = block.bunk;
             var blockDiv = block.divName || block.division || '';
             if (!blockDiv && bunk) { blockDiv = getBunkDivision(bunk) || ''; if (blockDiv) block.divName = blockDiv; }
@@ -1839,6 +1849,9 @@
                 if (!globallyValid[ci2]) continue;
                 var c2 = allCands[ci2], fn = c2.field, fnorm = c2._fieldNorm;
                 if (_allowSet && !_allowSet.has(c2._actNorm)) continue;
+                // ★ Tile-kind gate: Sports tile → sports only, Special tile → specials only.
+                if (_blkKind === 'sport' && c2.type === 'special') continue;
+                if (_blkKind === 'special' && c2.type !== 'special') continue;
                 if (window.GlobalFieldLocks?.isFieldLocked(fn, slots, blockDiv)) continue;
                 var _dLoc = window.getLocationForActivity?.(c2.activityName||fn) || window.getPinnedTileDefaultLocation?.(c2.activityName||fn);
                 if (_dLoc && typeof _dLoc === 'string' && window.GlobalFieldLocks?.isFieldLocked(_dLoc, slots, blockDiv)) continue;
@@ -2265,6 +2278,12 @@
     // ========================================================================
     function isPickStillValid(block, cand) {
         var fn=cand.field,fnorm=cand._fieldNorm||normName(fn),bunk=block.bunk,bDiv=block.divName||'',sM=block.startTime,eM=block.endTime;
+        // ★ Tile-kind gate (mirrors the domain filter) — also guards the empty-domain
+        //   and deepFreeResolution fallbacks, which scan ALL candidates via this fn.
+        //   A Sports tile never takes a special; a Special tile never takes a sport.
+        var _bk = block._slotKind;
+        if (_bk === 'sport' && cand.type === 'special') return false;
+        if (_bk === 'special' && cand.type !== 'special') return false;
         if (sM===undefined||eM===undefined) return true;
         var slots=block.slots||[];
         if (window.GlobalFieldLocks?.isFieldLocked(fn,slots,bDiv)) return false;
