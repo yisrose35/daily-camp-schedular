@@ -17,7 +17,31 @@
     // (and iterate 864+ rainy-only entries) on every single block.
     let _specialsCache = null;
     let _specialsCacheRainyMode = null;
-    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; };
+    let _validLocCache = null;   // Set of lowercased facility+field names (orphan-facility gate)
+    window.invalidateSmartLogicSpecialsCache = function() { _specialsCache = null; _specialsCacheRainyMode = null; _validLocCache = null; };
+
+    // ★ A special whose configured `location` is not a real facility/field has nowhere
+    //   to be held (e.g. "Canteen"/"Gameroom" with no such facility). The scheduler's
+    //   loader filters these out, but the SmartTile pre-allocator builds its pool from
+    //   getAvailableSpecialsForTimeBlock, so without the same gate it keeps emitting
+    //   them. Returns true if the special should be DROPPED. Fail-open: if the facility
+    //   registry can't be read, the cache stays empty and nothing is dropped.
+    function _specialFacilityMissing(special, props) {
+        if (_validLocCache === null) {
+            try {
+                const facs = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+                const facNames = Array.isArray(facs) ? facs.map(f => (f && f.name) || f) : (facs ? Object.keys(facs) : []);
+                const app1 = ((window.loadGlobalSettings && window.loadGlobalSettings()) || {}).app1 || {};
+                const fieldNames = (app1.fields || []).map(f => (f && f.name) || f);
+                const names = facNames.concat(fieldNames).filter(Boolean).map(n => String(n).trim().toLowerCase());
+                _validLocCache = new Set(names);
+            } catch (_e) { _validLocCache = new Set(); }
+        }
+        if (_validLocCache.size === 0) return false; // registry unavailable → fail open
+        const loc = (props && props.location) || (special && special.location);
+        if (!loc || !String(loc).trim()) return false;        // no location requirement → keep
+        return !_validLocCache.has(String(loc).trim().toLowerCase());
+    }
 
     // =========================================================================
     // STORAGE KEYS
@@ -279,6 +303,13 @@
         combinedSpecials.forEach(special => {
             const specialName = special.name;
             const props = activityProps?.[specialName] || special;
+
+            // 0. Skip specials whose configured facility doesn't exist (parity with the
+            //    scheduler loader — Canteen/Gameroom etc. with no matching facility).
+            if (_specialFacilityMissing(special, props)) {
+                log(`    ❌ ${specialName}: facility "${(props && props.location) || special.location}" does not exist — skipping`);
+                return;
+            }
 
             // 1. Check if globally enabled
             if (props.available === false) {
