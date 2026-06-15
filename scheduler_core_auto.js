@@ -1416,9 +1416,21 @@
             return _synthCustomRotEvents.length ? _base.concat(_synthCustomRotEvents) : _base;
         };
 
+        // ★ Consumer layer types are FILL TARGETS — the solver chooses the activity
+        //   (see the 'consumer' classifier ~L2524). A consumer layer carries no
+        //   concrete activity (its event/name is blank or just the type word), so it
+        //   must never be force-pinned into a wall: pinning materializes a literal
+        //   "sport"/"slot" block (eventName falls back to layer.type at ~L3277) that
+        //   Phase B never fills, so the bunk just shows the word "sport".
+        const _CONSUMER_LAYER_TYPES = new Set(['sport', 'sports', 'slot']);
+
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
             const lt = (layer.type || '').toLowerCase();
+            // A consumer slot with no concrete activity name is unfilled — eventName
+            //   would fall back to the type word, so it can't be a meaningful wall.
+            const _evName = String(layer.event || layer.name || '').toLowerCase().trim();
+            const _isUnfilledConsumer = _CONSUMER_LAYER_TYPES.has(lt) && (!_evName || _evName === lt);
             let classification;
             // ★ fullGrade swim/lunch/snacks → always pinned so Phase 0 places them
             //   grade-wide at the same time for every bunk (like a league).
@@ -1435,7 +1447,11 @@
                 //   path where later fill/recapture passes would scatter it.
                 classification = 'pinned';
             } else if (ratio >= 1) {
-                classification = 'pinned';
+                // An unfilled consumer slot stays a fill target (windowed) even when it
+                //   exactly fills its window — pinning it would create a dead "sport"
+                //   wall the solver never resolves. Concrete pinned activities (a real
+                //   sport name set on the layer) still pin as before.
+                classification = _isUnfilledConsumer ? 'windowed' : 'pinned';
             } else if (ratio >= 0.10) {
                 classification = 'windowed';
             } else {
@@ -2435,7 +2451,9 @@
                     const _overlap = ledger.claims.filter(c => c.startMin < endMin && c.endMin > startMin);
                     let _total = _bm[bunk]?.size || 0;
                     for (const c of _overlap) _total += _bm[c.bunk]?.size || 0;
-                    if (_total > _sm.maxPlayers) return false;
+                    // Absolute ceiling = max + 2 (max+1 routine grace, max+2 last-resort,
+                    // never max+3+). Smallest-overage preference lives in the scorers.
+                    if (_total > _sm.maxPlayers + 2) return false;
                 }
             }
 
@@ -4620,8 +4638,8 @@
                         var _pbSize = (_bmd[_pb] && typeof _bmd[_pb].size === 'number') ? _bmd[_pb].size : 0;
                         if (!_pbSize) continue;
                         var _comb = bunkSize + _pbSize;
-                        if (_comb >= playerReqs.minPlayers && (!playerReqs.maxPlayers || _comb <= playerReqs.maxPlayers)) {
-                            _canEverPair = true; break;
+                        if (_comb >= playerReqs.minPlayers && (!playerReqs.maxPlayers || _comb <= playerReqs.maxPlayers + 2)) {
+                            _canEverPair = true; break; // ceiling = max+2
                         }
                     }
                     if (!_canEverPair) return; // skip this sport — pairing is impossible for this bunk
@@ -5328,11 +5346,14 @@
                         if (!bSize) continue;
                         var combined = aSize + bSize;
                         if (combined < reqs.minPlayers) continue;
-                        if (reqs.maxPlayers && combined > reqs.maxPlayers) continue;
+                        // Combined ceiling = max+2 (max+1 routine, max+2 last-resort). Track
+                        // overage so we prefer partners that keep the pair at/under max.
+                        var over = (reqs.maxPlayers && combined > reqs.maxPlayers) ? (combined - reqs.maxPlayers) : 0;
+                        if (reqs.maxPlayers && over > 2) continue;
                         var dist = Math.abs((parseInt(String(B).replace(/\D/g, '')) || 0) - aNum);
-                        candidates.push({ bunk: B, dist: dist });
+                        candidates.push({ bunk: B, dist: dist, over: over });
                     }
-                    candidates.sort(function (a, b) { return a.dist - b.dist; });
+                    candidates.sort(function (a, b) { return (a.over - b.over) || (a.dist - b.dist); });
                     for (var c = 0; c < candidates.length; c++) {
                         var pb = candidates[c].bunk;
                         // Capacity + access + sharing check via the planner helper
@@ -6854,7 +6875,10 @@
                                     for (const _pc of plannerFieldClaims) {
                                         if (_pc.field === fs.name && _pc.bunk !== bunk && _pc.startMin < win.end && _pc.endMin > win.start) _occP += _szSW(_pc.bunk);
                                     }
-                                    if (_occP > 0 && (_occP + _szSW(bunk)) > _spMaxP * 1.2) continue;
+                                    // Absolute ceiling = max + 2 (max+1 routine grace,
+                                    // max+2 last-resort). Was *1.2, which for large maxes
+                                    // allowed far more than 2 extra players (max 30 → +6).
+                                    if (_occP > 0 && (_occP + _szSW(bunk)) > _spMaxP + 2) continue;
                                 }
                             }
 
@@ -14538,8 +14562,8 @@
                                         var _cbBunk = _pool[_pk];
                                         if (!_bunkFreeS(_cbBunk, _s, _e)) continue;
                                         var _bsz = (_bmCB[_cbBunk] && _bmCB[_cbBunk].size) || 0;
-                                        if (_maxP && _bsz && _bsz > _maxP) continue;               // single bunk over max — never legal
-                                        if (_maxP && _takeSize && _takeSize + _bsz > _maxP) continue; // batch would exceed max
+                                        if (_maxP && _bsz && _bsz > _maxP + 2) continue;               // single bunk over ceiling (max+2)
+                                        if (_maxP && _takeSize && _takeSize + _bsz > _maxP + 2) continue; // batch would exceed ceiling (max+2)
                                         _take.push(_cbBunk); _takeSize += _bsz;
                                     }
                                     if (_take.length === 0) { _cursor = _s + 5; continue; }
@@ -14678,8 +14702,8 @@
                                             var _b3 = _pool2[_pk2];
                                             if (!_bunkFreeS(_b3, _c2, _e2)) continue;
                                             var _bs3 = (_bmCB[_b3] && _bmCB[_b3].size) || 0;
-                                            if (_maxP && _bs3 && _bs3 > _maxP) continue;
-                                            if (_maxP && _ts2 && _ts2 + _bs3 > _maxP) continue;
+                                            if (_maxP && _bs3 && _bs3 > _maxP + 2) continue;               // single bunk over ceiling (max+2)
+                                            if (_maxP && _ts2 && _ts2 + _bs3 > _maxP + 2) continue;       // batch over ceiling (max+2)
                                             _take2.push(_b3); _ts2 += _bs3;
                                         }
                                         if (_take2.length === 0) { _cur2 = _c2 + 5; continue; }
@@ -19041,7 +19065,8 @@
                             if (_ea === _actLower) { _totHC += (_bmv[_ob] && _bmv[_ob].size) || 0; break; }
                         }
                     }
-                    if (_totHC > _smv.maxPlayers) return 'sport maxPlayers: combined ' + _totHC + ' > ' + _smv.maxPlayers;
+                    // Absolute ceiling = max + 2 (max+1 routine grace, max+2 last-resort).
+                    if (_totHC > _smv.maxPlayers + 2) return 'sport maxPlayers: combined ' + _totHC + ' > ' + _smv.maxPlayers + '+2';
                 }
             }
             if (fld?.accessRestrictions?.enabled
@@ -23611,7 +23636,7 @@
                         const _bm = window.bunkMetaData || {};
                         let _tot = (_bm[exclBunk] && _bm[exclBunk].size) || 0;
                         for (let i = 0; i < coBunks.length; i++) _tot += (_bm[coBunks[i]] && _bm[coBunks[i]].size) || 0;
-                        if (_tot > _sm.maxPlayers) return false;
+                        if (_tot > _sm.maxPlayers + 2) return false; // ceiling = max+2
                     }
                     return true;
                 }
@@ -23707,7 +23732,7 @@
                             if (!(_sm && _sm.maxPlayers)) return;
                             let _tot = 0;
                             grp.forEach(function (p) { _tot += (_bm[p.bunk] && _bm[p.bunk].size) || 0; });
-                            if (_tot > _sm.maxPlayers) ok = false;
+                            if (_tot > _sm.maxPlayers + 2) ok = false; // ceiling = max+2
                         });
                     }
                     if (!anyChange || !ok) return;
@@ -23926,7 +23951,9 @@
                             if (!bSize) return;
                             var combined = aSize + bSize;
                             if (combined < reqs.minPlayers) return;
-                            if (reqs.maxPlayers && combined > reqs.maxPlayers) return;
+                            // Combined ceiling = max+2 (max+1 routine, max+2 last-resort).
+                            var pOver = (reqs.maxPlayers && combined > reqs.maxPlayers) ? (combined - reqs.maxPlayers) : 0;
+                            if (reqs.maxPlayers && pOver > 2) return;
                             var bSlots = sa[bBunk] || [];
                             var bIdx = -1, bSlot = null;
                             for (var bi = 0; bi < bSlots.length; bi++) {
@@ -23970,6 +23997,8 @@
                             }
                             var isFree = (bActLower === 'free' || bActLower === '' || bActLower === 'general activity slot');
                             var score = isFree ? 100 : 50; // prefer filling Free over swapping a real sport
+                            // Prefer partners that keep the pair at/under max (smallest overage).
+                            score -= pOver * 60;
                             // Slight bonus for partners with rotationally-stale activities — but we don't have rotation here easily; skip
                             partnerCandidates.push({ bunk: bBunk, idx: bIdx, slot: bSlot, score: score, combined: combined, isFree: isFree });
                         });
@@ -24108,7 +24137,8 @@
                             if (!bSize) continue;
                             var combined = aSize + bSize;
                             if (combined < reqs.minPlayers) continue;
-                            if (reqs.maxPlayers && combined > reqs.maxPlayers) continue;
+                            // Combined ceiling = max+2 (max+1 routine, max+2 last-resort).
+                            if (reqs.maxPlayers && combined > reqs.maxPlayers + 2) continue;
                             var bSlots = sa[bBunk] || [];
                             // Find B's slot at T1
                             var bT1Idx = -1, bT1Slot = null;
@@ -24347,7 +24377,7 @@
                             if (playedToday.has(String(act).toLowerCase())) continue;
                             var actReqs = getReqs(act);
                             if (actReqs && actReqs.minPlayers && aSize < actReqs.minPlayers) continue;
-                            if (actReqs && actReqs.maxPlayers && aSize > actReqs.maxPlayers) continue;
+                            if (actReqs && actReqs.maxPlayers && aSize > actReqs.maxPlayers + 2) continue; // ceiling = max+2
                             for (var fi = 0; fi < _flds.length; fi++) {
                                 var f = _flds[fi];
                                 if (!f || !f.name) continue;
@@ -24388,7 +24418,7 @@
                             if (aMax && aMax.maxPlayers) {
                                 var occRoster = 0;
                                 for (var oi = 0; oi < occ.length; oi++) occRoster += _sz(occ[oi].bunk);
-                                if (occRoster + aSize > aMax.maxPlayers) continue;
+                                if (occRoster + aSize > aMax.maxPlayers + 2) continue; // ceiling = max+2
                             }
                             if (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function') {
                                 var bTemplate = [];
@@ -24550,7 +24580,7 @@
                     }
                     if (!anyUnder) return;
                     if (combined < reqs.minPlayers) return; // pair doesn't actually meet min
-                    if (reqs.maxPlayers && combined > reqs.maxPlayers) return; // over max
+                    if (reqs.maxPlayers && combined > reqs.maxPlayers + 2) return; // over ceiling (max+2)
                     for (var ej = 0; ej < entries.length; ej++) {
                         entries[ej].slot._pinned = true;
                         entries[ej].slot._pairLock = true;
@@ -25633,7 +25663,7 @@
                                         const _r = window.SchedulerCoreUtils?.getSportPlayerRequirements?.(a);
                                         if (!_r) return true;
                                         if (_r.minPlayers && _nsSize && _nsSize < _r.minPlayers) return false;
-                                        if (_r.maxPlayers && _nsSize && _nsSize > _r.maxPlayers) return false;
+                                        if (_r.maxPlayers && _nsSize && _nsSize > _r.maxPlayers + 2) return false; // ceiling = max+2
                                         return true;
                                     }) || null;
                                     if (chosenAct && !_validateWritePlacement(fld, chosenAct, grade, bunk, bucket.startMin, bucket.endMin)) {
