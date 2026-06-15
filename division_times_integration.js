@@ -99,6 +99,39 @@
         return [];
     }
 
+    // ★ Ensure window.divisionTimes has slots for every division that has skeleton
+    //   events. A reload can restore a PARTIAL divisionTimes (all division keys present
+    //   but a division has 0 slots) — that whole division then renders blank even though
+    //   scheduleAssignments holds its activities (e.g. a 5-6pm Sports tile added in Daily
+    //   Adjustments for division 7 → div 7 ends up with 0 slots). The active DAILY
+    //   skeleton (dailyOverrideSkeleton) is the source of truth — it carries
+    //   daily-adjustment tiles the base manualSkeleton may not. Build from it and
+    //   MERGE-FILL only the empty divisions (never clobber good ones). Manual mode only.
+    function ensureDivisionTimesForSkeleton(reason) {
+        var _isAuto = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
+        if (_isAuto || window._divisionTimesLocked) return;
+        var skeleton = (window.dailyOverrideSkeleton && window.dailyOverrideSkeleton.length)
+            ? window.dailyOverrideSkeleton : getSkeletonFromAnySource();
+        if (!skeleton || !skeleton.length) return;
+        var dt = window.divisionTimes || (window.divisionTimes = {});
+        var divsWithEvents = new Set(skeleton.map(function (e) { return e && e.division; }).filter(Boolean).map(String));
+        var anyEmpty = false;
+        divsWithEvents.forEach(function (d) { var a = dt[d]; if (!a || (Array.isArray(a) && a.length === 0)) anyEmpty = true; });
+        if (!anyEmpty) return;
+        var divisions = window.divisions || (window.loadGlobalSettings && window.loadGlobalSettings()?.app1?.divisions) || {};
+        var rebuilt = (window.DivisionTimesSystem && window.DivisionTimesSystem.buildFromSkeleton(skeleton, divisions)) || {};
+        var filled = [];
+        Object.keys(rebuilt).forEach(function (d) {
+            var cur = dt[d];
+            if ((!cur || (Array.isArray(cur) && cur.length === 0)) && rebuilt[d] && rebuilt[d].length) {
+                dt[d] = rebuilt[d];
+                filled.push(d);
+            }
+        });
+        if (filled.length) console.log('[DivTimesIntegration] 🩹 Filled empty divisionTimes from skeleton (' + (reason || '') + ') for division(s): ' + filled.join(', '));
+    }
+    window.ensureDivisionTimesForSkeleton = ensureDivisionTimesForSkeleton;
+
     // =========================================================================
     // PATCH: SCHEDULER CORE - runSkeletonOptimizer
     // =========================================================================
@@ -399,6 +432,10 @@
                             log('Restored divisionTimes from localStorage (legacy path)');
                         }
                     }
+                    // ★ After restoring a (possibly partial/stale) divisionTimes from
+                    //   saved data, heal any division that has skeleton events but ended
+                    //   up with 0 slots — otherwise its whole schedule renders blank.
+                    try { ensureDivisionTimesForSkeleton('loadCurrentDailyData'); } catch (_eDT) {}
                 }
 
                 return result;
@@ -427,31 +464,9 @@
             window.updateTable = function(...args) {
                 // ★★★ AUTO MODE: Don't rebuild from skeleton — it destroys per-bunk geometry ★★★
                 var _isAutoMode = window._daBuilderMode === 'auto' || (window.getCampBuilderMode && window.getCampBuilderMode() === 'auto');
-                // Ensure divisionTimes is synced before rendering. Rebuild from the
-                // skeleton when divisionTimes is empty OR — the bug — when a division
-                // that HAS skeleton events is missing its slots. A reload can restore a
-                // PARTIAL divisionTimes (all division keys present, but some division
-                // has 0 slots), so the old "all keys empty" guard never fired and that
-                // whole division rendered blank even though scheduleAssignments held its
-                // activities (e.g. a 5-6pm Sports tile for division 7 with 0 slots).
                 if (!_isAutoMode && !window._divisionTimesLocked) {
-                    const dt = window.divisionTimes || {};
-                    let _needRebuild = Object.keys(dt).length === 0;
-                    const skeleton = getSkeletonFromAnySource();
-                    if (!_needRebuild && skeleton.length > 0) {
-                        const _divsWithEvents = new Set(skeleton.map(e => e && e.division).filter(Boolean));
-                        for (const d of _divsWithEvents) {
-                            const arr = dt[d];
-                            if (!arr || (Array.isArray(arr) && arr.length === 0)) { _needRebuild = true; break; }
-                        }
-                    }
-                    if (_needRebuild && skeleton.length > 0) {
-                        const divisions = window.divisions || window.loadGlobalSettings?.()?.app1?.divisions || {};
-                        const _rebuilt = window.DivisionTimesSystem?.buildFromSkeleton(skeleton, divisions);
-                        if (_rebuilt && Object.keys(_rebuilt).length > 0) window.divisionTimes = _rebuilt;
-                    }
+                    try { ensureDivisionTimesForSkeleton('updateTable'); } catch (_e) { log('DT ensure (updateTable) error: ' + (_e && _e.message)); }
                 }
-
                 return originalUpdateTable?.apply(this, args);
             };
 
