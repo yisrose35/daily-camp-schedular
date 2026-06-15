@@ -517,6 +517,10 @@
     function checkCrossDivisionTimeConflict(fieldName, blockDivName, startMin, endMin, excludeBunk) {
         if (startMin === undefined || endMin === undefined) return null;
         var fieldNorm = normName(fieldName);
+        // ★ Player-max co-occupancy gate — applies to every sharing type (runs before
+        //   the cross/same-division logic so an over-max share is rejected regardless).
+        var _pmShare = checkSharedPlayerMaxConflict(fieldNorm, startMin, endMin, excludeBunk);
+        if (_pmShare) return _pmShare;
         // Check the field itself
         var entries = _fieldTimeIndex.get(fieldNorm);
         // ★ cross_division ("Grade Pairs"): honor the manual builder like auto —
@@ -568,6 +572,36 @@
         var count = 0, upperBound = findFirstOverlapIndex(entries, startMin, endMin);
         for (var i = 0; i < upperBound; i++) { var e = entries[i]; if (e.divName !== divisionName) continue; if (e.bunk === excludeBunk) continue; if (e.endMin > startMin) count++; }
         return count;
+    }
+    // ★ Player-max co-occupancy gate. Field-sharing rules cap how many BUNKS share a
+    //   field (capacity); this caps the combined PLAYERS. When a bunk joins a field
+    //   where the same sport is already being played, the total campers across all
+    //   sharers must not blow past the sport's maxPlayers. A 20% grace mirrors the
+    //   scoring's hard cutoff (e.g. for Hockey max 24: 26 is fine, 30 is not). Only
+    //   fires when ≥1 OTHER bunk is already on the field — a lone bunk that is itself
+    //   over max is unavoidable (you can't split a bunk) and is never blocked here.
+    function checkSharedPlayerMaxConflict(fieldNorm, startMin, endMin, excludeBunk) {
+        if (_sportPlayerReqs.size === 0 || startMin === undefined || endMin === undefined) return null;
+        var entries = _fieldTimeIndex.get(fieldNorm);
+        if (!entries) return null;
+        var upper = findFirstOverlapIndex(entries, startMin, endMin);
+        var act = null, others = 0, count = 0;
+        for (var i = 0; i < upper; i++) {
+            var e = entries[i];
+            if (e.bunk === excludeBunk) continue;
+            if (e.endMin <= startMin) continue;
+            if (!e.activityName) continue;
+            if (act === null) act = e.activityName;
+            else if (e.activityName !== act) continue;
+            others += (_bunkSizeCache.get(e.bunk) || 0);
+            count++;
+        }
+        if (count === 0 || !act) return null;
+        var req = _sportPlayerReqs.get(act);
+        if (!req || !req.max || req.max <= 0) return null;
+        var combined = others + (_bunkSizeCache.get(excludeBunk) || 0);
+        if (combined > req.max * 1.2) return { conflictingDiv: '(player-max)', sport: act, combined: combined, max: req.max, ourTime: startMin + '-' + endMin };
+        return null;
     }
     function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
         if (!activityName || activityName === 'Free' || activityName === 'free') return null;
@@ -1191,11 +1225,16 @@
                 if (_pcMySize > 0) {
                     var _pcProjected = _pcMySize;
                     var _pcOtherCount = 0;
-                    var _pcActEntries = _fieldTimeIndex.get(actNorm) || [];
+                    // ★ Count co-occupants on THIS FIELD playing the SAME sport (the
+                    //   shared-game player total). _fieldTimeIndex is keyed by field, so
+                    //   the old get(actNorm) lookup returned nothing for sports — this
+                    //   penalty was silently dead. Use the candidate's field, same-sport.
+                    var _pcActEntries = _fieldTimeIndex.get(normName(fieldName)) || [];
                     for (var _pci = 0; _pci < _pcActEntries.length; _pci++) {
                         var _pcE = _pcActEntries[_pci];
                         if (_pcE.bunk === bunk) continue;
                         if (_pcE.endMin <= blockStart || _pcE.startMin >= blockEnd) continue;
+                        if (_pcE.activityName && _pcE.activityName !== actNorm) continue;
                         _pcProjected += (_bunkSizeCache.get(_pcE.bunk) || 0);
                         _pcOtherCount++;
                     }
