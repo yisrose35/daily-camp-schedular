@@ -2667,6 +2667,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const _req = _ovSportReq(activityName);
                 const _maxP = _req.maxPlayers || 0;
                 const _enforcePlayers = _mySize > 0 && _maxP > 0; // cap campers only when sizes + a max exist
+                const _hasMin = _mySize > 0 && (_req.minPlayers || 0) > 0; // only consolidate toward an actual min
 
                 if (fieldsForSport.length > 0) {
                     // Field has open SHARING capacity (bunk count) and isn't locked.
@@ -2694,7 +2695,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     fieldsForSport.forEach((cf, idx) => {
                         if (!_capRoom(cf)) return;
                         const room = _maxRoom(cf);
-                        const score = (_access(cf) ? 1000 : 0) + (room ? 400 : 0) + (room && _occupied(cf) ? 200 : 0) - idx * 0.01;
+                        const score = (_access(cf) ? 1000 : 0) + (room ? 400 : 0) + (room && _hasMin && _occupied(cf) ? 200 : 0) - idx * 0.01;
                         if (score > bestScore) { bestScore = score; picked = cf; }
                     });
                     if (picked) fieldName = picked;
@@ -4253,6 +4254,15 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const ds = _dt76[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
                 return null;
             };
+            // Resolve a slot's tile event label (per-bunk grid first, then division grid)
+            // so this sport-only pass can leave Special-only slots untouched.
+            const _slotEvent76 = (bunk, grade, idx, e) => {
+                const pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                    || (_dt76[grade] && _dt76[grade]._perBunkSlots && _dt76[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].event != null) return pbs[idx].event;
+                const ds = _dt76[grade]; if (ds && ds[idx] && ds[idx].event != null) return ds[idx].event;
+                return (e && e.event) || '';
+            };
             const _skip76 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
             const _specialRooms76 = {};
             ((_gs76.app1 && _gs76.app1.specialActivities) || []).forEach(s => { if (s && s.location) _specialRooms76[String(s.location).toLowerCase().trim()] = 1; });
@@ -4318,6 +4328,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     const a = String((e._activity || e.field || e.sport || '')).toLowerCase().trim();
                     // Free detected by ACTIVITY, regardless of _fixed/_pinned/_bunkOverride flags.
                     if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
+                    // ★ A Special-only tile must never be sport-filled — leave it Free
+                    //   (STEP 7.5 already offered it specials).
+                    if (slotKindOf(_slotEvent76(b, g, idx, e)) === 'special') return;
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
