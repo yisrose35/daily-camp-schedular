@@ -576,8 +576,9 @@
     // ★ Player-max co-occupancy gate. Field-sharing rules cap how many BUNKS share a
     //   field (capacity); this caps the combined PLAYERS. When a bunk joins a field
     //   where the same sport is already being played, the total campers across all
-    //   sharers must not blow past the sport's maxPlayers. A 20% grace mirrors the
-    //   scoring's hard cutoff (e.g. for Hockey max 24: 26 is fine, 30 is not). Only
+    //   sharers must not blow past the sport's maxPlayers. Grace is absolute (max+2):
+    //   max is the target, max+1 is a small grace, max+2 is the desperate ceiling,
+    //   max+3+ is blocked — e.g. Football max 24 allows up to 26 but blocks 28. Only
     //   fires when ≥1 OTHER bunk is already on the field — a lone bunk that is itself
     //   over max is unavoidable (you can't split a bunk) and is never blocked here.
     function checkSharedPlayerMaxConflict(fieldNorm, startMin, endMin, excludeBunk) {
@@ -600,7 +601,7 @@
         var req = _sportPlayerReqs.get(act);
         if (!req || !req.max || req.max <= 0) return null;
         var combined = others + (_bunkSizeCache.get(excludeBunk) || 0);
-        if (combined > req.max * 1.2) return { conflictingDiv: '(player-max)', sport: act, combined: combined, max: req.max, ourTime: startMin + '-' + endMin };
+        if (combined > req.max + 2) return { conflictingDiv: '(player-max)', sport: act, combined: combined, max: req.max, ourTime: startMin + '-' + endMin };
         return null;
     }
     function checkSameFieldActivityMismatch(fieldName, startMin, endMin, activityName, excludeBunk) {
@@ -1239,10 +1240,22 @@
                         _pcOtherCount++;
                     }
                     if (_pcReq.max > 0 && _pcProjected > _pcReq.max) {
-                        var _pcOverPct = (_pcProjected - _pcReq.max) / _pcReq.max;
-                        if (_pcOverPct > 0.2) return 999999;
-                        else if (_pcOverPct > 0.05) penalty += 20000 + Math.round(_pcOverPct * 50000);
-                        else penalty += 8000;
+                        // ★ Absolute grace, not a %: max is the target, max+1 a small
+                        //   grace, max+2 only-when-desperate, max+3+ infeasible. (e.g.
+                        //   Football max 24: 25 ok, 26 desperate, 28 blocked.)
+                        var _pcOver = _pcProjected - _pcReq.max;
+                        if (_pcOtherCount > 0) {
+                            // Avoidable over-max via SHARING — discourage hard; >max+2 is
+                            // infeasible, mirroring the checkSharedPlayerMaxConflict gate.
+                            if (_pcOver > 2) return 999999;
+                            else if (_pcOver === 2) penalty += 30000;
+                            else penalty += 12000;
+                        } else {
+                            // A lone bunk that is itself over max — unavoidable (can't
+                            // split a bunk), so only a soft nudge toward an uncapped /
+                            // higher-max activity; never infeasible.
+                            penalty += 6000;
+                        }
                     } else if (_pcReq.min > 0 && _pcProjected < _pcReq.min) {
                         var _pcUnderPct = (_pcReq.min - _pcProjected) / _pcReq.min;
                         if (_pcUnderPct > 0.35) return 999999;
