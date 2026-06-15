@@ -1054,6 +1054,16 @@
                     return result;
                 }
 
+                // ★ The empty-save guard intentionally rejected a wipe-shaped payload
+                //   (e.g. a resource-override sync firing on tab-focus before the
+                //   schedule re-bundles). It returns success:true with target
+                //   'wipe-blocked-*' and is NOT a failure — don't log an error, don't
+                //   retry (a retry just re-blocks → console spam), don't toast.
+                if (result?.target && String(result.target).indexOf('wipe-blocked') === 0) {
+                    log('[VERIFIED SAVE] Skipped wipe-shaped payload (empty-save guard):', result.target);
+                    return result;
+                }
+
                 // 'cloud-unverified' = upsert succeeded but the post-save
                 // SELECT didn't see the row yet (Supabase replication
                 // delay). The data IS in the cloud — retrying would just

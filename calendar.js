@@ -282,9 +282,27 @@ all[date].updated_at = new Date().toISOString();
             window.currentDailyData = all[date];
             // 🟢 UNIFIED SAVING: Delegate to Bridge (Same way as Divisions)
             // 'daily_schedules' is the special key the bridge uses to bundle/unbundle this data
+            // ★ Only push the bundle when this date has a MATERIALIZED schedule (≥1 real
+            //   activity). An empty/preview payload — e.g. a resource-override sync firing
+            //   on tab-focus before the schedule re-bundles (loadCurrentOverrides), or a
+            //   future-date note — is rejected by the empty-save guard (all-empty-preview),
+            //   which spammed the console and triggered verified-save retries. Per-date
+            //   resource overrides still persist via the app1 mirror below; clearing a real
+            //   day goes through delete, not an empty save — so skipping here loses nothing.
+            var _saReal = false, _saScan = all[date] && all[date].scheduleAssignments;
+            if (_saScan && typeof _saScan === 'object') {
+                for (var _bk in _saScan) {
+                    var _sl = _saScan[_bk];
+                    if (_sl && typeof _sl === 'object') { for (var _sk in _sl) { if (_sl[_sk]) { _saReal = true; break; } } }
+                    else if (_sl) { _saReal = true; }
+                    if (_saReal) break;
+                }
+            }
             if (typeof window.saveGlobalSettings === 'function') {
-                console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
-                window.saveGlobalSettings('daily_schedules', all);
+                if (_saReal) {
+                    console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
+                    window.saveGlobalSettings('daily_schedules', all);
+                }
             } else {
                 // Fallback if bridge is missing
                 console.warn("⚠️ Bridge not found, falling back to local save");
