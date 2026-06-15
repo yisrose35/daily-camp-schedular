@@ -4149,6 +4149,38 @@ let tmpl = assignments[today] || assignments['Default'];
  console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
 }
 
+// ★ Bound the per-date app1 maps so they can't grow without limit. These maps
+//   (dailySkeletons / dailyAutoLayers / dailyResourcesByDate / dailyColumnOrders
+//   + their Ts twins) had NO cap, so every date ever touched piled up here — and
+//   because app1 is cloud-synced AND rides along in every config save, that bloat
+//   exhausted the ~5 MB localStorage quota (which then silently dropped OTHER
+//   saves, e.g. the league history cloud write → "counter resets next day").
+//   Keep a generous window around today: ~3 months back (older generated schedules
+//   still live authoritatively in daily_schedules) and ~18 months forward (covers
+//   pre-camp / next-season setup) — and NEVER prune the date currently being saved.
+function _pruneOldDailyDateMaps(app1, keepKey) {
+  try {
+    if (!app1 || typeof app1 !== 'object') return;
+    var KEEP_PAST_DAYS = 90, KEEP_FUTURE_DAYS = 540;
+    var now = new Date();
+    var lo = new Date(now.getTime() - KEEP_PAST_DAYS * 86400000).toISOString().slice(0, 10);
+    var hi = new Date(now.getTime() + KEEP_FUTURE_DAYS * 86400000).toISOString().slice(0, 10);
+    var DATE = /^\d{4}-\d{2}-\d{2}$/;
+    var maps = ['dailySkeletons', 'dailySkeletonsTs', 'dailyAutoLayers', 'dailyAutoLayersTs',
+                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate'];
+    var pruned = 0;
+    maps.forEach(function (m) {
+      var map = app1[m];
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+      Object.keys(map).forEach(function (k) {
+        if (k === keepKey) return;                 // never drop the date being saved
+        if (DATE.test(k) && (k < lo || k > hi)) { delete map[k]; pruned++; }
+      });
+    });
+    if (pruned > 0) console.log('[DailyAdj] 🧹 Pruned ' + pruned + ' stale per-date app1 entr(ies) (kept ' + lo + '..' + hi + ')');
+  } catch (e) { console.warn('[DailyAdj] daily-map prune skipped:', e); }
+}
+
 function saveDAAutoLayers() {
   if (!window.AccessControl?.canEdit?.()) {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
@@ -4167,6 +4199,7 @@ function saveDAAutoLayers() {
     if (!masterSettings.app1.dailyAutoLayersTs) masterSettings.app1.dailyAutoLayersTs = {};
     masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
     masterSettings.app1.dailyAutoLayersTs[dateKey] = _savedAtTs;   // ★ #10
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     window.saveGlobalSettings?.('app1', masterSettings.app1);
     window.forceSyncToCloud?.();
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
@@ -4308,6 +4341,7 @@ function saveDailySkeleton() {
     masterSettings.app1.dailySkeletonsTs[dateKey] = _skelTs;   // ★ #10 (manual twin)
     if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
     masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }
