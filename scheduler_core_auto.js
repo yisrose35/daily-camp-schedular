@@ -1416,9 +1416,21 @@
             return _synthCustomRotEvents.length ? _base.concat(_synthCustomRotEvents) : _base;
         };
 
+        // ★ Consumer layer types are FILL TARGETS — the solver chooses the activity
+        //   (see the 'consumer' classifier ~L2524). A consumer layer carries no
+        //   concrete activity (its event/name is blank or just the type word), so it
+        //   must never be force-pinned into a wall: pinning materializes a literal
+        //   "sport"/"slot" block (eventName falls back to layer.type at ~L3277) that
+        //   Phase B never fills, so the bunk just shows the word "sport".
+        const _CONSUMER_LAYER_TYPES = new Set(['sport', 'sports', 'slot']);
+
         const classified = layers.map(layer => {
             const ratio = computeRatio(layer);
             const lt = (layer.type || '').toLowerCase();
+            // A consumer slot with no concrete activity name is unfilled — eventName
+            //   would fall back to the type word, so it can't be a meaningful wall.
+            const _evName = String(layer.event || layer.name || '').toLowerCase().trim();
+            const _isUnfilledConsumer = _CONSUMER_LAYER_TYPES.has(lt) && (!_evName || _evName === lt);
             let classification;
             // ★ fullGrade swim/lunch/snacks → always pinned so Phase 0 places them
             //   grade-wide at the same time for every bunk (like a league).
@@ -1435,7 +1447,11 @@
                 //   path where later fill/recapture passes would scatter it.
                 classification = 'pinned';
             } else if (ratio >= 1) {
-                classification = 'pinned';
+                // An unfilled consumer slot stays a fill target (windowed) even when it
+                //   exactly fills its window — pinning it would create a dead "sport"
+                //   wall the solver never resolves. Concrete pinned activities (a real
+                //   sport name set on the layer) still pin as before.
+                classification = _isUnfilledConsumer ? 'windowed' : 'pinned';
             } else if (ratio >= 0.10) {
                 classification = 'windowed';
             } else {
