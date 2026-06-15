@@ -344,4 +344,92 @@
     window.addEventListener('campistry-override-access-warnings', onOverrideAccess);
     document.addEventListener('campistry-override-access-warnings', onOverrideAccess);
     window.__showOverrideAccessWarning = function () { renderOA(); };
+
+    // ---------------------------------------------------------------------
+    // ★ OVERRIDE PLAYER MIN/MAX WARNING  (rose — warn-but-allow)
+    // ---------------------------------------------------------------------
+    // The override placer groups same-sport bunks toward minPlayers and caps
+    // campers at maxPlayers, but the user's explicit picks can still leave a
+    // sport under min (nothing to combine with) or over max (all fields full).
+    // Surfaced here — dismissable, never silent, never blocking. Anchored
+    // bottom-RIGHT so it never overlaps the access (top-right) or Free (center)
+    // panels. Dispatched by scheduler_core_main.js after the bunk-override step.
+    // =====================================================================
+    var OP_WRAP_ID = 'campistry-override-player-warn';
+    var OP_STYLE_ID = 'campistry-override-player-warn-style';
+    var _op = [];
+    var _opOpen = true;
+
+    function injectOPStyle() {
+        if (document.getElementById(OP_STYLE_ID)) return;
+        var css = '' +
+        '#' + OP_WRAP_ID + '{position:fixed;bottom:12px;right:12px;z-index:99999;' +
+            'font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;width:440px;max-width:92vw;}' +
+        '#' + OP_WRAP_ID + ' *{box-sizing:border-box;}' +
+        '#' + OP_WRAP_ID + ' .op-panel{background:#fff;border:2px solid #e11d48;border-radius:12px;' +
+            'box-shadow:0 12px 34px rgba(225,29,72,.24);overflow:hidden;}' +
+        '#' + OP_WRAP_ID + ' .op-head{display:flex;align-items:center;gap:8px;padding:10px 12px;' +
+            'background:#ffe4e6;border-bottom:1px solid #fecdd3;color:#9f1239;cursor:pointer;}' +
+        '#' + OP_WRAP_ID + ' .op-head .op-title{font-size:13px;font-weight:800;flex:1;}' +
+        '#' + OP_WRAP_ID + ' .op-head button{border:none;background:transparent;cursor:pointer;' +
+            'color:#9f1239;font-size:18px;line-height:1;padding:0 6px;border-radius:6px;}' +
+        '#' + OP_WRAP_ID + ' .op-head button:hover{background:#fecdd3;}' +
+        '#' + OP_WRAP_ID + ' .op-body{max-height:280px;overflow:auto;padding:6px 0;}' +
+        '#' + OP_WRAP_ID + ' .op-row{padding:6px 12px;border-bottom:1px solid #f3f4f6;font-size:12.5px;color:#374151;}' +
+        '#' + OP_WRAP_ID + ' .op-row:last-child{border-bottom:none;}' +
+        '#' + OP_WRAP_ID + ' .op-where{font-weight:700;color:#111827;}' +
+        '#' + OP_WRAP_ID + ' .op-why{color:#6b7280;font-size:11.5px;margin-top:1px;}' +
+        '#' + OP_WRAP_ID + ' .op-foot{padding:7px 12px;background:#fff1f2;border-top:1px solid #fecdd3;' +
+            'font-size:11px;color:#9f1239;}';
+        var st = document.createElement('style');
+        st.id = OP_STYLE_ID;
+        st.textContent = css;
+        (document.head || document.documentElement).appendChild(st);
+    }
+
+    function renderOP() {
+        var wrap = document.getElementById(OP_WRAP_ID);
+        if (!_op.length) { if (wrap && wrap.parentNode) wrap.parentNode.removeChild(wrap); return; }
+        if (!document.body) { document.addEventListener('DOMContentLoaded', renderOP, { once: true }); return; }
+        injectOPStyle();
+        if (!wrap) { wrap = document.createElement('div'); wrap.id = OP_WRAP_ID; document.body.appendChild(wrap); }
+        var n = _op.length;
+        var title = n + ' override sport' + (n === 1 ? '' : 's') + ' outside player min/max';
+        var head =
+            '<div class="op-head" title="' + (_opOpen ? 'Collapse' : 'Expand') + '">' +
+                '<span>⚠️</span><span class="op-title">' + esc(title) + '</span>' +
+                '<button class="op-min">' + (_opOpen ? '–' : '+') + '</button>' +
+                '<button class="op-close" title="Dismiss">×</button>' +
+            '</div>';
+        var bodyHtml = '';
+        if (_opOpen) {
+            var rows = '';
+            _op.forEach(function (w) {
+                var bunks = Array.isArray(w.bunks) ? w.bunks.join(', ') : '';
+                var where = (w.sport || '?') + '  ·  ' + (w.field || '?') + (bunks ? '  ·  ' + bunks : '');
+                var why = (w.kind === 'max')
+                    ? ('Has ' + (w.campers != null ? w.campers : '?') + ' players — over the max of ' + (w.max || '?') + ' (placed anyway).')
+                    : ('Has ' + (w.campers != null ? w.campers : '?') + ' players — needs at least ' + (w.min || '?') + ' (placed anyway).');
+                rows += '<div class="op-row"><div class="op-where">' + esc(where) + '</div>' +
+                        '<div class="op-why">' + esc(why) + '</div></div>';
+            });
+            bodyHtml = '<div class="op-body">' + rows + '</div>' +
+                '<div class="op-foot">Overrides win by design. To clear: add/remove bunks for that sport, or adjust the sport’s min/max players in Rules.</div>';
+        }
+        wrap.innerHTML = '<div class="op-panel">' + head + bodyHtml + '</div>';
+        wrap.querySelector('.op-min').addEventListener('click', function (ev) { ev.stopPropagation(); _opOpen = !_opOpen; renderOP(); });
+        wrap.querySelector('.op-close').addEventListener('click', function (ev) { ev.stopPropagation(); _op = []; renderOP(); });
+        wrap.querySelector('.op-head').addEventListener('click', function () { _opOpen = !_opOpen; renderOP(); });
+    }
+
+    function onOverridePlayer(e) {
+        var d = (e && e.detail) || {};
+        _op = Array.isArray(d.items) ? d.items.slice() : [];
+        _opOpen = true;   // always surface expanded — never silent
+        renderOP();
+    }
+
+    window.addEventListener('campistry-override-player-warnings', onOverridePlayer);
+    document.addEventListener('campistry-override-player-warnings', onOverridePlayer);
+    window.__showOverridePlayerWarning = function () { renderOP(); };
 })();

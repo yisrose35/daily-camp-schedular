@@ -316,6 +316,20 @@
         return keys.some(k => s.includes(k)) ? "General Activity Slot" : null;
     }
 
+    // The skeleton tile palette has three fillable kinds: a "Sports" tile
+    // (event "Sports Slot") may ONLY hold a sport, a "Special Activity" tile may
+    // ONLY hold a special, and a flexible "Activity" tile ("General Activity
+    // Slot") may hold either. Derive that kind from the raw event label here —
+    // BEFORE normalizeGA() collapses "Special Activity" into "General Activity
+    // Slot" (it matches the 'activity' substring) and erases the restriction.
+    // The solver reads _slotKind to keep the pools separate. 'any' = flexible.
+    function slotKindOf(eventName) {
+        const s = String(eventName || '').toLowerCase().trim();
+        if (s === 'sports slot' || s === 'sport slot') return 'sport';
+        if (s === 'special activity') return 'special';
+        return 'any';
+    }
+
     function normalizeLeague(name) {
         if (!name) return null;
         const s = name.toLowerCase().replace(/\s+/g, '');
@@ -2546,6 +2560,18 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             return best;
         };
 
+        // ★ Sport PLAYER min/max for bunk overrides — mirror the solver's rule so an
+        //   override never overfills a court past maxPlayers or scatters a sport below
+        //   minPlayers. INERT unless bunk sizes (camper counts) AND sport min/max are
+        //   configured — exactly like the Total Solver's own `projectedPlayers > 0` guard.
+        const _ovBunkMeta = window.getBunkMetaData?.() || window.bunkMetaData || {};
+        const _ovBunkSize = (b) => (_ovBunkMeta[b]?.size || _ovBunkMeta[String(b)]?.size || 0);
+        const _ovSportReq = (sp) => (window.SchedulerCoreUtils?.getSportPlayerRequirements?.(sp)) || { minPlayers: null, maxPlayers: null };
+        const _ovFieldCampers = {};    // `${slot}|${field}` → campers placed by override sports
+        const _ovSportPlacements = []; // {bunk, sport, field, slots, size, divName} for the post-gen min/max scan
+        const _ovCampersOn = (field, slots) => { let c = 0; slots.forEach(s => { const v = _ovFieldCampers[s + '|' + field] || 0; if (v > c) c = v; }); return c; };
+        const _ovAddCampers = (field, slots, n) => { if (!(n > 0)) return; slots.forEach(s => { const k = s + '|' + field; _ovFieldCampers[k] = (_ovFieldCampers[k] || 0) + n; }); };
+
         bunkOverrides.forEach(override => {
             let activityName = override.activity;
             let overrideType = override.type;
@@ -2637,10 +2663,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const fieldsBySportData = fieldsBySport || {};
 
                 const fieldsForSport = fieldsBySportData[activityName] || [];
+                const _mySize = _ovBunkSize(bunk);
+                const _req = _ovSportReq(activityName);
+                const _maxP = _req.maxPlayers || 0;
+                const _enforcePlayers = _mySize > 0 && _maxP > 0; // cap campers only when sizes + a max exist
 
                 if (fieldsForSport.length > 0) {
-                    // A candidate field is usable if it's unlocked and has open capacity.
-                    const _sportFieldUsable = (cf) => {
+                    // Field has open SHARING capacity (bunk count) and isn't locked.
+                    const _capRoom = (cf) => {
                         if (window.GlobalFieldLocks?.isFieldLocked(cf, slots, divName)) return false;
                         const maxCapacity = getFieldCapacityLocal(cf, activityProperties);
                         for (const slotIdx of slots) {
@@ -2649,19 +2679,24 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         }
                         return true;
                     };
-                    // ★ Prefer a field the bunk's division can ACCESS. Only fall back
-                    //   to an access-restricted field (warn-but-allow) when no
-                    //   accessible field is free — so an override never lands on a
-                    //   restricted court while an open, allowed one sits unused.
-                    let picked = null;
-                    for (const cf of fieldsForSport) {
-                        if (_sportFieldUsable(cf) && !_fieldAccessViolates(cf, divName, bunk)) { picked = cf; break; }
-                    }
-                    if (!picked) {
-                        for (const cf of fieldsForSport) {
-                            if (_sportFieldUsable(cf)) { picked = cf; break; }
-                        }
-                    }
+                    // Adding this bunk keeps the field at/under the sport's maxPlayers.
+                    const _maxRoom = (cf) => !_enforcePlayers || (_ovCampersOn(cf, slots) + _mySize) <= _maxP;
+                    // Field already hosts this sport → group toward minPlayers before opening a new one.
+                    const _occupied = (cf) => _ovCampersOn(cf, slots) > 0;
+                    const _access = (cf) => !_fieldAccessViolates(cf, divName, bunk);
+                    // Score field-capacity-eligible fields:
+                    //   accessible (+1000) > stays under max (+400) > groups for min (+200) > field order.
+                    //   ⇒ packs same-sport override bunks onto an accessible field that still has
+                    //     player room (toward min), and only opens a new / access-restricted /
+                    //     over-max field when nothing better is free. (maxPlayers is a hard cap so
+                    //     long as ANY field has player room; the post-scan warns if truly unavoidable.)
+                    let picked = null, bestScore = -Infinity;
+                    fieldsForSport.forEach((cf, idx) => {
+                        if (!_capRoom(cf)) return;
+                        const room = _maxRoom(cf);
+                        const score = (_access(cf) ? 1000 : 0) + (room ? 400 : 0) + (room && _occupied(cf) ? 200 : 0) - idx * 0.01;
+                        if (score > bestScore) { bestScore = score; picked = cf; }
+                    });
                     if (picked) fieldName = picked;
                 }
 
@@ -2674,6 +2709,9 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     _activity: activityName,
                     _bunkOverride: true
                 }, fieldUsageBySlot, yesterdayHistory, false, activityProperties);
+                // Track campers on the chosen field + record for the post-gen min/max scan.
+                _ovAddCampers(fieldName, slots, _mySize);
+                _ovSportPlacements.push({ bunk, sport: activityName, field: fieldName, slots: slots.slice(), size: _mySize, divName });
                 console.log(`   → Sport ${activityName} assigned to ${bunk} on field ${fieldName}`);
 
             } else if (overrideType === 'field') {
@@ -2814,6 +2852,42 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             window.dispatchEvent(new CustomEvent('campistry-override-access-warnings', { detail: { count: _oaWarn.length, items: _oaWarn } }));
             if (_oaWarn.length) console.warn('[BunkOverride] ⚠️ ' + _oaWarn.length + ' override(s) placed on access-restricted field(s) — ALLOWED (warn-but-allow). See heads-up panel.');
         } catch (_eOA) { console.warn('[BunkOverride] access-warning scan error: ' + (_eOA && _eOA.message)); }
+
+        // =========================================================================
+        // ★ Sport player min/max heads-up (warn-but-allow). The field picker above
+        //   groups override bunks toward minPlayers and caps campers at maxPlayers —
+        //   but the user's explicit picks can still leave a sport under min (nothing
+        //   left to combine with) or, in the rare all-fields-full case, over max.
+        //   Surface those (never silent, never block), mirroring the access heads-up.
+        //   Empty payload clears stale warnings every gen. Inert without bunk sizes.
+        // =========================================================================
+        try {
+            const _pwGroups = {}; // `${field}|${slot}|${sport}` → tally
+            _ovSportPlacements.forEach(p => {
+                if (!(p.size > 0)) return; // player rules inert without bunk sizes
+                const req = _ovSportReq(p.sport);
+                if (!req.minPlayers && !req.maxPlayers) return;
+                p.slots.forEach(s => {
+                    const k = p.field + '|' + s + '|' + p.sport;
+                    const g = (_pwGroups[k] = _pwGroups[k] || { field: p.field, sport: p.sport, min: req.minPlayers || 0, max: req.maxPlayers || 0, campers: 0, bunks: new Set() });
+                    g.campers += p.size;
+                    g.bunks.add(p.bunk);
+                });
+            });
+            const _pwSeen = {}, _pw = [];
+            Object.keys(_pwGroups).forEach(k => {
+                const g = _pwGroups[k];
+                const under = g.min && g.campers < g.min;
+                const over = g.max && g.campers > g.max;
+                if (!under && !over) return;
+                const fk = g.field + '|' + g.sport + '|' + (under ? 'min' : 'max'); // collapse multi-slot → one row
+                if (_pwSeen[fk]) return; _pwSeen[fk] = 1;
+                _pw.push({ field: g.field, sport: g.sport, campers: g.campers, min: g.min, max: g.max, kind: under ? 'min' : 'max', bunks: Array.from(g.bunks) });
+            });
+            window._overridePlayerWarnings = _pw;
+            window.dispatchEvent(new CustomEvent('campistry-override-player-warnings', { detail: { count: _pw.length, items: _pw } }));
+            if (_pw.length) console.warn('[BunkOverride] ⚠️ ' + _pw.length + ' override sport(s) outside player min/max — placed anyway (warn-but-allow).');
+        } catch (_ePW) { console.warn('[BunkOverride] player-warning scan error: ' + (_ePW && _ePW.message)); }
 
         // =========================================================================
         // STEP 2.4: Daily Trips (off-campus) — honor campDailyTrips like AUTO does
@@ -3374,6 +3448,11 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             // General activity slot or other schedulable block
             if (normalizedGA || item.type === 'slot' || GENERATOR_TYPES.includes(item.type)) {
+                // ★ Capture the tile's category from the RAW event label (sport-only /
+                //   special-only / flexible) before normalizedGA flattens it — the
+                //   solver uses this to keep specials out of Sports tiles and sports
+                //   out of Special tiles.
+                const _slotKind = slotKindOf(eventName);
                 bunkList.forEach(bunk => {
                     const existing = window.scheduleAssignments[bunk]?.[slots[0]];
                     if (existing && existing._bunkOverride) return;
@@ -3382,6 +3461,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                         divName,
                         bunk,
                         event: normalizedGA || eventName,
+                        _slotKind,
                         type: 'slot',
                         startTime: sMin,
                         endTime: eMin,
