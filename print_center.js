@@ -287,6 +287,7 @@ var _liveWindow = null;
 var _livePageIndex = 0;
 var _numLivePages = 1;
 var _livePageTimer = null;
+var _livePrevPageCount = -1; // page count when the rotation timer was last (re)started
 var _liveRenderSig = ''; // signature of the last live render — skip rebuilds when nothing visible changed
 var _LIVE_PAGE_MS = 20000; // ms between page rotations
 var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60
@@ -1177,7 +1178,7 @@ function getStyles() {
     '.pc3-grid-area{flex:1;overflow:auto;background:#f5f5f4;padding:14px 14px 70px;min-height:0;position:relative;background-image:radial-gradient(rgba(168,162,158,.18) 1px, transparent 1px);background-size:18px 18px;background-position:0 0;}' +
     '.pc3-grid-area.live-bg{background:#111827;padding:0;background-image:none;}' +
     /* Paper-like sheet card — fills available width, no artificial cap */
-    '.pc3-sheet{background:#fff;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04),0 6px 18px -6px rgba(15,23,42,.08),0 0 0 1px rgba(15,23,42,.04);margin:0 0 14px;overflow:hidden;position:relative;width:100%;}' +
+    '.pc3-sheet{background:#fff;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 10px 30px -12px rgba(15,23,42,.13),0 0 0 1px rgba(15,23,42,.04);margin:0 0 18px;overflow:hidden;position:relative;width:100%;}' +
     /* Sticky sheet header at the top of each card */
     '.pc3-sheet-head{position:sticky;top:0;z-index:4;background:rgba(255,255,255,.94);backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
     /* Floating zoom dock */
@@ -1227,45 +1228,46 @@ function getStyles() {
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Sheet Header ── */
-    '.pc3-sheet-head{padding:8px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid #e7e5e4;}' +
-    '.pc3-sheet-title{font-size:14px;font-weight:700;color:#1c1917;letter-spacing:-.005em;}' +
-    '.pc3-sheet-subtitle{font-size:11px;color:#78716c;font-weight:500;}' +
-    '.pc3-sheet-badge{font-size:10px;font-weight:600;padding:3px 9px;border-radius:99px;background:#ecfeff;color:#147D91;text-transform:uppercase;letter-spacing:.4px;}' +
+    '.pc3-sheet-head{padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #eceae7;}' +
+    '.pc3-sheet-title{font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:700;color:#1c1917;letter-spacing:-.01em;}' +
+    '.pc3-sheet-subtitle{font-size:12px;color:#8a8378;font-weight:500;}' +
+    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;background:#e6f6f9;color:#0f6678;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
 
     /* ── League Matchups ── */
     '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:rgba(30,64,175,.06);border:1px solid rgba(30,64,175,.1);border-radius:3px;font-size:10px;white-space:nowrap;}' +
 
     /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
-    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;}' +
-    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;padding:14px 28px;background:#060a16;border-bottom:2px solid #1e293b;flex-shrink:0;}' +
-    '.pc3-live-title{font-size:30px;font-weight:800;color:#ffffff;letter-spacing:.3px;}' +
-    '.pc3-live-clock{font-size:42px;font-weight:400;color:#fbbf24;font-variant-numeric:tabular-nums;}' +
-    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.25);border-radius:8px;background:rgba(255,255,255,.12);color:#fff;font-size:14px;cursor:pointer;}' +
-    '.pc3-live-close:hover{background:rgba(255,255,255,.22);}' +
+    '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
+    '.pc3-live-header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:14px 30px;background:#060a16;border-bottom:1px solid #1e293b;flex-shrink:0;}' +
+    '.pc3-live-headleft{display:flex;align-items:baseline;gap:14px;min-width:0;}' +
+    '.pc3-live-title{font-family:"Fraunces",Georgia,serif;font-size:30px;font-weight:700;color:#ffffff;letter-spacing:.2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-live-date{font-size:16px;font-weight:600;color:#fcd34d;white-space:nowrap;}' +
+    '.pc3-live-headright{display:flex;align-items:center;gap:18px;flex-shrink:0;}' +
+    '.pc3-live-clock{font-size:34px;font-weight:300;color:#e2e8f0;font-variant-numeric:tabular-nums;letter-spacing:.5px;}' +
+    '.pc3-live-close{padding:8px 16px;border:1px solid rgba(255,255,255,.22);border-radius:9px;background:rgba(255,255,255,.10);color:#fff;font-size:13px;font-weight:600;cursor:pointer;}' +
+    '.pc3-live-close:hover{background:rgba(255,255,255,.2);}' +
+    '.pc3-live-loading{color:#94a3b8;padding:70px;text-align:center;font-size:22px;font-weight:600;}' +
     '.pc3-live-body{flex:1;overflow:hidden;position:relative;}' +
     '.pc3-live-page{position:absolute;inset:0;overflow:hidden;}' +
-    '.pc3-live-page-inner{padding:16px 24px;}' +
+    '.pc3-live-page-inner{padding:18px 28px;}' +
     '.pc3-live-nav-btn{background:none;border:none;color:rgba(255,255,255,.6);font-size:26px;cursor:pointer;line-height:1;padding:0 4px;transition:color .15s;}' +
     '.pc3-live-nav-btn:hover{color:#fbbf24;}' +
+    '.pc3-live-section{margin-bottom:22px;}' +
+    '.pc3-live-divhead{display:flex;align-items:baseline;gap:12px;margin-bottom:10px;padding-left:2px;}' +
+    '.pc3-live-divname{font-family:"Fraunces",Georgia,serif;font-size:24px;font-weight:700;color:#fbbf24;letter-spacing:.2px;}' +
+    '.pc3-live-divrange{font-size:14px;font-weight:600;color:#8aa0bd;font-variant-numeric:tabular-nums;}' +
     '.pc3-live-tbl{border-collapse:collapse;width:100%;table-layout:fixed;}' +
     '.pc3-live-tbl th,.pc3-live-tbl td{border:1px solid #2b3a55;padding:10px 12px;text-align:center;white-space:normal;word-break:break-word;font-size:16px;}' +
-    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;position:sticky;top:0;z-index:2;}' +
-    /* First column (Bunk / Time label) — fixed width + clip so a long name can NEVER bleed into the schedule cells */
-    '.pc3-live-tbl th.corner{z-index:3;left:0;top:0;width:155px;min-width:155px;max-width:155px;}' +
-    '.pc3-live-tbl th.row-head{position:sticky;left:0;z-index:2;background:#16233e;color:#fcd34d;font-weight:800;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;}' +
+    '.pc3-live-tbl th{background:#16233e;color:#f8fafc;font-weight:700;}' +
+    '.pc3-live-tbl th.corner{width:155px;min-width:155px;max-width:155px;}' +
+    '.pc3-live-tbl th.row-head{color:#fcd34d;font-weight:800;text-align:left;width:155px;min-width:155px;max-width:155px;white-space:normal;word-break:break-word;overflow:hidden;background:#16233e;}' +
     '.pc3-live-tbl td{color:#f1f5f9;background:#1c2a46;font-weight:600;}' +
     '.pc3-live-tbl tr:nth-child(even) td{background:#16223a;}' +
     '.pc3-live-tbl .cell-free{color:#7c8aa3 !important;font-style:italic;background:#111c30 !important;font-weight:500;}' +
-    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee;color:#ffffff !important;font-weight:800 !important;}' +
-    '.pc3-live-tbl .cell-past{opacity:.4;}' +
+    '.pc3-live-tbl .cell-current{background:#0e7490 !important;box-shadow:inset 0 0 0 3px #22d3ee,0 0 18px rgba(34,211,238,.35);color:#ffffff !important;font-weight:800 !important;}' +
+    '.pc3-live-tbl .cell-past{opacity:.42;}' +
     '.pc3-live-tbl .cell-pinned{background:#3a2206 !important;color:#fcd34d !important;font-weight:700;}' +
     '.pc3-live-tbl .cell-league{background:#262150 !important;color:#c4b5fd !important;font-weight:700;}' +
-    '.pc3-live-cursor-v{position:absolute;top:0;bottom:0;width:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:left .8s linear;}' +
-    '.pc3-live-cursor-h{position:absolute;left:0;right:0;height:3px;background:#fbbf24;z-index:50;pointer-events:none;box-shadow:0 0 14px rgba(251,191,36,.7);transition:top .8s linear;}' +
-    '.pc3-live-now-tag{position:absolute;background:#fbbf24;color:#111;font-size:12px;font-weight:800;padding:3px 8px;border-radius:4px;font-variant-numeric:tabular-nums;z-index:51;pointer-events:none;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.4);}' +
-    '.pc3-live-now-tag.tag-v{top:-2px;transform:translateX(-50%);}' +
-    '.pc3-live-now-tag.tag-h{left:8px;transform:translateY(-50%);}' +
-    '.pc3-live-section{position:relative;}' +
 
     /* ── Advanced Drawer ── */
     '.pc3-drawer{position:absolute;top:0;right:0;width:300px;height:100%;background:#fff;border-left:1px solid #e2e8f0;box-shadow:-4px 0 16px rgba(0,0,0,.08);z-index:20;transform:translateX(100%);transition:transform .25s;display:flex;flex-direction:column;}' +
@@ -1358,7 +1360,7 @@ function buildMainUI() {
         '#pc3-root.pc3{background:#f4f4f2;}' +
         '.pcx-bar{display:flex;align-items:center;gap:16px;padding:13px 20px;background:#fff;border-bottom:1px solid #ececea;flex-shrink:0;}' +
         '.pcx-brand{flex:1;min-width:0;}' +
-        '.pcx-title{font-size:19px;font-weight:800;letter-spacing:-.02em;color:#16181c;line-height:1.15;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+        '.pcx-title{font-family:"Fraunces",Georgia,serif;font-size:22px;font-weight:700;letter-spacing:-.01em;color:#16181c;line-height:1.1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
         '.pcx-sub{font-size:12px;color:#8b8b83;margin-top:2px;}' +
         '.pcx-actions{display:flex;align-items:center;gap:8px;flex-shrink:0;}' +
         '.pcx-btn{display:inline-flex;align-items:center;gap:7px;height:38px;padding:0 16px;border:1px solid #e2e2dd;border-radius:10px;background:#fff;color:#23252a;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;white-space:nowrap;transition:background .12s,border-color .12s,transform .04s;}' +
@@ -1458,19 +1460,6 @@ function buildMainUI() {
                 '<input type="text" id="pc3-sidebar-search" class="pcx-search" placeholder="Search...">' +
                 '<div class="pcx-list" id="pc3-sidebar-scroll"></div>' +
                 '<div class="pcx-rowbtns"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
-            '</div>' +
-            /* Theme */
-            '<div class="pcx-section">' +
-                '<div class="pcx-label">Theme</div>' +
-                '<div class="pcx-themes">' +
-                    STYLE_PRESETS.map(function (p) {
-                        var active = _activePreset === p.id;
-                        return '<button class="pcx-theme' + (active ? ' active' : '') + '" data-preset="' + p.id + '" title="' + escHtml(p.description) + '">' +
-                            '<span class="pcx-theme-sw">' + p.swatch.map(function (c) { return '<span style="background:' + c + ';"></span>'; }).join('') + '</span>' +
-                            escHtml(p.name) +
-                        '</button>';
-                    }).join('') +
-                '</div>' +
             '</div>' +
             /* Options */
             '<div class="pcx-section">' +
@@ -3377,6 +3366,26 @@ function runLiveStandalone() {
     document.documentElement.classList.add('pc3-live-standalone');
     document.body.classList.add('pc3-live-standalone-body');
 
+    // This kiosk window is dedicated to ONE day. Capture it from the URL up
+    // front. flow.html also set window.currentScheduleDate, but calendar.js's
+    // initCalendar() clobbers it back to "today" during boot — which is exactly
+    // why the Live View kept showing the wrong day. enforceDate() re-asserts it.
+    var _desiredDate = '';
+    try { _desiredDate = new URLSearchParams(window.location.search).get('date') || ''; } catch (e) {}
+    if (!_desiredDate) _desiredDate = window.currentScheduleDate || '';
+    if (_desiredDate) window.currentScheduleDate = _desiredDate;
+
+    function enforceDate() {
+        if (!_desiredDate) return false;
+        if (window.currentScheduleDate !== _desiredDate) {
+            window.currentScheduleDate = _desiredDate;
+            try { if (window.loadScheduleForDate) window.loadScheduleForDate(_desiredDate); } catch (e) {}
+            _liveRenderSig = '';
+            return true;
+        }
+        return false;
+    }
+
     // Strip the app shell — keep only #print
     var roots = document.querySelectorAll('body > *');
     roots.forEach(function (n) {
@@ -3385,7 +3394,6 @@ function runLiveStandalone() {
         n.style.display = 'none';
     });
 
-    // Force the print tab visible if the harness uses tab-content visibility
     var printTab = document.getElementById('print');
     if (printTab) {
         printTab.classList.add('active');
@@ -3402,24 +3410,23 @@ function runLiveStandalone() {
         return d;
     })();
 
-    // Inject styles (reuses pc3-live-* classes)
     container.innerHTML = getStyles() +
         '<div class="pc3-live-overlay" id="pc3-live-overlay" style="position:fixed;inset:0;">' +
         '<div class="pc3-live-header">' +
-            '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
-            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:6px;"></div>' +
-            '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
-            '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
+            '<div class="pc3-live-headleft">' +
+                '<div class="pc3-live-title" id="pc3-live-title">Camp Schedule</div>' +
+                '<div class="pc3-live-date" id="pc3-live-date"></div>' +
+            '</div>' +
+            '<div id="pc3-live-page-ind" style="display:none;align-items:center;gap:8px;"></div>' +
+            '<div class="pc3-live-headright">' +
+                '<div class="pc3-live-clock" id="pc3-live-clock"></div>' +
+                '<button class="pc3-live-close" onclick="window.close()">Close</button>' +
+            '</div>' +
         '</div>' +
         '<div class="pc3-live-body" id="pc3-live-body"></div>' +
         '</div>';
 
-    // Set the title once data is loaded (fall back to "Camp Schedule").
-    // ★ Prefer the authoritative camp name — the DB camp record exposed via
-    //   AccessControl.getCampName(), the same source the dashboard shows — over
-    //   the stored settings copy, which goes stale on rename (it kept showing
-    //   the old "Camp Awesome" test name). Then app1.campName, then the legacy
-    //   top-level fields (a stale one there could shadow the real name).
+    // Camp name (authoritative DB name first; settings copy goes stale on rename).
     function refreshTitle() {
         try {
             var g = window.loadGlobalSettings ? window.loadGlobalSettings() : {};
@@ -3433,7 +3440,9 @@ function runLiveStandalone() {
             nm = nm || (g.app1 ? g.app1.campName : '') || g.campName || g.camp_name || 'Camp Schedule';
             var titleEl = document.getElementById('pc3-live-title');
             if (titleEl) titleEl.textContent = nm;
-            document.title = nm + ' — Live';
+            var dateEl = document.getElementById('pc3-live-date');
+            if (dateEl) dateEl.textContent = formatDisplayDate(window.currentScheduleDate) || '';
+            document.title = nm + ' Live';
         } catch (e) {}
     }
 
@@ -3443,56 +3452,50 @@ function runLiveStandalone() {
         var now = new Date();
         var h = now.getHours() % 12 || 12;
         var m = String(now.getMinutes()).padStart(2, '0');
-        var s = String(now.getSeconds()).padStart(2, '0');
         var ap = now.getHours() >= 12 ? 'PM' : 'AM';
-        clockEl.textContent = h + ':' + m + ':' + s + ' ' + ap;
+        clockEl.textContent = h + ':' + m + ' ' + ap;
     }
 
     function tickAll() {
+        enforceDate();
         refreshTitle();
         renderLiveContent();
-        positionAllLiveCursors();
     }
 
-    // Show a loading state up front so the viewer never sees a stale cached
-    // schedule flash by before the cloud-authoritative one arrives.
     var liveBodyEl = document.getElementById('pc3-live-body');
-    if (liveBodyEl) liveBodyEl.innerHTML = '<div style="color:#94a3b8;padding:60px;text-align:center;font-size:22px;font-weight:600;">Loading schedule…</div>';
+    if (liveBodyEl) liveBodyEl.innerHTML = '<div class="pc3-live-loading">Loading schedule&hellip;</div>';
 
-    // Track whether the cloud has delivered fresh data. The popup re-runs the
-    // whole app boot (including integration_hooks), which fires these once the
-    // authoritative schedule has been hydrated/refreshed from Supabase.
+    // Cloud-fresh tracking — the popup re-runs the full app boot (integration
+    // hooks), which fires these once Supabase has delivered the day's schedule.
     var _cloudFresh = false;
     var _liveBooted = false;
     function _markCloudFresh() {
         _cloudFresh = true;
-        // If we've already started, the cache→cloud swap could change the
-        // picture — drop the signature so the next tick re-renders, and nudge
-        // it immediately so the correct schedule shows without waiting 5s.
         if (_liveBooted) { _liveRenderSig = ''; try { tickAll(); } catch (e) {} }
     }
     window.addEventListener('campistry-cloud-hydrated', _markCloudFresh);
     window.addEventListener('campistry-schedule-refreshed', _markCloudFresh);
 
-    // Trigger normal app initialization so divisions + schedule data load.
-    // (initApp1 loads global settings; initDailyAdjustments loads per-date schedule data.)
+    // Boot the app so divisions + schedule load. Re-assert the date around the
+    // daily-adjustments load so it reads the requested day, not "today".
     setTimeout(function () {
         try { window.initApp1 && window.initApp1(); } catch (e) {}
+        enforceDate();
         try { window.initDailyAdjustments && window.initDailyAdjustments(); } catch (e) {}
+        enforceDate();
     }, 100);
 
-    // Wait until divisions/scheduling data are populated AND the cloud has
-    // confirmed fresh data, then start. Falls back to whatever's loaded after
-    // ~7s so a slow/offline cloud never leaves the screen stuck on "Loading…".
     function whenReady(cb) {
         var attempts = 0;
         var iv = setInterval(function () {
             attempts++;
+            enforceDate();
             var hasDivs = window.divisions && Object.keys(window.divisions).length > 0;
             var hasSched = (window.scheduleAssignments && Object.keys(window.scheduleAssignments).length > 0)
                 || (window.divisionTimes && Object.keys(window.divisionTimes).length > 0);
+            var dateOk = !_desiredDate || window.currentScheduleDate === _desiredDate;
             var freshEnough = _cloudFresh || attempts > 28; // ~7s grace for the cloud
-            if ((hasDivs && hasSched && freshEnough) || attempts > 80) {
+            if ((hasDivs && hasSched && dateOk && freshEnough) || attempts > 80) {
                 clearInterval(iv);
                 cb();
             }
@@ -3502,88 +3505,13 @@ function runLiveStandalone() {
     whenReady(function () {
         _liveBooted = true;
         tickAll();
-        // Re-render content on a short interval, reposition cursor, tick clock.
+        // Cheap 5s tick (renderLiveContent is signature-gated) keeps the "now"
+        // highlight punctual and lets the view fill in as soon as data lands.
         if (_liveInterval) clearInterval(_liveInterval);
-        if (_liveCursorInterval) clearInterval(_liveCursorInterval);
-        // Tick often (cheap — renderLiveContent is signature-gated and only does
-        // real DOM work when the schedule or the "now" state actually changes).
-        // This makes the view fill in within seconds of data loading and keeps
-        // the current/past highlight punctual, without the old 30s rebuild flash.
         _liveInterval = setInterval(tickAll, 5000);
-        _liveCursorInterval = setInterval(positionAllLiveCursors, 15000);
         tickClock();
         setInterval(tickClock, 1000);
     });
-}
-
-// Compute the [dayStart, dayEnd] of the activity range visible in a live
-// section, and position its cursor element along the time axis.
-function positionLiveCursor(sectionEl) {
-    if (!sectionEl) return;
-    var nowMin = getNowMinutes();
-    var dayStart = parseInt(sectionEl.getAttribute('data-day-start')) || 0;
-    var dayEnd   = parseInt(sectionEl.getAttribute('data-day-end'))   || 0;
-    var mode     = sectionEl.getAttribute('data-cursor-mode') || 'auto';
-    var cursor   = sectionEl.querySelector('.pc3-live-cursor-v,.pc3-live-cursor-h');
-    var tag      = sectionEl.querySelector('.pc3-live-now-tag');
-    if (!cursor || !tag) return;
-
-    if (dayEnd <= dayStart || nowMin < dayStart || nowMin > dayEnd) {
-        cursor.style.display = 'none';
-        tag.style.display = 'none';
-        return;
-    }
-    cursor.style.display = '';
-    tag.style.display = '';
-    var fraction = (nowMin - dayStart) / (dayEnd - dayStart);
-
-    // Find the time-axis bounding rect to convert fraction -> px
-    var table = sectionEl.querySelector('table');
-    if (!table) return;
-    var tableRect = table.getBoundingClientRect();
-    var sectionRect = sectionEl.getBoundingClientRect();
-
-    if (mode === 'auto') {
-        // Vertical cursor: spans table height, X interpolated across time-axis cells
-        var timeCells = table.querySelectorAll('thead th[data-time-start]');
-        if (timeCells.length === 0) return;
-        var firstCell = timeCells[0];
-        var lastCell = timeCells[timeCells.length - 1];
-        var fr = firstCell.getBoundingClientRect();
-        var lr = lastCell.getBoundingClientRect();
-        var leftEdge = fr.left - sectionRect.left;
-        var rightEdge = lr.right - sectionRect.left;
-        var x = leftEdge + (rightEdge - leftEdge) * fraction;
-        cursor.style.left = x + 'px';
-        cursor.style.top = (tableRect.top - sectionRect.top) + 'px';
-        cursor.style.height = tableRect.height + 'px';
-        tag.style.left = x + 'px';
-        tag.style.top = (tableRect.top - sectionRect.top - 2) + 'px';
-        tag.textContent = minutesToTimeLabel(nowMin);
-    } else {
-        // Horizontal cursor: spans table width, Y interpolated across time-block rows
-        var rows = table.querySelectorAll('tbody tr[data-block-start]');
-        if (rows.length === 0) return;
-        var firstRow = rows[0];
-        var lastRow = rows[rows.length - 1];
-        var fr2 = firstRow.getBoundingClientRect();
-        var lr2 = lastRow.getBoundingClientRect();
-        var topEdge = fr2.top - sectionRect.top;
-        var botEdge = lr2.bottom - sectionRect.top;
-        var y = topEdge + (botEdge - topEdge) * fraction;
-        cursor.style.top = y + 'px';
-        cursor.style.left = (tableRect.left - sectionRect.left) + 'px';
-        cursor.style.width = tableRect.width + 'px';
-        tag.style.top = y + 'px';
-        tag.style.left = (tableRect.left - sectionRect.left + 8) + 'px';
-        tag.textContent = minutesToTimeLabel(nowMin);
-    }
-}
-
-function positionAllLiveCursors() {
-    var activePage = document.getElementById('lp-' + _livePageIndex);
-    var container = activePage || document;
-    container.querySelectorAll('.pc3-live-section').forEach(function (s) { positionLiveCursor(s); });
 }
 
 // —— Build HTML for a single division section (auto or manual mode) ——————————————
@@ -3609,13 +3537,11 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     // explicit — the column grid labels only show each slot's START, so the last
     // header reading "3:30" made the day look like it stopped there.
     var dayRange = minutesToTimeLabel(sectionStart) + ' – ' + minutesToTimeLabel(sectionEnd);
-    html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:20px;position:relative;">';
-    html += '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px;padding-left:4px;">' +
-        '<span style="font-size:24px;font-weight:800;color:#fbbf24;letter-spacing:.3px;">' + escHtml(divName) + '</span>' +
-        '<span style="font-size:14px;font-weight:600;color:#94a3b8;font-variant-numeric:tabular-nums;">' + dayRange + '</span>' +
+    html += '<div class="pc3-live-section">';
+    html += '<div class="pc3-live-divhead">' +
+        '<span class="pc3-live-divname">' + escHtml(divName) + '</span>' +
+        '<span class="pc3-live-divrange">' + dayRange + '</span>' +
     '</div>';
-    html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
-    html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
 
     if (isAutoMode()) {
         var inc = _timeIncrement;
@@ -3833,7 +3759,6 @@ function renderLiveContent() {
     var sig = _liveContentSignature(nowMin);
     var hasPages = !!body.querySelector('[id^="lp-"]');
     if (sig === _liveRenderSig && hasPages) {
-        positionAllLiveCursors();
         return;
     }
     _liveRenderSig = sig;
@@ -3846,7 +3771,8 @@ function renderLiveContent() {
         sectHtml += '<div class="pc3-live-section-wrap">' + buildLiveSectionHTML(divName, bunks, nowMin) + '</div>';
     });
     if (!sectHtml) {
-        body.innerHTML = '<div style="color:#6b7280;padding:40px;text-align:center;font-size:18px;">No schedule data available.</div>';
+        body.style.visibility = '';
+        body.innerHTML = '<div class="pc3-live-loading">No schedule for this day yet.</div>';
         _liveRenderSig = ''; // force a real render once data arrives
         return;
     }
@@ -3860,6 +3786,7 @@ function renderLiveContent() {
     // offsetHeight values are real (not 0) when we bin-pack into pages.
     requestAnimationFrame(function () {
         requestAnimationFrame(function () {
+        try {
 
     // 2. Measure available height and each section rendered height
     var availH = body.offsetHeight || (window.innerHeight - 80);
@@ -3904,12 +3831,18 @@ function renderLiveContent() {
         body.appendChild(pageDiv);
     });
 
-    // 5. Update indicator, start rotation timer (only once), position cursors
+    // 5. Update indicator + (re)start rotation only when the page COUNT changed,
+    //    so the 5s content refresh never disturbs the 20s rotation cadence.
     updateLivePageIndicator();
-    if (!_livePageTimer) startLivePageTimer();
-    positionAllLiveCursors();
-    body.style.visibility = ''; // reveal — pagination is done, no flash
-
+    if (_numLivePages !== _livePrevPageCount) {
+        _livePrevPageCount = _numLivePages;
+        startLivePageTimer();
+    }
+        } catch (e) {
+            console.error('[LiveView] render failed', e);
+        } finally {
+            body.style.visibility = ''; // ALWAYS reveal — never strand the screen on hidden
+        }
         }); // end inner rAF
     }); // end outer rAF
 }
@@ -3933,6 +3866,7 @@ function updateLivePageIndicator() {
 }
 
 function livePageNav(dir) {
+    if (_numLivePages < 1) return;
     _livePageIndex = ((_livePageIndex + dir) % _numLivePages + _numLivePages) % _numLivePages;
     for (var i = 0; i < _numLivePages; i++) {
         var p = document.getElementById('lp-' + i);
@@ -3942,7 +3876,6 @@ function livePageNav(dir) {
         p.style.pointerEvents = active ? 'auto' : 'none';
     }
     updateLivePageIndicator();
-    setTimeout(positionAllLiveCursors, 100);
     startLivePageTimer();
 }
 
@@ -4691,17 +4624,6 @@ function bindAll() {
     ['pc3-show-date', 'pc3-combined', 'pc3-hide-matchups', 'pc3-orientation', 'pc3-paper-size', 'pc3-transpose'].forEach(function (id) {
         var e = el(id);
         if (e) e.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
-    });
-
-    // Theme chips — apply the preset and move the active highlight.
-    document.querySelectorAll('.pcx-theme').forEach(function (btn) {
-        btn.addEventListener('click', function () {
-            var pid = this.getAttribute('data-preset');
-            if (window._pc3ApplyPreset) window._pc3ApplyPreset(pid);
-            document.querySelectorAll('.pcx-theme').forEach(function (b) {
-                b.classList.toggle('active', b.getAttribute('data-preset') === pid);
-            });
-        });
     });
 
     // Legacy Style menu (if present) — harmless no-op in the new shell.
