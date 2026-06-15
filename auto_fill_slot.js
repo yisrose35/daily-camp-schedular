@@ -545,7 +545,7 @@
     // toasts, without per-cell saves, without UI updates. The caller is
     // expected to save once at the end. Returns true if a pick was applied.
     // ─────────────────────────────────────────────────────────────────────
-    function autoFillSlotSilent(bunk, slotIdx) {
+    function autoFillSlotSilent(bunk, slotIdx, forcedKind) {
         const divName = getDivision(bunk);
         if (!divName) return false;
         const slot = getSlotInfo(divName, slotIdx, bunk);
@@ -557,7 +557,11 @@
         if (entry && !isFreeEntry(entry) && entry._fixed) return false;
 
         const actProps = getActivityProperties();
-        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, slotKindOf(slot.event));
+        // ★ Prefer the caller's explicit tile-kind (authoritative, from the solver's
+        //   _slotKind) over the slot.event guess — divisionTimes' event is not always
+        //   the raw "Sports Slot" / "Special Activity" label.
+        const _kind = (forcedKind === 'sport' || forcedKind === 'special') ? forcedKind : slotKindOf(slot.event);
+        const candidates = buildCandidates(bunk, slotStart, slotEnd, divName, actProps, _kind);
         if (!candidates.length) return false;
 
         const today = window.currentScheduleDate || new Date().toLocaleDateString('en-CA');

@@ -4004,12 +4004,25 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     }
                 });
                 if (_lgSkipped75 > 0) console.log(`[STEP 7.5] FN-56: left ${_lgSkipped75} league-period slot(s) alone`);
+                // ★ Build a reliable (bunk|slotIdx) → tile-kind map from the schedulable
+                //   blocks. The solver stamps _slotKind on these from the raw skeleton
+                //   event, so it is authoritative — divisionTimes' slot.event is not
+                //   always "Sports Slot" here, which would let the free-fill drop a
+                //   special into a Sports tile. We hand the kind to autoFillSlotSilent
+                //   directly so a Sports tile only takes sports (a Special tile only
+                //   specials); 'any' / missing keeps the prior either-or behavior.
+                const _kindByCell75 = {};
+                schedulableSlotBlocks.forEach(b => {
+                    if (!b || !b._slotKind || b._slotKind === 'any' || !Array.isArray(b.slots)) return;
+                    b.slots.forEach(si => { _kindByCell75[String(b.bunk) + '|' + si] = b._slotKind; });
+                });
                 if (_freeFills.length) {
                     console.log(`[STEP 7.5] Silent fallback: ${_freeFills.length} leftover Free slots`);
                     let _ffOk = 0, _ffSkip = 0;
                     for (const ff of _freeFills) {
                         try {
-                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si);
+                            const _ffKind = _kindByCell75[String(ff.bunk) + '|' + ff.si];
+                            const ok = window.AutoFillSlot.autoFillSlotSilent(ff.bunk, ff.si, _ffKind);
                             if (ok) _ffOk++; else _ffSkip++;
                         } catch (e) {
                             _ffSkip++;
@@ -4283,6 +4296,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 const ds = _dt76[grade]; if (ds && ds[idx] && ds[idx].event != null) return ds[idx].event;
                 return (e && e.event) || '';
             };
+            // Authoritative tile-kind per (bunk|slotIdx) from the schedulable blocks
+            // (solver-stamped _slotKind) — divisionTimes' slot.event is not always the
+            // raw label, so trust this first and fall back to the event guess.
+            const _kindByCell76 = {};
+            schedulableSlotBlocks.forEach(b => {
+                if (!b || !b._slotKind || b._slotKind === 'any' || !Array.isArray(b.slots)) return;
+                b.slots.forEach(si => { _kindByCell76[String(b.bunk) + '|' + si] = b._slotKind; });
+            });
             const _skip76 = { 'free': 1, 'free play': 1, 'free (timeout)': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'change': 1, 'cleanup': 1, 'main activity': 1, 'lineup': 1, 'transition': 1, 'buffer': 1, 'davening': 1, 'mincha': 1 };
             const _specialRooms76 = {};
             ((_gs76.app1 && _gs76.app1.specialActivities) || []).forEach(s => { if (s && s.location) _specialRooms76[String(s.location).toLowerCase().trim()] = 1; });
@@ -4350,7 +4371,8 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     if (!(a === '' || a === 'free' || a === 'free play' || a === 'free (timeout)')) return;
                     // ★ A Special-only tile must never be sport-filled — leave it Free
                     //   (STEP 7.5 already offered it specials).
-                    if (slotKindOf(_slotEvent76(b, g, idx, e)) === 'special') return;
+                    const _ck76 = _kindByCell76[String(b) + '|' + idx];
+                    if (_ck76 === 'special' || (!_ck76 && slotKindOf(_slotEvent76(b, g, idx, e)) === 'special')) return;
                     const t = _stime76(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
                     for (let fi = 0; fi < _sportFields76.length; fi++) {
                         const f = _sportFields76[fi]; const fl = String(f.name).toLowerCase().trim();
