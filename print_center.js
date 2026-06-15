@@ -1351,9 +1351,9 @@ function buildMainUI() {
     var dateLabel = window.currentScheduleDate ? formatDisplayDate(window.currentScheduleDate) : '';
     var liveOpen = !!(_liveWindow && !_liveWindow.closed);
     return getStyles() +
-    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_inspectMode ? ' inspect-mode' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + (_highlightGaps ? ' pc3-highlight-gaps' : '') + (_colorByCategory ? ' pc3-color-cat' : '') + (_quickFilter && _quickFilter !== 'all' ? ' pc3-filter-' + _quickFilter : '') + '" id="pc3-root">' +
+    '<div class="pc3' + (_isFullscreen ? ' pc3-fullscreen' : '') + (_hideDurations ? ' pc3-hide-durations' : '') + (_pageBreakPerBunk ? ' pc3-pb-per-bunk' : '') + '" id="pc3-root">' +
 
-    /* ── Hero header ── */
+    /* -- Hero header: title + the three things you actually do (Live, Print & Export, Fullscreen) -- */
     '<div class="pc3-hero no-print">' +
         '<div class="pc3-hero-title-block">' +
             '<h1>' + escHtml(t.campName || 'Camp Schedule') + '</h1>' +
@@ -1363,33 +1363,11 @@ function buildMainUI() {
             '</div>' +
         '</div>' +
         '<div class="pc3-hero-actions">' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-hero-btn" id="pc3-packs-btn" title="Print packs — opinionated one-click setups">' + ICO.grid + ' Packs <span style="opacity:.6;font-size:9px;">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-packs-menu" style="min-width:340px;left:0;right:auto;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">One-click setups</div>' +
-                        '<div class="pc3-packs-list">' +
-                            PRINT_PACKS.map(function (p) {
-                                var active = _activePack === p.id;
-                                return '<button class="pc3-pack-row' + (active ? ' active' : '') + '" data-pack="' + p.id + '">' +
-                                    '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
-                                    '<div class="pc3-pack-row-text">' +
-                                        '<div class="pc3-pack-row-name">' + escHtml(p.name) + '</div>' +
-                                        '<div class="pc3-pack-row-tagline">' + escHtml(p.tagline) + '</div>' +
-                                    '</div>' +
-                                    (active ? '<span class="pc3-popover-icon" style="color:#147D91;">' + ICO.check + '</span>' : '') +
-                                '</button>';
-                            }).join('') +
-                        '</div>' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View in a new window') + '">' +
+            '<button class="pc3-hero-btn' + (liveOpen ? ' live-on' : '') + '" id="pc3-live-btn" title="' + (liveOpen ? 'Live View is open' : 'Open Live View on a screen') + '">' +
                 (liveOpen ? '<span class="pc3-live-dot"></span>Live · On' : ICO.monitor + ' Live View') +
             '</button>' +
-            '<button class="pc3-hero-btn" id="pc3-design-btn" onclick="window._pc3ToggleAdvanced()" title="Open full design settings — colors, fonts, header, footer, watermark">' + ICO.gear + ' Design</button>' +
             '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Output <span style="opacity:.7;font-size:9px;">▼</span></button>' +
+                '<button class="pc3-hero-btn primary" id="pc3-output-btn">' + ICO.print + ' Print &amp; Export <span style="opacity:.7;font-size:9px;">▼</span></button>' +
                 '<div class="pc3-popover" id="pc3-output-menu" style="min-width:260px;">' +
                     '<div class="pc3-popover-section">' +
                         '<div class="pc3-popover-label">Print</div>' +
@@ -1397,9 +1375,9 @@ function buildMainUI() {
                         '<button class="pc3-popover-item" onclick="window.printAllDivisions()"><span class="pc3-popover-icon">' + ICO.grid + '</span>Print every division</button>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Export</div>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportExcel()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to Excel</button>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ExportCSV && window._pc3ExportCSV()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Export to CSV</button>' +
+                        '<div class="pc3-popover-label">Download</div>' +
+                        '<button class="pc3-popover-item" onclick="window._pc3ExportExcel()"><span class="pc3-popover-icon">' + ICO.excel + '</span>Excel (.xlsx)</button>' +
+                        '<button class="pc3-popover-item" onclick="window._pc3ExportCSV && window._pc3ExportCSV()"><span class="pc3-popover-icon">' + ICO.excel + '</span>CSV</button>' +
                     '</div>' +
                 '</div>' +
             '</div>' +
@@ -1407,20 +1385,20 @@ function buildMainUI() {
         '</div>' +
     '</div>' +
 
-    /* ── Tab bar ── */
+    /* -- Tab bar: the four views + one Style menu -- */
     '<div class="pc3-tabbar no-print">' +
         '<div class="pc3-tabs">' +
             '<button class="pc3-tab' + (_activeView === 'division' ? ' active' : '') + '" data-view="division">Divisions</button>' +
             '<button class="pc3-tab' + (_activeView === 'bunk' ? ' active' : '') + '" data-view="bunk">Bunks</button>' +
             '<button class="pc3-tab' + (_activeView === 'location' ? ' active' : '') + '" data-view="location">Facilities</button>' +
-            '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon–Sun at-a-glance">Week</button>' +
+            '<button class="pc3-tab' + (_activeView === 'week' ? ' active' : '') + '" data-view="week" title="Mon-Sun at-a-glance">Week</button>' +
         '</div>' +
         '<div class="pc3-tab-actions">' +
             '<div class="pc3-popover-wrap">' +
                 '<button class="pc3-tab-btn" id="pc3-style-btn">Style <span class="caret">▼</span></button>' +
                 '<div class="pc3-popover" id="pc3-style-menu" style="min-width:280px;">' +
                     '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Presets</div>' +
+                        '<div class="pc3-popover-label">Theme</div>' +
                         STYLE_PRESETS.map(function (p) {
                             var active = _activePreset === p.id;
                             var sw = '<div class="pc3-preset-swatch">' +
@@ -1443,60 +1421,15 @@ function buildMainUI() {
                         '<label class="pc3-popover-field"><span class="pc3-popover-field-lbl">Footer</span><input type="text" id="pc3-hero-footer" value="' + escHtml(_currentTemplate.footerText || '') + '" placeholder="Generated by Campistry"></label>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
-                        '<div class="pc3-popover-label">Saved layouts</div>' +
-                        '<div id="pc3-layouts-list" class="pc3-layouts-list"></div>' +
-                        '<button class="pc3-save-layout-btn" id="pc3-save-layout-btn">+ Save current as layout</button>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        /* Customize is a local style editor — every user can tweak how their own print output looks. Saving as a shared template stays gated separately inside the drawer. */
-                        '<button class="pc3-popover-item" onclick="window._pc3ToggleAdvanced()"><span class="pc3-popover-icon">' + ICO.gear + '</span>Customize…</button>' +
-                        '<button class="pc3-popover-item" onclick="window._pc3ShowShortcuts && window._pc3ShowShortcuts()"><span class="pc3-popover-icon">⌘</span>Keyboard shortcuts<span class="pc3-popover-hint">?</span></button>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-inspect-mode"' + (_inspectMode ? ' checked' : '') + '>Inspect mode<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Excel-like</span></label>' +
-                    '</div>' +
-                '</div>' +
-            '</div>' +
-            '<div class="pc3-popover-wrap">' +
-                '<button class="pc3-tab-btn" id="pc3-layout-btn">Layout <span class="caret">▼</span></button>' +
-                '<div class="pc3-popover" id="pc3-layout-menu" style="min-width:280px;">' +
-                    '<div class="pc3-popover-section">' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-transpose"' + (t.tableOrientation === 'time-top' ? ' checked' : '') + '>Time across the top<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Transpose</span></label>' +
+                        '<div class="pc3-popover-label">Options</div>' +
+                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-show-date"' + (t.showDate !== false ? ' checked' : '') + '>Show date</label>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks into one sheet</label>' +
                         '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
                     '</div>' +
                     '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Time axis</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-activity-aligned"' + (_activityAligned ? ' checked' : '') + '>Activity-aligned columns<span style="margin-left:auto;font-size:11px;color:#a8a29e;">Recommended</span></label>' +
-                        '<div class="pc3-popover-row" id="pc3-subseg-row" style="' + (_activityAligned ? 'display:none;' : '') + '"><span>Sub-segment</span>' +
-                            '<select id="pc3-time-increment" class="pc3-popover-select" style="max-width:110px;">' +
-                                (function () {
-                                    var opts = '';
-                                    for (var iv = 5; iv <= 60; iv += 5) {
-                                        opts += '<option value="' + iv + '"' + (_timeIncrement === iv ? ' selected' : '') + '>' + iv + ' min</option>';
-                                    }
-                                    return opts;
-                                })() +
-                            '</select>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Content</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-durations"' + (_hideDurations ? ' checked' : '') + '>Hide activity durations (50m)</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-hide-locations"' + (_hideLocations ? ' checked' : '') + '>Hide locations &amp; sharing notes</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-highlight-gaps"' + (_highlightGaps ? ' checked' : '') + '>Highlight coverage gaps (Free cells)</label>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-color-cat"' + (_colorByCategory ? ' checked' : '') + '>Color cells by category</label>' +
-                        '<div class="pc3-popover-field" style="margin-top:6px;"><span class="pc3-popover-field-lbl">Show only</span>' +
-                            '<select id="pc3-quick-filter">' +
-                                '<option value="all"' + (_quickFilter === 'all' ? ' selected' : '') + '>Everything</option>' +
-                                '<option value="leagues"' + (_quickFilter === 'leagues' ? ' selected' : '') + '>Leagues</option>' +
-                                '<option value="specials"' + (_quickFilter === 'specials' ? ' selected' : '') + '>Specials (pinned)</option>' +
-                                '<option value="general"' + (_quickFilter === 'general' ? ' selected' : '') + '>General activities</option>' +
-                                '<option value="free"' + (_quickFilter === 'free' ? ' selected' : '') + '>Free / gaps</option>' +
-                            '</select>' +
-                        '</div>' +
-                    '</div>' +
-                    '<div class="pc3-popover-section">' +
-                        '<div style="font-size:10px;font-weight:600;color:#a8a29e;letter-spacing:0.05em;margin-bottom:6px;text-transform:uppercase;">Print</div>' +
-                        '<label class="pc3-popover-toggle"><input type="checkbox" id="pc3-page-break-bunk"' + (_pageBreakPerBunk ? ' checked' : '') + '>One bunk per page (Bunks view)</label>' +
+                        '<div class="pc3-popover-label">Print layout</div>' +
+                        '<div class="pc3-popover-field"><span class="pc3-popover-field-lbl">Orientation</span><select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select></div>' +
+                        '<div class="pc3-popover-field"><span class="pc3-popover-field-lbl">Paper</span><select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select></div>' +
                     '</div>' +
                 '</div>' +
             '</div>' +
@@ -1507,27 +1440,17 @@ function buildMainUI() {
         '</div>' +
     '</div>' +
 
-    /* ── Formula Bar ── */
-    '<div class="pc3-formula no-print">' +
-        '<span class="pc3-formula-cell" id="pc3-fx-cell">\u2014</span>' +
-        '<span class="pc3-formula-val" id="pc3-fx-val">Select a cell to see details</span>' +
-        '<span class="pc3-formula-mode ' + mode + '" id="pc3-fx-mode">' + mode + ' builder</span>' +
-    '</div>' +
-
-    /* ── Workspace ── */
+    /* -- Workspace -- */
     '<div class="pc3-workspace">' +
         /* Sidebar */
         '<div class="pc3-sidebar' + (_sidebarCollapsed ? ' collapsed' : '') + '" id="pc3-sidebar">' +
             '<div class="pc3-sidebar-header"><span id="pc3-sidebar-title">Divisions</span><span class="pc3-sidebar-count" id="pc3-sidebar-count">0 selected</span></div>' +
             '<div class="pc3-sidebar-search">' +
-                '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search…">' +
+                '<input type="text" id="pc3-sidebar-search" class="pc3-sidebar-search-input" placeholder="Search...">' +
             '</div>' +
             '<div class="pc3-sidebar-scroll" id="pc3-sidebar-scroll"></div>' +
             '<div class="pc3-sidebar-actions"><button onclick="window._pc3SelectAll()">Select all</button><button onclick="window._pc3SelectNone()">Clear</button></div>' +
         '</div>' +
-        /* ★ Day 22.5+: collapse/expand sidebar toggle — small tab on the
-           border between sidebar and grid area. Lets users maximize the
-           preview area when they want to focus on the schedule. */
         '<button class="pc3-sidebar-toggle no-print" id="pc3-sidebar-toggle" onclick="window._pc3ToggleSidebar()" title="' + (_sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') + '" aria-label="Toggle sidebar">' +
             '<span class="pc3-sidebar-toggle-arrow">' + (_sidebarCollapsed ? '›' : '‹') + '</span>' +
         '</button>' +
@@ -1535,38 +1458,21 @@ function buildMainUI() {
         /* Grid Area */
         '<div class="pc3-grid-area" id="pc3-grid-area">' +
             '<div id="pc3-preview-empty" style="display:flex;align-items:center;justify-content:center;height:100%;padding:40px 28px;">' +
-                '<div style="text-align:center;max-width:760px;width:100%;">' +
-                    '<div style="font-size:36px;margin-bottom:10px;opacity:.35;color:#a8a29e;">' + ICO.grid + '</div>' +
-                    '<p style="margin:0 0 6px;font-size:18px;font-weight:700;color:#1c1917;letter-spacing:-.005em;">Print Packs</p>' +
-                    '<p style="margin:0 0 8px;font-size:13px;color:#78716c;line-height:1.5;max-width:480px;margin-left:auto;margin-right:auto;">Pick a pack and the print center configures itself for that workflow. Style, layout, and selection — set in one click.</p>' +
-                    '<div class="pc3-packs-grid">' +
-                        PRINT_PACKS.map(function (p) {
-                            return '<button class="pc3-pack-card" data-pack="' + p.id + '">' +
-                                '<span class="pc3-pack-icon">' + (ICO[p.icon] || ICO.grid) + '</span>' +
-                                '<span class="pc3-pack-name">' + escHtml(p.name) + '</span>' +
-                                '<span class="pc3-pack-tagline">' + escHtml(p.tagline) + '</span>' +
-                            '</button>';
-                        }).join('') +
-                    '</div>' +
+                '<div style="text-align:center;max-width:420px;">' +
+                    '<div style="font-size:34px;margin-bottom:12px;opacity:.3;color:#a8a29e;">' + ICO.grid + '</div>' +
+                    '<p style="margin:0 0 6px;font-size:17px;font-weight:700;color:#1c1917;">Pick what to print</p>' +
+                    '<p style="margin:0;font-size:13px;color:#78716c;line-height:1.5;">Choose divisions, bunks, or facilities on the left. Your printout previews here — then Print or Download from the top.</p>' +
                 '</div>' +
             '</div>' +
             '<div id="pc3-preview-content" style="display:none;"></div>' +
-            /* Floating zoom dock — bottom-right of preview */
+            /* Floating zoom dock -- bottom-right of preview */
             '<div class="pc3-zoom-dock no-print" id="pc3-zoom-dock">' +
-                /* ★ Day 22.5+: explicit + / − glyphs alongside icons so the
-                   buttons are unmistakably zoom controls at a glance */
                 '<button onclick="window._pc3Zoom(-10)" title="Zoom out" aria-label="Zoom out"><span class="pc3-zoom-glyph">−</span></button>' +
                 '<span class="pc3-zoom-dock-label" id="pc3-zoom-dock-label" onclick="window._pc3ZoomReset && window._pc3ZoomReset()" title="Reset to 100%">' + _zoomLevel + '%</span>' +
                 '<button onclick="window._pc3Zoom(10)" title="Zoom in" aria-label="Zoom in"><span class="pc3-zoom-glyph">+</span></button>' +
                 '<span class="pc3-zoom-dock-sep"></span>' +
                 '<button onclick="window._pc3ToggleFullscreen()" title="Toggle fullscreen">' + ICO.expand + '</button>' +
             '</div>' +
-        '</div>' +
-
-        /* Advanced Drawer */
-        '<div class="pc3-drawer' + (_advancedOpen ? ' open' : '') + '" id="pc3-drawer">' +
-            '<div class="pc3-drawer-header"><span>' + ICO.gear + ' Design Settings</span><button class="pc3-hero-icon-btn" onclick="window._pc3ToggleAdvanced()" style="width:28px;height:28px;">' + ICO.x + '</button></div>' +
-            '<div class="pc3-drawer-scroll" id="pc3-drawer-scroll">' + buildAdvancedSections() + '</div>' +
         '</div>' +
     '</div>' +
 
@@ -3668,8 +3574,15 @@ function buildLiveSectionHTML(divName, bunks, nowMin) {
     if (sectionStart === Infinity) sectionStart = 480;
     if (sectionEnd === -Infinity) sectionEnd = 960;
 
+    // Show the full day span beside the division name so the real end time is
+    // explicit — the column grid labels only show each slot's START, so the last
+    // header reading "3:30" made the day look like it stopped there.
+    var dayRange = minutesToTimeLabel(sectionStart) + ' – ' + minutesToTimeLabel(sectionEnd);
     html += '<div class="pc3-live-section" data-day-start="' + sectionStart + '" data-day-end="' + sectionEnd + '" data-cursor-mode="' + cursorMode + '" style="margin-bottom:20px;position:relative;">';
-    html += '<div style="font-size:24px;font-weight:800;color:#fbbf24;margin-bottom:8px;padding-left:4px;letter-spacing:.3px;">' + escHtml(divName) + '</div>';
+    html += '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:8px;padding-left:4px;">' +
+        '<span style="font-size:24px;font-weight:800;color:#fbbf24;letter-spacing:.3px;">' + escHtml(divName) + '</span>' +
+        '<span style="font-size:14px;font-weight:600;color:#94a3b8;font-variant-numeric:tabular-nums;">' + dayRange + '</span>' +
+    '</div>';
     html += '<div class="pc3-live-cursor-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
     html += '<div class="pc3-live-now-tag tag-' + (cursorMode === 'auto' ? 'v' : 'h') + '"></div>';
 
@@ -4748,6 +4661,11 @@ function bindAll() {
         var e = el(id);
         if (e) e.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
     });
+
+    // Style menu — any checkbox/select change (Show date, Combine, Hide matchups,
+    // Orientation, Paper) re-reads design values and re-renders the preview.
+    var styleMenu = el('pc3-style-menu');
+    if (styleMenu) styleMenu.addEventListener('change', function () { readDesignValues(); liveRefresh(); });
 
     // Time increment selector
     var incSel = el('pc3-time-increment');
