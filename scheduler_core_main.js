@@ -2458,9 +2458,69 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             ? externalOverrides.bunkActivityOverrides
             : (window.loadCurrentDailyData?.().bunkActivityOverrides || []);
 
+        // ★ POOL OVERRIDE support ("the bunk can have baseball OR basketball — let
+        //   the solver decide"). A sportPool override carries a candidate set; we
+        //   pick ONE candidate per bunk using a mix of FAIRNESS (rotation count —
+        //   the activity this bunk has done least wins) and AVAILABILITY (a field /
+        //   location that's actually open with capacity at this time). Defined here
+        //   (closes over fieldUsageBySlot / fieldsBySport / capacity + location
+        //   helpers) so the chosen candidate then flows through the normal per-type
+        //   placement branches below.
+        const _poolCandidateAvailable = (it, divName, slots) => {
+            const nm = it.name;
+            const ty = it.type || 'sport';
+            const slotOpen = (key) => {
+                const cap = getFieldCapacityLocal(key, activityProperties);
+                return slots.every(si => {
+                    const u = fieldUsageBySlot[si]?.[key];
+                    return !(u && u.count >= cap);
+                });
+            };
+            if (ty === 'sport') {
+                const fs = (fieldsBySport || {})[nm] || [];
+                if (fs.length === 0) return true; // sport branch falls back to the sport name as its own field
+                return fs.some(cf => {
+                    if (window.GlobalFieldLocks?.isFieldLocked(cf, slots, divName)) return false;
+                    return slotOpen(cf);
+                });
+            }
+            if (ty === 'field') {
+                if (window.GlobalFieldLocks?.isFieldLocked(nm, slots, divName)) return false;
+                return slotOpen(nm);
+            }
+            // special / pinned → location-based
+            if (window.GlobalFieldLocks?.isFieldLocked(nm, slots, divName)) return false;
+            const loc = it.location || (typeof getLocationForActivity === 'function' ? getLocationForActivity(nm) : null);
+            if (loc) {
+                if (typeof canScheduleAtLocation === 'function' && !canScheduleAtLocation(nm, loc, slots)) return false;
+                if (!slotOpen(loc)) return false;
+            }
+            return true;
+        };
+        const _pickPoolCandidate = (override, bunk, divName, slots) => {
+            let items = (override.poolItems && override.poolItems.length)
+                ? override.poolItems
+                : (override.sportPool || []).map(n => ({ name: n, type: 'sport', location: null }));
+            items = items.filter(it => it && it.name);
+            if (!items.length) return null;
+            const getCount = (nm) => (window.RotationEngine && typeof window.RotationEngine.getActivityCount === 'function')
+                ? (window.RotationEngine.getActivityCount(bunk, nm) || 0) : 0;
+            let best = null, bestScore = -Infinity;
+            items.forEach((it, idx) => {
+                const avail = _poolCandidateAvailable(it, divName, slots);
+                const count = getCount(it.name);
+                // available candidates strongly preferred (+1000); among them the
+                // least-done one wins (-count*10); stable order tiebreak (-idx*0.01).
+                const score = (avail ? 1000 : 0) - count * 10 - idx * 0.01;
+                if (score > bestScore) { bestScore = score; best = it; }
+            });
+            return best;
+        };
+
         bunkOverrides.forEach(override => {
-            const activityName = override.activity;
-            const overrideType = override.type;
+            let activityName = override.activity;
+            let overrideType = override.type;
+            let _poolChosenLocation = null; // set when a sportPool override resolves to a chosen candidate
             const startMin = override.startMin ?? Utils.parseTimeToMinutes(override.startTime);
             const endMin = override.endMin ?? Utils.parseTimeToMinutes(override.endTime);
             const bunk = override.bunk;
@@ -2474,6 +2534,23 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             if (allowedDivisionsSet && !allowedDivisionsSet.has(String(divName))) {
                 return;
+            }
+
+            // Resolve a pool ("either/or") override down to one concrete candidate,
+            // then let it fall through to the matching per-type placement below.
+            if (override.overrideMode === 'sportPool' || overrideType === 'sportPool') {
+                const _chosen = _pickPoolCandidate(override, bunk, divName, slots);
+                if (!_chosen) {
+                    console.warn(`[BunkOverride] Pool ${bunk}: no usable candidate — skipping`);
+                    return;
+                }
+                activityName = _chosen.name;
+                overrideType = _chosen.type || 'sport';
+                _poolChosenLocation = _chosen.location || null;
+                const _poolNames = (override.sportPool && override.sportPool.length)
+                    ? override.sportPool
+                    : (override.poolItems || []).map(p => p.name);
+                console.log(`[BunkOverride] Pool ${bunk}: chose "${activityName}" (${overrideType}) from [${_poolNames.join(', ')}] — fairness+availability`);
             }
 
             console.log(`[BunkOverride] ${bunk}: ${activityName} (${overrideType}) @ ${override.startTime}-${override.endTime}`);
@@ -2496,6 +2573,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             } else if (overrideType === 'pinned') {
                 // Resolve location: prefer override's stored location, then pinned defaults, then special lookup
                 const locName = override.location
+                    || _poolChosenLocation
                     || window.getPinnedTileDefaultLocation?.(activityName)
                     || getLocationForActivity(activityName);
 
@@ -2601,7 +2679,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
 
             } else if (overrideType === 'special') {
                 // Use stored location from override, fall back to global lookup
-                const locName = override.location || getLocationForActivity(activityName);
+                const locName = override.location || _poolChosenLocation || getLocationForActivity(activityName);
 
                 if (window.GlobalFieldLocks?.isFieldLocked(activityName, slots, divName)) {
                     console.warn(`   → Special ${activityName} is LOCKED for ${divName}, cannot assign to ${bunk}`);

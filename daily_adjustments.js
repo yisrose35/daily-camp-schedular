@@ -5751,6 +5751,11 @@ function _renderTripsPopoverContent(pop) {
 // =================================================================
 let _boSelectedDiv = null;
 let _boBunkViewActive = false;
+// ★ Bulk bunk-override selection: double-click a slot to add/remove it here, then
+//   a single click (or the "Assign…" bar button) opens ONE picker that writes the
+//   chosen activity (or either/or pool) to every selected (bunk, time-window) cell.
+//   Keyed "bunkstartendlayerType" → {bunk, startMin, endMin, layerType}.
+let _boSelectedCells = new Map();
 
 function _boGetActivityGroups() {
   const pinnedDefaults = masterSettings.global?.pinnedTileDefaults || {};
@@ -6827,7 +6832,19 @@ function _boRenderBunkGrid(wrap, divName) {
   const overrides = currentOverrides.bunkActivityOverrides || [];
   const color = div.color || '#64748b';
 
-  let html = `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:12px;">`;
+  // Fresh render ⇒ drop any stale multi-selection (e.g. after a division switch).
+  _boSelectedCells.clear();
+
+  // Bulk-selection action bar (hidden until the user double-clicks ≥1 slot).
+  let html = `<div id="bo-sel-bar" style="display:none;align-items:center;gap:10px;position:sticky;top:0;z-index:20;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:8px 12px;margin-bottom:8px;">
+    <span style="font-size:16px;">🎯</span>
+    <strong id="bo-sel-count" style="font-size:13px;color:#1e40af;">0 slots selected</strong>
+    <span style="font-size:11px;color:#3b82f6;">— double-click slots to (de)select, then Assign</span>
+    <div style="flex:1;"></div>
+    <button id="bo-sel-assign" type="button" style="padding:5px 12px;font-size:12px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-weight:700;">Assign…</button>
+    <button id="bo-sel-clear" type="button" style="padding:5px 10px;font-size:12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;">Clear</button>
+  </div>`;
+  html += `<div class="bo-grid" style="display:grid;grid-template-columns:70px repeat(${bunks.length}, 1fr);column-gap:3px;margin-top:4px;">`;
 
   // Header row
   html += '<div class="da-grid-header da-time-header" style="font-size:11px;">Time</div>';
@@ -6863,9 +6880,13 @@ function _boRenderBunkGrid(wrap, divName) {
       const height = Math.max((evEnd - evStart) * PX - 2, 24);
 
       if (override) {
-        // Render the override block (highlighted)
-        const oStyle = 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
-        const typeIcon = override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 '));
+        // Render the override block (highlighted). A pool ("either/or") override
+        // gets a distinct green treatment so it reads as "solver picks one of N".
+        const isPool = override.overrideMode === 'sportPool' || override.type === 'sportPool';
+        const oStyle = isPool
+          ? 'background:#dcfce7;color:#065f46;border:2px solid #10b981;'
+          : 'background:#fef3c7;color:#92400e;border:2px solid #f59e0b;';
+        const typeIcon = isPool ? '🔀 ' : (override.type === 'pinned' ? '📌 ' : (override.type === 'sport' ? '⚽ ' : (override.type === 'field' ? '🏟️ ' : '🎨 ')));
         let fontSize = height < 35 ? '10px' : (height < 50 ? '11px' : '12px');
         let content;
         if (height < 35) {
@@ -6907,16 +6928,40 @@ function _boRenderBunkGrid(wrap, divName) {
   html += '</div>';
   wrap.innerHTML = html;
 
-  // Attach click handlers on blocks
+  // Attach handlers on blocks. Single-click opens the picker (for the active
+  // multi-selection if any, else just this slot); DOUBLE-click toggles this slot
+  // in/out of the multi-selection. A short timer disambiguates the two so a
+  // double-click never also fires the single-click picker.
+  let _boClickTimer = null;
   wrap.querySelectorAll('.bo-block').forEach(block => {
+    block.style.userSelect = 'none';
     block.onclick = (e) => {
       if (e.target.classList.contains('bo-revert-btn')) return;
-      const bunk = block.dataset.bunk;
-      const startMin = parseInt(block.dataset.start);
-      const endMin = parseInt(block.dataset.end);
-      _boShowPicker(block, bunk, startMin, endMin);
+      if (_boClickTimer) return; // a double-click is unfolding — let ondblclick handle it
+      _boClickTimer = setTimeout(() => {
+        _boClickTimer = null;
+        const bunk = block.dataset.bunk;
+        const startMin = parseInt(block.dataset.start);
+        const endMin = parseInt(block.dataset.end);
+        _boShowPicker(block, bunk, startMin, endMin);
+      }, 220);
+    };
+    block.ondblclick = (e) => {
+      if (e.target.classList.contains('bo-revert-btn')) return;
+      if (_boClickTimer) { clearTimeout(_boClickTimer); _boClickTimer = null; }
+      e.preventDefault();
+      _boToggleCellSelection(block);
     };
   });
+
+  // Selection action bar buttons.
+  const _assignBtn = wrap.querySelector('#bo-sel-assign');
+  if (_assignBtn) _assignBtn.onclick = () => {
+    if (_boSelectedCells.size === 0) return;
+    _boShowPicker(_assignBtn, null, null, null);
+  };
+  const _clearBtn = wrap.querySelector('#bo-sel-clear');
+  if (_clearBtn) _clearBtn.onclick = () => { _boSelectedCells.clear(); renderBunkOverridesUI(); };
 
   // Revert buttons on overrides
   wrap.querySelectorAll('.bo-revert-btn').forEach(btn => {
@@ -6933,33 +6978,78 @@ function _boRenderBunkGrid(wrap, divName) {
   });
 }
 
+// Toggle one slot in/out of the bulk multi-selection (driven by double-click).
+// Re-styles the block in place (no grid re-render → keeps scroll position) and
+// refreshes the selection bar.
+function _boToggleCellSelection(block) {
+  const bunk = block.dataset.bunk;
+  const startMin = parseInt(block.dataset.start);
+  const endMin = parseInt(block.dataset.end);
+  const lt = block.dataset.layerType || null;
+  if (isNaN(startMin) || isNaN(endMin)) return;
+  const key = bunk + '' + startMin + '' + endMin + '' + (lt || '');
+  if (_boSelectedCells.has(key)) {
+    _boSelectedCells.delete(key);
+    block.style.outline = '';
+    block.style.outlineOffset = '';
+    block.classList.remove('bo-cell-selected');
+  } else {
+    _boSelectedCells.set(key, { bunk, startMin, endMin, layerType: lt });
+    block.style.outline = '3px solid #2563eb';
+    block.style.outlineOffset = '-3px';
+    block.classList.add('bo-cell-selected');
+  }
+  _boUpdateSelBar();
+}
+
+function _boUpdateSelBar() {
+  const bar = document.getElementById('bo-sel-bar');
+  if (!bar) return;
+  const n = _boSelectedCells.size;
+  if (n === 0) { bar.style.display = 'none'; return; }
+  bar.style.display = 'flex';
+  const cnt = bar.querySelector('#bo-sel-count');
+  if (cnt) cnt.textContent = n + (n === 1 ? ' slot selected' : ' slots selected');
+}
+
+// Searchable, multi-select activity picker. Pick ONE = a concrete override; pick
+// TWO+ = an "either/or" pool the solver resolves (fairness + availability). Writes
+// to every slot in the active multi-selection, or just the clicked slot if none.
 function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
-  // Remove any existing picker
   const existing = document.getElementById('bo-activity-picker');
   if (existing) existing.remove();
-  // layerType is optional — set only in auto-mode where multiple layers share
-  // the same time window and we need to disambiguate which one is overridden.
   layerType = layerType || anchorEl?.dataset?.layerType || null;
 
+  // Resolve target cells: the multi-selection if any, else the single clicked slot.
+  const targets = (_boSelectedCells.size > 0)
+    ? Array.from(_boSelectedCells.values())
+    : (bunk != null && startMin != null && endMin != null)
+      ? [{ bunk, startMin, endMin, layerType }]
+      : [];
+  if (targets.length === 0) return;
+  const bulk = _boSelectedCells.size > 0;
+
   const groups = _boGetActivityGroups();
+  const chosen = new Map(); // name -> item
 
   const picker = document.createElement('div');
   picker.id = 'bo-activity-picker';
-  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:400px;width:280px;overflow:auto;padding:8px 0;';
+  picker.style.cssText = 'position:fixed;z-index:10000;background:#fff;border:1px solid #d1d5db;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.15);max-height:470px;width:300px;display:flex;flex-direction:column;overflow:hidden;';
 
-  // Position near the clicked block
   const rect = anchorEl.getBoundingClientRect();
-  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 410) + 'px';
-  picker.style.left = Math.min(rect.left, window.innerWidth - 290) + 'px';
+  picker.style.top = Math.min(rect.bottom + 4, window.innerHeight - 480) + 'px';
+  picker.style.left = Math.min(rect.left, window.innerWidth - 310) + 'px';
 
   // Header
   const header = document.createElement('div');
-  header.style.cssText = 'padding:6px 12px;font-size:12px;color:#64748b;border-bottom:1px solid #e5e7eb;';
-  header.textContent = bunk + ' · ' + minutesToTime(startMin) + '-' + minutesToTime(endMin);
+  header.style.cssText = 'padding:8px 12px;font-size:12px;color:#475569;border-bottom:1px solid #e5e7eb;background:#f8fafc;font-weight:600;';
+  header.textContent = bulk
+    ? ('🎯 ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's') + ' selected')
+    : (targets[0].bunk + ' · ' + minutesToTime(targets[0].startMin) + '-' + minutesToTime(targets[0].endMin));
   picker.appendChild(header);
 
-  // Revert option (if this is an override)
-  if (anchorEl.classList.contains('bo-override')) {
+  // Revert (single override cell only)
+  if (!bulk && anchorEl.classList && anchorEl.classList.contains('bo-override')) {
     const revertRow = document.createElement('div');
     revertRow.style.cssText = 'padding:6px 12px;cursor:pointer;font-size:12px;color:#dc2626;font-weight:600;border-bottom:1px solid #e5e7eb;';
     revertRow.textContent = '↩ Revert to grade skeleton';
@@ -6976,6 +7066,21 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
     picker.appendChild(revertRow);
   }
 
+  // Type-ahead search
+  const searchWrap = document.createElement('div');
+  searchWrap.style.cssText = 'padding:8px 10px;border-bottom:1px solid #f1f5f9;';
+  const search = document.createElement('input');
+  search.type = 'text';
+  search.placeholder = '🔍 Type to filter… (e.g. "foo" → Football)';
+  search.style.cssText = 'width:100%;box-sizing:border-box;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;';
+  searchWrap.appendChild(search);
+  picker.appendChild(searchWrap);
+
+  // Scrollable body
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;overflow:auto;padding:6px 0;';
+  picker.appendChild(body);
+
   const categoryDefs = [
     { key: 'pinned', label: '📌 Pinned Activities', items: groups.pinned },
     { key: 'facilities', label: '🏢 Facilities', items: groups.facilities },
@@ -6984,30 +7089,103 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
     { key: 'sports', label: '⚽ Sports', items: groups.sports }
   ];
 
+  const rowEls = [];
+  let applyBtn;
+  const updateApply = () => {
+    const n = chosen.size;
+    applyBtn.disabled = (n === 0);
+    if (n === 0) {
+      applyBtn.style.background = '#cbd5e1'; applyBtn.style.cursor = 'not-allowed';
+      applyBtn.textContent = 'Apply';
+    } else {
+      applyBtn.style.background = (n >= 2) ? '#10b981' : '#f59e0b';
+      applyBtn.style.cursor = 'pointer';
+      applyBtn.textContent = (n >= 2)
+        ? ('Apply either/or (' + n + ') → ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's'))
+        : ('Apply → ' + targets.length + ' slot' + (targets.length === 1 ? '' : 's'));
+    }
+  };
+
   categoryDefs.forEach(cat => {
     if (cat.items.length === 0) return;
     const groupLabel = document.createElement('div');
+    groupLabel.className = 'bo-pick-group';
     groupLabel.style.cssText = 'padding:6px 12px 2px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.04em;';
     groupLabel.textContent = cat.label;
-    picker.appendChild(groupLabel);
-
+    body.appendChild(groupLabel);
+    const rowsInGroup = [];
     cat.items.forEach(item => {
       const row = document.createElement('div');
-      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;';
-      row.textContent = item.label;
-      row.onmouseenter = () => { row.style.background = '#f1f5f9'; };
-      row.onmouseleave = () => { row.style.background = ''; };
+      row.className = 'bo-pick-row';
+      row.dataset.search = (item.name + ' ' + (item.label || '')).toLowerCase();
+      row.style.cssText = 'padding:5px 12px;cursor:pointer;font-size:12px;color:#374151;display:flex;align-items:center;gap:8px;';
+      const check = document.createElement('span');
+      check.style.cssText = 'width:14px;display:inline-block;color:#10b981;font-weight:700;';
+      const lbl = document.createElement('span');
+      lbl.textContent = item.label;
+      row.appendChild(check);
+      row.appendChild(lbl);
+      row.onmouseenter = () => { if (!chosen.has(item.name)) row.style.background = '#f1f5f9'; };
+      row.onmouseleave = () => { if (!chosen.has(item.name)) row.style.background = ''; };
       row.onclick = () => {
-        _boApplyOverride(bunk, startMin, endMin, item, layerType);
-        picker.remove();
+        if (chosen.has(item.name)) {
+          chosen.delete(item.name); check.textContent = ''; row.style.background = '';
+        } else {
+          chosen.set(item.name, item); check.textContent = '✓'; row.style.background = '#ecfdf5';
+        }
+        updateApply();
       };
-      picker.appendChild(row);
+      body.appendChild(row);
+      rowEls.push(row);
+      rowsInGroup.push(row);
     });
+    groupLabel._rows = rowsInGroup;
   });
 
-  document.body.appendChild(picker);
+  // Footer
+  const footer = document.createElement('div');
+  footer.style.cssText = 'padding:8px 10px;border-top:1px solid #e5e7eb;background:#f8fafc;';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'font-size:10px;color:#64748b;margin-bottom:6px;';
+  hint.textContent = 'Pick 1 = set activity · pick 2+ = either/or (solver decides).';
+  applyBtn = document.createElement('button');
+  applyBtn.type = 'button';
+  applyBtn.style.cssText = 'width:100%;padding:7px;font-size:12px;background:#cbd5e1;color:#fff;border:none;border-radius:6px;cursor:not-allowed;font-weight:700;';
+  applyBtn.textContent = 'Apply';
+  applyBtn.disabled = true;
+  footer.appendChild(hint);
+  footer.appendChild(applyBtn);
+  picker.appendChild(footer);
 
-  // Close on outside click
+  const doApply = () => {
+    if (chosen.size === 0) return;
+    _boApplyOverrideBulk(targets, Array.from(chosen.values()), layerType);
+    picker.remove();
+  };
+  applyBtn.onclick = doApply;
+
+  search.oninput = () => {
+    const q = search.value.trim().toLowerCase();
+    rowEls.forEach(r => { r.style.display = (!q || r.dataset.search.includes(q)) ? 'flex' : 'none'; });
+    body.querySelectorAll('.bo-pick-group').forEach(g => {
+      const anyVisible = (g._rows || []).some(r => r.style.display !== 'none');
+      g.style.display = anyVisible ? 'block' : 'none';
+    });
+  };
+  search.onkeydown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (chosen.size > 0) { doApply(); return; }
+      const firstVisible = rowEls.find(r => r.style.display !== 'none');
+      if (firstVisible) { firstVisible.onclick(); doApply(); }
+    } else if (e.key === 'Escape') {
+      picker.remove();
+    }
+  };
+
+  document.body.appendChild(picker);
+  setTimeout(() => { try { search.focus(); } catch (_e) {} }, 30);
+
   const closeHandler = (e) => {
     if (!picker.contains(e.target) && e.target !== anchorEl) {
       picker.remove();
@@ -7017,31 +7195,62 @@ function _boShowPicker(anchorEl, bunk, startMin, endMin, layerType) {
   setTimeout(() => document.addEventListener('mousedown', closeHandler), 0);
 }
 
-function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
+// Write one override per target cell. items.length === 1 ⇒ concrete override;
+// items.length >= 2 ⇒ an "either/or" sportPool the solver resolves at gen time.
+function _boApplyOverrideBulk(targets, items, layerTypeFallback) {
+  if (!targets || !targets.length || !items || !items.length) return;
   let overrides = currentOverrides.bunkActivityOverrides || [];
-  // Remove any existing override for this bunk + same time + same layer (or no
-  // layerType for legacy manual-mode overrides). Different layers at the same
-  // time (auto-mode floaters) coexist.
-  overrides = overrides.filter(o => !(
-    o.bunk === bunk
-    && o.startMin === startMin
-    && o.endMin === endMin
-    && (o.layerType || null) === (layerType || null)
-  ));
-  overrides.push({
-    id: uid(),
-    bunk: bunk,
-    activity: item.name,
-    location: item.location || null,
-    startTime: minutesToTime(startMin),
-    endTime: minutesToTime(endMin),
-    startMin: startMin,
-    endMin: endMin,
-    type: item.type,
-    layerType: layerType || null
+  const isPool = items.length >= 2;
+  const names = items.map(it => it.name);
+  targets.forEach(t => {
+    const lt = (t.layerType != null ? t.layerType : layerTypeFallback) || null;
+    // Replace any existing override at this exact (bunk, window, layer).
+    overrides = overrides.filter(o => !(
+      o.bunk === t.bunk
+      && o.startMin === t.startMin
+      && o.endMin === t.endMin
+      && (o.layerType || null) === lt
+    ));
+    if (isPool) {
+      overrides.push({
+        id: uid(),
+        bunk: t.bunk,
+        activity: names.join(' / '),
+        overrideMode: 'sportPool',
+        type: 'sportPool',
+        sportPool: names.slice(),
+        poolItems: items.map(it => ({ name: it.name, type: it.type, location: it.location || null })),
+        location: null,
+        startTime: minutesToTime(t.startMin),
+        endTime: minutesToTime(t.endMin),
+        startMin: t.startMin,
+        endMin: t.endMin,
+        layerType: lt
+      });
+    } else {
+      const it = items[0];
+      overrides.push({
+        id: uid(),
+        bunk: t.bunk,
+        activity: it.name,
+        location: it.location || null,
+        startTime: minutesToTime(t.startMin),
+        endTime: minutesToTime(t.endMin),
+        startMin: t.startMin,
+        endMin: t.endMin,
+        type: it.type,
+        layerType: lt
+      });
+    }
   });
   _boSaveOverrides(overrides);
+  _boSelectedCells.clear();
   renderBunkOverridesUI();
+}
+
+// Back-compat single-cell apply (window-exposed; delegates to the bulk writer).
+function _boApplyOverride(bunk, startMin, endMin, item, layerType) {
+  _boApplyOverrideBulk([{ bunk, startMin, endMin, layerType: layerType || null }], [item], layerType || null);
 }
 
 function createChip(name, color) {
