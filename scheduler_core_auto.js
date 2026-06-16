@@ -27601,6 +27601,74 @@
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.866 — FINAL SPECIAL-CAPACITY GATE (mirror auto_validator)
+        // ═══════════════════════════════════════════════════════════════════
+        // The FN-19/21 sweep enforces caps on the grid AS IT FINDS IT, but its
+        // own swap-refill — and the later fill/absorb passes — can place two
+        // same-grade bunks into the SAME cap-1 special at the SAME window AFTER
+        // the sweep already ran. The diagnostic proved this: pre-sweep those
+        // Period-1 slots held Baking (correctly capped to 2); the displaced
+        // bunks were then refilled with Arts&Crafts/Accessorize/etc., landing 2
+        // of the same grade in one cap-1 room. This DEAD-LAST gate re-checks
+        // every special by its real cap and demotes the surplus occupant(s) to
+        // Free, so nothing over-cap can reach the validator. Only specials are
+        // touched (real fields keep their own capacity/sharing); explicit
+        // cap-2 specials (Baking/VR) keep 2; leagues/trips/rotation events and
+        // whole-grade custom layers are never touched.
+        try {
+            var _fcgSA = window.scheduleAssignments || {};
+            var _fcgDivs = window.divisions || {};
+            var _fcgDT = window.divisionTimes || {};
+            var _fcgB2G = {}; Object.keys(_fcgDivs).forEach(function (g) { ((_fcgDivs[g] && _fcgDivs[g].bunks) || []).forEach(function (b) { _fcgB2G[String(b)] = g; }); });
+            var _fcgApp1 = (function () { try { return _fn24DurableApp1(); } catch (_e) { return null; } })();
+            var _fcgKnown = {};
+            ((_fcgApp1 && _fcgApp1.specialActivities) || []).forEach(function (s) { if (s && s.name) { _fcgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _fcgKnown[String(s.location).toLowerCase().trim()] = 1; } });
+            try { if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) todaysSpecials.forEach(function (s) { if (s && s.name) { _fcgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _fcgKnown[String(s.location).toLowerCase().trim()] = 1; } }); } catch (_e) {}
+            var _fcgTime = function (bunk, grade, idx, e) {
+                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_fcgDT[grade] && _fcgDT[grade]._perBunkSlots && _fcgDT[grade]._perBunkSlots[bunk]);
+                if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                var ds = _fcgDT[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                return null;
+            };
+            var _fcgGroups = {};
+            Object.keys(_fcgSA).forEach(function (bunk) {
+                var slots = _fcgSA[bunk]; if (!Array.isArray(slots)) return;
+                var g = _fcgB2G[String(bunk)] || '?';
+                slots.forEach(function (e, idx) {
+                    if (!e || e.continuation) return;
+                    if (e._league || e._isTrip || e._isRotationEvent) return;
+                    if (e.type === 'custom' || e._customActivity) return;
+                    var nm = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
+                    if (!nm || !_fcgKnown[nm]) return;          // specials only — sports/fields untouched
+                    var t = _fcgTime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                    var key = g + '|' + nm + '|' + t.s + '-' + t.e;
+                    (_fcgGroups[key] = _fcgGroups[key] || []).push({ bunk: bunk, idx: idx, nm: nm });
+                });
+            });
+            var _fcgDemoted = 0;
+            Object.keys(_fcgGroups).forEach(function (k) {
+                var grp = _fcgGroups[k];
+                if (grp.length < 2) return;
+                var cap = 1;
+                try { var info = getSpecialSharingInfo(grp[0].nm, activityProperties, globalSettings); cap = (info && info.capacity) || 1; } catch (_e) { cap = 1; }
+                if (grp.length <= cap) return;
+                grp.sort(function (a, b) { return String(a.bunk).localeCompare(String(b.bunk)) || (a.idx - b.idx); });
+                for (var i = cap; i < grp.length; i++) {
+                    var u = grp[i];
+                    var cur = _fcgSA[u.bunk] && _fcgSA[u.bunk][u.idx];
+                    if (!cur || cur.field === 'Free') continue;
+                    var st = (cur._startMin != null) ? cur._startMin : null, en = (cur._endMin != null) ? cur._endMin : null;
+                    _fcgSA[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: st, _endMin: en, _source: 'final-cap-gate', continuation: false };
+                    _fcgDemoted++;
+                }
+            });
+            if (_fcgDemoted > 0) log('[STEP 6.866 FINAL-CAP GATE] demoted ' + _fcgDemoted + ' over-cap special occupant(s) → Free (created after the FN-19/21 sweep)');
+            else log('[STEP 6.866 FINAL-CAP GATE] ✅ no post-sweep over-cap specials');
+        } catch (_eFcg) { try { warn('[STEP 6.866 FINAL-CAP GATE] error: ' + (_eFcg && _eFcg.message)); } catch (_x) {} }
+
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.87 — OFF-GRID EDGE-CLIP (cover the TRUE division boundary)
         // ═══════════════════════════════════════════════════════════════════
         // When a division's true start/end is NOT on the 5-minute grid (e.g.
