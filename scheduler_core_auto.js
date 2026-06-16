@@ -14465,9 +14465,18 @@
                         var _p23AllFree = [];
                         for (var _p23i = 0; _p23i < _p23Candidates.length; _p23i++) {
                             var _p23P = _p23Candidates[_p23i];
+                            // ★ STAGGER COVERAGE: for a synthesized full-day window (no bell
+                            //   periods) step finely (5-min grain) so swim can slot into the
+                            //   gaps BETWEEN this bunk's walls/pool-busy times instead of only
+                            //   the coarse 40-min-aligned starts. Without this, staggered swim
+                            //   ✗'d whenever the few 40-min-aligned starts happened to hit a
+                            //   wall or pool collision — even though an open slot existed a few
+                            //   minutes over. Real bell-schedule periods stay period-aligned
+                            //   (Phase 2.4's wet-bundle needs swim snapped to a single period).
+                            var _p23Step = _p23P._synthetic ? 5 : _p23SwimDur;
                             for (var _p23tryS = _p23P.startMin;
                                      _p23tryS + _p23SwimDur <= _p23P.endMin;
-                                     _p23tryS += _p23SwimDur) {
+                                     _p23tryS += _p23Step) {
                                 var _p23tryE = _p23tryS + _p23SwimDur;
                                 if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue;
                                 var _p23Free = true;
