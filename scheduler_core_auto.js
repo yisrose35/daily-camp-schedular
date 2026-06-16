@@ -1461,32 +1461,33 @@
         });
         if (_wetBundleTargets.size > 0) {
             log('[STEP 1.5] Force-pinning wet-bundle target layer types: ' + Array.from(_wetBundleTargets).join(', '));
-            // ★ DIAG: print the resolved Pool sharing config so we can tell
-            //   whether the everyone-locked-out behavior is a capacity limit
-            //   (cap counts BUNKS) vs an exclusive/not_sharable setting.
-            try {
-                const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
-                const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(f => { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
-                // Resolve the SWIM general-activity sharing too (preferred by canUsePoolAtTime).
-                let _swimGASW = null, _swimGASrc = '';
-                (( _gsP.facilities) || []).forEach(fac => {
-                    (fac && fac.generalActivities || []).forEach(ga => {
-                        if (!_swimGASW && ga && ((String(ga.quickType||'').toLowerCase()==='swim') || (String(ga.name||'').toLowerCase()==='swim')) && ga.sharableWith) {
-                            _swimGASW = ga.sharableWith; _swimGASrc = (fac.name || '?') + '→' + (ga.name || 'Swim');
-                        }
-                    });
-                });
-                const _swEff = _swimGASW || (_pf && _pf.sharableWith) || null;
-                if (_swEff) {
-                    const _st = _swEff.type || _swEff.shareType || 'all';
-                    const _cap = _st === 'not_sharable' ? 1 : (parseInt(_swEff.capacity) > 0 ? parseInt(_swEff.capacity) : (_st === 'all' ? 999 : 12));
-                    log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_swEff.allowedPairs || {}).length) + ' [source=' + (_swimGASW ? ('swim-activity ' + _swimGASrc) : 'pool-field') + ']');
-                } else {
-                    const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
-                    log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
-                }
-            } catch (_epc) {}
         }
+        // ★ DIAG (always-on): print the resolved Pool sharing config so we can tell
+        //   whether the everyone-locked-out behavior is a capacity limit
+        //   (cap counts BUNKS) vs an exclusive/not_sharable setting. Ungated so it
+        //   prints on EVERY run — needed to confirm the Swim-activity sharing is read.
+        try {
+            const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
+            const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(f => { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
+            // Resolve the SWIM general-activity sharing too (preferred by canUsePoolAtTime).
+            let _swimGASW = null, _swimGASrc = '';
+            (( _gsP.facilities) || []).forEach(fac => {
+                (fac && fac.generalActivities || []).forEach(ga => {
+                    if (!_swimGASW && ga && ((String(ga.quickType||'').toLowerCase()==='swim') || (String(ga.name||'').toLowerCase()==='swim')) && ga.sharableWith) {
+                        _swimGASW = ga.sharableWith; _swimGASrc = (fac.name || '?') + '→' + (ga.name || 'Swim');
+                    }
+                });
+            });
+            const _swEff = _swimGASW || (_pf && _pf.sharableWith) || null;
+            if (_swEff) {
+                const _st = _swEff.type || _swEff.shareType || 'all';
+                const _cap = _st === 'not_sharable' ? 1 : (parseInt(_swEff.capacity) > 0 ? parseInt(_swEff.capacity) : (_st === 'all' ? 999 : 12));
+                log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_swEff.allowedPairs || {}).length) + ' [source=' + (_swimGASW ? ('swim-activity ' + _swimGASrc) : 'pool-field') + ']');
+            } else {
+                const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
+                log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
+            }
+        } catch (_epc) {}
 
         const classOrder = { pinned: 0, windowed: 1, open: 2 };
         classified.sort((a, b) => {
@@ -23640,6 +23641,66 @@
             });
             if (_wdFlagged === 0) log('[WetDiag] every swim has a Change on both sides — clean');
         } catch (_ewd) {}
+
+        // ★ COVERAGE REPORT (always-on) — from the AUTHORITATIVE final
+        //   scheduleAssignments, list every bunk that is missing a general
+        //   activity its grade's layers asked for (swim / lunch). This is the
+        //   definitive "who actually didn't get swim/lunch" answer: it reads the
+        //   final saved grid (post sport-fill / recapture / demotes), not the
+        //   intermediate bunkTimelines, so a live log shows the exact scope and
+        //   what occupies the day of any bunk that came up short — no guessing
+        //   from WetDiag (which only dumps swim rows that already exist).
+        try {
+            const _saCV = window.scheduleAssignments || {};
+            const _gmCV = s => (s && (s._startMin != null ? s._startMin : s.startMin));
+            const _geCV = s => (s && (s._endMin   != null ? s._endMin   : s.endMin));
+            const _fmtCV = m => (m == null ? '?' : Math.floor(m / 60) + ':' + String(((m % 60) + 60) % 60).padStart(2, '0'));
+            const _typeCV = s => String(s && (s.type || '')).toLowerCase();
+            const _actCV  = s => String(s && (s._activity || s.event || s.name || '')).toLowerCase();
+            const _hasType = (row, t) => row.some(s => _typeCV(s) === t || _actCV(s) === t);
+            // Which general types does each grade's layer config actually request?
+            const _gradeWants = {};
+            try {
+                Object.keys(layersByGrade || {}).forEach(g => {
+                    const set = new Set();
+                    (layersByGrade[g] || []).forEach(l => {
+                        const t = String(l && (l.type || '')).toLowerCase();
+                        if (t === 'swim' || t === 'lunch') set.add(t);
+                    });
+                    if (set.size) _gradeWants[g] = set;
+                });
+            } catch (_egw) {}
+            const _bunkGrade = bk => {
+                try {
+                    for (const g of Object.keys(_gradeWants)) {
+                        const bunks = getBunksForGrade(g, divisions) || [];
+                        if (bunks.map(String).includes(String(bk))) return g;
+                    }
+                } catch (_ebg) {}
+                return null;
+            };
+            const _missSwim = [], _missLunch = [];
+            Object.keys(_saCV).forEach(bk => {
+                const arr = _saCV[bk];
+                if (!Array.isArray(arr)) return;
+                const row = arr.filter(s => s && _gmCV(s) != null).slice().sort((a, b) => _gmCV(a) - _gmCV(b));
+                const g = _bunkGrade(bk);
+                const wants = (g && _gradeWants[g]) || null;
+                if (!wants) return; // grade didn't ask for swim/lunch — nothing to flag
+                if (wants.has('swim')  && !_hasType(row, 'swim'))  _missSwim.push({ bk, row });
+                if (wants.has('lunch') && !_hasType(row, 'lunch')) _missLunch.push({ bk, row });
+            });
+            const _dumpCV = (label, list) => {
+                if (!list.length) { log('[COVERAGE] ✅ ' + label + ': every bunk that wanted it got it'); return; }
+                log('[COVERAGE] ⚠ ' + label + ': ' + list.length + ' bunk(s) MISSING — ' + list.map(x => x.bk).join(', '));
+                list.slice(0, 12).forEach(x => {
+                    log('[COVERAGE]    ' + x.bk + ' day = ' +
+                        (x.row.length ? x.row.map(s => (s.type || '?') + ':' + (s._activity || s.event || '') + '@' + _fmtCV(_gmCV(s)) + '-' + _fmtCV(_geCV(s))).join('  ') : '(empty)'));
+                });
+            };
+            _dumpCV('SWIM',  _missSwim);
+            _dumpCV('LUNCH', _missLunch);
+        } catch (_ecv) {}
 
         // ★ FN-59: FINAL TRIP RE-WRITE — the multi-slot write ran once after
         // materialization, but every pass since (sport writes, perfection
