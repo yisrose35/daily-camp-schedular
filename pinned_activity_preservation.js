@@ -225,6 +225,17 @@
             for (let slotIdx = 0; slotIdx < slots.length; slotIdx++) {
                 const entry = slots[slotIdx];
 
+                // ★ Staggered shared-room reserved WALL: the auto solver tags these
+                //   _pinned:true so every post-solve sweep treats them like lunch (a
+                //   wall it never demotes). But unlike a USER pin they must be
+                //   re-DERIVED from the layer config on every regeneration (the
+                //   stagger anchor depends on the live grade set / shifted days), not
+                //   frozen and carried forward. Skip them here so capture/restore
+                //   never snapshots an auto-derived wall as a user pin.
+                if (entry && entry._staggerReserved === true) {
+                    continue;
+                }
+
                 // Check if this is a pinned entry
                 if (entry && entry._pinned === true) {
                     // Drop pin if its activity isn't in any current registry.

@@ -20276,19 +20276,31 @@
                             _stepRulesBlocked.push({ bunk, grade, idx, fieldName: resolvedField, activity: _pcAct, reason: (isCustom ? 'custom-write: ' : 'pinned-write: ') + _pcRulesWhy });
                             return;
                         }
+                        // ★ Staggered shared-room custom reserved sub-slot = a WALL.
+                        //   When the per-grade sub-slot is genuinely non-overlapping
+                        //   (_staggerReserved, set only on the clean tiling — see the
+                        //   guard at the needs-planner ~L8214), represent it EXACTLY
+                        //   like lunch / a Phase-0 pinned wall: _pinned + _fixed +
+                        //   _activityLocked. That single representation makes the block
+                        //   immune to EVERY post-solve sweep that already honors _pinned
+                        //   (STEP 4.5, FN-15, FN-19/21, _xdivBackstop, FN-22, drop-refill,
+                        //   perfection, auto_validator, the daily_adjustments capacity
+                        //   gate) AND any future sweep — instead of whitelisting
+                        //   _staggerReserved in each pass one at a time.
+                        //   pinned_activity_preservation explicitly skips _staggerReserved
+                        //   entries so this wall is re-DERIVED each generation (not frozen
+                        //   like a user pin); see capturePinnedActivities.
+                        const _isReservedWall = isCustom && (block._staggerReserved || false);
                         window.scheduleAssignments[String(bunk)][idx] = {
                             field: resolvedField,
                             sport: resolvedSport,
                             _activity: _pcAct,
-                            _fixed: true, _pinned: block._classification === 'pinned',
+                            _fixed: true,
+                            _pinned: (block._classification === 'pinned') || _isReservedWall,
                             _bunkOverride: true, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
                             _customField: block._customField || null,
-                            // ★ Staggered shared-room custom: reserved per-grade sub-slot.
-                            //   STEP 4.5 skips this entry (it sits on a non-overlapping
-                            //   timeline slot) so the activity isn't demoted as a spurious
-                            //   cross-grade violation.
-                            _staggerReserved: isCustom ? (block._staggerReserved || false) : false,
+                            _staggerReserved: _isReservedWall,
                             _autoMode: true, continuation: false,
                             _startMin: block.startMin, _endMin: block.endMin
                         };
@@ -26314,7 +26326,12 @@
                 Object.keys(sa2).forEach(function (bb) {
                     (sa2[bb] || []).forEach(function (e) {
                         if (!e || e.continuation) return;
-                        if (e.type || e._autoSpecial || e._pinned) return;
+                        // ★ Never demote a WALL or hard placement. _pinned covers lunch,
+                        //   Phase-0 walls, user pins AND the staggered shared-room reserved
+                        //   sub-slot (now materialized with _pinned:true). _staggerReserved
+                        //   is kept as a belt-and-suspenders guard so a future change that
+                        //   stops setting _pinned on the reserve still can't demote it here.
+                        if (e.type || e._autoSpecial || e._pinned || e._staggerReserved) return;
                         if (e._league || e._leagueGame || e.leagueName) return;
                         const fk = String(e.field || '').toLowerCase().trim();
                         if (!fk || fk === 'free' || !_fpX[fk]) return;
@@ -26323,43 +26340,71 @@
                         (byField[fk] = byField[fk] || []).push({ e: e, bunk: String(bb), grade: _bgX[String(bb)], st: st, en: en });
                     });
                 });
+                // ★ A _staggerReserved block holding the room at a window is a legitimate
+                //   reserved tiling, not a competitor — count it as occupied capacity but
+                //   never demote it. Build a per-field list of reserved windows so the
+                //   greedy cap below seeds "kept" with them.
+                const _reservedByField = {};
+                Object.keys(sa2).forEach(function (bb) {
+                    (sa2[bb] || []).forEach(function (e) {
+                        if (!e || e.continuation || !e._staggerReserved) return;
+                        const fk = String(e.field || e._customField || '').toLowerCase().trim();
+                        if (!fk || !_fpX[fk]) return;
+                        const st = (e._startMin != null ? e._startMin : e.startMin), en = (e._endMin != null ? e._endMin : e.endMin);
+                        if (st == null || en == null) return;
+                        (_reservedByField[fk] = _reservedByField[fk] || []).push({ bunk: String(bb), grade: _bgX[String(bb)], st: st, en: en, _reserved: true });
+                    });
+                });
                 let demotedX = 0;
                 Object.keys(byField).forEach(function (fk) {
                     const cfg = _fpX[fk], list = byField[fk];
-                    let changed = true, guard = 0;
-                    while (changed && guard++ < 20) {
-                        changed = false;
-                        for (let i = 0; i < list.length && !changed; i++) {
-                            const a = list[i];
-                            if (a.e.field === 'Free') continue;
-                            // overlapping co-occupants (excluding demoted)
-                            const co = list.filter(function (x) { return x !== a && x.e.field !== 'Free' && x.st < a.en && a.st < x.en; });
-                            if (!co.length) continue;
-                            const grades = {}; grades[a.grade] = 1;
-                            co.forEach(function (x) { grades[x.grade] = 1; });
-                            const gradeNames = Object.keys(grades);
-                            let illegal = false;
-                            if (cfg.type === 'not_sharable') illegal = true;
-                            else if (co.length + 1 > cfg.cap) illegal = true;
-                            else if (cfg.type === 'same_division' && gradeNames.length > 1) illegal = true;
-                            else if (cfg.type === 'cross_division' && gradeNames.length > 1) {
-                                for (let gi = 0; gi < gradeNames.length && !illegal; gi++) {
-                                    for (let gj = gi + 1; gj < gradeNames.length && !illegal; gj++) {
-                                        if (!cfg.pairs[[gradeNames[gi], gradeNames[gj]].sort().join('|')]) illegal = true;
+                    // Group by IDENTICAL window (mirror FN-19/21 PASS 2). Demote-on-overlap
+                    //   anti-stagger is handled by FN-19/21; here we only enforce
+                    //   capacity + sharing-type on co-occupant groups, pair-aware via
+                    //   isCrossDivAllowed (NOT a raw 2-grade pairs lookup — that ignored
+                    //   gradeShareRules and treated within-capacity same-grade shares as
+                    //   illegal, which demoted 8 legal same-grade Auto shares in a cap-20
+                    //   room). A within-capacity same-grade share is ALWAYS legal.
+                    const groups = {};
+                    list.forEach(function (u) { if (u.e.field === 'Free') return; const k = u.st + '-' + u.en; (groups[k] = groups[k] || []).push(u); });
+                    Object.keys(groups).forEach(function (k) {
+                        // most senior first so juniors are demoted last
+                        const grp = groups[k].sort(function (x, y) {
+                            return (_senX[x.grade] != null ? _senX[x.grade] : 99) - (_senX[y.grade] != null ? _senX[y.grade] : 99);
+                        });
+                        const capMax = (cfg.type === 'not_sharable') ? 1 : (cfg.cap || 1);
+                        // Seed kept with reserved-wall occupants overlapping this window —
+                        //   they hold capacity and their grades are already legitimately
+                        //   present, but they are never demoted.
+                        const kept = (_reservedByField[fk] || [])
+                            .filter(function (r) { const gs = k.split('-'); const ks = +gs[0], ke = +gs[1]; return r.st < ke && r.en > ks; })
+                            .map(function (r) { return r.grade; });
+                        grp.forEach(function (u) {
+                            if (u.e.field === 'Free') return;
+                            let ok = kept.length < capMax;
+                            if (ok && kept.length > 0) {
+                                // Same-grade co-occupants are ALWAYS legal within capacity —
+                                //   only DIFFERENT grades trigger a sharing-type check. (Note:
+                                //   isCrossDivAllowed returns false for an 'X|X' key, so it must
+                                //   only ever see the cross-grade subset.)
+                                const _others = kept.filter(function (gg) { return gg !== u.grade; });
+                                if (cfg.type === 'not_sharable') { if (_others.length > 0) ok = false; }
+                                else if (cfg.type === 'same_division') { if (_others.length > 0) ok = false; }
+                                else if (cfg.type === 'cross_division') {
+                                    if (_others.length > 0) {
+                                        if (typeof isCrossDivAllowed === 'function') { if (!isCrossDivAllowed(u.grade, _others, cfg.pairs)) ok = false; }
+                                        else { _others.forEach(function (gg) { if (!cfg.pairs[[gg, u.grade].sort().join('|')]) ok = false; }); }
                                     }
                                 }
+                                // 'all' / other types: capacity-only (already checked)
                             }
-                            if (!illegal) continue;
-                            // demote the most junior occupant in this overlap set
-                            const all = [a].concat(co);
-                            all.sort(function (x, y) { return (_senX[y.grade] != null ? _senX[y.grade] : 99) - (_senX[x.grade] != null ? _senX[x.grade] : 99); });
-                            const victim = all[0];
-                            try { console.warn('[XDIV-BACKSTOP] ' + victim.bunk + ' (' + victim.grade + ') demoted to Free — illegal share on "' + cfg.name + '" @' + victim.st + '-' + victim.en + ' (' + cfg.type + ', cap ' + cfg.cap + ')'); } catch (_eW) {}
-                            victim.e.field = 'Free'; victim.e.sport = null; victim.e._activity = 'Free';
-                            victim.e._source = 'xdiv-backstop';
-                            demotedX++; changed = true;
-                        }
-                    }
+                            if (ok) { kept.push(u.grade); return; }
+                            try { console.warn('[XDIV-BACKSTOP] ' + u.bunk + ' (' + u.grade + ') demoted to Free — illegal share on "' + cfg.name + '" @' + u.st + '-' + u.en + ' (' + cfg.type + ', cap ' + cfg.cap + ')'); } catch (_eW) {}
+                            u.e.field = 'Free'; u.e.sport = null; u.e._activity = 'Free';
+                            u.e._source = 'xdiv-backstop';
+                            demotedX++;
+                        });
+                    });
                 });
                 if (demotedX) log('  ⛔ Sharing-invariant backstop: demoted ' + demotedX + ' illegal share(s) to Free.');
             })();
