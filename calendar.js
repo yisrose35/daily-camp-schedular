@@ -1877,11 +1877,20 @@ all[date].updated_at = new Date().toISOString();
             }
             
             const currentState = window.loadGlobalSettings?.() || {};
-            
+
+            // ★ Quota: do NOT duplicate the full multi-date schedule cache
+            //   (campDailyData_v1, ~700KB) into the auto-save snapshot. It was the
+            //   single biggest blob and the #1 cause of the auto-save quota trip —
+            //   the snapshot roughly DOUBLED localStorage. The schedule is already
+            //   persisted canonically in campDailyData_v1 (local) AND in the cloud
+            //   (daily_schedules, authoritative); restoreAutoSave reloads the page,
+            //   so the cloud rehydrates the schedule. The snapshot now carries only
+            //   settings + histories — the point-in-time rollback that isn't
+            //   otherwise recoverable. (Full backups still capture the schedule via
+            //   a separate campDailyData_v1 entry — see the backup keys list.)
             const snapshot = {
                 timestamp: Date.now(),
                 [UNIFIED_CACHE_KEY]: JSON.stringify(currentState),
-                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
                 [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
                 [LEAGUE_HISTORY_KEY]: localStorage.getItem(LEAGUE_HISTORY_KEY),
                 [SPECIALTY_LEAGUE_HISTORY_KEY]: localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY),
@@ -1945,7 +1954,10 @@ all[date].updated_at = new Date().toISOString();
                 if (typeof window.setCloudState === 'function') {
                     const state = JSON.parse(snap[UNIFIED_CACHE_KEY]);
                     
-                    // Inject schedules if present in snapshot, so they sync too
+                    // ★ Schedules are no longer stored in the snapshot (see
+                    //   performAutoSave) — they live in campDailyData_v1 + the cloud.
+                    //   Older snapshots may still carry it, so honor it when present;
+                    //   otherwise the reload below rehydrates the schedule from cloud.
                     if (snap[DAILY_DATA_KEY]) {
                         state.daily_schedules = JSON.parse(snap[DAILY_DATA_KEY]);
                     }
