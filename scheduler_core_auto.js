@@ -26438,7 +26438,7 @@
                 }
                 return false;
             };
-            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0;
+            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0;
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -26608,16 +26608,86 @@
                     }
                     // No stretchable bounding block → leave Free (true impossibility).
                 }
+
+                // ── TRAILING-TAIL absorb ─────────────────────────────────────
+                // The between-pairs loop above only walks ADJACENT block pairs,
+                // so a Free span between the LAST real block and the division's
+                // configured day end is never considered (the engine's gap report
+                // doesn't even flag it). That is the user's "bunk ends 12:15 not
+                // 12:30" tail and a source of a stray trailing Free. Extend the
+                // last bounding SPORT over the tail (ideal), else stretch the last
+                // bounding SPECIAL / SWIM, but ONLY for a SMALL tail (< 2× floor):
+                // a larger trailing span should have been sport-filled and is left
+                // to surface. Same SAFE gates as the between-block ladder
+                // (isFieldAvailable + _validateWritePlacement + period coverage).
+                if (heads.length > 0) {
+                    var _divObj = (divisions && (divisions[g] || divisions[String(g)])) || {};
+                    var _gEnd = (typeof parseTimeToMinutes === 'function' && _divObj.endTime)
+                        ? parseTimeToMinutes(_divObj.endTime) : null;
+                    var _last = heads[heads.length - 1];
+                    var _tS = _last.e, _tE = _gEnd;
+                    if (_gEnd != null && _tE > _tS && (_tE - _tS) < 2 * floor &&
+                        (typeof coveredByContiguousPeriods !== 'function' || coveredByContiguousPeriods(_tS, _tE, g))) {
+                        var _lh = slots[_last.head];
+                        var _edgeDone = false;
+                        // (1) extend a flexible SPORT forward over the tail
+                        if (_sabSportElig(_lh)) {
+                            var _eAct = _lh._activity || _lh.sport;
+                            if ((typeof isFieldAvailable !== 'function' || isFieldAvailable(_lh.field, _tS, _tE, bunk, g, _lh.sport || _eAct)) &&
+                                (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(_lh.field, _eAct, g, bunk, _tS, _tE) === null)) {
+                                _lh._endMin = _tE; _edgeDone = true;
+                            }
+                        }
+                        // (2) else stretch the bounding SPECIAL forward
+                        if (!_edgeDone && _sabSpecialElig(_lh)) {
+                            var _eActS = _lh._activity || _lh.event;
+                            var _eFldS = _lh.field || _lh._specialLocation;
+                            if (_eFldS && _sabNorm(_eFldS) !== 'free' &&
+                                (typeof isFieldAvailable !== 'function' || isFieldAvailable(_eFldS, _tS, _tE, bunk, g, _eActS)) &&
+                                (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(_eFldS, _eActS, g, bunk, _tS, _tE) === null)) {
+                                _lh._endMin = _tE;
+                                if (_lh._specialDuration != null) _lh._specialDuration = _lh._endMin - _lh._startMin;
+                                _edgeDone = true;
+                            }
+                        }
+                        // (3) else stretch the bounding SWIM forward (real pool field)
+                        if (!_edgeDone && _sabSwimElig(_lh)) {
+                            var _eActW = _lh._activity || 'Swim';
+                            var _eFldW = _sabResolvePool(_lh);
+                            if (_eFldW && _sabNorm(_eFldW) !== 'free' &&
+                                (typeof isFieldAvailable !== 'function' || isFieldAvailable(_eFldW, _tS, _tE, bunk, g, _eActW)) &&
+                                (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(_eFldW, _eActW, g, bunk, _tS, _tE) === null)) {
+                                _lh._endMin = _tE; _edgeDone = true;
+                            }
+                        }
+                        if (_edgeDone) {
+                            // Overwrite any trailing Free placeholder(s) inside [_tS,_tE)
+                            // with continuations so no Free survives over the covered tail.
+                            for (var _kt = _last.tail + 1; _kt < slots.length; _kt++) {
+                                var _ts = slots[_kt];
+                                if (_ts && _ts._startMin != null && _ts._endMin != null &&
+                                    _ts._startMin >= _tS && _ts._endMin <= _tE) {
+                                    slots[_kt] = { field: _lh.field, sport: (_lh.sport != null ? _lh.sport : null),
+                                        _activity: _lh._activity || _lh.sport || _lh.event, type: _lh.type,
+                                        continuation: true, _startMin: _ts._startMin, _endMin: _ts._endMin,
+                                        _autoMode: true, _sliverAbsorbed: true, _specialLocation: _lh._specialLocation };
+                                }
+                            }
+                            try { if (typeof claimField === 'function') claimField(_lh.field, _tS, _tE, bunk, g, _lh._activity || _lh.sport || _lh.event); } catch (_e) {}
+                            _sabAbsorbed++; _sabByEdge++;
+                        }
+                    }
+                }
             });
             if (_sabAbsorbed > 0) {
                 log('  🩹 [STEP 6.865 SLIVER-ABSORB] absorbed ' + _sabAbsorbed + ' wall-bounded sub-floor sliver(s) (' +
                     _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special, ' +
-                    _sabBySwim + ' into a bounding swim block).');
+                    _sabBySwim + ' into a bounding swim block, ' + _sabByEdge + ' day-edge tail(s)).');
                 try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
             } else {
                 log('[STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.');
             }
-            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim); } catch (_e) {}
+            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
