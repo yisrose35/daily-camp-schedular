@@ -443,7 +443,17 @@
             standings: (league.standings && typeof league.standings === 'object') ? league.standings : {},
             games: Array.isArray(league.games) ? league.games : [],
             // ★ Preserve playoff sub-object — see leagues.js for the same fix.
-            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined
+            playoff: (league.playoff && typeof league.playoff === 'object') ? league.playoff : undefined,
+            // ★ LG-23: preserve the advanced options the SCHEDULER reads directly but
+            //   that this allowlist used to silently drop on every save — conferences +
+            //   inter-conference settings (matchup generation), gamesPerFieldSlot
+            //   (assignMatchupsToFieldsAndSlots), and per-team sports[]. Omitted when
+            //   absent (undefined → dropped by JSON), so normal leagues are unaffected.
+            conferences: Array.isArray(league.conferences) ? league.conferences : undefined,
+            allowInterConference: typeof league.allowInterConference === 'boolean' ? league.allowInterConference : undefined,
+            interConferencePriority: (league.interConferencePriority != null) ? league.interConferencePriority : undefined,
+            gamesPerFieldSlot: (typeof league.gamesPerFieldSlot === 'number' && league.gamesPerFieldSlot > 0) ? league.gamesPerFieldSlot : undefined,
+            sports: Array.isArray(league.sports) ? league.sports : undefined
         };
 
         // ★ Filter out orphaned divisions (divisions that no longer exist)
@@ -2394,6 +2404,12 @@
 
     window.SpecialtyLeaguesAPI.syncGamesFromGeneration = function (leagueId, dateKey, gameEntries) {
         try {
+            // ★ LG-4: the results store is normally hydrated only when the Specialty
+            //   Leagues tab is opened (initSpecialtyLeagues → loadData). If a generation
+            //   runs without the tab ever being opened, the store is empty and this sync
+            //   silently no-ops — the day's games never reach the results page / cloud.
+            //   Hydrate on demand so the write lands regardless of tab state.
+            if (Object.keys(specialtyLeagues).length === 0) { try { loadData(); } catch (_e) {} }
             const league = specialtyLeagues[leagueId];
             if (!league || !dateKey) return false;
             if (!Array.isArray(league.games)) league.games = [];
@@ -2466,6 +2482,9 @@
     window.SpecialtyLeaguesAPI.removeAutoGamesForDate = function (dateKey, leagueIds) {
         try {
             if (!dateKey) return;
+            // ★ LG-4: hydrate on demand (see syncGamesFromGeneration) so a date-delete
+            //   that runs before the tab is opened still clears the auto games.
+            if (Object.keys(specialtyLeagues).length === 0) { try { loadData(); } catch (_e) {} }
             const ids = (Array.isArray(leagueIds) && leagueIds.length > 0) ? leagueIds : Object.keys(specialtyLeagues);
             let changed = false;
             ids.forEach(function (id) {

@@ -512,7 +512,7 @@
     // ★★★ CRITICAL: ASSIGN MATCHUPS WITH GLOBAL LOCK CHECK ★★★
     // =========================================================================
 
-    function assignMatchupsToFieldsAndSlots(matchups, league, history, slots) {
+    function assignMatchupsToFieldsAndSlots(matchups, league, history, slots, divName) {
         const {
             id,
             fields,
@@ -545,7 +545,12 @@
         // Per-grade scoping: skip rules whose `divisions` list doesn't
         // intersect this league's active divisions. Empty/missing list = all.
         if (slots && slots.length > 0) {
-            const _divSlots = window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
+            // ★ LG-24: resolve the slot window against the DIVISION BEING SCHEDULED, not
+            //   an arbitrary first key of divisionTimes — slot index N maps to a different
+            //   clock time per division, so using the wrong division dropped/kept courts by
+            //   the wrong time window. Fall back to the first key only if divName is missing.
+            const _divSlots = (divName && window.divisionTimes?.[divName])
+                || window.divisionTimes?.[Object.keys(window.divisionTimes || {})[0]] || [];
             const _slotStart = _divSlots[slots[0]]?.startMin;
             const _slotEnd = _divSlots[slots[slots.length - 1]]?.endMin;
             if (_slotStart != null && _slotEnd != null) {
@@ -1063,7 +1068,7 @@
             matchups.forEach(m => console.log(`   • ${m.teamA} vs ${m.teamB} (${m.conference || 'No Conference'})`));
 
             // ★★★ ASSIGN MATCHUPS - RESPECTING GLOBAL LOCKS ★★★
-            const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, uniqueSlots);
+            const assignments = assignMatchupsToFieldsAndSlots(matchups, league, history, uniqueSlots, divName);
 
             // Carry playoff sport through to assignments for display/downstream
             if (_playoffRoundNum && assignments.length > 0) {

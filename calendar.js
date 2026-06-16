@@ -24,7 +24,12 @@
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
     const SMART_TILE_SPECIAL_HISTORY_KEY = "smartTileSpecialHistory_v1";
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
-    const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
+    // ★ LG-3: must match the engine's actual backup key
+    //   (scheduler_core_specialty_leagues.js SPECIALTY_HISTORY_KEY). The old value
+    //   "specialtyLeagueHistory_v1" was missing the "camp" prefix, so New Half /
+    //   Erase All / backup / export all operated on a phantom key — the real
+    //   specialty history was never cleared (stale rounds resurrected) or backed up.
+    const SPECIALTY_LEAGUE_HISTORY_KEY = "campSpecialtyLeagueHistory_v1";
     const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
 

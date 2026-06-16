@@ -468,7 +468,7 @@ describe('eraseAllDailyData', () => {
             'campDailyData_v1': JSON.stringify({ '2026-07-15': { scheduleAssignments: {}, leagueAssignments: {} } }),
             'campRotationHistory_v1': JSON.stringify({ 'Bunk 1': { 'Art': 3 } }),
             'campLeagueHistory_v2': JSON.stringify({ teamSports: { 'Hoops|TeamA': ['Baseball'] }, matchupHistory: {}, gamesPerDate: {}, offCampusCounts: {} }),
-            'specialtyLeagueHistory_v1': JSON.stringify({ round: 2 })
+            'campSpecialtyLeagueHistory_v1': JSON.stringify({ round: 2 })
         });
         supabaseLog = [];
         global.supabase = makeSupabaseMock();
@@ -480,7 +480,7 @@ describe('eraseAllDailyData', () => {
 
         assert.ok(fakeStorage.hasOwnProperty('campRotationHistory_v1'), 'Rotation history preserved');
         assert.ok(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), 'League matchup history preserved');
-        assert.ok(fakeStorage.hasOwnProperty('specialtyLeagueHistory_v1'), 'Specialty league history preserved');
+        assert.ok(fakeStorage.hasOwnProperty('campSpecialtyLeagueHistory_v1'), 'Specialty league history preserved');
     });
 });
 
@@ -547,7 +547,7 @@ describe('startNewHalf', () => {
             'smartTileHistory_v1': JSON.stringify({ data: true }),
             'smartTileSpecialHistory_v1': JSON.stringify({ data: true }),
             'campLeagueHistory_v2': JSON.stringify({ game: 5 }),
-            'specialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
+            'campSpecialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
             'campDailyData_v1': JSON.stringify({
                 '2026-07-15': { scheduleAssignments: { 'Bunk 1': ['Art'] } }
             })
@@ -564,7 +564,7 @@ describe('startNewHalf', () => {
         assert.equal(fakeStorage.hasOwnProperty('smartTileHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('smartTileSpecialHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('campLeagueHistory_v2'), false);
-        assert.equal(fakeStorage.hasOwnProperty('specialtyLeagueHistory_v1'), false);
+        assert.equal(fakeStorage.hasOwnProperty('campSpecialtyLeagueHistory_v1'), false);
         assert.equal(fakeStorage.hasOwnProperty('campDailyData_v1'), false);
 
         // Direct Supabase delete must fire (not just clearCloudKeys which skips the table)
@@ -666,7 +666,7 @@ describe('Scope: New Half vs Reset History', () => {
             'smartTileHistory_v1': JSON.stringify({ data: true }),
             'smartTileSpecialHistory_v1': JSON.stringify({ data: true }),
             'campLeagueHistory_v2': JSON.stringify({ game: 5 }),
-            'specialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
+            'campSpecialtyLeagueHistory_v1': JSON.stringify({ sgame: 3 }),
             'campDailyData_v1': JSON.stringify({ '2026-07-15': {} })
         };
 
@@ -695,7 +695,7 @@ describe('Scope: New Half vs Reset History', () => {
 
         // Reset History should preserve leagues + schedules
         assert.ok(resetPreserved.includes('campLeagueHistory_v2'), 'Reset preserves league history');
-        assert.ok(resetPreserved.includes('specialtyLeagueHistory_v1'), 'Reset preserves specialty league');
+        assert.ok(resetPreserved.includes('campSpecialtyLeagueHistory_v1'), 'Reset preserves specialty league');
         assert.ok(resetPreserved.includes('campDailyData_v1'), 'Reset preserves daily schedules');
     });
 });
