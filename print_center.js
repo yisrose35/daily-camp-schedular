@@ -1414,10 +1414,17 @@ function buildMainUI() {
         /* CANVAS — warm stone; paper sheets float */
         '.pcx-canvas{flex:1;overflow:auto;background:#e9e3d7;padding:26px 26px 90px;position:relative;min-height:0;}' +
         '.pcx-empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;color:#9a917f;}' +
-        /* sidebar items recolored for the cream rail */
-        '#pc3-sidebar .pc3-item{border-radius:10px;color:#3a382f;}' +
+        /* sidebar items — more breathing room for the cream rail */
+        '#pc3-sidebar .pc3-sidebar-scroll{padding:0 10px 14px;}' +
+        '#pc3-sidebar .pc3-sidebar-group{margin-bottom:10px;}' +
+        '#pc3-sidebar .pc3-sidebar-group-head{padding:8px 6px 4px;font-size:10.5px;}' +
+        '#pc3-sidebar .pc3-item{padding:11px 14px;border-radius:10px;color:#3a382f;font-size:13.5px;gap:12px;margin-bottom:4px;}' +
         '#pc3-sidebar .pc3-item:hover{background:#f1ece1;}' +
         '#pc3-sidebar .pc3-item.selected{background:#dff1f4;border-color:rgba(20,125,145,.25);}' +
+        '#pc3-sidebar .pc3-item input[type="checkbox"]{width:16px;height:16px;}' +
+        '#pc3-sidebar .pc3-item-label{font-size:13.5px;font-weight:600;}' +
+        '#pc3-sidebar .pc3-item-count{font-size:11px;background:rgba(0,0,0,.06);color:#6b6254;padding:2px 7px;border-radius:20px;font-weight:700;}' +
+        '#pc3-sidebar .pc3-item.selected .pc3-item-count{background:rgba(20,125,145,.12);color:#0f6678;}' +
     '</style>';
 
     return getStyles() + chrome +
