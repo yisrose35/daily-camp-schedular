@@ -244,6 +244,7 @@ function campConfig(opts) {
     autoStart: AUTO_START, autoEnd: AUTO_END,
     chairStart: CHAIR_START, chairEnd: CHAIR_END,
     autoStartStr: '9:00', autoEndStr: '11:40',
+    lunchLeeway: !!opts.lunchLeeway,
   };
 }
 
@@ -465,6 +466,30 @@ function buildLayers(cfg) {
       },
       color: '#7C3AED',
     });
+
+    // LUNCH layer (lunchLeeway only) — a UNIVERSAL camp wall modeled exactly like
+    // the live camp's problem case: type:'lunch', NOT fullGrade, drawn with a WIDE
+    // window (the whole day). Pre-fix, the wide window gives ratio<1 → the layer is
+    // classified windowed/open instead of pinned, so specials/sports crowd lunch
+    // out entirely and many bunks end the day with NO lunch block. Post-fix, lunch
+    // is pinned grade-wide regardless of the flag and snapped to its 30-min
+    // duration near the window centre — every bunk gets lunch.
+    if (cfg.lunchLeeway) {
+      layers.push({
+        grade,
+        type: 'lunch',
+        name: 'lunch',
+        event: 'lunch',
+        // intentionally NO fullGrade flag + WIDE window (whole day). Duration =
+        // PERIOD so it snaps cleanly onto this harness's 20-min period grid (the
+        // live camp's periods fit its 30-min lunch the same way) — the fix under
+        // test is the wide-window→ratio<1→unpinned classification, not tiling.
+        periodMin: PERIOD, durationMin: PERIOD, durationMax: PERIOD,
+        startMin: start, endMin: end,
+        qty: 1, op: '=',
+        color: '#F59E0B',
+      });
+    }
 
     if (cfg.swimWalls) {
       // SWIM-WALLS: model the special as a CUSTOM layer named "Lake" hosted in
@@ -920,7 +945,7 @@ function analyse(sandbox, cfg) {
     const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
     const divSlots = dt[grade] || [];
 
-    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0;
+    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0;
     const covered = []; // {s,e}
     const entries = [];
     slots.forEach((s, i) => {
@@ -930,6 +955,7 @@ function analyse(sandbox, cfg) {
       if (startMin == null && divSlots[i]) { startMin = divSlots[i].startMin; endMin = divSlots[i].endMin; }
       entries.push({ act, startMin, endMin, raw: s });
       const al = String(act).toLowerCase();
+      if (al === 'lunch' || String(s.type || '').toLowerCase() === 'lunch') lunchCount++;
       if (al === 'swim' || String(s.type || '').toLowerCase() === 'swim') swimCount++;
       if (al === 'main activity') mainCount++;
       else if (specialNames.has(al)) specialCount++;
@@ -950,12 +976,13 @@ function analyse(sandbox, cfg) {
     if (cursor < winEnd) { gapMin += (winEnd - cursor); gaps.push([cursor, winEnd]); }
 
     results[bunk] = {
-      grade, mainCount, specialCount, sportCount, swimCount, gapMin, gaps, entries,
+      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, gapMin, gaps, entries,
       pass: {
         main: mainCount === 1,
         special: specialCount >= 1,
         sport: sportCount >= 1,
         swim: swimCount >= 1,
+        lunch: lunchCount >= 1,
         nogap: gapMin === 0,
       },
     };
@@ -1053,6 +1080,9 @@ async function runScenario(label, opts) {
     //   Swim general-activity sharing path). skipGapCheck: relax the gapless
     //   criterion for scenarios whose purpose is swim coverage, not tiling.
     if (opts.requireSwim && !r.pass.swim) failures.push(`${bunk}: swim count = ${r.swimCount} (want >=1)`);
+    // requireLunch: assert every bunk got a lunch block (validates that a
+    //   non-fullGrade, wide-window lunch layer still pins as a universal wall).
+    if (opts.requireLunch && !r.pass.lunch) failures.push(`${bunk}: lunch count = ${r.lunchCount} (want >=1)`);
     if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   }
   assert.deepEqual(failures, [], '[' + label + '] per-bunk criteria failures:\n  ' + failures.join('\n  '));
@@ -1277,6 +1307,28 @@ test('auto scheduler honors pool sharing set on the Swim general activity (not t
     // the gap-absorber's pool-stretch, leaving a 20-min Main-adjacent gap that
     // is NOT what this scenario tests — so assert swim coverage, skip gaps.
     requireSwim: true,
+    skipGapCheck: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 9 — LUNCH-LEEWAY: a type:'lunch' layer that is NOT fullGrade and is drawn
+// with a WIDE window (the whole day). This is the live-camp shape that left 4
+// grades with a lunch layer but NO lunch block: the wide window gives ratio<1,
+// so the classifier put lunch in the windowed/open fill path, and specials/
+// sports crowded it out entirely.
+//
+// The fix pins lunch (and snacks) grade-wide regardless of the fullGrade flag or
+// window width — every bunk eats lunch, every day — and snaps it to its 30-min
+// duration near the window centre. With the fix, every bunk gets a lunch block.
+// This test FAILS without the fix (lunch crowded out for most bunks) and PASSES
+// with it.
+test('auto scheduler pins a non-fullGrade, wide-window lunch layer for every bunk', async (t) => {
+  await runScenario('LUNCH-LEEWAY (type:lunch, no fullGrade, whole-day window)', {
+    lunchLeeway: true,
+    requireLunch: true,
+    // This scenario validates lunch coverage specifically; the wide lunch wall
+    // can leave a small tiling residue that is not what we're testing here.
     skipGapCheck: true,
   });
 });

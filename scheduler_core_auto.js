@@ -1436,6 +1436,17 @@
             //   grade-wide at the same time for every bunk (like a league).
             if (layer.fullGrade === true && FULL_GRADE_TYPES.has(lt)) {
                 classification = 'pinned';
+            } else if (lt === 'lunch' || lt === 'snacks' || lt === 'snack') {
+                // ★ Lunch/snacks are UNIVERSAL camp walls — every bunk gets them every
+                //   day (unlike swim, which rotates per-bunk). Pin them grade-wide
+                //   regardless of the fullGrade flag or how wide the user drew the
+                //   window. A wide ("leeway") lunch window otherwise yields ratio<1 →
+                //   windowed/open, and the fill phase lets specials/sports crowd lunch
+                //   out entirely (live log: 4 grades had a lunch layer but no lunch
+                //   block — it was silently replaced). Phase 0 snaps it to its real
+                //   duration near the window centre (see the FULL_GRADE placement,
+                //   which now also fires for non-fullGrade lunch/snacks).
+                classification = 'pinned';
             } else if (_wetBundleTargets.has(lt)) {
                 // ★ Wet-bundle target (e.g. swim when Water Slide is configured
                 // "Adjacent to: Swim") — force pinned regardless of ratio so
@@ -3641,7 +3652,7 @@
                 let blockEnd = layer.endMin;
                 // (Custom "connect-to" adjacency is handled earlier by the early-return
                 //  → synthesized rotation event through the Phase 2.4 wet-bundle engine.)
-                if (layer.fullGrade === true && FULL_GRADE_TYPES.has(t)) {
+                if (FULL_GRADE_TYPES.has(t) && (layer.fullGrade === true || t === 'lunch' || t === 'snacks' || t === 'snack')) {
                     const fgC = resolveConstraints(layer, t);
                     const dur = layer.periodMin || fgC.dMin || 30;
                     const win = layer.endMin - layer.startMin;
