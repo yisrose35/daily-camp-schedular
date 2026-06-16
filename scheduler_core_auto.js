@@ -26307,6 +26307,36 @@
                         (byLoc[key] = byLoc[key] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
                     });
                 });
+                // ★ DIAGNOSTIC (FN-19/21 DIAG): independently scan the live grid for
+                //   same-grade / same-special / overlapping pairs and report whether each
+                //   member made it into byLoc. This pinpoints WHY a cap-1 double (e.g. 2
+                //   Quints in "Arts and Crafts 2" at 10:50) survives the sweep — i.e. which
+                //   filter excluded it. Remove once the root exclusion is fixed.
+                try {
+                    var _inByLoc = {};
+                    Object.keys(byLoc).forEach(function (k) { byLoc[k].forEach(function (u) { _inByLoc[u.bunk + '|' + u.idx] = k; }); });
+                    var _diagGroups = {};
+                    Object.keys(_sa).forEach(function (bunk) {
+                        var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                        var g = _b2g[String(bunk)] || '?';
+                        slots.forEach(function (e, idx) {
+                            if (!e || e.continuation) return;
+                            var a = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
+                            if (!a || a === 'free' || !_knownSpecial[a]) return;
+                            var t = _slotTime(bunk, g, idx, e);
+                            var key = g + '|' + a + '|' + (t ? (t.s + '-' + t.e) : 'NOTIME');
+                            (_diagGroups[key] = _diagGroups[key] || []).push({ bunk: bunk, idx: idx, inByLoc: !!_inByLoc[bunk + '|' + idx], timed: !!t, pinned: !!e._pinned, type: e.type || '', cust: !!e._customActivity, asg: !!e._assignedSpecial, auto: !!e._autoSpecial, fld: e.field || '' });
+                        });
+                    });
+                    Object.keys(_diagGroups).forEach(function (k) {
+                        var grp = _diagGroups[k];
+                        if (grp.length < 2) return;
+                        var anyOut = grp.some(function (x) { return !x.inByLoc; });
+                        if (!anyOut) return; // only report groups where ≥1 member escaped the sweep
+                        log('[FN-19/21 DIAG] over-occupied special "' + k + '" ×' + grp.length + ' → ' +
+                            grp.map(function (x) { return x.bunk + '(byLoc=' + x.inByLoc + ',timed=' + x.timed + ',pin=' + x.pinned + ',type=' + (x.type || '-') + ',asg=' + x.asg + ',auto=' + x.auto + ',cust=' + x.cust + ',fld=' + x.fld + ')'; }).join(' | '));
+                    });
+                } catch (_eDiag) { try { warn('[FN-19/21 DIAG] ' + (_eDiag && _eDiag.message)); } catch (_e) {} }
                 var demoted = 0, staggerD = 0, capD = 0, swapped = 0;
                 function _live(u) { var c = _sa[u.bunk] && _sa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
                 // ★ Live concurrency counter for a candidate special at [s,e) — counts
