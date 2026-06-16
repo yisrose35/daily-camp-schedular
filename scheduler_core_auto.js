@@ -26469,15 +26469,29 @@
                     var gapDur = gapE - gapS;
                     // Don't bridge a real inter-period dead zone (lunch break etc.).
                     if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(gapS, gapE, g)) continue;
+                    var Lh = slots[L.head], Rh = slots[R.head];
                     // A gap that's >= the sport floor is "fillable on its own" — but
                     // ONLY when a sport field is genuinely free across the window. If
                     // no sport/field can take it (e.g. it straddles two sub-floor
                     // periods so no per-period sport landed, the user's 25-min case),
                     // it can NEVER host its own activity and must be absorbed like a
                     // sub-floor sliver.
-                    if (gapDur >= floor && _sabSportFillable(gapS, gapE, g)) continue;
-
-                    var Lh = slots[L.head], Rh = slots[R.head];
+                    //
+                    // CRITICAL (swim-era live gaps): 6.865 is the LAST gap closer. Any
+                    // gap still open here has already survived FN-22 / 6.8 / 6.86, so
+                    // there is NO later pass that will sport-fill it. _sabSportFillable
+                    // only checks "is some sport field free across the window" — it
+                    // ignores same-day-repeat and field-access blocks that actually
+                    // prevent a fresh sport from landing (the "no sports in priority
+                    // list" residual). Honouring its optimism therefore strands the
+                    // hole as a permanent [REAL-GAP] (the user's Main↔special 25min and
+                    // swim↔Main holes). For a SMALL gap (< 2× floor), always fall
+                    // through to the absorption ladder: it tries a sport-neighbour
+                    // extension FIRST (the ideal), then a bounding special/swim stretch
+                    // (a slightly longer bounding block beats a Free hole). Only a
+                    // genuinely large gap (>= 2× floor) is left to surface as a real
+                    // fillability problem rather than ballooning a bounding block.
+                    if (gapDur >= 2 * floor && _sabSportFillable(gapS, gapE, g)) continue;
                     // (1) Prefer extending a flexible SPORT neighbour over the sliver.
                     //     Try the LEFT block forward first, then the RIGHT block back.
                     var done = false;
