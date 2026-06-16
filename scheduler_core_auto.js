@@ -26438,7 +26438,7 @@
                 }
                 return false;
             };
-            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0;
+            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0;
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -26606,6 +26606,39 @@
                             _sabAbsorbed++; _sabBySwim++; continue;
                         }
                     }
+                    // (4) Neither sport, special, nor swim could take it, but a
+                    //     bounding SOFT TRANSITION wall (Cleanup / Change / pre- or
+                    //     post-change) sits against the sliver. These carry no field
+                    //     and no fixed-clock requirement (unlike lunch / Main / swim /
+                    //     league), so growing one a few minutes over the sliver is free
+                    //     and legal — it just renders slightly longer and stays attached
+                    //     to whatever it bundles with on its far side. This closes the
+                    //     wall-bounded survivors the field-gated rungs above can't:
+                    //     capacity-blocked specials and immune-wall-vs-soft-wall pairs —
+                    //     the user's leeway-induced 5-15min slivers in front of Cleanup/
+                    //     Change. (Inter-period gaps are already excluded at the loop
+                    //     top via coveredByContiguousPeriods, so this never bridges a
+                    //     real transition/lunch dead zone.)
+                    var _SAB_SOFT = /^(cleanup|change|pre-?change|post-?change)$/i;
+                    if (Lh && _SAB_SOFT.test(_sabNorm(Lh._activity || Lh.event))) {
+                        Lh._endMin = gapE;
+                        for (var ksl = L.tail + 1; ksl <= R.head - 1; ksl++) {
+                            slots[ksl] = { field: Lh.field, _activity: Lh._activity || Lh.event, type: Lh.type,
+                                continuation: true, _startMin: slots[ksl] ? slots[ksl]._startMin : gapS, _endMin: slots[ksl] ? slots[ksl]._endMin : gapE,
+                                _autoMode: true, _sliverAbsorbed: true };
+                        }
+                        _sabAbsorbed++; _sabBySoft++; continue;
+                    }
+                    if (Rh && _SAB_SOFT.test(_sabNorm(Rh._activity || Rh.event))) {
+                        Rh._startMin = gapS;
+                        for (var ksr = L.tail + 1; ksr <= R.head - 1; ksr++) {
+                            slots[ksr] = { field: Rh.field, _activity: Rh._activity || Rh.event, type: Rh.type,
+                                continuation: true, _startMin: slots[ksr] ? slots[ksr]._startMin : gapS, _endMin: slots[ksr] ? slots[ksr]._endMin : gapE,
+                                _autoMode: true, _sliverAbsorbed: true };
+                        }
+                        _sabAbsorbed++; _sabBySoft++; continue;
+                    }
+
                     // No stretchable bounding block → leave Free (true impossibility).
                 }
 
@@ -26682,12 +26715,12 @@
             if (_sabAbsorbed > 0) {
                 log('  🩹 [STEP 6.865 SLIVER-ABSORB] absorbed ' + _sabAbsorbed + ' wall-bounded sub-floor sliver(s) (' +
                     _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special, ' +
-                    _sabBySwim + ' into a bounding swim block, ' + _sabByEdge + ' day-edge tail(s)).');
+                    _sabBySwim + ' into a bounding swim block, ' + _sabByEdge + ' day-edge tail(s), ' + _sabBySoft + ' into a soft transition wall).');
                 try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
             } else {
                 log('[STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.');
             }
-            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge); } catch (_e) {}
+            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge + ' soft=' + _sabBySoft); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
