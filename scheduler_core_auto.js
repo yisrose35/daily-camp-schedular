@@ -26313,6 +26313,11 @@
                 //   Quints in "Arts and Crafts 2" at 10:50) survives the sweep — i.e. which
                 //   filter excluded it. Remove once the root exclusion is fixed.
                 try {
+                    // ★ Always emit a heartbeat so we can tell from the log whether THIS
+                    //   build (with the diagnostic) is actually running vs a cached older
+                    //   bundle. If you don't see this line, the deployed scheduler_core_auto.js
+                    //   is stale — hard-refresh / clear cache.
+                    log('[FN-19/21 DIAG] build=v2 active — scanning ' + Object.keys(byLoc).length + ' byLoc key(s)');
                     var _inByLoc = {};
                     Object.keys(byLoc).forEach(function (k) { byLoc[k].forEach(function (u) { _inByLoc[u.bunk + '|' + u.idx] = k; }); });
                     var _diagGroups = {};
@@ -26322,19 +26327,20 @@
                         slots.forEach(function (e, idx) {
                             if (!e || e.continuation) return;
                             var a = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
-                            if (!a || a === 'free' || !_knownSpecial[a]) return;
+                            // ★ UNCONDITIONAL: report ANY repeated same-grade/same-name/overlapping
+                            //   activity (not gated on _knownSpecial), so a name that isn't in the
+                            //   known-special set can't hide. Skip only obvious non-resources.
+                            if (!a || a === 'free' || _skip[a]) return;
                             var t = _slotTime(bunk, g, idx, e);
                             var key = g + '|' + a + '|' + (t ? (t.s + '-' + t.e) : 'NOTIME');
-                            (_diagGroups[key] = _diagGroups[key] || []).push({ bunk: bunk, idx: idx, inByLoc: !!_inByLoc[bunk + '|' + idx], timed: !!t, pinned: !!e._pinned, type: e.type || '', cust: !!e._customActivity, asg: !!e._assignedSpecial, auto: !!e._autoSpecial, fld: e.field || '' });
+                            (_diagGroups[key] = _diagGroups[key] || []).push({ bunk: bunk, idx: idx, inByLoc: !!_inByLoc[bunk + '|' + idx], timed: !!t, pinned: !!e._pinned, type: e.type || '', cust: !!e._customActivity, asg: !!e._assignedSpecial, auto: !!e._autoSpecial, known: !!_knownSpecial[a], fld: e.field || '' });
                         });
                     });
                     Object.keys(_diagGroups).forEach(function (k) {
                         var grp = _diagGroups[k];
                         if (grp.length < 2) return;
-                        var anyOut = grp.some(function (x) { return !x.inByLoc; });
-                        if (!anyOut) return; // only report groups where ≥1 member escaped the sweep
-                        log('[FN-19/21 DIAG] over-occupied special "' + k + '" ×' + grp.length + ' → ' +
-                            grp.map(function (x) { return x.bunk + '(byLoc=' + x.inByLoc + ',timed=' + x.timed + ',pin=' + x.pinned + ',type=' + (x.type || '-') + ',asg=' + x.asg + ',auto=' + x.auto + ',cust=' + x.cust + ',fld=' + x.fld + ')'; }).join(' | '));
+                        log('[FN-19/21 DIAG] over-occupied "' + k + '" ×' + grp.length + ' → ' +
+                            grp.map(function (x) { return x.bunk + '(byLoc=' + x.inByLoc + ',timed=' + x.timed + ',pin=' + x.pinned + ',type=' + (x.type || '-') + ',asg=' + x.asg + ',auto=' + x.auto + ',cust=' + x.cust + ',known=' + x.known + ',fld=' + x.fld + ')'; }).join(' | '));
                     });
                 } catch (_eDiag) { try { warn('[FN-19/21 DIAG] ' + (_eDiag && _eDiag.message)); } catch (_e) {} }
                 var demoted = 0, staggerD = 0, capD = 0, swapped = 0;
