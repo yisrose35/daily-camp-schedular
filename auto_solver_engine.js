@@ -565,9 +565,13 @@
         // Build candidate list
         const { candidates } = buildCandidates(config);
         if (candidates.length === 0) {
-            warn('No candidates available — all blocks will be Free');
-            blocks.forEach(b => writeFree(b));
-            return { filled: 0, free: blocks.length, elapsed: '0.00' };
+            // ★ SPORT-LEAK GATE: with no sport candidates, don't blanket-Free every
+            //   block. Honor each block's pre-chosen special event (sports-free
+            //   camps fill open time from specials); fall back to Free otherwise.
+            warn('No sport candidates available — honoring slot specials, else Free');
+            let _f = 0;
+            blocks.forEach(b => { if (writeSlotEvent(b)) _f++; });
+            return { filled: _f, free: blocks.length - _f, elapsed: '0.00' };
         }
 
         // Build field time index from current state
@@ -798,6 +802,14 @@
             // Already filled? Skip
             const existing = window.scheduleAssignments?.[bunk]?.[slotIdx];
             if (existing && existing._fixed) continue;
+
+            // ★ SPORT-LEAK GATE: this block's grade has no sport layer — never
+            //   assign a field-catalog sport. Honor its pre-chosen special (or
+            //   leave Free) and move on.
+            if (block._noSport) {
+                if (writeSlotEvent(block)) filled++; else free++;
+                continue;
+            }
 
             // Get this bunk's activities so far
             const doneToday = bunkActivities.get(bunk) || new Set();
@@ -1468,6 +1480,34 @@
             _startMin: _sMin ?? null,
             _endMin: _eMin ?? null
         };
+    }
+
+    // ★ SPORT-LEAK GATE: write a slot whose grade has NO sport layer. Such a slot
+    //   must never become a field-catalog sport. Honor the special the open-slot
+    //   materializer already chose (block.event); if there is none, leave it Free.
+    //   Specials placed here are off-field (no field-capacity claim) — the
+    //   required, room-backed specials were already placed by the specials pass;
+    //   these merely fill leftover open time in a sports-free camp.
+    function writeSlotEvent(block) {
+        const bunk = block.bunk;
+        const slotIdx = block.slots?.[0];
+        if (!window.scheduleAssignments?.[bunk]) return false;
+        const ev = block.event;
+        const evNorm = (ev && typeof ev === 'string') ? ev.toLowerCase().trim() : '';
+        if (!evNorm || evNorm === 'free') { writeFree(block); return false; }
+        let _sMin = block.startMin;
+        let _eMin = block.endMin;
+        const _ptm = window.SchedulerCoreUtils?.parseTimeToMinutes;
+        if (_sMin == null && block.startTime && _ptm) _sMin = _ptm(block.startTime);
+        if (_eMin == null && block.endTime && _ptm) _eMin = _ptm(block.endTime);
+        window.scheduleAssignments[bunk][slotIdx] = {
+            field: block._draftField || null, sport: null, _activity: ev,
+            type: 'special', _autoMode: true, _autoSolved: true, _autoSpecial: true,
+            continuation: false,
+            _startMin: _sMin ?? null,
+            _endMin: _eMin ?? null
+        };
+        return true;
     }
 
 

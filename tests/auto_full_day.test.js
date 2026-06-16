@@ -246,6 +246,14 @@ function campConfig(opts) {
     chairStart: CHAIR_START, chairEnd: CHAIR_END,
     autoStartStr: '9:00', autoEndStr: '11:40',
     lunchLeeway: !!opts.lunchLeeway,
+    // noSports: model a sports-free camp — the user's day is swim + lunch +
+    //   specials + custom activities only, and they NEVER created a sport layer.
+    //   The FIELD catalog (FIELDS, with sport activities) is STILL configured in
+    //   the sandbox, so the engine could (wrongly) back-fill open time with field
+    //   sports. buildLayers omits the SPORT layer; the assertion is that NO bunk
+    //   receives any sport-typed block (the field catalog must not leak into a
+    //   camp that asked for no sports).
+    noSports: !!opts.noSports,
   };
 }
 
@@ -537,12 +545,17 @@ function buildLayers(cfg) {
     }
 
     // SPORT layer — at least 1 sport; cap unbounded so it fills remaining slots.
-    layers.push({
-      grade, type: 'sport', name: 'Sports',
-      periodMin: sportMin, durationMin: sportMin,
-      startMin: start, endMin: end,
-      qty: 1, op: '>=',
-    });
+    // OMITTED entirely in the noSports scenario: a sports-free camp never created
+    // a sport layer, so the engine must fill open time from specials/customs and
+    // must NOT inject field-catalog sports.
+    if (!cfg.noSports) {
+      layers.push({
+        grade, type: 'sport', name: 'Sports',
+        periodMin: sportMin, durationMin: sportMin,
+        startMin: start, endMin: end,
+        qty: 1, op: '>=',
+      });
+    }
   }
   return layers;
 }
@@ -1091,7 +1104,14 @@ async function runScenario(label, opts) {
   for (const [bunk, r] of Object.entries(results)) {
     if (!r.pass.main)    failures.push(`${bunk}: Main Activity count = ${r.mainCount} (want exactly 1)`);
     if (!r.pass.special) failures.push(`${bunk}: special count = ${r.specialCount} (want >=1)`);
-    if (!r.pass.sport)   failures.push(`${bunk}: sport count = ${r.sportCount} (want >=1)`);
+    // requireNoSports (sports-free camp): the day has NO sport layer, so no bunk
+    //   may receive a sport-typed block — the field catalog must not leak in.
+    //   Skip the default "sport >= 1" requirement in this mode.
+    if (opts.requireNoSports) {
+      if (r.sportCount > 0) failures.push(`${bunk}: sport count = ${r.sportCount} (want 0 — no sport layer configured)`);
+    } else if (!r.pass.sport) {
+      failures.push(`${bunk}: sport count = ${r.sportCount} (want >=1)`);
+    }
     // requireSwim: assert every bunk actually got a swim block (validates the
     //   Swim general-activity sharing path). skipGapCheck: relax the gapless
     //   criterion for scenarios whose purpose is swim coverage, not tiling.
@@ -1382,6 +1402,26 @@ test('auto scheduler reserves rotated (non-fullGrade) swim before specials for e
     swimRotated: true,
     requireSwim: true,
     requireSwimReservedBeforeSpecials: true,
+    skipGapCheck: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 11 — NO-SPORTS: a sports-free camp. The day is built from a Main Activity
+// custom wall + specials only; the user NEVER created a sport layer. But the
+// FIELD catalog (8 sport fields) is still configured in the sandbox (a leftover
+// from setup / a template). Pre-fix, the engine treats every open grid slot as a
+// sport-fillable 'slot' block and the AutoSolver back-fills it with a field sport
+// (Baseball/Basketball/...), so a sports-free camp gets sports it never asked for
+// (the live "why are there sports?" bug). Post-fix, with no sport layer the field
+// catalog must NOT leak: open time is filled from the specials pool (or left
+// clean), and NO bunk receives a sport-typed block.
+test('auto scheduler injects NO field-catalog sports when the camp has no sport layer', async (t) => {
+  await runScenario('NO-SPORTS (no sport layer, fields still configured)', {
+    noSports: true,
+    requireNoSports: true,
+    // The fix under test is the sport-leak gate (no sport-typed blocks); whether
+    // the limited specials pool can tile every last minute is a separate concern.
     skipGapCheck: true,
   });
 });
