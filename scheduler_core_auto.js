@@ -26354,13 +26354,18 @@
             var _sabSwimElig = function (M) {
                 if (!M) return false;
                 var act = _sabNorm(M._activity);
+                var typ = _sabNorm(M.type);
                 var fld = _sabNorm(M.field || M._specialLocation);
-                if (act !== 'swim' && fld.indexOf('pool') === -1) return false;
+                if (act !== 'swim' && typ !== 'swim' && fld.indexOf('pool') === -1) return false;
                 // Guard: only swim — never a mis-named immune wall (Main/lunch/etc.)
                 // other than swim itself, never a trip/league/prep/rotation block.
                 if (act && act !== 'swim' && _SAB_IMMUNE.test(act)) return false;
                 if (M._isTrip || M._trip || M._league || M._isChinuch || M._isPrep ||
                     M._isRotationEvent) return false;
+                // Field may be the EVENT name ("Swim") for a REAL type:'swim' anchor
+                // block (materializer writes field=block.event); accept it — the
+                // stretch path below resolves the real POOL field for the
+                // isFieldAvailable gate via _sabResolvePool().
                 return !!(M.field && fld !== 'free');
             };
             // Sport-field occupancy index (mirrors FN-22 FREE-FILL) so we can ask:
@@ -26380,6 +26385,34 @@
                 return f && f.name && f.available !== false && !_sabSpecialRooms[_sabNorm(f.name)] &&
                     Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled);
             }).map(function (f) { return f.name; });
+            // Resolve the real pool field NAME for a swim block. A real type:'swim'
+            // anchor carries field === the event name ("Swim"), which is NOT a
+            // registered field — so isFieldAvailable("Swim", …) would always fail
+            // and the swim stretch could never fire (the live swim-era entanglement).
+            // Find the configured field whose name contains "pool" OR whose
+            // activities include "swim"; fall back to the block's own field.
+            var _sabPoolName = null;
+            for (var _pi = 0; _pi < _sabFieldsAll.length; _pi++) {
+                var _pf = _sabFieldsAll[_pi];
+                if (!_pf || !_pf.name) continue;
+                var _pn = _sabNorm(_pf.name);
+                if (_pn.indexOf('pool') !== -1 ||
+                    (Array.isArray(_pf.activities) && _pf.activities.some(function (a) { return _sabNorm(a) === 'swim'; }))) {
+                    _sabPoolName = _pf.name; break;
+                }
+            }
+            var _sabResolvePool = function (M) {
+                // If the block's field is already a registered field, keep it.
+                var fld = M && (M.field || M._specialLocation);
+                if (fld) {
+                    var fln = _sabNorm(fld);
+                    for (var _fi = 0; _fi < _sabFieldsAll.length; _fi++) {
+                        if (_sabFieldsAll[_fi] && _sabNorm(_sabFieldsAll[_fi].name) === fln) return fld;
+                    }
+                }
+                // Otherwise resolve to the real pool field.
+                return _sabPoolName || fld;
+            };
             // Build field occupancy from the FINAL grid.
             var _sabOcc = {};
             Object.keys(window.scheduleAssignments || {}).forEach(function (b) {
@@ -26501,6 +26534,14 @@
                             (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(sFieldR, sActR, g, bunk, gapS, gapE) === null)) {
                             Rh._startMin = gapS;
                             if (Rh._specialDuration != null) Rh._specialDuration = Rh._endMin - Rh._startMin;
+                            // Overwrite the stale Free slot(s) between L.tail and R.head
+                            // with continuations of the pulled-back special, so no Free
+                            // placeholder survives over the now-covered minutes.
+                            for (var krs = L.tail + 1; krs <= R.head - 1; krs++) {
+                                slots[krs] = { field: Rh.field, _activity: sActR, type: Rh.type,
+                                    continuation: true, _startMin: slots[krs] ? slots[krs]._startMin : gapS, _endMin: slots[krs] ? slots[krs]._endMin : gapE,
+                                    _autoMode: true, _sliverAbsorbed: true, _specialLocation: Rh._specialLocation };
+                            }
                             try { if (typeof claimField === 'function') claimField(sFieldR, gapS, gapE, bunk, g, sActR); } catch (_e) {}
                             _sabAbsorbed++; _sabBySpecial++; continue;
                         }
@@ -26516,7 +26557,10 @@
                     //     The Main-Activity wall is NEVER stretched (it is not swim).
                     if (_sabSwimElig(Lh)) {
                         var wActL = Lh._activity || 'Swim';
-                        var wFieldL = Lh.field || Lh._specialLocation;
+                        // Resolve to the REAL pool field for the availability/validation
+                        // gate — a real type:'swim' anchor's field is "Swim" (the event
+                        // name), which isFieldAvailable doesn't recognize.
+                        var wFieldL = _sabResolvePool(Lh);
                         if (wFieldL && _sabNorm(wFieldL) !== 'free' &&
                             (typeof isFieldAvailable !== 'function' || isFieldAvailable(wFieldL, gapS, gapE, bunk, g, wActL)) &&
                             (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(wFieldL, wActL, g, bunk, gapS, gapE) === null)) {
@@ -26532,11 +26576,18 @@
                     }
                     if (_sabSwimElig(Rh)) {
                         var wActR = Rh._activity || 'Swim';
-                        var wFieldR = Rh.field || Rh._specialLocation;
+                        var wFieldR = _sabResolvePool(Rh);
                         if (wFieldR && _sabNorm(wFieldR) !== 'free' &&
                             (typeof isFieldAvailable !== 'function' || isFieldAvailable(wFieldR, gapS, gapE, bunk, g, wActR)) &&
                             (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(wFieldR, wActR, g, bunk, gapS, gapE) === null)) {
                             Rh._startMin = gapS;
+                            // Overwrite the stale Free slot(s) between L.tail and R.head
+                            // with continuations of the pulled-back swim block.
+                            for (var krw = L.tail + 1; krw <= R.head - 1; krw++) {
+                                slots[krw] = { field: Rh.field, _activity: wActR, type: Rh.type,
+                                    continuation: true, _startMin: slots[krw] ? slots[krw]._startMin : gapS, _endMin: slots[krw] ? slots[krw]._endMin : gapE,
+                                    _autoMode: true, _sliverAbsorbed: true };
+                            }
                             try { if (typeof claimField === 'function') claimField(wFieldR, gapS, gapE, bunk, g, wActR); } catch (_e) {}
                             _sabAbsorbed++; _sabBySwim++; continue;
                         }

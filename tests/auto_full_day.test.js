@@ -91,6 +91,28 @@ const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Cha
 // ---------------------------------------------------------------------------
 function campConfig(opts) {
   opts = opts || {};
+  if (opts.swimReal) {
+    // SWIM-REAL scenario — the FAITHFUL reproduction of the live swim-era bug.
+    //
+    // Unlike SWIM-WALLS (TEST 6), this models swim as a REAL type:'swim' fullGrade
+    // layer and the special as a REAL type:'special' layer that the GlobalPlanner +
+    // Phase 2.5 distributes from globalSettings.app1.specialActivities (real catalog
+    // specials in real rooms). NO custom-layer stand-ins. This is the live config.
+    //
+    // Live band structure (grades 9:00-12:20, Chair shifted; matching the report):
+    //   - sport band first
+    //   - SWIM band (real type:'swim', 45-min, fullGrade)
+    //   - special band (real type:'special', 45-min, distributed)
+    //   - 20-min Main-Activity custom-layer wall AFTER the swim band
+    // The day window is 9:00-12:20 (200 min). The special band is a wide window so
+    // the special can float; the Main wall lands between swim and the special.
+    return {
+      autoStart: HM(9, 0),  autoEnd: HM(12, 20),
+      chairStart: HM(9, 0), chairEnd: HM(12, 20),
+      autoStartStr: '9:00', autoEndStr: '12:20',
+      swimReal: true,
+    };
+  }
   if (opts.swimWalls) {
     // SWIM-WALLS scenario — the user's LIVE swim-era regen bug. None of the
     // first five scenarios include SWIM; the moment the user enabled swim, two
@@ -343,16 +365,35 @@ function buildLayers(cfg) {
   const swimBandEnd = cfg.swimWalls ? HM(10, 30) : null;
   const mainWallSWStart = cfg.swimWalls ? HM(10, 45) : null;
   const mainWallSWEnd = cfg.swimWalls ? HM(11, 5) : null;
+  // SWIM-REAL band geometry (faithful: REAL type:'swim' + REAL type:'special'):
+  //   P0 09:00-09:45 sport | P1 09:45-10:30 SWIM band (real swim, fullGrade) |
+  //   P2 10:30-10:50 Main-Activity wall (20-min custom) | P3 10:50-11:35 special
+  //   target | P4 11:35-12:20 sport. The special LAYER window is WIDE
+  //   (10:50-12:20) so the distributor is free to park it flush after the Main
+  //   wall (10:50-11:35) — the correct outcome — or float it to the band end
+  //   (11:35-12:20), which orphans the 10:50-11:35 gap (the live bug).
+  const swimBandRStart = cfg.swimReal ? HM(9, 45) : null;
+  const swimBandREnd   = cfg.swimReal ? HM(10, 30) : null;
+  // Main-Activity wall window is WIDE (10:30-11:35) — a STAGGERED shared-room
+  // custom (Auditorium, same-grade-only). Phase 2.6 picks the actual 20-min lane
+  // AFTER Phase 2.5 has already distributed the special, so at special-placement
+  // time the special does NOT know where the Main wall will land — the live bug.
+  const mainWallRStart = cfg.swimReal ? HM(10, 30) : null;
+  const mainWallREnd   = cfg.swimReal ? HM(11, 35) : null;
+  // The special LAYER window is WIDE (10:30-12:20) so the distributor is free to
+  // float it to its band END instead of flush after the (not-yet-placed) Main wall.
+  const specBandRStart = cfg.swimReal ? HM(10, 30) : null;
+  const specBandREnd   = cfg.swimReal ? HM(12, 20) : null;
   const layers = [];
 
   for (const grade of ['Auto', 'Chair']) {
     const start = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
     const end = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const bunks = grade === 'Auto' ? AUTO_BUNKS : CHAIR_BUNKS;
-    const mainStart = cfg.swimWalls ? mainWallSWStart : (cfg.sliver2 ? mainWall2Start : (cfg.sliver ? mainWallStart : start));
-    const mainEnd = cfg.swimWalls ? mainWallSWEnd : (cfg.sliver2 ? mainWall2End : (cfg.sliver ? mainWallEnd : end));
-    const specStart = cfg.sliver2 ? band2Start : (cfg.sliver ? bandStart : start);
-    const specEnd = cfg.sliver2 ? band2End : (cfg.sliver ? bandEnd : end);
+    const mainStart = cfg.swimReal ? mainWallRStart : (cfg.swimWalls ? mainWallSWStart : (cfg.sliver2 ? mainWall2Start : (cfg.sliver ? mainWallStart : start)));
+    const mainEnd = cfg.swimReal ? mainWallREnd : (cfg.swimWalls ? mainWallSWEnd : (cfg.sliver2 ? mainWall2End : (cfg.sliver ? mainWallEnd : end)));
+    const specStart = cfg.swimReal ? specBandRStart : (cfg.sliver2 ? band2Start : (cfg.sliver ? bandStart : start));
+    const specEnd = cfg.swimReal ? specBandREnd : (cfg.sliver2 ? band2End : (cfg.sliver ? bandEnd : end));
 
     // SWIM layer (SWIM-WALLS only) — a 45-min swim confined to P1 (09:45-10:30).
     // Modeled as a CUSTOM layer named "Swim" hosted in the "Pool" field so it
@@ -378,6 +419,26 @@ function buildLayers(cfg) {
           capacity: 20,
           allowedGrades: ['Auto', 'Chair'],
         },
+        color: '#0EA5E9',
+      });
+    }
+
+    // SWIM layer (SWIM-REAL only) — a REAL type:'swim' fullGrade layer, 45 min,
+    // confined to the swim band (09:45-10:30). This drives the actual swim-type
+    // planner (Phase 0 pin + pool staggering), exactly as the live camp does —
+    // NOT a custom stand-in. fullGrade:true so Phase 0 pins it grade-wide to the
+    // Pool. This is what makes the repro faithful (and may surface the
+    // "0 specials placed" entanglement the prior agent sidestepped).
+    if (cfg.swimReal) {
+      layers.push({
+        grade,
+        type: 'swim',
+        name: 'Swim',
+        event: 'Swim',
+        fullGrade: true,
+        periodMin: 45, durationMin: 45, durationMax: 45,
+        startMin: swimBandRStart, endMin: swimBandREnd,
+        qty: 1, op: '=',
         color: '#0EA5E9',
       });
     }
@@ -435,7 +496,7 @@ function buildLayers(cfg) {
         grade, type: 'special', name: 'Special',
         periodMin: specialDur, durationMin: specialDur,
         startMin: specStart, endMin: specEnd,
-        qty: 1, op: (cfg.sliver || cfg.sliver2) ? '=' : '>=',
+        qty: 1, op: (cfg.sliver || cfg.sliver2 || cfg.swimReal) ? '=' : '>=',
       });
     }
 
@@ -476,9 +537,9 @@ function buildSandbox(opts) {
   // can float mid-band and orphan a 20-min sub-floor sliver), 20-min elsewhere.
   const period = cfg.sliver ? 5 : PERIOD;
   // Special duration: 45-min specials in the sliver scenarios, else one period.
-  const specialDur = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? 45 : PERIOD;
-  const chairStartStr = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? '9:00' : '10:00';
-  const chairEndStr = cfg.swimWalls ? '12:15' : ((cfg.sliver || cfg.sliver2) ? '12:30' : '12:40');
+  const specialDur = (cfg.sliver || cfg.sliver2 || cfg.swimWalls || cfg.swimReal) ? 45 : PERIOD;
+  const chairStartStr = (cfg.sliver || cfg.sliver2 || cfg.swimWalls || cfg.swimReal) ? '9:00' : '10:00';
+  const chairEndStr = cfg.swimReal ? '12:20' : (cfg.swimWalls ? '12:15' : ((cfg.sliver || cfg.sliver2) ? '12:30' : '12:40'));
   const divisions = {
     // TRUE division window — off-grid edges (e.g. 9:58) flow through here so the
     // solver sees the real boundary, exactly like a real camp config.
@@ -540,7 +601,24 @@ function buildSandbox(opts) {
     slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
   }));
 
-  const divisionTimes = cfg.swimWalls ? {
+  // SWIM-REAL grid (faithful — real swim + real special layers):
+  //   P0 09:00-09:45 sport | P1 09:45-10:30 SWIM band | P2 10:30-10:50 Main wall |
+  //   P3 10:50-11:35 special target | P4 11:35-12:20 sport.
+  const swimRealPeriods = () => ([
+    { startMin: HM(9, 0),   endMin: HM(9, 45) },  // 45 sport
+    { startMin: HM(9, 45),  endMin: HM(10, 30) }, // 45 swim band
+    { startMin: HM(10, 30), endMin: HM(10, 50) }, // 20 Main Activity wall
+    { startMin: HM(10, 50), endMin: HM(11, 35) }, // 45 special target
+    { startMin: HM(11, 35), endMin: HM(12, 20) }, // 45 sport
+  ]);
+  const swimRealDivTimes = () => swimRealPeriods().map((p, i) => ({
+    slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
+  }));
+
+  const divisionTimes = cfg.swimReal ? {
+    Auto:  swimRealDivTimes(),
+    Chair: swimRealDivTimes(),
+  } : cfg.swimWalls ? {
     Auto:  swimWallsDivTimes(),
     Chair: swimWallsDivTimes(),
   } : cfg.sliver2 ? {
@@ -554,7 +632,10 @@ function buildSandbox(opts) {
     Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd, period),
   };
 
-  const campPeriods = cfg.swimWalls ? {
+  const campPeriods = cfg.swimReal ? {
+    Auto:  swimRealPeriods(),
+    Chair: swimRealPeriods(),
+  } : cfg.swimWalls ? {
     Auto:  swimWallsPeriods(),
     Chair: swimWallsPeriods(),
   } : cfg.sliver2 ? {
@@ -573,10 +654,10 @@ function buildSandbox(opts) {
   // periods. The base 8 fields would starve 6 bunks (an unrelated capacity
   // failure). Provision extra fields/sports so capacity matches the 14-bunk
   // simultaneous demand — isolating the sliver bug from field starvation.
-  const sportList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls)
+  const sportList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls || cfg.swimReal)
     ? SPORTS.concat(['Tennis', 'Dodgeball', 'Kickball', 'Frisbee', 'Lacrosse', 'Handball'])
     : SPORTS.slice();
-  const fieldList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls)
+  const fieldList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls || cfg.swimReal)
     ? FIELDS.concat([
         { name: 'Tennis Court',    activities: ['Tennis'] },
         { name: 'Dodgeball Gym',   activities: ['Dodgeball'] },
@@ -591,6 +672,17 @@ function buildSandbox(opts) {
   // (8 Auto + 6 Chair) can swim simultaneously in the 9:30-10:15 band without
   // pool-capacity starvation (isolating the wall-bounded-gap bug). The pool is
   // free 10:15-10:30, so the swim block can legally stretch over the P2 sliver.
+  // SWIM-REAL: a high-capacity, cross-grade-shared Pool so all 14 bunks can swim
+  // in the 09:45-10:30 band without pool-capacity starvation. The pool is free
+  // after 10:30 so swim CAN stretch over a swim|gap|Main sliver if one appears.
+  if (cfg.swimReal) {
+    fieldList.push({
+      name: 'Pool',
+      activities: ['Swim'],
+      sharableWith: { type: 'all', divisions: [], capacity: 20,
+        allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
+    });
+  }
   if (cfg.swimWalls) {
     fieldList.push({
       name: 'Pool',
@@ -644,6 +736,25 @@ function buildSandbox(opts) {
       if (f.activities.some(a => ['swim', 'lake', 'main activity'].includes(String(a).toLowerCase()))) return;
       activityProperties[f.name] = Object.assign(activityProperties[f.name] || {}, {
         timeRules: [{ type: 'Unavailable', startMin: HM(10, 30), endMin: HM(11, 30), divisions: null }],
+      });
+    });
+  }
+  // SWIM-REAL: make every SPORT field Unavailable 10:30-11:35 so NO sport can
+  // fill the Main↔special gap window (P3, 10:50-11:35) — exactly the user's "no
+  // sport field free in that window". Sports place freely in P0 (9:00-9:45) and
+  // P4 (11:35-12:20), so criterion (3) holds. The Pool (swim), Auditorium (Main),
+  // and the special ROOMS stay free across the gap, so the only gapless outcome
+  // is to place/stretch the special flush after the Main wall.
+  if (cfg.swimReal) {
+    const _specialRooms = new Set(SPECIALS.map(s => String(s.location).toLowerCase()));
+    const _nonSport = new Set(['pool', 'auditorium']);
+    fieldList.forEach(f => {
+      if (!f || !Array.isArray(f.activities) || !f.activities.length) return;
+      const nm = String(f.name).toLowerCase();
+      if (_nonSport.has(nm) || _specialRooms.has(nm)) return;        // pool/auditorium/special rooms stay open
+      if (f.activities.some(a => ['swim', 'main activity'].includes(String(a).toLowerCase()))) return;
+      activityProperties[f.name] = Object.assign(activityProperties[f.name] || {}, {
+        timeRules: [{ type: 'Unavailable', startMin: HM(10, 30), endMin: HM(11, 35), divisions: null }],
       });
     });
   }
@@ -1085,5 +1196,38 @@ test('auto scheduler fills a gapless day with a floor-sized period-crossing resi
 test('auto scheduler fills a gapless day with swim-bounded and Main-wall-bounded gaps', async (t) => {
   await runScenario('SWIM-WALLS (swim|gap|Main 15m + Main|gap|special 25m, mixed-size periods, fields blocked 10:30-11:30)', {
     swimWalls: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 7 — SWIM-REAL config: the FAITHFUL reproduction of the live swim-era bug.
+//
+// TEST 6 (SWIM-WALLS) modeled swim AND the special as CUSTOM layers (named
+// "Swim"/"Lake" in "Pool"/"Lake" fields) that pin deterministically. That made
+// the test GREEN but UNFAITHFUL: it sidestepped the REAL type:'swim' planner
+// (Phase 0 pin + pool staggering) and the REAL type:'special' GlobalPlanner +
+// Phase 2.5 distributor. The live camp STILL had gaps because the real
+// special-distribution path parks the special at its band END instead of flush
+// after the Main-Activity wall.
+//
+// This scenario uses a REAL type:'swim' fullGrade layer and a REAL type:'special'
+// layer (catalog specials in real rooms), plus a 20-min Main-Activity custom
+// wall. Band structure (both grades, 9:00-12:20):
+//   P0 09:00-09:45 sport | P1 09:45-10:30 SWIM (real swim, fullGrade) |
+//   P2 10:30-10:50 Main-Activity wall (20-min custom) | P3 10:50-11:35 special
+//   target | P4 11:35-12:20 sport.
+// The special LAYER window is WIDE (10:50-12:20) and sport fields are blocked
+// 10:30-11:35, so the only gapless outcome is the special placed flush after the
+// Main wall (10:50-11:35). If the distributor parks it at the band end
+// (11:35-12:20), the 10:50-11:35 gap is orphaned (the live bug).
+//
+// FEASIBILITY-ORACLE (a perfect, gapless day EXISTS per bunk):
+//   sport 9:00-9:45 | swim 9:45-10:30 | Main 10:30-10:50 |
+//   special 10:50-11:35 | sport 11:35-12:20
+//   → 1 main, 1 special, 1 sport, swim covered, ZERO gap minutes.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day with a REAL swim layer + REAL catalog special', async (t) => {
+  await runScenario('SWIM-REAL (real type:swim + real type:special, Main wall between, fields blocked 10:30-11:35)', {
+    swimReal: true,
   });
 });
