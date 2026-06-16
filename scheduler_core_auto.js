@@ -7605,6 +7605,12 @@
                     _travelZone: _travel ? _travel.zoneName : null,
                     _travelMode: _travel ? _travel.mode : null,
                     _final: opts._final || false,
+                    // ★ Staggered shared-room custom: reserved-wall marker. When true
+                    //   the block sits on its own non-overlapping per-grade sub-slot and
+                    //   STEP 4.5 must NOT demote it as a cross-grade violation. _alignAnchor
+                    //   carries the deterministic start for downstream pinning.
+                    _staggerReserved: opts._staggerReserved || false,
+                    _alignAnchor: opts._alignAnchor != null ? opts._alignAnchor : null,
                     // Swim+change merge metadata (block holds the bundle range;
                     // these fields let the renderer split it visually if needed).
                     _preChangeMin: opts._preChangeMin != null ? opts._preChangeMin : null,
@@ -8090,6 +8096,11 @@
                         //   stays in-window and owns its own field — so we only gate on the
                         //   room being sharable to avoid touching solo-room layouts.)
                         var _clAlignAnchor = null;
+                        // ★ Set true only when this grade lands on its own dur-wide
+                        //   sub-slot on the common timeline — i.e. genuinely
+                        //   non-overlapping with every other grade. Gates the 4.5
+                        //   reserve whitelist so a real conflict is never skipped.
+                        var _clStaggerNonOverlap = false;
                         try {
                             var _clFld = cl.customField || null;
                             if (_clFld) {
@@ -8140,6 +8151,17 @@
                                     }
                                     var _clOrdinal = _shareGrades.indexOf(grade);
                                     if (_clOrdinal < 0) _clOrdinal = 0;
+                                    // ── COMMON timeline base across grades ──────────────
+                                    //   Every grade must tile from the SAME origin or the
+                                    //   sub-slots overlap. winStart is clamped per-grade
+                                    //   (Math.max(cl.startMin, gradeStart)) so grades whose
+                                    //   day is shifted (e.g. a special band) get a different
+                                    //   base and the stagger collapses to a partial overlap.
+                                    //   Use the room/layer window start (cl.startMin) — the
+                                    //   value shared by every grade hosting this activity in
+                                    //   this room — as the common base, snapped to the 5-min
+                                    //   grid the position scan steps on.
+                                    var _commonWinStart = (cl.startMin != null) ? cl.startMin : winStart;
                                     // Decide whether cross-grade co-use is fully permitted.
                                     // If so, all grades may share one anchor (winStart).
                                     var _crossGradeOk = true;
@@ -8172,27 +8194,51 @@
                                             _crossGradeOk = false;
                                         }
                                     }
-                                    // Base anchor: snap winStart up to the 5-min grid so it
-                                    // matches the position scan (steps by 5).
-                                    var _baseAnchor = Math.round(winStart / 5) * 5;
-                                    if (_baseAnchor < winStart) _baseAnchor += 5;
+                                    // Base anchor: snap the COMMON window start up to the
+                                    // 5-min grid so it matches the position scan (steps by 5)
+                                    // and is identical for every grade.
+                                    var _baseAnchor = Math.round(_commonWinStart / 5) * 5;
+                                    if (_baseAnchor < _commonWinStart) _baseAnchor += 5;
                                     if (_crossGradeOk || _shareGrades.length <= 1) {
                                         // Single shared anchor — original (tighter) behavior.
-                                        _clAlignAnchor = _baseAnchor;
+                                        // Clamp into this grade's own clamped window.
+                                        _clAlignAnchor = Math.max(_baseAnchor, Math.round(winStart / 5) * 5);
+                                        if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
                                     } else {
-                                        // Per-grade sub-slot. dur is the fixed need duration.
+                                        // Per-grade sub-slot on the COMMON timeline:
+                                        //   slot(grade) = [base + ord*dur, base + (ord+1)*dur)
+                                        // The offset MUST be the FULL activity duration so
+                                        // consecutive grades are STRICTLY non-overlapping
+                                        // (e.g. dur=20 → Auto 630-650, Chair 650-670). dur is
+                                        // the fixed need duration (read above).
                                         var _staggerAnchor = _baseAnchor + _clOrdinal * dur;
-                                        // Snap (in case dur isn't a 5-multiple) and clamp to
-                                        // the window. If the grade's sub-slot would run past
-                                        // windowEnd, fall back to the base anchor (today's
-                                        // behavior) for this overflowing grade rather than
-                                        // placing out of window — never drop the activity.
+                                        // Snap (in case dur isn't a 5-multiple). Do NOT snap
+                                        // toward winStart here — that would collapse the
+                                        // stagger; the common base is already on the grid.
                                         _staggerAnchor = Math.round(_staggerAnchor / 5) * 5;
-                                        if (_staggerAnchor < winStart) _staggerAnchor += 5;
-                                        if (_staggerAnchor + dur > winEnd) {
+                                        // The grade's own clamped window may start later than
+                                        // the common base (shifted day). If this grade's slot
+                                        // falls before its own winStart it can't be placed —
+                                        // fall back to the base anchor for this grade.
+                                        if (_staggerAnchor < winStart) {
+                                            _clAlignAnchor = Math.round(winStart / 5) * 5;
+                                            if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
+                                            _clStaggerNonOverlap = false; // outside the clean tiling
+                                        } else if (_staggerAnchor + dur > winEnd) {
+                                            // Sub-slot would run past windowEnd → place at the
+                                            // base anchor rather than out of window. This grade
+                                            // is NOT on the clean non-overlapping tiling, so the
+                                            // 4.5 reserve must NOT whitelist it (it may collide).
                                             _clAlignAnchor = _baseAnchor;
+                                            _clStaggerNonOverlap = false;
                                         } else {
                                             _clAlignAnchor = _staggerAnchor;
+                                            // This grade sits on its own dur-wide sub-slot on
+                                            // the common timeline → genuinely non-overlapping
+                                            // with every other grade's sub-slot. Safe to mark
+                                            // the materialized block as a reserved wall that
+                                            // STEP 4.5 skips.
+                                            _clStaggerNonOverlap = true;
                                         }
                                     }
                                 }
@@ -8204,6 +8250,7 @@
                             _activityLocked: true, _customActivity: cl.customActivity || null,
                             _customField: cl.customField || null, _customBunks: cl.customBunks || null,
                             _alignAnchor: _clAlignAnchor,
+                            _staggerReserved: _clStaggerNonOverlap,
                             _shareEventId: _clShareEvtId, _shareConcurrency: _clShareConc, _source: 'need' });
                     });
 
@@ -9024,7 +9071,9 @@
                                 _customActivity: need._customActivity || null, _customField: need._customField || null,
                                 _customBunks: need._customBunks || null,
                                 _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true
+                                _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null,
+                                _staggerReserved: need._staggerReserved || false,
+                                _alignAnchor: need._alignAnchor != null ? need._alignAnchor : null, _final: true
                             });
                             if (blk) {
                                 template.push(blk);
@@ -9161,7 +9210,9 @@
                                     _customActivity: need._customActivity || null, _customField: need._customField || null,
                                     _customBunks: need._customBunks || null,
                                     _rotationEventId: need._rotationEventId || null, _rotationEventLocation: need._rotationEventLocation || null,
-                                    _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null, _final: true,
+                                    _rotationEventColor: need._rotationEventColor || null, _sequenceTarget: need._sequenceTarget || null,
+                                    _staggerReserved: need._staggerReserved || false,
+                                    _alignAnchor: need._alignAnchor != null ? need._alignAnchor : null, _final: true,
                                     _relaxed: !!relaxationType, _relaxationType: relaxationType, _relaxationDetail: relaxationDetail
                                 });
                                 if (need.type === 'rotation_event' && need._rotationEventId && rotationQuotas) {
@@ -12590,7 +12641,9 @@
                         _swimActualStart: block._swimActualStart != null ? block._swimActualStart : null,
                         _swimActualEnd: block._swimActualEnd != null ? block._swimActualEnd : null,
                         _swimGroupId: block._swimGroupId || null,
-                        _changeAttached: block._changeAttached || false
+                        _changeAttached: block._changeAttached || false,
+                        _staggerReserved: block._staggerReserved || false,
+                        _alignAnchor: block._alignAnchor != null ? block._alignAnchor : null
                     });
                 });
                 // ★ v11.3: Validate after template execution
@@ -20231,6 +20284,11 @@
                             _bunkOverride: true, _activityLocked: isCustom || false,
                             _customActivity: block._customActivity || null,
                             _customField: block._customField || null,
+                            // ★ Staggered shared-room custom: reserved per-grade sub-slot.
+                            //   STEP 4.5 skips this entry (it sits on a non-overlapping
+                            //   timeline slot) so the activity isn't demoted as a spurious
+                            //   cross-grade violation.
+                            _staggerReserved: isCustom ? (block._staggerReserved || false) : false,
                             _autoMode: true, continuation: false,
                             _startMin: block.startMin, _endMin: block.endMin
                         };
@@ -21685,6 +21743,26 @@
                         postSolveSA[o.bunk]?.[o.idx]?.field !== 'Free'
                     );
                     if (overlapping.length === 0) continue;
+
+                    // ★ Staggered shared-room custom reserve. A custom activity placed
+                    //   on its own per-grade, non-overlapping sub-slot on the common
+                    //   timeline carries _staggerReserved. Different grades sequenced in
+                    //   the SAME room should never be demoted as a cross-grade conflict —
+                    //   but ONLY when this is a genuine non-overlap. We whitelist this
+                    //   entry iff it is reserved AND every overlapping entry is ALSO a
+                    //   reserved use of the SAME custom activity (the legitimate adjacent
+                    //   tiling). If a non-reserved (real) consumer overlaps, fall through
+                    //   to normal enforcement — we never skip a real conflict.
+                    if (sa._staggerReserved) {
+                        const _myAct = String(sa._customActivity || sa._activity || '').toLowerCase().trim();
+                        const _allReservedSameAct = overlapping.every(o => {
+                            const _osa = postSolveSA[o.bunk]?.[o.idx];
+                            if (!_osa || !_osa._staggerReserved) return false;
+                            const _oAct = String(_osa._customActivity || _osa._activity || '').toLowerCase().trim();
+                            return _oAct === _myAct;
+                        });
+                        if (_allReservedSameAct) continue;
+                    }
 
                     // ★ FIX A2: peak simultaneous occupancy via event sweep
                     const allIntervals = overlapping.map(o => ({ startMin: o.startMin, endMin: o.endMin }));
