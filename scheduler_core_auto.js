@@ -1494,6 +1494,124 @@
 
         const allGrades = Object.keys(divisions).filter(g => !allowedSet || allowedSet.has(String(g)));
 
+        // ════════════════════════════════════════════════════════════════════
+        // ★ Shared-room custom staggered-slot computation (factored helper)
+        //   A custom layer hosted in a SHARABLE room that does NOT permit
+        //   cross-GRADE co-use must give each grade its own non-overlapping
+        //   sub-slot inside the layer window, laid on a COMMON timeline base so
+        //   consecutive grades tile cleanly (e.g. Auto 630-650, Chair 650-670).
+        //   Originally inlined in the Phase-3 needs build (timeSweepFillAll);
+        //   factored out so Phase 2.6 can PRE-PLACE the activity as a wall using
+        //   the identical math. Returns:
+        //     { alignAnchor, staggerReserved, isShareableRoom, crossGradeOk,
+        //       shareGrades, dur }
+        //   alignAnchor       — the grade's deterministic start minute (or null)
+        //   staggerReserved   — true iff the grade sits on its own dur-wide
+        //                       non-overlapping sub-slot (safe to wall/whitelist)
+        //   isShareableRoom   — room is sharable at all
+        //   crossGradeOk      — every relevant cross-grade pair is permitted
+        //                       (→ a single shared anchor is used, no stagger)
+        //   shareGrades       — deterministic ordered set of grades hosting this
+        //                       activity in this room
+        // ════════════════════════════════════════════════════════════════════
+        function computeStaggeredCustomSlot(cl, grade, dur, winStart, winEnd) {
+            var result = { alignAnchor: null, staggerReserved: false, isShareableRoom: false,
+                           crossGradeOk: true, shareGrades: [], dur: dur };
+            try {
+                var _clFld = cl.customField || null;
+                if (!_clFld) return result;
+                var _clFldCfg = getFields(globalSettings).find(function (f) {
+                    return f && f.name && String(f.name).toLowerCase().trim() === String(_clFld).toLowerCase().trim();
+                });
+                var _clSw = (_clFldCfg && _clFldCfg.sharableWith) || null;
+                var _clShareable = !!_clSw && (
+                    (_clSw.type && _clSw.type !== 'not_sharable') ||
+                    (parseInt(_clSw.capacity) || 0) > 1
+                );
+                if (!_clShareable) return result;
+                result.isShareableRoom = true;
+
+                var _clNm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                var _clFldLow = String(_clFld).toLowerCase().trim();
+                // Deterministic set of grades that host this activity in this
+                // room, in allGrades order.
+                var _shareGrades = [];
+                for (var _sg = 0; _sg < allGrades.length; _sg++) {
+                    var _sgGrade = allGrades[_sg];
+                    var _sgLayers = layersByGrade[_sgGrade] || [];
+                    var _sgHas = _sgLayers.some(function (ll) {
+                        return ll && (ll.type || '').toLowerCase() === 'custom' &&
+                            String(ll.customActivity || ll.event || '').toLowerCase().trim() === _clNm &&
+                            String(ll.customField || '').toLowerCase().trim() === _clFldLow;
+                    });
+                    if (_sgHas) _shareGrades.push(_sgGrade);
+                }
+                result.shareGrades = _shareGrades;
+                var _clOrdinal = _shareGrades.indexOf(grade);
+                if (_clOrdinal < 0) _clOrdinal = 0;
+                // COMMON timeline base across grades — the room/layer window start
+                // (cl.startMin), the value shared by every grade hosting this
+                // activity in this room (NOT the per-grade clamped winStart).
+                var _commonWinStart = (cl.startMin != null) ? cl.startMin : winStart;
+                // Decide whether cross-grade co-use is fully permitted.
+                var _crossGradeOk = true;
+                if (_shareGrades.length > 1) {
+                    var _swType = (_clSw.type || '').toLowerCase();
+                    if (_swType === 'all') {
+                        _crossGradeOk = true;
+                    } else if (_swType === 'not_sharable' || _swType === 'same_division') {
+                        _crossGradeOk = false;
+                    } else if (_swType === 'cross_division') {
+                        var _pairs = _clSw.allowedPairs || {};
+                        _crossGradeOk = true;
+                        for (var _pa = 0; _pa < _shareGrades.length && _crossGradeOk; _pa++) {
+                            for (var _pb = _pa + 1; _pb < _shareGrades.length; _pb++) {
+                                var _pk = [_shareGrades[_pa], _shareGrades[_pb]].sort().join('|');
+                                if (_pairs[_pk] !== true) { _crossGradeOk = false; break; }
+                            }
+                        }
+                    } else if (_swType === 'custom') {
+                        var _divs = _clSw.divisions || [];
+                        if (_divs.length > 0) {
+                            _crossGradeOk = _shareGrades.every(function (gg) { return _divs.indexOf(gg) >= 0; });
+                        } else {
+                            _crossGradeOk = false;
+                        }
+                    } else {
+                        _crossGradeOk = false;
+                    }
+                }
+                result.crossGradeOk = _crossGradeOk;
+                // Base anchor: snap the COMMON window start up to the 5-min grid.
+                var _baseAnchor = Math.round(_commonWinStart / 5) * 5;
+                if (_baseAnchor < _commonWinStart) _baseAnchor += 5;
+                if (_crossGradeOk || _shareGrades.length <= 1) {
+                    // Single shared anchor — clamp into this grade's own window.
+                    result.alignAnchor = Math.max(_baseAnchor, Math.round(winStart / 5) * 5);
+                    if (result.alignAnchor < winStart) result.alignAnchor += 5;
+                    // No stagger needed (cross-grade legal) → not a reserved tiling.
+                    result.staggerReserved = false;
+                } else {
+                    // Per-grade sub-slot on the COMMON timeline:
+                    //   slot(grade) = [base + ord*dur, base + (ord+1)*dur)
+                    var _staggerAnchor = _baseAnchor + _clOrdinal * dur;
+                    _staggerAnchor = Math.round(_staggerAnchor / 5) * 5;
+                    if (_staggerAnchor < winStart) {
+                        result.alignAnchor = Math.round(winStart / 5) * 5;
+                        if (result.alignAnchor < winStart) result.alignAnchor += 5;
+                        result.staggerReserved = false;
+                    } else if (_staggerAnchor + dur > winEnd) {
+                        result.alignAnchor = _baseAnchor;
+                        result.staggerReserved = false;
+                    } else {
+                        result.alignAnchor = _staggerAnchor;
+                        result.staggerReserved = true;
+                    }
+                }
+            } catch (_eAnchor) { result.alignAnchor = null; result.staggerReserved = false; }
+            return result;
+        }
+
         // ★ PRIORITY ORDERING: sort grades so higher-priority grades are processed first.
         // Each field with usePriority=true contributes rank votes; grades that rank first
         // across the most fields get processed earliest → they claim contested fields first.
@@ -7842,7 +7960,12 @@
                         // ★ FN-33: user-resized blocks (_bunkResized) are exempt too — the
                         //   user explicitly chose that window in the Bunk Overrides view.
                         var _p0Start = b.startMin, _p0End = b.endMin;
-                        var _p0Periods = (!b._bunkResized) && window.campPeriods && window.campPeriods[grade];
+                        // ★ Phase 2.6 staggered shared-room custom walls are exempt from
+                        //   the period-boundary snap: their start is already lane-aligned
+                        //   on the common timeline (e.g. Auto 630-650, Chair 650-670) and
+                        //   snapping one back to a period start would collapse the stagger
+                        //   and re-create the cross-grade overlap. Treat like _bunkResized.
+                        var _p0Periods = (!b._bunkResized && !b._staggerReserved) && window.campPeriods && window.campPeriods[grade];
                         if (_p0Periods && _p0Periods.length > 0) {
                             var _p0Duration = _p0End - _p0Start;
                             var _p0PS = null; // period containing startMin
@@ -8095,155 +8218,19 @@
                         //   (Snapping an UNshared custom to its window start is harmless — it
                         //   stays in-window and owns its own field — so we only gate on the
                         //   room being sharable to avoid touching solo-room layouts.)
-                        var _clAlignAnchor = null;
-                        // ★ Set true only when this grade lands on its own dur-wide
-                        //   sub-slot on the common timeline — i.e. genuinely
-                        //   non-overlapping with every other grade. Gates the 4.5
-                        //   reserve whitelist so a real conflict is never skipped.
-                        var _clStaggerNonOverlap = false;
-                        try {
-                            var _clFld = cl.customField || null;
-                            if (_clFld) {
-                                var _clFldCfg = getFields(globalSettings).find(function (f) {
-                                    return f && f.name && String(f.name).toLowerCase().trim() === String(_clFld).toLowerCase().trim();
-                                });
-                                var _clSw = (_clFldCfg && _clFldCfg.sharableWith) || null;
-                                var _clShareable = !!_clSw && (
-                                    (_clSw.type && _clSw.type !== 'not_sharable') ||
-                                    (parseInt(_clSw.capacity) || 0) > 1
-                                );
-                                if (_clShareable) {
-                                    // ── Per-grade staggered shared-room anchor ───────────
-                                    //   A shared room that does NOT permit cross-GRADE
-                                    //   co-use (shareType not_sharable / same_division, or
-                                    //   custom/cross_division whose allowedPairs|divisions
-                                    //   don't cover every grade using the room) cannot host
-                                    //   two different grades at the SAME minute — STEP 4.5
-                                    //   demotes that as a cross-grade violation and the
-                                    //   activity vanishes for most bunks. The old logic
-                                    //   anchored EVERY grade to winStart, forcing exactly
-                                    //   that overlap. Instead we give each grade its own
-                                    //   sequential sub-slot inside the window:
-                                    //     anchor(grade) = winStart + ordinal * dur
-                                    //   where ordinal is the grade's index among the grades
-                                    //   that share THIS room for THIS activity (deterministic
-                                    //   allGrades order). Same-grade bunks compute the same
-                                    //   ordinal → same anchor → they legally co-use the room
-                                    //   at one time (capacity permitting). Different grades
-                                    //   get non-overlapping windows → no 4.5 demotion.
-                                    //   When the room DOES allow every relevant cross-grade
-                                    //   pair we keep a single shared anchor (winStart) — that
-                                    //   is valid and tighter.
-                                    var _clNm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
-                                    var _clFldLow = String(_clFld).toLowerCase().trim();
-                                    // Deterministic set of grades that host this activity in
-                                    // this room, in allGrades order.
-                                    var _shareGrades = [];
-                                    for (var _sg = 0; _sg < allGrades.length; _sg++) {
-                                        var _sgGrade = allGrades[_sg];
-                                        var _sgLayers = layersByGrade[_sgGrade] || [];
-                                        var _sgHas = _sgLayers.some(function (ll) {
-                                            return ll && (ll.type || '').toLowerCase() === 'custom' &&
-                                                String(ll.customActivity || ll.event || '').toLowerCase().trim() === _clNm &&
-                                                String(ll.customField || '').toLowerCase().trim() === _clFldLow;
-                                        });
-                                        if (_sgHas) _shareGrades.push(_sgGrade);
-                                    }
-                                    var _clOrdinal = _shareGrades.indexOf(grade);
-                                    if (_clOrdinal < 0) _clOrdinal = 0;
-                                    // ── COMMON timeline base across grades ──────────────
-                                    //   Every grade must tile from the SAME origin or the
-                                    //   sub-slots overlap. winStart is clamped per-grade
-                                    //   (Math.max(cl.startMin, gradeStart)) so grades whose
-                                    //   day is shifted (e.g. a special band) get a different
-                                    //   base and the stagger collapses to a partial overlap.
-                                    //   Use the room/layer window start (cl.startMin) — the
-                                    //   value shared by every grade hosting this activity in
-                                    //   this room — as the common base, snapped to the 5-min
-                                    //   grid the position scan steps on.
-                                    var _commonWinStart = (cl.startMin != null) ? cl.startMin : winStart;
-                                    // Decide whether cross-grade co-use is fully permitted.
-                                    // If so, all grades may share one anchor (winStart).
-                                    var _crossGradeOk = true;
-                                    if (_shareGrades.length > 1) {
-                                        var _swType = (_clSw.type || '').toLowerCase();
-                                        if (_swType === 'all') {
-                                            _crossGradeOk = true;
-                                        } else if (_swType === 'not_sharable' || _swType === 'same_division') {
-                                            _crossGradeOk = false;
-                                        } else if (_swType === 'cross_division') {
-                                            // Every distinct grade pair in the set must be allowed.
-                                            var _pairs = _clSw.allowedPairs || {};
-                                            _crossGradeOk = true;
-                                            for (var _pa = 0; _pa < _shareGrades.length && _crossGradeOk; _pa++) {
-                                                for (var _pb = _pa + 1; _pb < _shareGrades.length; _pb++) {
-                                                    var _pk = [_shareGrades[_pa], _shareGrades[_pb]].sort().join('|');
-                                                    if (_pairs[_pk] !== true) { _crossGradeOk = false; break; }
-                                                }
-                                            }
-                                        } else if (_swType === 'custom') {
-                                            // 'custom' permits the divisions/grades in its list.
-                                            var _divs = _clSw.divisions || [];
-                                            if (_divs.length > 0) {
-                                                _crossGradeOk = _shareGrades.every(function (gg) { return _divs.indexOf(gg) >= 0; });
-                                            } else {
-                                                // No explicit allow list → no cross-grade pairing.
-                                                _crossGradeOk = false;
-                                            }
-                                        } else {
-                                            _crossGradeOk = false;
-                                        }
-                                    }
-                                    // Base anchor: snap the COMMON window start up to the
-                                    // 5-min grid so it matches the position scan (steps by 5)
-                                    // and is identical for every grade.
-                                    var _baseAnchor = Math.round(_commonWinStart / 5) * 5;
-                                    if (_baseAnchor < _commonWinStart) _baseAnchor += 5;
-                                    if (_crossGradeOk || _shareGrades.length <= 1) {
-                                        // Single shared anchor — original (tighter) behavior.
-                                        // Clamp into this grade's own clamped window.
-                                        _clAlignAnchor = Math.max(_baseAnchor, Math.round(winStart / 5) * 5);
-                                        if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
-                                    } else {
-                                        // Per-grade sub-slot on the COMMON timeline:
-                                        //   slot(grade) = [base + ord*dur, base + (ord+1)*dur)
-                                        // The offset MUST be the FULL activity duration so
-                                        // consecutive grades are STRICTLY non-overlapping
-                                        // (e.g. dur=20 → Auto 630-650, Chair 650-670). dur is
-                                        // the fixed need duration (read above).
-                                        var _staggerAnchor = _baseAnchor + _clOrdinal * dur;
-                                        // Snap (in case dur isn't a 5-multiple). Do NOT snap
-                                        // toward winStart here — that would collapse the
-                                        // stagger; the common base is already on the grid.
-                                        _staggerAnchor = Math.round(_staggerAnchor / 5) * 5;
-                                        // The grade's own clamped window may start later than
-                                        // the common base (shifted day). If this grade's slot
-                                        // falls before its own winStart it can't be placed —
-                                        // fall back to the base anchor for this grade.
-                                        if (_staggerAnchor < winStart) {
-                                            _clAlignAnchor = Math.round(winStart / 5) * 5;
-                                            if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
-                                            _clStaggerNonOverlap = false; // outside the clean tiling
-                                        } else if (_staggerAnchor + dur > winEnd) {
-                                            // Sub-slot would run past windowEnd → place at the
-                                            // base anchor rather than out of window. This grade
-                                            // is NOT on the clean non-overlapping tiling, so the
-                                            // 4.5 reserve must NOT whitelist it (it may collide).
-                                            _clAlignAnchor = _baseAnchor;
-                                            _clStaggerNonOverlap = false;
-                                        } else {
-                                            _clAlignAnchor = _staggerAnchor;
-                                            // This grade sits on its own dur-wide sub-slot on
-                                            // the common timeline → genuinely non-overlapping
-                                            // with every other grade's sub-slot. Safe to mark
-                                            // the materialized block as a reserved wall that
-                                            // STEP 4.5 skips.
-                                            _clStaggerNonOverlap = true;
-                                        }
-                                    }
-                                }
-                            }
-                        } catch (_eAnchor) { _clAlignAnchor = null; }
+                        // ★ Shared-room staggered anchor — computed by the factored
+                        //   helper (computeStaggeredCustomSlot, defined at solver scope)
+                        //   so Phase 2.6 pre-placement and this Phase-3 needs build use
+                        //   IDENTICAL math. _clAlignAnchor biases the position scan toward
+                        //   the grade's deterministic sub-slot; _clStaggerNonOverlap
+                        //   (a.k.a. _staggerReserved) is set only on the genuinely
+                        //   non-overlapping per-grade tiling and gates the reserve
+                        //   whitelist / wall representation so a real conflict is never
+                        //   skipped. (Original inlined per-grade-stagger logic preserved
+                        //   verbatim inside the helper.)
+                        var _clSlot = computeStaggeredCustomSlot(cl, grade, dur, winStart, winEnd);
+                        var _clAlignAnchor = _clSlot.alignAnchor;
+                        var _clStaggerNonOverlap = _clSlot.staggerReserved;
                         needs.push({ type: 'custom', event: cl.customActivity || cl.event || 'Custom', layer: cl,
                             dMin: dur, dMax: cl.durationMax || dur,
                             windowStart: winStart, windowEnd: winEnd,
@@ -17186,6 +17173,201 @@
                 allGrades.forEach(grade => {
                     log('[Phase2.5]   Grade ' + grade + ': ' + preplacedByGrade[grade] + '/' + getBunksForGrade(grade, divisions).length + ' bunks got specials');
                 });
+            }
+
+            // ── Phase 2.6: Pre-place STAGGERED shared-room custom layers as walls ──
+            //   A custom layer hosted in a SHARED room that does NOT permit
+            //   cross-grade co-use (e.g. "Main Activity" in the Auditorium, where
+            //   Auto and Chair must NOT overlap) was previously placed LATE, in the
+            //   Phase-3 custom CSP path, where its staggered slot was only a SOFT
+            //   front-of-list anchor preference (getValidPositions). By then the
+            //   swim/special walls (Phase 0 / Phase 2.5) already occupied the
+            //   staggered slot for some bunks, so when the anchor was blocked the
+            //   activity simply DROPPED — most bunks of one grade never got it
+            //   (CUSTOM-LAYER COVERAGE miss).
+            //
+            //   Fix: pre-place it as an EARLY WALL here — before the sport engine —
+            //   exactly the way Phase 2.5 pre-places specials and Phase 0 places
+            //   lunch. Each grade gets its deterministic per-grade staggered slot
+            //   (computeStaggeredCustomSlot, the same math the Phase-3 needs build
+            //   uses). Every bunk of the grade gets the activity at that slot as a
+            //   _pinned/_fixed/_staggerReserved wall — the lunch-like representation
+            //   (commit 0fb9c98) that is immune to every post-solve sweep. Same-grade
+            //   bunks legally share one slot (capacity permitting). The sport engine
+            //   and swim then tile AROUND this wall.
+            //
+            //   Slot selection + fallback (per bunk):
+            //     1. Try the grade's primary staggered slot. Accept if it doesn't
+            //        overlap any of this bunk's existing walls (swim/special/lunch).
+            //     2. If blocked, scan other in-window 20-min sub-slots that (a) don't
+            //        overlap this bunk's other walls AND (b) fall entirely inside
+            //        this grade's stagger lane — i.e. overlap NO other grade's lane
+            //        (so two grades never co-use the room at one minute).
+            //     3. If none fits, skip (surfaces as a coverage miss — Phase 3 will
+            //        backfill the period). NEVER place out of window or cross-grade
+            //        overlapping.
+            {
+                var _p26Count = 0, _p26ByGrade = {};
+                allGrades.forEach(function (_p26grade) {
+                    _p26ByGrade[_p26grade] = 0;
+                    var _p26gradeStart = parseTimeToMinutes((divisions[_p26grade] || divisions[String(_p26grade)])?.startTime) || 540;
+                    var _p26gradeEnd = parseTimeToMinutes((divisions[_p26grade] || divisions[String(_p26grade)])?.endTime) || 960;
+                    (layersByGrade[_p26grade] || []).forEach(function (cl) {
+                        if ((cl.type || '').toLowerCase() !== 'custom' || cl._classification === 'pinned') return;
+                        // A custom layer naming a consecutive-bunks general is owned by
+                        // the Phase 2.35 walk — skip here (mirror the Phase-3 guard).
+                        if (!(cl.customBunks && cl.customBunks.length > 0)) {
+                            var _nmLowCB = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                            if ((window.__cbGeneralNamesLow || []).indexOf(_nmLowCB) >= 0) return;
+                        }
+                        // Connect-to (wet-bundle) custom layers are placed adjacent to
+                        // swim by Phase 2.4 — leave them to the Phase-3 fallback.
+                        if (cl.adjacentTo) return;
+
+                        var _winStart = Math.max(cl.startMin || 0, _p26gradeStart);
+                        var _winEnd = Math.min(cl.endMin || 1440, _p26gradeEnd);
+                        if (_winEnd <= _winStart) return;
+                        var _dur = cl.durationMin || cl.periodMin || 30;
+                        if (_winEnd - _winStart < _dur) return;
+
+                        // Only pre-place STAGGERED shared-room customs (cross-grade
+                        // co-use NOT permitted → each grade needs its own lane).
+                        // Cross-grade-allowed or solo-room customs keep the existing
+                        // Phase-3 CSP path (single shared anchor, no lane conflict).
+                        var _slot = computeStaggeredCustomSlot(cl, _p26grade, _dur, _winStart, _winEnd);
+                        if (!_slot.isShareableRoom) return;       // solo room → Phase 3 owns it
+                        if (_slot.crossGradeOk) return;           // cross-grade legal → no stagger needed
+                        if (_slot.shareGrades.length <= 1) return; // only this grade uses it → Phase 3 fine
+                        if (!_slot.staggerReserved || _slot.alignAnchor == null) return; // no clean lane → leave to Phase 3
+
+                        var _custName = cl.customActivity || cl.event || 'Custom';
+                        var _custNameLow = String(_custName).toLowerCase().trim();
+                        var _custField = cl.customField || null;
+
+                        // ── Build this grade's stagger LANE and the set of FORBIDDEN
+                        //   minutes (every OTHER grade's lane in this room) on the
+                        //   COMMON timeline base, so an alternate sub-slot never lets
+                        //   two grades share the room at one minute.
+                        var _commonBase = (cl.startMin != null) ? cl.startMin : _winStart;
+                        var _base = Math.round(_commonBase / 5) * 5;
+                        if (_base < _commonBase) _base += 5;
+                        var _myOrd = _slot.shareGrades.indexOf(_p26grade);
+                        if (_myOrd < 0) _myOrd = 0;
+                        var _myLaneStart = _base + _myOrd * _dur;
+                        var _myLaneEnd = _myLaneStart + _dur;
+                        // Forbidden lanes = all other grades' [base+ord*dur, +dur)
+                        var _forbidden = [];
+                        for (var _fo = 0; _fo < _slot.shareGrades.length; _fo++) {
+                            if (_fo === _myOrd) continue;
+                            _forbidden.push({ s: _base + _fo * _dur, e: _base + (_fo + 1) * _dur });
+                        }
+                        function _p26InOtherLane(s, e) {
+                            for (var _k = 0; _k < _forbidden.length; _k++) {
+                                if (s < _forbidden[_k].e && e > _forbidden[_k].s) return true;
+                            }
+                            return false;
+                        }
+
+                        var _bunks = getBunksForGrade(_p26grade, divisions);
+                        _bunks.forEach(function (bunk) {
+                            // Honor per-bunk scoping on the layer.
+                            if (cl.customBunks && cl.customBunks.length > 0 && !cl.customBunks.includes(String(bunk))) return;
+                            bunkTimelines[bunk] = bunkTimelines[bunk] || [];
+                            // Skip if this bunk already has the activity as a wall.
+                            var _already = (bunkTimelines[bunk] || []).some(function (w) {
+                                return w._fixed && (w.type || '').toLowerCase() === 'custom' &&
+                                       String(w.event || '').toLowerCase().trim() === _custNameLow;
+                            });
+                            if (_already) return;
+
+                            // Does [s,e) overlap any of this bunk's existing walls?
+                            function _p26Collides(s, e) {
+                                var tl = bunkTimelines[bunk] || [];
+                                for (var _t = 0; _t < tl.length; _t++) {
+                                    var b = tl[_t];
+                                    if (b.startMin < e && b.endMin > s) return true;
+                                }
+                                return false;
+                            }
+
+                            // Candidate slots: primary lane first, then any other
+                            // in-window 5-min-aligned sub-slot inside THIS grade's lane
+                            // region (i.e. not in any other grade's lane).
+                            var _candidates = [_slot.alignAnchor];
+                            for (var _cs = Math.round(_winStart / 5) * 5; _cs + _dur <= _winEnd; _cs += 5) {
+                                if (_cs === _slot.alignAnchor) continue;
+                                if (_p26InOtherLane(_cs, _cs + _dur)) continue; // would overlap another grade's lane
+                                _candidates.push(_cs);
+                            }
+
+                            var _chosen = null;
+                            for (var _ci = 0; _ci < _candidates.length; _ci++) {
+                                var _cStart = _candidates[_ci];
+                                if (_cStart == null) continue;
+                                var _cEnd = _cStart + _dur;
+                                if (_cStart < _winStart || _cEnd > _winEnd) continue;
+                                if (_p26Collides(_cStart, _cEnd)) continue;
+                                // Field/rule check at the room for this bunk/grade/time.
+                                var _ruleWhy = null;
+                                try {
+                                    _ruleWhy = (typeof _validateWritePlacement === 'function')
+                                        ? _validateWritePlacement(_custField, _custName, _p26grade, bunk, _cStart, _cEnd)
+                                        : null;
+                                } catch (_eRw) { _ruleWhy = null; }
+                                if (_ruleWhy) continue;
+                                _chosen = { start: _cStart, end: _cEnd };
+                                break;
+                            }
+
+                            if (!_chosen) {
+                                // No legal in-lane slot — leave to Phase 3 (coverage miss).
+                                return;
+                            }
+
+                            bunkTimelines[bunk].push({
+                                startMin: _chosen.start, endMin: _chosen.end,
+                                type: 'custom', event: _custName, layer: cl,
+                                dMin: _dur, dMax: _dur,
+                                _classification: 'pinned', _committed: true, _fixed: true,
+                                _gradeWide: false, _activityLocked: true, _noBacktrack: false,
+                                // Mark as the genuine non-overlapping per-grade tiling so
+                                // materialization (~L20279) walls it (_pinned) and every
+                                // post-solve sweep + auto_validator + pinned_activity_
+                                // preservation already honors _staggerReserved.
+                                _staggerReserved: true,
+                                _customActivity: _custName,
+                                _customField: _custField,
+                                _customBunks: cl.customBunks || null,
+                                _alignAnchor: _chosen.start,
+                                _source: 'phase2.6-staggered-custom'
+                            });
+
+                            // Register room occupancy + cross-grade ledger so nothing
+                            // else (specials/sports/swim fill) takes this slot.
+                            if (_custField && fieldLedger[_custField]) {
+                                fieldLedger[_custField].claims.push({
+                                    bunk: bunk, grade: _p26grade, activity: _custName,
+                                    startMin: _chosen.start, endMin: _chosen.end
+                                });
+                            }
+                            try { registerCrossGrade(_p26grade, 'custom', _chosen.start, _chosen.end, _custName); } catch (_eCg) {}
+                            if (_custField && window.AutoFieldLocks) {
+                                try { window.AutoFieldLocks.lockField(_custField, _chosen.start, _chosen.end, _p26grade, _custName, 'auto_custom_p26'); } catch (_eL) {}
+                            }
+                            ensureTimelineIntegrity(bunk);
+                            _p26Count++;
+                            _p26ByGrade[_p26grade]++;
+                        });
+                    });
+                });
+                if (_p26Count > 0) {
+                    log('[Phase2.6] ★ PRE-PLACED ' + _p26Count + ' staggered shared-room custom blocks as walls');
+                    allGrades.forEach(function (g) {
+                        if (_p26ByGrade[g] > 0) {
+                            log('[Phase2.6]   Grade ' + g + ': ' + _p26ByGrade[g] + '/' + getBunksForGrade(g, divisions).length + ' bunks got the staggered custom');
+                        }
+                    });
+                }
             }
 
             // ── Phase 3: Time-sweep sport filler (v8.0) ──
