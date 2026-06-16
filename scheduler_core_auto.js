@@ -28268,45 +28268,70 @@
                     return null;
                 };
                 var _sa = window.scheduleAssignments || {};
-                // Collect every live special occupant once, tagged with its (grade, window).
-                //   Two complementary guarantees run off this single index — they mirror the
-                //   auto-validator's two special-facing checks exactly so the engine can never
-                //   emit a grid the validator would flag:
-                //     • CAPACITY — per (special, grade): peak concurrent ≤ cap   (Check B)
-                //     • STAGGER  — per special: any two overlapping occupants must share an
-                //                  IDENTICAL window, unless the special's own sharing config
-                //                  legitimately permits that cross-division pairing  (Check C)
-                //   Leagues / trips / rotation events / whole-grade custom layers are never
-                //   touched (they are not contended special resources).
-                var _byName = {};   // special name → [occupants across all grades]
-                var _byNG = {};     // special name||grade → [occupants in that grade]
+                // ── Share map, keyed by LOCATION — built IDENTICALLY to the auto-validator's
+                //    buildFieldSharingMap (fields first, then specials; field def wins on a
+                //    shared key). This is the authoritative capacity/shareType source: the
+                //    special's OWN sharableWith, NOT activityProperties (which can carry a
+                //    stale, higher cap and was the reason cap-1 rooms slipped through before).
+                var _norm = function (s) { return String(s || '').toLowerCase().trim(); };
+                var _normType = function (sw) {
+                    var t = (sw && sw.type) || 'not_sharable';
+                    if (t === 'custom' && !(Array.isArray(sw.divisions) && sw.divisions.length)) t = 'same_division';
+                    if (t === 'all') t = 'same_division';
+                    return t;
+                };
+                var _shareMap = {};   // locationKey → { type, cap }
+                var _specLoc = {};    // locationKey → 1   (only special rooms are in FN-54 scope)
+                ((_sgGS.app1 && _sgGS.app1.fields) || []).forEach(function (f) {
+                    if (!f || !f.name) return;
+                    var sw = f.sharableWith || {}; var t = _normType(sw);
+                    _shareMap[_norm(f.name)] = { type: t, cap: parseInt(sw.capacity) || (t === 'not_sharable' ? 1 : 2) };
+                });
+                var _addSpecial = function (s) {
+                    if (!s || !s.name) return;
+                    var key = _norm(s.location || s.name);
+                    _specLoc[key] = 1; _specLoc[_norm(s.name)] = 1;
+                    if (_shareMap[key]) return;   // field definition takes precedence
+                    var sw = s.sharableWith || {}; var t = _normType(sw);
+                    _shareMap[key] = { type: t, cap: parseInt(sw.capacity) || (t === 'not_sharable' ? 1 : 2) };
+                };
+                ((_sgGS.app1 && _sgGS.app1.specialActivities) || []).forEach(_addSpecial);
+                try { if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) todaysSpecials.forEach(_addSpecial); } catch (_e) {}
+                // Collect every live special occupant, keyed by its physical LOCATION (field).
+                //   Two guarantees run off this index, mirroring the validator's two special-
+                //   facing checks so the engine can never emit a grid the validator would flag:
+                //     • CAPACITY — per (location, grade): peak concurrent ≤ cap   (Check B)
+                //     • STAGGER  — per location: a LATE JOIN (overlap, different start time) is a
+                //                  violation, unless the resource is configured for cross-division
+                //                  use and the two bunks are cross-grade                 (Check C)
+                //   Leagues / trips / rotation events / whole-grade custom layers are never touched.
+                var _byField = {};   // locationKey → [occupants across all grades]
+                var _byFG = {};      // locationKey||grade → [occupants in that grade]
                 Object.keys(_sa).forEach(function (bunk) {
                     var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
                     var g = _sgBG[String(bunk)]; if (!g) return;
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
+                        if (!e.field || e.field === 'Free') return;
                         if (e._league || e._leagueGame || e.leagueName || e._isTrip || e._isRotationEvent) return;
                         if (e.type === 'custom' || e._customActivity) return;   // whole-grade custom layer
-                        var rawNm = String(e._assignedSpecial || e._activity || e.event || '').trim();
-                        var nm = rawNm.toLowerCase();
-                        if (!nm || nm === 'free' || !_sgKnown[nm]) return;       // specials only
+                        var fk = _norm(e.field);
+                        var nm = _norm(e._assignedSpecial || e._activity || e.event || '');
+                        // FN-54 scope = special rooms only (by location OR known special name).
+                        if (!_specLoc[fk] && !(nm && (_specLoc[nm] || _sgKnown[nm]))) return;
+                        // Key by the contended physical resource. Fall back to the special name
+                        //   only when the field label itself isn't a mapped location.
+                        var key = _shareMap[fk] ? fk : (_shareMap[nm] ? nm : fk);
                         var t = _sgTime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                        var occ = { e: e, bunk: String(bunk), grade: g, nm: nm, raw: rawNm, st: t.s, en: t.e, demoted: false };
-                        (_byName[nm] = _byName[nm] || []).push(occ);
-                        (_byNG[nm + '||' + g] = _byNG[nm + '||' + g] || []).push(occ);
+                        var occ = { e: e, bunk: String(bunk), grade: g, key: key, st: t.s, en: t.e, demoted: false };
+                        (_byField[key] = _byField[key] || []).push(occ);
+                        (_byFG[key + '||' + g] = _byFG[key + '||' + g] || []).push(occ);
                     });
                 });
-                // Per-special sharing config (capacity + shareType), resolved once.
-                var _spInfo = {};
-                Object.keys(_byName).forEach(function (nm) {
-                    var cap = 1, st = 'not_sharable';
-                    try { var info = getSpecialSharingInfo(_byName[nm][0].raw || _byName[nm][0].nm, activityProperties, _sgGS); if (info) { cap = info.capacity || 1; st = info.shareType || 'not_sharable'; } } catch (_e) {}
-                    _spInfo[nm] = { cap: cap, shareType: st };
-                });
+                var _infoFor = function (key) { return _shareMap[key] || { type: 'not_sharable', cap: 1 }; };
                 // A cross-grade overlap is LEGITIMATE (not a stagger violation) only when the
-                //   special is explicitly configured for cross-division use. Same-grade overlap
-                //   is always governed by the identical-window rule. This is the exact pivot the
-                //   validator now uses too, so engine + report agree on one definition.
+                //   resource is explicitly configured for cross-division use. Same pivot the
+                //   validator now uses, so engine + report agree on one definition.
                 var _crossDivOK = function (st) { return st === 'cross_division' || st === 'any_division' || st === 'custom'; };
                 var _toFree = function (u) {
                     if (u.demoted || u.e.field === 'Free') { u.demoted = true; return; }
@@ -28315,12 +28340,12 @@
                     u.demoted = true;
                 };
                 var _demotedCap = 0, _demotedStag = 0;
-                // PASS 1 — CAPACITY (per special, per grade). Admit earliest/longest first;
+                // PASS 1 — CAPACITY (per location, per grade). Admit earliest/longest first;
                 //   demote any occupant whose admission would push concurrent count over cap.
-                Object.keys(_byNG).forEach(function (k) {
-                    var occ = _byNG[k].slice();
+                Object.keys(_byFG).forEach(function (k) {
+                    var occ = _byFG[k].slice();
                     if (occ.length < 2) return;
-                    var cap = (_spInfo[occ[0].nm] && _spInfo[occ[0].nm].cap) || 1;
+                    var cap = _infoFor(occ[0].key).cap || 1;
                     occ.sort(function (a, b) { return (a.st - b.st) || ((b.en - b.st) - (a.en - a.st)) || String(a.bunk).localeCompare(String(b.bunk)); });
                     var kept = [];
                     occ.forEach(function (u) {
@@ -28331,17 +28356,16 @@
                         _toFree(u); _demotedCap++;
                     });
                 });
-                // PASS 2 — STAGGER (per special, across grades). The disruptive case the
-                //   owner means by "staggering" — and the rule's operational rationale — is a
-                //   LATE JOIN: a bunk walks into a session already in progress (shows up at
-                //   9:25 to a VR room another bunk started at 9:00). Two bunks that START
-                //   TOGETHER but run different durations (an early departure, or a multi-period
-                //   bunk staying longer) is benign — nobody joins mid-session. So flag overlap
-                //   with DIFFERENT start times only, and demote the later arrival. Legitimately
-                //   configured cross-division shares are exempt (each division runs its own clock).
-                Object.keys(_byName).forEach(function (nm) {
-                    var info = _spInfo[nm] || { cap: 1, shareType: 'not_sharable' };
-                    var occ = _byName[nm].filter(function (u) { return !u.demoted; });
+                // PASS 2 — STAGGER (per location, across grades). The disruptive case the owner
+                //   means by "staggering" — and the rule's operational rationale — is a LATE JOIN:
+                //   a bunk walks into a session already in progress (shows up at 9:25 to a VR room
+                //   another bunk started at 9:00). Two bunks that START TOGETHER but run different
+                //   durations (an early departure, or a multi-period bunk staying longer) is benign
+                //   — nobody joins mid-session. So flag overlap with DIFFERENT start times only,
+                //   and demote the later arrival. Legitimate cross-division shares are exempt.
+                Object.keys(_byField).forEach(function (key) {
+                    var info = _infoFor(key);
+                    var occ = _byField[key].filter(function (u) { return !u.demoted; });
                     if (occ.length < 2) return;
                     occ.sort(function (a, b) { return (a.st - b.st) || ((b.en - b.st) - (a.en - a.st)) || String(a.bunk).localeCompare(String(b.bunk)); });
                     for (var i = 0; i < occ.length; i++) {
@@ -28350,7 +28374,7 @@
                             var b = occ[j]; if (b.demoted) continue;
                             if (!(a.en > b.st && a.st < b.en)) continue;          // no overlap
                             if (a.st === b.st) continue;                          // same start → benign (no late join)
-                            if (a.grade !== b.grade && _crossDivOK(info.shareType)) continue; // legit cross-div share
+                            if (a.grade !== b.grade && _crossDivOK(info.type)) continue; // legit cross-div share
                             _toFree(b); _demotedStag++;                            // late join → demote the later arrival
                         }
                     }
