@@ -574,6 +574,21 @@
         console.log('  Field reuse warnings:', summary.fieldReuse);
         console.log('  TOTAL errors:', allErrors.length);
 
+        // ── Per-error detail (so the offending field/grade/bunks are visible
+        //    in the console, not just a count). Strips the HTML from the
+        //    modal-oriented `message` into a one-line plain-text summary.
+        if (allErrors.length) {
+            const _plain = (s) => String(s || '')
+                .replace(/<br\s*\/?>/gi, ' — ')
+                .replace(/<[^>]+>/g, '')
+                .replace(/\s+/g, ' ')
+                .trim();
+            console.log('🛡️ Auto Validator — error detail:');
+            allErrors.forEach((e, i) => {
+                console.log('   ' + (i + 1) + '. [' + e.type + '] ' + _plain(e.message));
+            });
+        }
+
         // Show modal (skipped for silent/automated callers)
         if (!_silent) showAutoValidatorModal(allErrors, allWarnings, summary);
 
