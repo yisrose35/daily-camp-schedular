@@ -26326,6 +26326,48 @@
                 if (_SAB_IMMUNE.test(_sabNorm(M._activity))) return false;
                 return !!(M.field && _sabNorm(M.field) !== 'free');
             };
+            // Sport-field occupancy index (mirrors FN-22 FREE-FILL) so we can ask:
+            // "could a brand-new sport actually take this gap?" A gap that EQUALS or
+            // exceeds the sport floor is normally "fillable on its own → not our job"
+            // — BUT only if a sport field is genuinely free across the whole window.
+            // The user's residual ([REAL-GAP] Auto 3 25min = the 25-min sport floor)
+            // proves the old `gapDur >= floor` skip was too eager: the 25-min gap
+            // straddles two short periods, no per-period sport piece reaches the
+            // floor, and no sport landed there ("no sports in priority list"). When
+            // NO sport/field can take the gap, it must be absorbed like a sub-floor
+            // sliver — a slightly longer special beats a Free hole.
+            var _sabGsAll = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+            var _sabFieldsAll = (_sabGsAll.app1 && _sabGsAll.app1.fields) || _sabGsAll.fields || [];
+            var _sabSpecialRooms = {}; ((_sabGsAll.app1 && _sabGsAll.app1.specialActivities) || []).forEach(function (s) { if (s && s.location) _sabSpecialRooms[_sabNorm(s.location)] = 1; });
+            var _sabSportFieldNames = _sabFieldsAll.filter(function (f) {
+                return f && f.name && f.available !== false && !_sabSpecialRooms[_sabNorm(f.name)] &&
+                    Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled);
+            }).map(function (f) { return f.name; });
+            // Build field occupancy from the FINAL grid.
+            var _sabOcc = {};
+            Object.keys(window.scheduleAssignments || {}).forEach(function (b) {
+                var gg = _sabGrade[String(b)] || '?';
+                (window.scheduleAssignments[b] || []).forEach(function (e) {
+                    if (!e || e.continuation) return;
+                    var fl = _sabNorm(e.field || e._specialLocation); if (!fl || fl === 'free') return;
+                    var s = e._startMin, en = e._endMin; if (s == null || en == null) return;
+                    (_sabOcc[fl] = _sabOcc[fl] || []).push({ s: s, e: en });
+                });
+            });
+            // True iff SOME sport field is free across [s,e) AND the gap is wholly
+            // covered by contiguous periods (i.e. a new sport could legally take it).
+            var _sabSportFillable = function (s, e, grade) {
+                if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(s, e, grade)) return false;
+                for (var fi = 0; fi < _sabSportFieldNames.length; fi++) {
+                    var nm = _sabSportFieldNames[fi], fl = _sabNorm(nm);
+                    var arr = _sabOcc[fl] || [], busy = false;
+                    for (var oi = 0; oi < arr.length; oi++) { if (arr[oi].s < e && arr[oi].e > s) { busy = true; break; } }
+                    if (busy) continue;
+                    if (typeof isFieldAvailable === 'function' && !isFieldAvailable(nm, s, e, null, grade, null)) continue;
+                    return true; // a real sport opportunity exists → leave it for sport-fill, not absorb
+                }
+                return false;
+            };
             var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0;
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
@@ -26355,9 +26397,15 @@
                     var gapS = L.e, gapE = R.s;
                     if (gapE <= gapS) continue;               // no gap / overlap
                     var gapDur = gapE - gapS;
-                    if (gapDur >= floor) continue;            // fillable on its own → not our job
                     // Don't bridge a real inter-period dead zone (lunch break etc.).
                     if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(gapS, gapE, g)) continue;
+                    // A gap that's >= the sport floor is "fillable on its own" — but
+                    // ONLY when a sport field is genuinely free across the window. If
+                    // no sport/field can take it (e.g. it straddles two sub-floor
+                    // periods so no per-period sport landed, the user's 25-min case),
+                    // it can NEVER host its own activity and must be absorbed like a
+                    // sub-floor sliver.
+                    if (gapDur >= floor && _sabSportFillable(gapS, gapE, g)) continue;
 
                     var Lh = slots[L.head], Rh = slots[R.head];
                     // (1) Prefer extending a flexible SPORT neighbour over the sliver.

@@ -91,6 +91,39 @@ const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Cha
 // ---------------------------------------------------------------------------
 function campConfig(opts) {
   opts = opts || {};
+  if (opts.sliver2) {
+    // SLIVER-RESIDUAL scenario — the user's LIVE residual gap that the original
+    // STEP 6.865 (commit 8badb70) STILL missed. Distinct from the SLIVER-BAND
+    // case below in two load-bearing ways:
+    //
+    //   (1) the gap is EXACTLY the 25-min sport floor (not a 15-min sub-floor
+    //       sliver). 6.865 short-circuited any gap with `gapDur >= floor`, so a
+    //       25-min gap was treated as "fillable on its own → not our job" and
+    //       skipped — even though NO sport could actually take it.
+    //   (2) the gap STRADDLES a period boundary. The 25 minutes are split across
+    //       two short periods (a 10-min P0 leftover + a 15-min P1), so neither
+    //       per-period piece reaches the 25-min sport floor and the per-period
+    //       tiler can place no sport there → "no sports in priority list" /
+    //       "no field". coveredByContiguousPeriods(585,610) is still TRUE (the
+    //       two periods are contiguous — it is NOT a real dead gap like lunch),
+    //       so the gap is legitimately coverable; it just can't host its own
+    //       activity. The ONLY gapless outcome is to stretch the bounding
+    //       special (Lake) from 585 over the gap to 610 (its room is free).
+    //
+    // Geometry (mirrors the user's [REAL-GAP] Auto 3 10:45-11:10 25min):
+    //   P0 band   540-595 (55m): 45-min Lake special → 540-585, leaves 585-595
+    //   P1        595-610 (15m): empty (15m < 25m sport floor)
+    //   P2 wall   610-630 (20m): 20-min Main Activity wall
+    //   afternoon 45/45/40-min sport periods to 12:30
+    // → gap 585-610 = 25 min, bounded by special(ends 585) | Main wall(starts 610),
+    //   crossing the 595 boundary. prev=[special/Lake 45m pinned], next=[Main wall].
+    return {
+      autoStart: HM(9, 0),  autoEnd: HM(12, 30),
+      chairStart: HM(9, 0), chairEnd: HM(12, 30),
+      autoStartStr: '9:00', autoEndStr: '12:30',
+      sliver2: true,
+    };
+  }
   if (opts.sliver) {
     // SLIVER-BAND scenario — faithful reproduction of the user's live regen bug.
     //
@@ -227,8 +260,18 @@ function buildLayers(cfg) {
   // In the sliver scenario the band geometry depends on a 20-min Main Activity
   // wall and 45-min specials on a 5-min grid; elsewhere everything is 20-min.
   const mainDur = cfg.sliver ? 20 : PERIOD;
-  const specialDur = cfg.sliver ? 45 : PERIOD;
-  const sportMin = cfg.sliver ? 25 : PERIOD;
+  const specialDur = (cfg.sliver || cfg.sliver2) ? 45 : PERIOD;
+  const sportMin = (cfg.sliver || cfg.sliver2) ? 25 : PERIOD;
+  // SLIVER-RESIDUAL band geometry: 45-min special confined to a 55-min band
+  // (9:00-9:55) leaving a 10-min in-band remainder; a 15-min empty period
+  // (9:55-10:10); then the 20-min Main-Activity wall (10:10-10:30). The 25-min
+  // gap 9:45-10:10 (special-end .. Main-start) straddles the 9:55 boundary and
+  // equals the sport floor — neither per-period piece (10m + 15m) can host a
+  // 25-min sport, so only stretching the bounding special can close it.
+  const band2Start = cfg.sliver2 ? HM(9, 0) : null;
+  const band2End = cfg.sliver2 ? HM(9, 50) : null;
+  const mainWall2Start = cfg.sliver2 ? HM(10, 10) : null;
+  const mainWall2End = cfg.sliver2 ? HM(10, 30) : null;
   // The 45-min special is confined to the 60-min off-field band (9:00-10:00),
   // leaving a 15-min sub-floor sliver in the band. The 20-min Main Activity wall
   // is confined to the very next period (10:00-10:20). So the band sliver is
@@ -245,10 +288,10 @@ function buildLayers(cfg) {
     const start = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
     const end = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const bunks = grade === 'Auto' ? AUTO_BUNKS : CHAIR_BUNKS;
-    const mainStart = cfg.sliver ? mainWallStart : start;
-    const mainEnd = cfg.sliver ? mainWallEnd : end;
-    const specStart = cfg.sliver ? bandStart : start;
-    const specEnd = cfg.sliver ? bandEnd : end;
+    const mainStart = cfg.sliver2 ? mainWall2Start : (cfg.sliver ? mainWallStart : start);
+    const mainEnd = cfg.sliver2 ? mainWall2End : (cfg.sliver ? mainWallEnd : end);
+    const specStart = cfg.sliver2 ? band2Start : (cfg.sliver ? bandStart : start);
+    const specEnd = cfg.sliver2 ? band2End : (cfg.sliver ? bandEnd : end);
 
     // CUSTOM "Main Activity" layer — same-grade-only cross sharing.
     layers.push({
@@ -258,9 +301,9 @@ function buildLayers(cfg) {
       customActivity: 'Main Activity',
       customField: 'Auditorium',
       customBunks: bunks.slice(),
-      periodMin: mainDur,
-      durationMin: mainDur,
-      durationMax: mainDur,
+      periodMin: cfg.sliver2 ? 20 : mainDur,
+      durationMin: cfg.sliver2 ? 20 : mainDur,
+      durationMax: cfg.sliver2 ? 20 : mainDur,
       startMin: mainStart,
       endMin: mainEnd,       // sliver: confined to the band; else whole day
       qty: 1, op: '=',
@@ -280,7 +323,7 @@ function buildLayers(cfg) {
       grade, type: 'special', name: 'Special',
       periodMin: specialDur, durationMin: specialDur,
       startMin: specStart, endMin: specEnd,
-      qty: 1, op: cfg.sliver ? '=' : '>=',
+      qty: 1, op: (cfg.sliver || cfg.sliver2) ? '=' : '>=',
     });
 
     // SPORT layer — at least 1 sport; cap unbounded so it fills remaining slots.
@@ -319,10 +362,10 @@ function buildSandbox(opts) {
   // Period granularity: 5-min grid for the sliver scenario (so a 45-min special
   // can float mid-band and orphan a 20-min sub-floor sliver), 20-min elsewhere.
   const period = cfg.sliver ? 5 : PERIOD;
-  // Special duration: 45-min specials in the sliver scenario, else one period.
-  const specialDur = cfg.sliver ? 45 : PERIOD;
-  const chairStartStr = cfg.sliver ? '9:00' : '10:00';
-  const chairEndStr = cfg.sliver ? '12:30' : '12:40';
+  // Special duration: 45-min specials in the sliver scenarios, else one period.
+  const specialDur = (cfg.sliver || cfg.sliver2) ? 45 : PERIOD;
+  const chairStartStr = (cfg.sliver || cfg.sliver2) ? '9:00' : '10:00';
+  const chairEndStr = (cfg.sliver || cfg.sliver2) ? '12:30' : '12:40';
   const divisions = {
     // TRUE division window — off-grid edges (e.g. 9:58) flow through here so the
     // solver sees the real boundary, exactly like a real camp config.
@@ -350,7 +393,30 @@ function buildSandbox(opts) {
     slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
   }));
 
-  const divisionTimes = cfg.sliver ? {
+  // SLIVER-RESIDUAL grid (see campConfig({sliver2})): the 25-min gap straddles a
+  // period boundary and EQUALS the sport floor — the case the original 6.865
+  // skipped via `gapDur >= floor`. The band (9:00-9:55) holds a 45-min special
+  // (→ 9:45-9:55 in-band remainder); a 15-min empty period (9:55-10:10) and the
+  // 20-min Main-Activity wall (10:10-10:30) follow; afternoon 45/45/40-min sport
+  // periods to 12:30. Neither the 10-min nor the 15-min piece can host a 25-min
+  // sport, so the 9:45-10:10 gap can only be closed by stretching the special.
+  const sliver2Periods = () => ([
+    { startMin: HM(9, 0),   endMin: HM(9, 50) },  // 50-min band: 45-min special → 9:00-9:45, 5-min in-band remainder
+    { startMin: HM(9, 50),  endMin: HM(10, 0) },  // 10-min empty period (< 25-min sport floor)
+    { startMin: HM(10, 0),  endMin: HM(10, 10) }, // 10-min empty period (< 25-min sport floor)
+    { startMin: HM(10, 10), endMin: HM(10, 30) }, // 20-min Main Activity wall
+    { startMin: HM(10, 30), endMin: HM(11, 15) }, // 45 sport
+    { startMin: HM(11, 15), endMin: HM(12, 0) },  // 45 sport
+    { startMin: HM(12, 0),  endMin: HM(12, 30) }, // 30 sport
+  ]);
+  const sliver2DivTimes = () => sliver2Periods().map((p, i) => ({
+    slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
+  }));
+
+  const divisionTimes = cfg.sliver2 ? {
+    Auto:  sliver2DivTimes(),
+    Chair: sliver2DivTimes(),
+  } : cfg.sliver ? {
     Auto:  sliverDivTimes(),
     Chair: sliverDivTimes(),
   } : {
@@ -358,7 +424,10 @@ function buildSandbox(opts) {
     Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd, period),
   };
 
-  const campPeriods = cfg.sliver ? {
+  const campPeriods = cfg.sliver2 ? {
+    Auto:  sliver2Periods(),
+    Chair: sliver2Periods(),
+  } : cfg.sliver ? {
     Auto:  sliverPeriods(),
     Chair: sliverPeriods(),
   } : {
@@ -371,10 +440,10 @@ function buildSandbox(opts) {
   // periods. The base 8 fields would starve 6 bunks (an unrelated capacity
   // failure). Provision extra fields/sports so capacity matches the 14-bunk
   // simultaneous demand — isolating the sliver bug from field starvation.
-  const sportList = cfg.sliver
+  const sportList = (cfg.sliver || cfg.sliver2)
     ? SPORTS.concat(['Tennis', 'Dodgeball', 'Kickball', 'Frisbee', 'Lacrosse', 'Handball'])
     : SPORTS.slice();
-  const fieldList = cfg.sliver
+  const fieldList = (cfg.sliver || cfg.sliver2)
     ? FIELDS.concat([
         { name: 'Tennis Court',    activities: ['Tennis'] },
         { name: 'Dodgeball Gym',   activities: ['Dodgeball'] },
@@ -390,6 +459,20 @@ function buildSandbox(opts) {
 
   const activityProperties = {};
   SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s, specialDur); });
+  // SLIVER-RESIDUAL: make every sport FIELD genuinely Unavailable before 10:30, so
+  // NO sport field is free in the 9:45-10:10 gap window — faithfully reproducing the
+  // user's "no field free for a new sport in that window". A new sport therefore
+  // CANNOT fill the gap; the only gapless outcome is stretching the bounding special
+  // (Lake), whose own room (Lake Dock) IS free across the window. Sports still place
+  // freely in the afternoon periods (all >= 10:30), so criterion (3) holds.
+  if (cfg.sliver2) {
+    fieldList.forEach(f => {
+      if (!f || !Array.isArray(f.activities) || !f.activities.length) return;
+      activityProperties[f.name] = Object.assign(activityProperties[f.name] || {}, {
+        timeRules: [{ type: 'Unavailable', startMin: 0, endMin: HM(10, 30), divisions: null }],
+      });
+    });
+  }
 
   const globalSettings = {
     app1: {
@@ -754,5 +837,40 @@ test('auto scheduler fills a gapless day for all 14 bunks with an off-grid divis
 test('auto scheduler fills a gapless day with a sub-floor sliver band (flush-placement bug)', async (t) => {
   await runScenario('SLIVER-BAND (45-min special in a 60-min band + 20-min Main Activity wall, mixed-size periods)', {
     sliver: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 5 — SLIVER-RESIDUAL config: the user's LIVE residual gap that the
+// ORIGINAL STEP 6.865 (commit 8badb70) STILL left open. NONE of tests 1-4
+// reproduce it.
+//
+//   [REAL-GAP] Auto 3 10:45am-11:10am (25min)  prev=[special/Lake 45m pinned]
+//                                               next=[custom/Main Activity 20m pinned]
+//   [STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.  absorbed=0
+//
+// Two things make this case slip past the original 6.865 (both must hold):
+//   (1) The gap EQUALS the 25-min sport floor (not a sub-floor sliver). 6.865
+//       short-circuited every gap with `gapDur >= floor` as "fillable on its own
+//       → not our job" — so a 25-min gap was never considered, even though no
+//       sport could actually take it.
+//   (2) The gap STRADDLES a period boundary, split into a 10-min band remainder
+//       + a 15-min empty period. Neither piece reaches the 25-min sport floor, so
+//       the per-period tiler places no sport there ("no sports in priority list"
+//       / "no field"). coveredByContiguousPeriods is still TRUE (the periods are
+//       contiguous — NOT a real dead gap like lunch), so it is legitimately
+//       coverable; the only gapless outcome is to stretch the bounding special
+//       (Lake) over the gap (its room is free across the window).
+//
+// THE FIX (extends STEP 6.865): treat a wall-bounded gap as absorbable when it is
+// sub-floor OR (>= floor but no sport / no free field can actually fill it). The
+// bounding-special stretch then closes it, gated by isFieldAvailable on the
+// special's own room + _validateWritePlacement + coveredByContiguousPeriods, never
+// bridging a real dead gap and never stretching an immune wall.
+// The four criteria are NOT weakened.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day with a floor-sized period-crossing residual gap', async (t) => {
+  await runScenario('SLIVER-RESIDUAL (25-min gap = sport floor, straddles a period boundary, special|gap|Main wall)', {
+    sliver2: true,
   });
 });
