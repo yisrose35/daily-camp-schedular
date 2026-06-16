@@ -588,8 +588,26 @@
             });
         }
 
+        // ★ Orphan-court gate (mirrors scheduler_core_loader.filterSpecialsByFacility):
+        //   drop any configured court that no longer exists in the facilities/fields
+        //   registry — a deleted court, a typo, or a name like "Basketball Court A" that
+        //   was never created. Without this the league schedules AND globally locks games
+        //   on courts that don't exist (LG-25). Fail-open: if the registry can't be read,
+        //   keep all (never silently drop everything).
+        try {
+            const _facsReg = (typeof window.getFacilities === 'function') ? window.getFacilities() : null;
+            const _facNamesReg = Array.isArray(_facsReg) ? _facsReg.map(f => (f && f.name) || f) : (_facsReg ? Object.keys(_facsReg) : []);
+            const _validReg = new Set(_facNamesReg.concat(Object.keys(_fcfgSL)).filter(Boolean).map(n => String(n).trim().toLowerCase()));
+            if (_validReg.size) {
+                const _beforeReg = availableFields.slice();
+                availableFields = availableFields.filter(fName => _validReg.has(String(fName).trim().toLowerCase()));
+                const _ghosts = _beforeReg.filter(f => !availableFields.includes(f));
+                if (_ghosts.length) console.warn(`[SpecialtyLeagues] ⚠️ Dropped ${_ghosts.length} court(s) not in your facilities — create them or remove from league "${league.name}": ${_ghosts.join(', ')}`);
+            }
+        } catch (_eReg) { /* fail open — keep availableFields as-is */ }
+
         if (availableFields.length === 0) {
-            console.error(`[SpecialtyLeagues] ❌ NO FIELDS AVAILABLE - all fields are locked!`);
+            console.error(`[SpecialtyLeagues] ❌ NO COURTS AVAILABLE for "${league.name}" — its configured courts are locked, blocked by time rules, or don't exist in your facilities. Add real courts to the league.`);
             return [];
         }
 
