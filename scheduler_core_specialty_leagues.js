@@ -346,17 +346,20 @@
     // FAIRNESS ALGORITHM: Wait Priority Score
     // =========================================================================
 
-    function getWaitPriorityScore(teamA, teamB, lastSlotOrder, leagueId) {
+    function getWaitPriorityScore(teamA, teamB, slotDebt, leagueId) {
         const keyA = `${leagueId}|${teamA}`;
         const keyB = `${leagueId}|${teamB}`;
 
-        const slotA = lastSlotOrder[keyA] || 1;
-        const slotB = lastSlotOrder[keyB] || 1;
+        // Cumulative "late-slot debt": the total number of periods each team has had
+        // to WAIT (slotOrder-1 summed over ALL its games). Teams that have waited more
+        // across the season score higher → sorted first → placed in the early (no-wait)
+        // slot this time. Using the running total (not just the last game) keeps the
+        // who-plays-first / who-waits order fair over the whole season, so the same
+        // teams aren't repeatedly stuck waiting on a shared court.
+        const debtA = (slotDebt && slotDebt[keyA]) || 0;
+        const debtB = (slotDebt && slotDebt[keyB]) || 0;
 
-        const scoreA = (slotA - 1) * 50;
-        const scoreB = (slotB - 1) * 50;
-
-        return scoreA + scoreB;
+        return (debtA + debtB) * 50;
     }
 
     // =========================================================================
@@ -620,7 +623,7 @@
         if (workingMatchups.length > totalSlotsAvailable) {
             workingMatchups = workingMatchups.map(m => ({
                 ...m,
-                waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
+                waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.slotDebt, id)
             }));
             workingMatchups.sort((a, b) => b.waitScore - a.waitScore);
             workingMatchups = workingMatchups.slice(0, totalSlotsAvailable);
@@ -649,7 +652,7 @@
 
         workingMatchups = workingMatchups.map(m => ({
             ...m,
-            waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.lastSlotOrder, id)
+            waitScore: getWaitPriorityScore(m.teamA, m.teamB, history.slotDebt, id)
         }));
         workingMatchups.sort((a, b) => b.waitScore - a.waitScore);
 
@@ -677,15 +680,23 @@
                 }
             }
 
-            if (!bestField) for (const field of availableFields) {
-                const currentGames = _effectiveGames(field);
-                const maxGames = gamesPerFieldSlot || 3;
-
-                if (currentGames < maxGames && currentGames < minGames) {
+            if (!bestField) {
+                let bestRot = -Infinity;
+                for (const field of availableFields) {
+                    const currentGames = _effectiveGames(field);
+                    const maxGames = gamesPerFieldSlot || 3;
+                    if (currentGames >= maxGames) continue;   // court already full this period
                     const rotationScore = getFieldRotationScore(matchup.teamA, matchup.teamB, field, history.teamFieldRotation, availableFields, id);
-
-                    if (currentGames < minGames || (currentGames === minGames && rotationScore > 0)) {
+                    // Primary: fewest games already on the court (balance court load).
+                    // Secondary (★ LG-17 fix): among equally-loaded courts, pick the one
+                    //   these two teams have played LEAST (highest rotation score), so teams
+                    //   actually cycle through every court instead of sticking to a fixed few.
+                    //   The old guard required currentGames < minGames STRICTLY, so the
+                    //   rotation tie-break was unreachable and courts were chosen by array
+                    //   order — leaving some teams never on certain courts.
+                    if (currentGames < minGames || (currentGames === minGames && rotationScore > bestRot)) {
                         minGames = currentGames;
+                        bestRot = rotationScore;
                         bestField = field;
                     }
                 }
@@ -750,6 +761,12 @@
 
             history.lastSlotOrder[keyA] = game.slotOrder;
             history.lastSlotOrder[keyB] = game.slotOrder;
+            // ★ Cumulative late-slot debt for season-long wait fairness (read by
+            //   getWaitPriorityScore): how many periods each team waited this game.
+            if (!history.slotDebt) history.slotDebt = {};
+            const _wait = Math.max(0, (game.slotOrder || 1) - 1);
+            history.slotDebt[keyA] = (history.slotDebt[keyA] || 0) + _wait;
+            history.slotDebt[keyB] = (history.slotDebt[keyB] || 0) + _wait;
 
             const matchupKey = [game.teamA, game.teamB].sort().join('|');
             const fullKey = `${id}|${matchupKey}`;
