@@ -291,7 +291,14 @@
         const errors = [];
 
         fieldIndex.forEach((usages, fieldNorm) => {
-            const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1 };
+            // ★ Only configured resources are capacity-checked. A field/room/special the
+            //   camp actually defined is in the sharing map (real fields + every special,
+            //   incl. cap-1 unconfigured ones). A label that is NOT in the map is a custom
+            //   layer or generic block (e.g. a user-named "Morning Activity" the whole grade
+            //   does together) — not a contended resource. Treating unmapped as cap-1 here
+            //   produced false positives like "Morning Activity has 4 Harmony bunks (cap 1)".
+            const sharing = sharingMap.get(fieldNorm);
+            if (!sharing) return;
 
             // Include sports + specials (both compete for the field).
             // Only exclude leagues (which run their own field-allocator).

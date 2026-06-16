@@ -26206,16 +26206,12 @@
                 ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) {
                     if (!s || !s.name) return;
                     var sw = s.sharableWith || {};
-                    // ★ EXPLICIT-ONLY cap enforcement for specials. A special is only
-                    //   cap-enforced here when the user ACTUALLY configured its sharing
-                    //   (a `capacity` number or a sharing `type`). Specials with no sharing
-                    //   config default to not_sharable/cap-1 in getSpecialSharingInfo — but
-                    //   many of those are general-fill / game-like activities (Machanayim,
-                    //   7 Sticks, Arts & Crafts) that the AutoSolver + DROP-REFILL place
-                    //   concurrently across many bunks ON PURPOSE. Treating their cap as 1
-                    //   here demoted 88 legit placements camp-wide and gutted the schedule.
-                    //   So: only the explicitly-limited specials (e.g. Baking/VR set to 2)
-                    //   are enforced; unconfigured specials are left shareable (never demoted).
+                    // ★ Per the owner's rule "if sharing is off, only one bunk at a time":
+                    //   every special is enforced by its REAL config. A special with no
+                    //   sharing configured defaults to not_sharable / cap-1 (one bunk at a
+                    //   time); an explicit capacity (e.g. Baking/VR = 2) is honored as set.
+                    //   `_explicit` is retained only for diagnostics/telemetry — it no longer
+                    //   gates whether the special is enforced (it always is).
                     var _explicit = !!(sw && (sw.capacity != null || sw.type));
                     var entry = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {}, explicit: _explicit, isSpecial: true };
                     // ★ Key by the special's ACTIVITY NAME (authoritative) so this sweep
@@ -26230,6 +26226,20 @@
                     var key = String(s.location || s.name).toLowerCase().trim();
                     if (!_cfg[key]) _cfg[key] = entry; // also match by location, if not a real field
                 });
+                // ★ Known-special name set — every special the camp knows about, by name
+                //   AND by location, lower-cased. Used to recognize an entry as a SPECIAL
+                //   even when its grid slot wasn't tagged _autoSpecial / type:'special' (some
+                //   passes write a plain pinned block) or when its name doesn't exactly match
+                //   a configured field/special key (spelling drift, e.g. config "Accesorize"
+                //   vs grid "Accessorize"). Without this, such an entry slipped past the cap
+                //   sweep yet the validator still flagged it (count/cleanup mismatch).
+                var _knownSpecial = {};
+                (function () {
+                    var add = function (n) { if (n) _knownSpecial[String(n).toLowerCase().trim()] = 1; };
+                    ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) { if (s) { add(s.name); add(s.location); } });
+                    try { if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) todaysSpecials.forEach(function (s) { if (s) { add(s.name); add(s.location); } }); } catch (_e) {}
+                    try { if (typeof activityProperties === 'object' && activityProperties) Object.keys(activityProperties).forEach(add); } catch (_e) {}
+                })();
                 var _skip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'bus': 1, 'regroup': 1, 'free play': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
                 // Time geometry: mirror auto_validator.getBunkSlotTime so this sweep sees the
                 // SAME windows the validator flags — per-bunk slot grid first (durable copy,
@@ -26256,7 +26266,10 @@
                         //   (a whole grade does its custom "Morning Activity" together).
                         if (e._league || e._isTrip || e._isRotationEvent) return;
                         if (e.type === 'custom' || e._customActivity) return;
-                        var _isSpecialEntry = !!(e._assignedSpecial || e._autoSpecial || e.type === 'special');
+                        var _actNmEarly = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
+                        var _flEarly = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                        var _isSpecialEntry = !!(e._assignedSpecial || e._autoSpecial || e.type === 'special')
+                            || !!_knownSpecial[_actNmEarly] || !!_knownSpecial[_flEarly];
                         // ★ A _pinned block is protected UNLESS it's an auto-placed special.
                         //   The planner pins specials as scheduling "walls" (Phase 2.5 etc.),
                         //   but an over-cap auto special must STILL be enforceable — the
