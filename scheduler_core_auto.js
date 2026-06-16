@@ -26358,12 +26358,14 @@
                 Object.keys(byLoc).forEach(function (fl) {
                     var cfg = _cfg[fl];
                     var arr = byLoc[fl];
-                    // ★ Skip specials that have NO explicitly-configured sharing — they are
-                    //   general-fill / game-like activities placed concurrently on purpose,
-                    //   not finite limited rooms. Enforcing a default cap-1 on them gutted
-                    //   the schedule (88 spurious demotions). Only explicitly-limited specials
-                    //   (and all real fields) are enforced. (See _cfg build above.)
-                    if (cfg && cfg.isSpecial && !cfg.explicit) return;
+                    // ★ Per the camp owner's rule: "if sharing is off, only one bunk at a
+                    //   time." Every special is enforced by its REAL config — an unconfigured
+                    //   special defaults to not_sharable / cap 1, so two bunks in it (even
+                    //   same-grade, even staggered) is a genuine violation. We do NOT skip
+                    //   non-explicit specials; instead the demote step below swaps in an
+                    //   available alternative wherever possible (only falling back to Free
+                    //   when nothing fits), so enforcement stays as non-destructive as the
+                    //   cap-1 reality allows.
                     // PASS 1 — anti-stagger: among OVERLAPPING occupants, keep the longest/earliest
                     //   as primary; demote any overlapping occupant whose [start,end] differs.
                     arr.sort(function (a, b) { return (b.dur - a.dur) || (a.s - b.s) || (a.idx - b.idx); });

@@ -156,6 +156,17 @@
                 // "at the Zoo" simultaneously is the intended state, not a
                 // cross-division conflict / capacity violation (FN-59).
                 if (entry._isTrip) return;
+                // Custom-layer blocks (user-named layers like "Morning Activity",
+                // plus Davening / Main activity) are whole-grade activities the
+                // entire grade does TOGETHER by design — not contended physical
+                // rooms. The engine writes them as type:'custom' / _customActivity.
+                // SKIP_FIELDS hard-codes a few generic labels, but a user can name a
+                // custom layer anything ("Morning Activity"), so that list can't catch
+                // them all. Treat any custom-layer entry like lunch/davening and
+                // exclude it from field capacity + stagger checks — otherwise
+                // "Morning Activity has 4 Harmony bunks (capacity 1)" is a false
+                // positive (all 4 bunks SHOULD do their morning activity together).
+                if (entry.type === 'custom' || entry._customActivity) return;
 
                 const fn = entry.field.toLowerCase().trim();
                 if (SKIP_FIELDS.has(fn) || isLeagueField(fn)) return;
