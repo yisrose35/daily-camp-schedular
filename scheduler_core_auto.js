@@ -26203,10 +26203,19 @@
                 });
                 ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) {
                     if (!s || !s.name) return;
-                    var key = String(s.location || s.name).toLowerCase().trim();
-                    if (_cfg[key]) return; // a real facility-field def takes precedence
                     var sw = s.sharableWith || {};
-                    _cfg[key] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {} };
+                    var entry = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {} };
+                    // ★ Key by the special's ACTIVITY NAME (authoritative) so this sweep
+                    //   matches the placement by what it IS, not by the field string it
+                    //   happens to carry. The saved slot's `field` is often the activity
+                    //   name itself (off-field special) or a room whose name differs from
+                    //   the configured location — keying only by location silently skipped
+                    //   the special and reported "no violations" while N bunks shared it
+                    //   (live Baking/VR limit=2 → 4 concurrent). The special's own cap wins
+                    //   over any same-named facility field.
+                    _cfg[String(s.name).toLowerCase().trim()] = entry;
+                    var key = String(s.location || s.name).toLowerCase().trim();
+                    if (!_cfg[key]) _cfg[key] = entry; // also match by location, if not a real field
                 });
                 var _skip = { 'free': 1, 'no field': 1, 'lunch': 1, 'snacks': 1, 'dismissal': 1, 'swim': 1, 'pool': 1, 'custom': 1, 'transition': 1, 'buffer': 1, 'canteen': 1, 'mincha': 1, 'davening': 1, 'lineup': 1, 'bus': 1, 'regroup': 1, 'free play': 1, 'change': 1, 'cleanup': 1, 'main activity': 1 };
                 // Time geometry: mirror auto_validator.getBunkSlotTime so this sweep sees the
@@ -26230,11 +26239,16 @@
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
                         if (e._pinned || e._league) return; // hard constraints — never demote
+                        // ★ Resolve the capacity key by the special's ACTIVITY NAME first
+                        //   (so all "Baking" placements group together regardless of the
+                        //   field string they carry), then fall back to the field/location.
+                        var actNm = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
                         var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
-                        if (!fl || _skip[fl] || /^game\s*\d+$/i.test(fl) || !_cfg[fl]) return;
+                        var key = (actNm && _cfg[actNm]) ? actNm : fl;
+                        if (!key || _skip[key] || /^game\s*\d+$/i.test(key) || !_cfg[key]) return;
                         var _t = _slotTime(bunk, g, idx, e);
                         if (!_t || _t.s == null || _t.e == null) return;
-                        (byLoc[fl] = byLoc[fl] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
+                        (byLoc[key] = byLoc[key] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
                     });
                 });
                 var demoted = 0, staggerD = 0, capD = 0;
