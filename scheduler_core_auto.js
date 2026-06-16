@@ -26562,13 +26562,15 @@
         try {
             var _rcGeneralLow = window.__cbGeneralNamesLow || [];
             var _rcReq = []; // { grade, nameLow, nameRaw, field, winStart, winEnd, dur, bunks }
+            // Use layersByGrade[grade] — the SAME source Phase 1.4 uses (which we know
+            // finds "Morning Activity": it logs "Reserved 4"). Re-deriving the grade match
+            // from cl.grade was fragile (the layer may store its grade differently).
             allGrades.forEach(function (grade) {
                 var _gd = divisions[grade] || divisions[String(grade)] || {};
                 var gs = parseTimeToMinutes(_gd.startTime) || 540;
                 var ge = parseTimeToMinutes(_gd.endTime) || 960;
-                (layers || []).forEach(function (cl) {
+                (layersByGrade[grade] || []).forEach(function (cl) {
                     if (!cl || String(cl.type || '').toLowerCase() !== 'custom') return;
-                    if (String(cl.grade || cl.division || '') !== String(grade)) return;
                     if (cl._classification === 'pinned') return;     // Phase 0 pins it itself
                     if (cl.adjacentTo) return;                       // connect-to (Phase 2.4)
                     var nameRaw = cl.customActivity || cl.event || cl.name || '';
@@ -26658,10 +26660,10 @@
                         ' (reclaimed ' + (tgt._activity || tgt.sport || 'Free') + ')');
                 });
             });
-            if (_rcEnsured > 0 || _rcMissingNoSlot > 0) {
-                log('[STEP 6.84 REQ-CUSTOM] ✅ ensured ' + _rcEnsured + ' required custom block(s)' +
-                    (_rcMissingNoSlot > 0 ? '; ' + _rcMissingNoSlot + ' had no reclaimable in-window slot' : ''));
-            }
+            // Always log so execution is verifiable in the console (even a no-op).
+            log('[STEP 6.84 REQ-CUSTOM] checked ' + _rcReq.length + ' required custom layer(s) → ensured ' +
+                _rcEnsured + ' block(s)' +
+                (_rcMissingNoSlot > 0 ? ', ' + _rcMissingNoSlot + ' had no reclaimable in-window slot' : ''));
         } catch (_e684) { try { warn('[STEP 6.84 REQ-CUSTOM] error: ' + (_e684 && _e684.message)); } catch (_x) {} }
 
         // ★ STEP 6.85 — SPACING-RULE ENFORCEMENT SWEEP (FINAL, runs LAST among placement
