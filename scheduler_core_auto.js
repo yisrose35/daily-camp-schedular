@@ -8102,10 +8102,99 @@
                                     (parseInt(_clSw.capacity) || 0) > 1
                                 );
                                 if (_clShareable) {
-                                    // Snap anchor to a 5-min grid so it matches the position scan
-                                    // (which steps by 5) and the end-aligned candidate.
-                                    _clAlignAnchor = Math.round(winStart / 5) * 5;
-                                    if (_clAlignAnchor < winStart) _clAlignAnchor += 5;
+                                    // ── Per-grade staggered shared-room anchor ───────────
+                                    //   A shared room that does NOT permit cross-GRADE
+                                    //   co-use (shareType not_sharable / same_division, or
+                                    //   custom/cross_division whose allowedPairs|divisions
+                                    //   don't cover every grade using the room) cannot host
+                                    //   two different grades at the SAME minute — STEP 4.5
+                                    //   demotes that as a cross-grade violation and the
+                                    //   activity vanishes for most bunks. The old logic
+                                    //   anchored EVERY grade to winStart, forcing exactly
+                                    //   that overlap. Instead we give each grade its own
+                                    //   sequential sub-slot inside the window:
+                                    //     anchor(grade) = winStart + ordinal * dur
+                                    //   where ordinal is the grade's index among the grades
+                                    //   that share THIS room for THIS activity (deterministic
+                                    //   allGrades order). Same-grade bunks compute the same
+                                    //   ordinal → same anchor → they legally co-use the room
+                                    //   at one time (capacity permitting). Different grades
+                                    //   get non-overlapping windows → no 4.5 demotion.
+                                    //   When the room DOES allow every relevant cross-grade
+                                    //   pair we keep a single shared anchor (winStart) — that
+                                    //   is valid and tighter.
+                                    var _clNm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                                    var _clFldLow = String(_clFld).toLowerCase().trim();
+                                    // Deterministic set of grades that host this activity in
+                                    // this room, in allGrades order.
+                                    var _shareGrades = [];
+                                    for (var _sg = 0; _sg < allGrades.length; _sg++) {
+                                        var _sgGrade = allGrades[_sg];
+                                        var _sgLayers = layersByGrade[_sgGrade] || [];
+                                        var _sgHas = _sgLayers.some(function (ll) {
+                                            return ll && (ll.type || '').toLowerCase() === 'custom' &&
+                                                String(ll.customActivity || ll.event || '').toLowerCase().trim() === _clNm &&
+                                                String(ll.customField || '').toLowerCase().trim() === _clFldLow;
+                                        });
+                                        if (_sgHas) _shareGrades.push(_sgGrade);
+                                    }
+                                    var _clOrdinal = _shareGrades.indexOf(grade);
+                                    if (_clOrdinal < 0) _clOrdinal = 0;
+                                    // Decide whether cross-grade co-use is fully permitted.
+                                    // If so, all grades may share one anchor (winStart).
+                                    var _crossGradeOk = true;
+                                    if (_shareGrades.length > 1) {
+                                        var _swType = (_clSw.type || '').toLowerCase();
+                                        if (_swType === 'all') {
+                                            _crossGradeOk = true;
+                                        } else if (_swType === 'not_sharable' || _swType === 'same_division') {
+                                            _crossGradeOk = false;
+                                        } else if (_swType === 'cross_division') {
+                                            // Every distinct grade pair in the set must be allowed.
+                                            var _pairs = _clSw.allowedPairs || {};
+                                            _crossGradeOk = true;
+                                            for (var _pa = 0; _pa < _shareGrades.length && _crossGradeOk; _pa++) {
+                                                for (var _pb = _pa + 1; _pb < _shareGrades.length; _pb++) {
+                                                    var _pk = [_shareGrades[_pa], _shareGrades[_pb]].sort().join('|');
+                                                    if (_pairs[_pk] !== true) { _crossGradeOk = false; break; }
+                                                }
+                                            }
+                                        } else if (_swType === 'custom') {
+                                            // 'custom' permits the divisions/grades in its list.
+                                            var _divs = _clSw.divisions || [];
+                                            if (_divs.length > 0) {
+                                                _crossGradeOk = _shareGrades.every(function (gg) { return _divs.indexOf(gg) >= 0; });
+                                            } else {
+                                                // No explicit allow list → no cross-grade pairing.
+                                                _crossGradeOk = false;
+                                            }
+                                        } else {
+                                            _crossGradeOk = false;
+                                        }
+                                    }
+                                    // Base anchor: snap winStart up to the 5-min grid so it
+                                    // matches the position scan (steps by 5).
+                                    var _baseAnchor = Math.round(winStart / 5) * 5;
+                                    if (_baseAnchor < winStart) _baseAnchor += 5;
+                                    if (_crossGradeOk || _shareGrades.length <= 1) {
+                                        // Single shared anchor — original (tighter) behavior.
+                                        _clAlignAnchor = _baseAnchor;
+                                    } else {
+                                        // Per-grade sub-slot. dur is the fixed need duration.
+                                        var _staggerAnchor = _baseAnchor + _clOrdinal * dur;
+                                        // Snap (in case dur isn't a 5-multiple) and clamp to
+                                        // the window. If the grade's sub-slot would run past
+                                        // windowEnd, fall back to the base anchor (today's
+                                        // behavior) for this overflowing grade rather than
+                                        // placing out of window — never drop the activity.
+                                        _staggerAnchor = Math.round(_staggerAnchor / 5) * 5;
+                                        if (_staggerAnchor < winStart) _staggerAnchor += 5;
+                                        if (_staggerAnchor + dur > winEnd) {
+                                            _clAlignAnchor = _baseAnchor;
+                                        } else {
+                                            _clAlignAnchor = _staggerAnchor;
+                                        }
+                                    }
                                 }
                             }
                         } catch (_eAnchor) { _clAlignAnchor = null; }
