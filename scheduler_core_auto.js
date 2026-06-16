@@ -26542,6 +26542,128 @@
             } catch (_eSF) { try { warn('[STEP 6.8 SHARE-FILL] error: ' + (_eSF && _eSF.message)); } catch (_x) {} }
         })();
 
+        // ★ STEP 6.84 — REQUIRED-CUSTOM ENSURE (FINAL guarantee for band-shared customs)
+        //   A required windowed custom layer (e.g. "Morning Activity") shares the midday
+        //   "stacker" band with Lunch + specials. The user wants the SOLVER to choose
+        //   WHERE it lands (any valid order: Morning→Special→Lunch→Special, etc.) — but
+        //   it must ALWAYS land for every selected bunk. Phase 1.4 reserves it before the
+        //   planner distributes specials, yet a long chain of late special passes
+        //   (planner re-draft, Phase 2.5 walls, 4.9 recapture, drop-refill, free-fill)
+        //   can still crowd it out on saturated days (live Harmony bug: Gaga took the
+        //   12:10 slot; Morning Activity vanished for 2 of 4 bunks). This FINAL pass runs
+        //   after EVERY placement pass and guarantees the required custom is present: for
+        //   each bunk missing it, it relabels the lowest-value SINGLE-slot block INSIDE
+        //   the layer's window — a Free slot first, else a sport, else a duplicate/
+        //   over-allocated special — to the custom activity IN PLACE (slot geometry
+        //   untouched → no new gaps). It never displaces another wall (swim / lunch /
+        //   league / another custom / trip / prep). Solver still chose the slot's time;
+        //   we only guarantee the required layer claims one band slot. Runs before STEP
+        //   6.9 so the rotation count + saved grid reflect the change.
+        try {
+            var _rcGeneralLow = window.__cbGeneralNamesLow || [];
+            var _rcReq = []; // { grade, nameLow, nameRaw, field, winStart, winEnd, dur, bunks }
+            allGrades.forEach(function (grade) {
+                var _gd = divisions[grade] || divisions[String(grade)] || {};
+                var gs = parseTimeToMinutes(_gd.startTime) || 540;
+                var ge = parseTimeToMinutes(_gd.endTime) || 960;
+                (layers || []).forEach(function (cl) {
+                    if (!cl || String(cl.type || '').toLowerCase() !== 'custom') return;
+                    if (String(cl.grade || cl.division || '') !== String(grade)) return;
+                    if (cl._classification === 'pinned') return;     // Phase 0 pins it itself
+                    if (cl.adjacentTo) return;                       // connect-to (Phase 2.4)
+                    var nameRaw = cl.customActivity || cl.event || cl.name || '';
+                    var nameLow = String(nameRaw).toLowerCase().trim();
+                    if (!nameLow) return;
+                    if (_rcGeneralLow.indexOf(nameLow) >= 0) return;  // consecutive-bunk general (Phase 2.35)
+                    var _opRaw = String(cl.op != null ? cl.op : (cl.operator != null ? cl.operator : ''));
+                    if (/[<≤]/.test(_opRaw)) return;                 // explicit "at most" → not required
+                    var winStart = Math.max(cl.startMin || 0, gs);
+                    var winEnd = Math.min(cl.endMin || 1440, ge);
+                    var dur = cl.durationMin || cl.periodMin || 30;
+                    if (winEnd - winStart < dur) return;
+                    if ((winEnd - winStart) >= (ge - gs)) return;     // whole-day floater → let it roam
+                    var _allB = getBunksForGrade(grade, divisions);
+                    var bunks = (cl.customBunks && cl.customBunks.length > 0)
+                        ? _allB.filter(function (b) { return cl.customBunks.includes(String(b)); })
+                        : _allB;
+                    _rcReq.push({
+                        grade: grade, nameLow: nameLow, nameRaw: nameRaw,
+                        field: cl.customField || null, winStart: winStart, winEnd: winEnd,
+                        dur: dur, bunks: bunks
+                    });
+                });
+            });
+
+            var _rcWallRe = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|shiur|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+            var _rcEnsured = 0, _rcMissingNoSlot = 0;
+            _rcReq.forEach(function (req) {
+                req.bunks.forEach(function (bunk) {
+                    var slots = window.scheduleAssignments && window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    // Already present anywhere in the day? (the solver may have placed it)
+                    var has = slots.some(function (s) {
+                        return s && !s.continuation &&
+                            String(s._activity || s.event || '').toLowerCase().trim() === req.nameLow;
+                    });
+                    if (has) return;
+
+                    // Count special occurrences (for over-allocation / duplicate detection).
+                    var _specCount = {};
+                    slots.forEach(function (s) {
+                        if (!s || s.continuation) return;
+                        var sp = s._assignedSpecial || (s.type === 'special' ? (s._activity || s.event) : null);
+                        if (sp) { var k = String(sp).toLowerCase().trim(); _specCount[k] = (_specCount[k] || 0) + 1; }
+                    });
+
+                    // Pick the best SINGLE-slot block fully inside the window.
+                    // Rank: 3 = Free, 2 = sport, 1 = duplicate special, 0 = single special.
+                    var bestIdx = -1, bestRank = -1;
+                    for (var i = 0; i < slots.length; i++) {
+                        var s = slots[i];
+                        if (!s || s.continuation) continue;
+                        if (slots[i + 1] && slots[i + 1].continuation === true) continue; // multi-slot block → don't split
+                        if (s._startMin == null || s._endMin == null) continue;
+                        if (s._startMin < req.winStart || s._endMin > req.winEnd) continue; // strictly inside the window
+                        var act = String(s._activity || s.event || '').toLowerCase().trim();
+                        // Reclaimable fixed slots are ONLY constraint-demoted Frees; real walls are not.
+                        if ((s._pinned === true || s._fixed === true) &&
+                            !(s._constraintDemoted || !act || /^free$/i.test(act))) continue;
+                        if (_customLayerActivityNames.has(act)) continue;  // another custom layer's block
+                        if (_rcWallRe.test(act)) continue;                 // named wall
+                        if (s._league || s._isChinuch || s._isTrip || s._isPrep || s._isRotationEvent || s._bunkOverride) continue;
+
+                        var rank;
+                        if (!act || /^free$/i.test(act)) rank = 3;
+                        else if (s.sport && !s._assignedSpecial && s.type !== 'special') rank = 2;
+                        else rank = (_specCount[act] > 1) ? 1 : 0; // special (duplicate vs single)
+                        if (rank > bestRank) { bestRank = rank; bestIdx = i; }
+                        if (bestRank === 3) break; // nothing beats a Free slot
+                    }
+
+                    if (bestIdx < 0) { _rcMissingNoSlot++; return; }
+
+                    var tgt = slots[bestIdx];
+                    slots[bestIdx] = Object.assign({}, tgt, {
+                        _activity: req.nameRaw, event: req.nameRaw, type: 'custom',
+                        field: req.field || null, sport: null,
+                        _assignedSpecial: null, _autoSpecial: false,
+                        _isSpecialLocation: false, _specialLocation: null,
+                        _customActivity: req.nameRaw, _customField: req.field || null,
+                        _pinned: true, _fixed: true, _activityLocked: true,
+                        _source: 'step6.84-required-custom'
+                    });
+                    _rcEnsured++;
+                    log('[STEP 6.84 REQ-CUSTOM] placed "' + req.nameRaw + '" for ' + bunk +
+                        ' @ ' + tgt._startMin + '-' + tgt._endMin +
+                        ' (reclaimed ' + (tgt._activity || tgt.sport || 'Free') + ')');
+                });
+            });
+            if (_rcEnsured > 0 || _rcMissingNoSlot > 0) {
+                log('[STEP 6.84 REQ-CUSTOM] ✅ ensured ' + _rcEnsured + ' required custom block(s)' +
+                    (_rcMissingNoSlot > 0 ? '; ' + _rcMissingNoSlot + ' had no reclaimable in-window slot' : ''));
+            }
+        } catch (_e684) { try { warn('[STEP 6.84 REQ-CUSTOM] error: ' + (_e684 && _e684.message)); } catch (_x) {} }
+
         // ★ STEP 6.85 — SPACING-RULE ENFORCEMENT SWEEP (FINAL, runs LAST among placement
         //   passes). The main solver path gates spacing via isCandidateAllowed({mode:'auto'}),
         //   but coverage/recapture fill passes (phase4.9-recapture, the 4.97b / FN-22 /

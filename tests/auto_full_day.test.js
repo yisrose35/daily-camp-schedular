@@ -1487,8 +1487,11 @@ test('auto scheduler never displaces a pinned custom layer with a recaptured spe
 // window is wider than its duration classifies "windowed" and competes with
 // specials. Pre-fix it dropped for most bunks because Phase 2.5 pre-placed
 // specials as walls before the Phase-3 custom need ran (live Harmony bug:
-// Morning Activity landed for only 1 of 4 bunks). Phase 2.45 now reserves it for
-// every bunk before specials. Asserts every bunk keeps exactly one.
+// Morning Activity landed for only 1 of 4 bunks). Two-layer defense now: Phase
+// 1.4 reserves it BEFORE the planner distributes specials, and STEP 6.84
+// (REQUIRED-CUSTOM ENSURE) guarantees it in the FINAL grid for any bunk a late
+// saturated-band pass still crowded out. Asserts every bunk keeps exactly one
+// in window.scheduleAssignments (the saved schedule).
 test('auto scheduler reserves a required windowed custom layer for every bunk', async (t) => {
   await runScenario('REQUIRED-WINDOWED-CUSTOM (wide-window "Morning Activity", stacker band)', {
     morningPin: true,
