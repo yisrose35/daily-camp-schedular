@@ -14355,7 +14355,29 @@
                     var _p23Periods = (window.campPeriods && window.campPeriods[grade])
                         ? window.campPeriods[grade].slice().sort(function(a, b) { return a.startMin - b.startMin; })
                         : [];
-                    if (!_p23Periods.length) return;
+                    // ★ No bell-schedule periods configured (free-form division times —
+                    //   the live camp's setup) → synthesize a single candidate window
+                    //   spanning the swim layer window (clamped to the grade day) so
+                    //   swim can STILL be reserved as a wall BEFORE Phase 2.5 places
+                    //   specials. Without this, Phase 2.3 was a silent no-op for
+                    //   period-less camps (it bailed here), so EVERY swimmer fell to the
+                    //   post-specials CSP — which the 86 pre-placed specials had already
+                    //   crowded out ("missing SWIM: window … has only 0min free").
+                    //   To keep grades staggered across the one pool, bias the synthetic
+                    //   window's start to this grade's rotation-matrix swim band.
+                    if (!_p23Periods.length) {
+                        if (_p23WinEnd - _p23WinStart < _p23SwimDur) return; // window too short for swim
+                        var _p23BandS = _p23WinStart;
+                        try {
+                            var _swB = staggerPlan && staggerPlan[grade] && staggerPlan[grade].typeBands && staggerPlan[grade].typeBands.swim;
+                            if (_swB && _swB.start >= _p23WinStart && (_swB.start + _p23SwimDur) <= _p23WinEnd) _p23BandS = _swB.start;
+                        } catch (_eSynthBand) {}
+                        // Two synthetic candidates: the grade's band window first (preferred
+                        // stagger slot), then the full window (fallback for coverage).
+                        _p23Periods = [];
+                        if (_p23BandS > _p23WinStart) _p23Periods.push({ startMin: _p23BandS, endMin: _p23WinEnd, _synthetic: true });
+                        _p23Periods.push({ startMin: _p23WinStart, endMin: _p23WinEnd, _synthetic: true });
+                    }
 
                     // Do NOT narrow by getSwimWindow here — that function returns the first
                     // available window and is designed for fullGrade (all-at-once) swim.

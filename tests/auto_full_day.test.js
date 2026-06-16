@@ -668,7 +668,13 @@ function buildSandbox(opts) {
     Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd, period),
   };
 
-  const campPeriods = cfg.swimReal ? {
+  const campPeriods = (cfg.swimReal && cfg.swimRotated) ? {
+    // swimRotated faithfully models the LIVE camp: free-form division times with
+    // NO bell-schedule periods. campPeriods is empty so Phase 2.3's period
+    // requirement is exercised (the no-periods synthetic-window path).
+    Auto:  [],
+    Chair: [],
+  } : cfg.swimReal ? {
     Auto:  swimRealPeriods(),
     Chair: swimRealPeriods(),
   } : cfg.swimWalls ? {
@@ -1095,6 +1101,25 @@ async function runScenario(label, opts) {
     if (opts.requireLunch && !r.pass.lunch) failures.push(`${bunk}: lunch count = ${r.lunchCount} (want >=1)`);
     if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   }
+
+  // requireSwimReservedBeforeSpecials: assert Phase 2.3 actually pre-placed swim
+  //   as walls (count > 0) on EVERY iteration. This is the behavior the
+  //   no-bell-periods fix changes: pre-fix it logged "PRE-PLACED 0" (silent
+  //   no-op → swim crowded out by the post-specials CSP); post-fix it reserves
+  //   swim from a synthesized window before specials. The end-of-day swim count
+  //   can't prove this (the small-harness CSP recovers), so assert on the
+  //   reservation directly.
+  if (opts.requireSwimReservedBeforeSpecials) {
+    const prePlaced = (sandbox.__logs || [])
+      .map(l => { const m = /\[Phase2\.3\] ★ PRE-PLACED (\d+) staggered swim/.exec(l); return m ? parseInt(m[1], 10) : null; })
+      .filter(n => n !== null);
+    assert.ok(prePlaced.length > 0, '[' + label + '] expected at least one [Phase2.3] PRE-PLACED summary line');
+    const zeroIters = prePlaced.filter(n => n === 0).length;
+    assert.equal(zeroIters, 0,
+      '[' + label + '] Phase 2.3 reserved 0 swim walls on ' + zeroIters + '/' + prePlaced.length +
+      ' iteration(s) — swim not reserved before specials (counts seen: ' + prePlaced.join(',') + ')');
+  }
+
   assert.deepEqual(failures, [], '[' + label + '] per-bunk criteria failures:\n  ' + failures.join('\n  '));
 }
 
@@ -1352,10 +1377,11 @@ test('auto scheduler pins a non-fullGrade, wide-window lunch layer for every bun
 // SWIM: window ... has only 0min free" in the live log). Asserts every bunk
 // gets swim.
 test('auto scheduler reserves rotated (non-fullGrade) swim before specials for every bunk', async (t) => {
-  await runScenario('SWIM-ROTATED (type:swim, fullGrade:false, reserved before specials)', {
+  await runScenario('SWIM-ROTATED (type:swim, fullGrade:false, no bell periods, reserved before specials)', {
     swimReal: true,
     swimRotated: true,
     requireSwim: true,
+    requireSwimReservedBeforeSpecials: true,
     skipGapCheck: true,
   });
 });
