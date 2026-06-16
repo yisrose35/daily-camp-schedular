@@ -1978,6 +1978,7 @@
     let _lastHydrationHash = null;          // content hash: skip if cloud unchanged
     const HYDRATION_THROTTLE_MS = 10000;    // 10s — cloud doesn't change faster than this in practice
     let _campStateDebounceTimer = null;
+    let _campStateRemoteKeys = null;        // ★ LG-8: keys changed remotely, drained after re-hydrate
     let _campStateSubscribed = false;
     let _campStateReconnectTimer = null;
     let _campStateReconnectAttempts = 0;
@@ -2013,12 +2014,34 @@
                         log('camp_state change ignored (self echo)');
                         return;
                     }
+                    // ★ LG-8: remember WHICH key changed so we can notify the
+                    //   in-memory module stores after re-hydrating. leagues.js,
+                    //   specialty_leagues.js and special_activities.js each register a
+                    //   key-filtered 'campistry-remote-change' listener to refresh
+                    //   their store — but nothing ever dispatched that event, so a
+                    //   focused tab kept a STALE store and its next whole-key save
+                    //   clobbered the remote edit (no merge). Accumulate across the
+                    //   debounced burst.
+                    var _ck = (payload && payload.new && payload.new.key) ||
+                              (payload && payload.old && payload.old.key) || null;
+                    if (_ck) { (_campStateRemoteKeys || (_campStateRemoteKeys = new Set())).add(_ck); }
                     // Debounce — bulk edits in Me arrive as a rapid burst.
                     if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
                     _campStateDebounceTimer = setTimeout(async function () {
                         _campStateDebounceTimer = null;
                         log('camp_state remote change — re-hydrating');
                         await hydrateFromCloud();
+                        // ★ LG-8: _localCache is fresh now — tell the in-memory stores
+                        //   which keys changed so they pull the new value. Their
+                        //   refreshFromStorage has its own just-saved protection
+                        //   window, so this can't clobber a local edit in flight.
+                        try {
+                            var _keys = _campStateRemoteKeys ? Array.from(_campStateRemoteKeys) : [];
+                            _campStateRemoteKeys = null;
+                            for (var _i = 0; _i < _keys.length; _i++) {
+                                window.dispatchEvent(new CustomEvent('campistry-remote-change', { detail: { key: _keys[_i] } }));
+                            }
+                        } catch (_e) { /* non-fatal */ }
                     }, 200);
                 })
                 .subscribe(function (status) {
