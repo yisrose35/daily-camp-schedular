@@ -1977,6 +1977,15 @@
         window.fieldUsageBySlot = {};
         let fieldUsageBySlot = window.fieldUsageBySlot;
 
+        // ★ LG-6: a SCOPED (partial) generation must not lose OTHER divisions'
+        //   league matchups. window.leagueAssignments here holds the cloud-merged,
+        //   all-divisions map (built in the partial-mode preamble ~L1819). The wipe
+        //   below clears it and only the regenerated (allowed) divisions get
+        //   re-filled, so the unscoped divisions' matchups would vanish and then be
+        //   saved as gone. Snapshot them now and restore after Step 1.5.
+        const _preservedLeagueAssignments = (allowedDivisionsSet && window.leagueAssignments && typeof window.leagueAssignments === 'object')
+            ? JSON.parse(JSON.stringify(window.leagueAssignments)) : null;
+
         window.scheduleAssignments = {};
         window.leagueAssignments = {};
 
@@ -2455,6 +2464,26 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
             );
         } else if (allowedDivisions) {
             console.log('[STEP 1.5] No snapshot provided - generating fresh for allowed divisions only');
+        }
+
+        // ★ LG-6: restore league matchups for divisions NOT in this scoped gen.
+        //   Step 1.5 above restored their SCHEDULE (scheduleAssignments); their
+        //   leagueAssignments were wiped at the top of this run and the partial gen
+        //   only re-fills the allowed divisions. Without this, a scope-regen of one
+        //   division drops every OTHER division's league games, and the wholesale
+        //   save pushes that loss to localStorage + cloud. The partial gen only
+        //   writes allowed divisions, so the non-allowed entries restored here
+        //   survive to the save.
+        if (_preservedLeagueAssignments && allowedDivisionsSet) {
+            if (!window.leagueAssignments || typeof window.leagueAssignments !== 'object') window.leagueAssignments = {};
+            let _restoredLG6 = 0;
+            for (const [divName, divData] of Object.entries(_preservedLeagueAssignments)) {
+                if (!allowedDivisionsSet.has(String(divName))) {
+                    window.leagueAssignments[divName] = divData;
+                    _restoredLG6++;
+                }
+            }
+            if (_restoredLG6 > 0) console.log(`[OPTIMIZER] ★ LG-6: restored league matchups for ${_restoredLG6} non-regenerated division(s)`);
         }
 
         // =========================================================================

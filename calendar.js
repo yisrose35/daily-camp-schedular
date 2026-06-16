@@ -1303,8 +1303,17 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // CLEAN LEAGUE HISTORY for the deleted date (regular + specialty)
         // ═══════════════════════════════════════════════════════════════
-        window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
-        window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        // ★ LG-5: cleanupDateFromHistory is UNSCOPED — it rolls back EVERY league's
+        //   gameLog / teamSports / matchupHistory / gamesPerDate for the date. That
+        //   is correct only for an owner/admin full-day delete. A SCHEDULER deleted
+        //   just their own divisions' bunks, so running this would destroy other
+        //   schedulers'/the owner's league results for that date. Skip it for
+        //   schedulers — their own leagues' history is reconciled by the day-reset
+        //   (rollbackDayRecords) the next time they regenerate the date.
+        if (role !== 'scheduler') {
+            window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+            window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        }
 
         // ═══════════════════════════════════════════════════════════════
         // REBUILD ROTATION COUNTS after delete
