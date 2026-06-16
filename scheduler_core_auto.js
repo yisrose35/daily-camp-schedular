@@ -476,8 +476,57 @@
         // A layer scoped to '_all' (no grade) enables sports for every grade.
         const _sportLayerAllGrades = _gradesWithSportLayer.has('_all');
         const gradeHasSportLayer = (g) => _sportLayerAllGrades || _gradesWithSportLayer.has(String(g));
+
+        // ★ PINNED-CUSTOM GUARD: names of every custom layer (e.g. "Morning
+        //   Activity", "Davening", "Main Activity"). Custom layers are user walls —
+        //   the deferred-special recapture must NEVER displace them. The recapture's
+        //   skip-list was name-regex based (only matched "main activity"/"shiur"/…),
+        //   so a custom named "Morning Activity" slipped through and got overwritten
+        //   by a special (live log: 'RECAPTURED Pioneering … displaced "Morning
+        //   Activity"'). Custom activities also masquerade as sports (sport=name when
+        //   they have no field), so the !!e.sport displaceable check doesn't stop it.
+        const _customLayerActivityNames = new Set(
+            (layers || [])
+                .filter(l => String(l && l.type || '').toLowerCase() === 'custom')
+                .map(l => String((l && (l.customActivity || l.event || l.name)) || '').toLowerCase().trim())
+                .filter(Boolean)
+        );
         log('[SPORT-GATE] grades with a sport layer: ' +
             (_sportLayerAllGrades ? 'ALL' : (_gradesWithSportLayer.size ? Array.from(_gradesWithSportLayer).join(', ') : 'NONE — sports-free camp')));
+
+        // ★ SPORT-LEAK GATE helper: pick a special to fill a Free slot in a grade
+        //   that has NO sport layer. The late "fill every Free with a field sport"
+        //   backstops (FN-22, dead-continuation, STEP 6.8, 4.97b) would otherwise
+        //   inject Baseball/etc. into a sports-free camp. For those grades we draw
+        //   from the specials pool instead: least-recently-done available special
+        //   that fits, preferring one not already done today; null ⇒ leave Free
+        //   (never a field sport). Closure reads todaysSpecials/helpers defined
+        //   later in this function — only ever called from the late passes, so
+        //   they're initialized by then.
+        let _sportlessRotCache = null;
+        const _sportlessSpecialPick = function (bunk, grade, s, e, doneMap) {
+            if (s == null || e == null || e <= s) return null;
+            if (typeof todaysSpecials === 'undefined' || !todaysSpecials) return null;
+            if (!_sportlessRotCache) {
+                try { const _h = window.loadRotationHistory && window.loadRotationHistory(); _sportlessRotCache = (_h && _h.bunks) || {}; }
+                catch (_e) { _sportlessRotCache = {}; }
+            }
+            const _ts = function (a) { try { const m = _sportlessRotCache[bunk]; const t = m && m[a]; return (t == null) ? 0 : t; } catch (_e) { return 0; } };
+            const gap = e - s;
+            let bestNew = null, bestNewTs = Infinity, bestRep = null, bestRepTs = Infinity;
+            for (let i = 0; i < todaysSpecials.length; i++) {
+                const sp = todaysSpecials[i];
+                if (!isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue;
+                const d = getSpecialDuration(sp.name, activityProperties, globalSettings) || sp.defaultDuration || sp.duration || sp.durationMin || 0;
+                if (d <= 0 || d > gap) continue;
+                if (instructorConflictAt(sp.name, s, e, bunk)) continue;
+                const t = _ts(sp.name);
+                const dn = doneMap && doneMap[String(sp.name).toLowerCase().trim()];
+                if (!dn) { if (t < bestNewTs) { bestNew = sp; bestNewTs = t; } }
+                else { if (t < bestRepTs) { bestRep = sp; bestRepTs = t; } }
+            }
+            return bestNew || bestRep;
+        };
 
         // ★ FN-38: hydrate sport/bunk metadata globals ONCE per run. The hot-path
         //   maxPlayers check in isFieldAvailable reads window.sportMetaData
@@ -21856,6 +21905,9 @@
                     // specials, or anything the user configured directly.
                     const act = String(s._activity || '').toLowerCase();
                     if (/^(swim|lunch|cleanup|change|main\s*activity|shiur|dismissal|snack)/i.test(act)) continue;
+                    // ★ PINNED-CUSTOM GUARD: never displace a user's custom-layer
+                    //   activity (Morning Activity, Davening, …) with a recaptured special.
+                    if (_customLayerActivityNames.has(act.trim())) continue;
                     if (s._assignedSpecial) continue; // already a special
                     // ★ Day 20: NEVER displace a division's league game with a recaptured
                     // special. League slots are written (with matchups) before Phase 4.9
@@ -25869,6 +25921,22 @@
                 var _filled = 0;
                 Object.keys(_sa).forEach(function (b) {
                     var g = _b2g[b] || '?'; var arr = _sa[b] || [];
+                    // ★ SPORT-LEAK GATE: a grade with no sport layer never gets a
+                    //   field sport here — fill its Free slots from the specials pool
+                    //   (or leave Free). This is the FN-22 path the live Harmony log
+                    //   showed leaking sports ("filled N Free slot(s) with sports").
+                    if (!gradeHasSportLayer(g)) {
+                        arr.forEach(function (e, idx) {
+                            if (!e || e.continuation || e._pinned || e._league) return;
+                            var a = e._activity || e.sport; if (a && a !== 'Free') return;
+                            var t = _stime(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                            var sp = _sportlessSpecialPick(b, g, t.s, t.e, _done[b]);
+                            if (!sp) return;
+                            _sa[b][idx] = { field: sp.location || null, sport: null, _activity: sp.name, type: 'special', _autoSpecial: true, _startMin: t.s, _endMin: t.e, _autoMode: true, _freeFilled: true, continuation: false };
+                            _done[b][String(sp.name).toLowerCase()] = 1; _filled++;
+                        });
+                        return;
+                    }
                     arr.forEach(function (e, idx) {
                         if (!e || e.continuation || e._pinned || e._league) return;
                         var a = e._activity || e.sport; if (a && a !== 'Free') return;
@@ -26206,9 +26274,17 @@
                                 else { if (_ts < bestRepeatTs) { bestRepeat = { field: F.name, act: A }; bestRepeatTs = _ts; } }
                             }
                         }
-                        const pick = bestNew || bestRepeat;
+                        // ★ SPORT-LEAK GATE: a sportless grade's dead continuation is
+                        //   refilled from the specials pool, never a field sport.
+                        let pick = (bestNew || bestRepeat);
+                        if (!gradeHasSportLayer(grade)) {
+                            const _sp = _sportlessSpecialPick(bunk, grade, s, e, done);
+                            pick = _sp ? { field: _sp.location || null, act: _sp.name, _special: true } : null;
+                        }
                         if (pick) {
-                            slots[idx] = { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'dead-cont-fill' + (bestNew ? '' : '-repeat'), continuation: false };
+                            slots[idx] = pick._special
+                                ? { field: pick.field, sport: null, _activity: pick.act, type: 'special', _autoSpecial: true, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'dead-cont-fill-special', continuation: false }
+                                : { field: pick.field, sport: pick.act, _activity: pick.act, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'dead-cont-fill' + (bestNew ? '' : '-repeat'), continuation: false };
                             done[_nm(pick.act)] = true; _filled++;
                         } else {
                             slots[idx] = { field: 'Free', _activity: 'Free', _startMin: s, _endMin: e, _autoMode: true, _source: 'dead-cont-free', continuation: false };
@@ -26317,6 +26393,17 @@
                         if (!(!a0 || /^free$/i.test(a0) || en.field === 'Free')) return;           // only Free slots
                         if (en._intentionalFree || en._source === 'bunk-delete-override') return;    // user-intended Free
                         var s = en._startMin, e = en._endMin; if (s == null || e == null) return;
+                        // ★ SPORT-LEAK GATE: a sportless grade shares in a SPECIAL here,
+                        //   never a field sport.
+                        if (!gradeHasSportLayer(grade)) {
+                            var _sp68 = _sportlessSpecialPick(bunk, grade, s, e, done);
+                            if (_sp68) {
+                                slots[idx] = { field: _sp68.location || null, sport: null, _activity: _sp68.name, type: 'special', _autoSpecial: true, _autoMode: true, _autoSolved: true, _startMin: s, _endMin: e, _source: 'share-fill-special', continuation: false };
+                                done[_nm(_sp68.name)] = true; _filled++;
+                                if (_det.length < 14) _det.push(bunk + '→' + _sp68.name);
+                            }
+                            return;
+                        }
                         var pick = null, isShared = false, _pickTs = Infinity;
                         for (var fi = 0; fi < _allF.length; fi++) {   // ★ Issue-1: scan ALL fields to rank by cross-day recency
                             var F = _allF[fi];

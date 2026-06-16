@@ -254,6 +254,9 @@ function campConfig(opts) {
     //   receives any sport-typed block (the field catalog must not leak into a
     //   camp that asked for no sports).
     noSports: !!opts.noSports,
+    // morningPin: add a fixed-time custom "Morning Activity" wall (see buildLayers)
+    //   — the recapture-displacement repro for the pinned-custom guard.
+    morningPin: !!opts.morningPin,
   };
 }
 
@@ -484,6 +487,30 @@ function buildLayers(cfg) {
       },
       color: '#7C3AED',
     });
+
+    // CUSTOM "Morning Activity" PINNED layer (morningPin only) — a fixed-time wall
+    // (window == duration, so it classifies pinned) named "Morning Activity". The
+    // name is intentionally NOT one the recapture's skip regex matched (it matched
+    // "main activity"), so pre-fix the deferred-special recapture could swap a
+    // special into it and drop it for some bunks (live: 'RECAPTURED Pioneering …
+    // displaced "Morning Activity"'). Post-fix the custom-layer-name guard protects
+    // it: every bunk keeps exactly one Morning Activity.
+    if (cfg.morningPin) {
+      const mpStart = HM(10, 0), mpEnd = HM(10, 20); // tight 20-min window → pinned
+      layers.push({
+        grade,
+        type: 'custom',
+        name: 'Morning Activity',
+        customActivity: 'Morning Activity',
+        customField: 'Pavilion',
+        customBunks: bunks.slice(),
+        periodMin: 20, durationMin: 20, durationMax: 20,
+        startMin: mpStart, endMin: mpEnd,
+        qty: 1, op: '=',
+        customSharing: { capacity: 20, allowedGrades: [grade] },
+        color: '#6366F1',
+      });
+    }
 
     // LUNCH layer (lunchLeeway only) — a UNIVERSAL camp wall modeled exactly like
     // the live camp's problem case: type:'lunch', NOT fullGrade, drawn with a WIDE
@@ -974,7 +1001,7 @@ function analyse(sandbox, cfg) {
     const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
     const divSlots = dt[grade] || [];
 
-    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0;
+    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0, morningCount = 0;
     const covered = []; // {s,e}
     const entries = [];
     slots.forEach((s, i) => {
@@ -986,6 +1013,7 @@ function analyse(sandbox, cfg) {
       const al = String(act).toLowerCase();
       if (al === 'lunch' || String(s.type || '').toLowerCase() === 'lunch') lunchCount++;
       if (al === 'swim' || String(s.type || '').toLowerCase() === 'swim') swimCount++;
+      if (al === 'morning activity') morningCount++;
       if (al === 'main activity') mainCount++;
       else if (specialNames.has(al)) specialCount++;
       else if (sportNames.has(al) || (s.type === 'sport') || s.sport) sportCount++;
@@ -1005,7 +1033,7 @@ function analyse(sandbox, cfg) {
     if (cursor < winEnd) { gapMin += (winEnd - cursor); gaps.push([cursor, winEnd]); }
 
     results[bunk] = {
-      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, gapMin, gaps, entries,
+      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, morningCount, gapMin, gaps, entries,
       pass: {
         main: mainCount === 1,
         special: specialCount >= 1,
@@ -1119,6 +1147,9 @@ async function runScenario(label, opts) {
     // requireLunch: assert every bunk got a lunch block (validates that a
     //   non-fullGrade, wide-window lunch layer still pins as a universal wall).
     if (opts.requireLunch && !r.pass.lunch) failures.push(`${bunk}: lunch count = ${r.lunchCount} (want >=1)`);
+    // requireMorningPin: the pinned custom "Morning Activity" must survive for every
+    //   bunk (exactly 1) — never displaced by deferred-special recapture.
+    if (opts.requireMorningPin && r.morningCount !== 1) failures.push(`${bunk}: Morning Activity count = ${r.morningCount} (want exactly 1 — pinned custom must not be displaced)`);
     if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   }
 
@@ -1422,6 +1453,22 @@ test('auto scheduler injects NO field-catalog sports when the camp has no sport 
     requireNoSports: true,
     // The fix under test is the sport-leak gate (no sport-typed blocks); whether
     // the limited specials pool can tile every last minute is a separate concern.
+    skipGapCheck: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 12 — PINNED-CUSTOM: a fixed-time custom "Morning Activity" wall must
+// survive for every bunk. Pre-fix, the deferred-special recapture's skip-list
+// was a name regex that only matched "main activity"/"shiur"/… so a custom named
+// "Morning Activity" was a valid displacement target and got overwritten by a
+// recaptured special for some bunks (live Harmony log: 'RECAPTURED Pioneering …
+// displaced "Morning Activity"'). The custom-layer-name guard now protects every
+// custom layer. Run with a special-heavy day to create recapture pressure.
+test('auto scheduler never displaces a pinned custom layer with a recaptured special', async (t) => {
+  await runScenario('PINNED-CUSTOM (fixed-time "Morning Activity", special-heavy day)', {
+    morningPin: true,
+    requireMorningPin: true,
     skipGapCheck: true,
   });
 });
