@@ -1930,8 +1930,16 @@
             try {
                 const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
                 const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(function (f) { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
-                if (!_pf || !_pf.sharableWith) return true; // no Pool sharing config → unrestricted (legacy)
-                const _sw = _pf.sharableWith;
+                // v18: prefer the Swim general-activity sharing over the Pool field
+                // (the user configures pool concurrency on the Swim activity).
+                let _swimGAsw = null;
+                ((_gsP.facilities) || []).forEach(function (fac) {
+                    (fac && fac.generalActivities || []).forEach(function (ga) {
+                        if (!_swimGAsw && ga && ((String(ga.quickType||'').toLowerCase()==='swim') || (String(ga.name||'').toLowerCase()==='swim')) && ga.sharableWith) _swimGAsw = ga.sharableWith;
+                    });
+                });
+                const _sw = _swimGAsw || (_pf && _pf.sharableWith) || null;
+                if (!_sw) return true; // no Pool/Swim sharing config → unrestricted (legacy)
                 const _type = _sw.type || _sw.shareType || 'all';
                 const _pairs = _sw.allowedPairs || {};
                 const _cap = _type === 'not_sharable' ? 1 : (parseInt(_sw.capacity) > 0 ? parseInt(_sw.capacity) : (_type === 'all' ? 999 : 12));

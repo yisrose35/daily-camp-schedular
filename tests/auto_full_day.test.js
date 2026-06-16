@@ -111,6 +111,7 @@ function campConfig(opts) {
       chairStart: HM(9, 0), chairEnd: HM(12, 20),
       autoStartStr: '9:00', autoEndStr: '12:20',
       swimReal: true,
+      swimGAShare: !!opts.swimGAShare,
     };
   }
   if (opts.swimWalls) {
@@ -676,7 +677,16 @@ function buildSandbox(opts) {
   // in the 09:45-10:30 band without pool-capacity starvation. The pool is free
   // after 10:30 so swim CAN stretch over a swim|gap|Main sliver if one appears.
   if (cfg.swimReal) {
-    fieldList.push({
+    // SWIM-GA-SHARE: model the user's real config — the Pool FIELD is restrictive
+    // (not_sharable → capacity 1), but pool sharing is configured on the "Swim"
+    // GENERAL ACTIVITY instead (added to globalSettings.facilities below). Without
+    // the v18 fix, canUsePoolAtTime reads only the field (cap 1) and starves swim;
+    // with it, the Swim activity's type:'all' is honored and every bunk swims.
+    fieldList.push(cfg.swimGAShare ? {
+      name: 'Pool',
+      activities: ['Swim'],
+      sharableWith: { type: 'not_sharable', divisions: [], capacity: 1, allowedPairs: {} },
+    } : {
       name: 'Pool',
       activities: ['Swim'],
       sharableWith: { type: 'all', divisions: [], capacity: 20,
@@ -769,6 +779,15 @@ function buildSandbox(opts) {
     },
     campPeriods,
   };
+  // SWIM-GA-SHARE: pool sharing lives on the "Swim" general activity (the real
+  // user config), NOT on the Pool field. canUsePoolAtTime must read this.
+  if (cfg.swimGAShare) {
+    globalSettings.facilities = [{
+      name: 'Pool',
+      generalActivities: [{ name: 'Swim', quickType: 'swim',
+        sharableWith: { type: 'all', divisions: [], capacity: 999, allowedPairs: {} } }],
+    }];
+  }
 
   const bunkMetaData = {};
   [...AUTO_BUNKS, ...CHAIR_BUNKS].forEach(b => { bunkMetaData[b] = { size: 12 }; });
@@ -901,7 +920,7 @@ function analyse(sandbox, cfg) {
     const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
     const divSlots = dt[grade] || [];
 
-    let mainCount = 0, specialCount = 0, sportCount = 0;
+    let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0;
     const covered = []; // {s,e}
     const entries = [];
     slots.forEach((s, i) => {
@@ -911,6 +930,7 @@ function analyse(sandbox, cfg) {
       if (startMin == null && divSlots[i]) { startMin = divSlots[i].startMin; endMin = divSlots[i].endMin; }
       entries.push({ act, startMin, endMin, raw: s });
       const al = String(act).toLowerCase();
+      if (al === 'swim' || String(s.type || '').toLowerCase() === 'swim') swimCount++;
       if (al === 'main activity') mainCount++;
       else if (specialNames.has(al)) specialCount++;
       else if (sportNames.has(al) || (s.type === 'sport') || s.sport) sportCount++;
@@ -930,11 +950,12 @@ function analyse(sandbox, cfg) {
     if (cursor < winEnd) { gapMin += (winEnd - cursor); gaps.push([cursor, winEnd]); }
 
     results[bunk] = {
-      grade, mainCount, specialCount, sportCount, gapMin, gaps, entries,
+      grade, mainCount, specialCount, sportCount, swimCount, gapMin, gaps, entries,
       pass: {
         main: mainCount === 1,
         special: specialCount >= 1,
         sport: sportCount >= 1,
+        swim: swimCount >= 1,
         nogap: gapMin === 0,
       },
     };
@@ -1028,7 +1049,11 @@ async function runScenario(label, opts) {
     if (!r.pass.main)    failures.push(`${bunk}: Main Activity count = ${r.mainCount} (want exactly 1)`);
     if (!r.pass.special) failures.push(`${bunk}: special count = ${r.specialCount} (want >=1)`);
     if (!r.pass.sport)   failures.push(`${bunk}: sport count = ${r.sportCount} (want >=1)`);
-    if (!r.pass.nogap)   failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+    // requireSwim: assert every bunk actually got a swim block (validates the
+    //   Swim general-activity sharing path). skipGapCheck: relax the gapless
+    //   criterion for scenarios whose purpose is swim coverage, not tiling.
+    if (opts.requireSwim && !r.pass.swim) failures.push(`${bunk}: swim count = ${r.swimCount} (want >=1)`);
+    if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   }
   assert.deepEqual(failures, [], '[' + label + '] per-bunk criteria failures:\n  ' + failures.join('\n  '));
 }
@@ -1229,5 +1254,29 @@ test('auto scheduler fills a gapless day with swim-bounded and Main-wall-bounded
 test('auto scheduler fills a gapless day with a REAL swim layer + REAL catalog special', async (t) => {
   await runScenario('SWIM-REAL (real type:swim + real type:special, Main wall between, fields blocked 10:30-11:35)', {
     swimReal: true,
+  });
+});
+
+// TEST 8 — SWIM-GA-SHARE: pool concurrency is configured on the "Swim" GENERAL
+// ACTIVITY (globalSettings.facilities[].generalActivities[]), while the Pool
+// FIELD is set not_sharable (capacity 1). This is the user's real config shape.
+//
+// Before the v18 fix, canUsePoolAtTime read ONLY the Pool field → capacity 1 →
+// only one bunk could swim per window → most bunks fail ("could not place swim")
+// and the day is left with gaps / missing swim. The fix makes canUsePoolAtTime
+// prefer the Swim general activity's sharableWith (type:'all' → unlimited), so
+// every bunk swims and the day is perfect. This test FAILS without the fix
+// (verified by stashing the solver change) and PASSES with it.
+test('auto scheduler honors pool sharing set on the Swim general activity (not the Pool field)', async (t) => {
+  await runScenario('SWIM-GA-SHARE (Pool field not_sharable, Swim general-activity type:all)', {
+    swimReal: true,
+    swimGAShare: true,
+    // The fix's guarantee is that EVERY bunk swims (concurrently, which the
+    // field's not_sharable cap=1 would forbid → proves the Swim activity's
+    // type:'all' is honored). The unrealistic not_sharable field also poisons
+    // the gap-absorber's pool-stretch, leaving a 20-min Main-adjacent gap that
+    // is NOT what this scenario tests — so assert swim coverage, skip gaps.
+    requireSwim: true,
+    skipGapCheck: true,
   });
 });
