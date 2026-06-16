@@ -167,7 +167,13 @@
                     _league: !!entry._league,
                     _autoSpecial: !!entry._autoSpecial,
                     _pinned: !!entry._pinned,
-                    _fixed: !!entry._fixed
+                    _fixed: !!entry._fixed,
+                    // ★ Staggered shared-room custom reserve: per-grade non-overlapping
+                    //   tiling of the SAME custom activity in a shared room is intentional,
+                    //   not a violation. Carry the flag + the custom-activity name so the
+                    //   share checks can exempt an all-reserved-same-act overlap group.
+                    _staggerReserved: !!entry._staggerReserved,
+                    _customAct: String(entry._customActivity || '').toLowerCase().trim()
                 };
 
                 if (!index.has(fn)) index.set(fn, []);
@@ -215,6 +221,15 @@
                     if (b.flags._league) continue;
                     if (a.grade === b.grade) continue;
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
+
+                    // ★ Reserved-tiling exemption: both are _staggerReserved uses of the
+                    //   SAME custom activity, sequenced per-grade on a common timeline in a
+                    //   shared room. Their windows are non-overlapping by construction (the
+                    //   solver only sets _staggerReserved on a genuine non-overlap), so any
+                    //   "overlap" here is boundary-touching tiling — not a real cross-grade
+                    //   share. A non-reserved consumer still flags normally.
+                    if (a.flags._staggerReserved && b.flags._staggerReserved &&
+                        a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
 
                     // Cross-division overlap detected
                     let isViolation = false;
@@ -376,6 +391,12 @@
 
                     // Must overlap in time
                     if (!timesOverlap(a.startMin, a.endMin, b.startMin, b.endMin)) continue;
+
+                    // ★ Reserved-tiling exemption: both are _staggerReserved uses of the
+                    //   SAME custom activity → a legitimate sequenced share, not a stagger
+                    //   violation. A real (non-reserved) consumer still flags normally.
+                    if (a.flags._staggerReserved && b.flags._staggerReserved &&
+                        a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
 
                     // If they overlap but don't have identical times → staggered violation
                     if (a.startMin !== b.startMin || a.endMin !== b.endMin) {

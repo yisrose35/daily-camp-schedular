@@ -25424,6 +25424,26 @@
                                 && _sa[o.bunk] && _sa[o.bunk][o.idx] && _sa[o.bunk][o.idx].field !== 'Free';
                         });
                         if (others.length === 0) continue;
+                        // ★ Staggered shared-room custom reserve (mirrors STEP 4.5). A custom
+                        //   activity placed on its own per-grade, non-overlapping sub-slot of a
+                        //   shared room carries _staggerReserved. The grades are SEQUENCED in the
+                        //   same room on a common timeline, so although their windows tile
+                        //   adjacently the cross-grade demote rule below would treat them as a
+                        //   violation. Whitelist this entry IFF it is reserved AND every
+                        //   overlapping occupant is ALSO a reserved use of the SAME custom
+                        //   activity (the legitimate adjacent tiling). If a non-reserved (real)
+                        //   consumer overlaps, fall through to normal enforcement — a genuine
+                        //   cross-grade overlap is never exempted.
+                        if (cur._staggerReserved) {
+                            var _myAct15 = String(cur._customActivity || cur._activity || '').toLowerCase().trim();
+                            var _allRsv15 = others.every(function (o) {
+                                var _osa = _sa[o.bunk] && _sa[o.bunk][o.idx];
+                                if (!_osa || !_osa._staggerReserved) return false;
+                                var _oAct = String(_osa._customActivity || _osa._activity || '').toLowerCase().trim();
+                                return _oAct === _myAct15;
+                            });
+                            if (_allRsv15) continue;
+                        }
                         var bad = false;
                         if (st === 'not_sharable') bad = true;
                         else if (st === 'same_division') { if (others.some(function (o) { return o.grade !== u.grade; })) bad = true; }
@@ -25509,6 +25529,21 @@
                 });
                 var demoted = 0, staggerD = 0, capD = 0;
                 function _live(u) { var c = _sa[u.bunk] && _sa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
+                // ★ Staggered shared-room custom reserve (mirrors STEP 4.5 / FN-15). Two
+                //   occupants are a LEGITIMATE adjacent tiling — NOT a violation — when BOTH
+                //   are _staggerReserved uses of the SAME custom activity. The grades are
+                //   sequenced in the same room on a common timeline, so their windows differ
+                //   ON PURPOSE; the anti-stagger and cap/cross-grade rules below must not
+                //   demote them. A non-reserved (real) consumer overlapping a reserved block
+                //   is still a genuine conflict and falls through to normal enforcement.
+                function _reservedPair(a, b) {
+                    var ca = _sa[a.bunk] && _sa[a.bunk][a.idx];
+                    var cb = _sa[b.bunk] && _sa[b.bunk][b.idx];
+                    if (!ca || !cb || !ca._staggerReserved || !cb._staggerReserved) return false;
+                    var na = String(ca._customActivity || ca._activity || '').toLowerCase().trim();
+                    var nb = String(cb._customActivity || cb._activity || '').toLowerCase().trim();
+                    return na && na === nb;
+                }
                 function _demote(u, reason) {
                     if (!_live(u)) return false;
                     _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
@@ -25527,6 +25562,7 @@
                         for (var j = 0; j < arr.length; j++) {
                             if (j === i) continue;
                             var o = arr[j]; if (o.bunk === u.bunk || !_live(o)) continue;
+                            if (_reservedPair(u, o)) continue; // legitimate adjacent reserved tiling — never demote
                             if (o.s < u.e && o.e > u.s && (o.s !== u.s || o.e !== u.e)) { if (_demote(o, 'fn21_stagger')) staggerD++; }
                         }
                     }
@@ -25545,6 +25581,14 @@
                         var kept = [];
                         grp.forEach(function (u) {
                             if (!_live(u)) return;
+                            // ★ Reserved-tiling exemption: a _staggerReserved block whose every
+                            //   same-window co-occupant is a reserved use of the SAME custom
+                            //   activity is a legitimate sequenced share — never demote. A real
+                            //   (non-reserved) consumer in the group falls through to enforcement.
+                            var _curU = _sa[u.bunk] && _sa[u.bunk][u.idx];
+                            if (_curU && _curU._staggerReserved && grp.every(function (g2) {
+                                return g2.bunk === u.bunk || !_live(g2) || _reservedPair(u, g2);
+                            })) { kept.push(u); return; }
                             var ok = kept.length < capMax;
                             if (ok && kept.length > 0) {
                                 var kg = kept.map(function (x) { return x.grade; });
