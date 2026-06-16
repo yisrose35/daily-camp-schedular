@@ -257,6 +257,9 @@ function campConfig(opts) {
     // morningPin: add a fixed-time custom "Morning Activity" wall (see buildLayers)
     //   — the recapture-displacement repro for the pinned-custom guard.
     morningPin: !!opts.morningPin,
+    // morningWide: draw that custom's window wider than its duration so it
+    //   classifies "windowed" (the stacker case) — repro for Phase 2.45.
+    morningWide: !!opts.morningWide,
   };
 }
 
@@ -496,7 +499,13 @@ function buildLayers(cfg) {
     // displaced "Morning Activity"'). Post-fix the custom-layer-name guard protects
     // it: every bunk keeps exactly one Morning Activity.
     if (cfg.morningPin) {
-      const mpStart = HM(10, 0), mpEnd = HM(10, 20); // tight 20-min window → pinned
+      // morningWide: model the live "stacker band" — a REQUIRED custom whose
+      //   window (60 min) is wider than its duration (20 min), so it classifies
+      //   "windowed" (floats) and competes with specials. Pre-fix it dropped for
+      //   most bunks (specials claimed the window first); Phase 2.45 must reserve
+      //   it for every bunk.
+      const mpStart = cfg.morningWide ? HM(10, 0)  : HM(10, 0);
+      const mpEnd   = cfg.morningWide ? HM(11, 0)  : HM(10, 20); // wide vs tight window
       layers.push({
         grade,
         type: 'custom',
@@ -1468,6 +1477,22 @@ test('auto scheduler injects NO field-catalog sports when the camp has no sport 
 test('auto scheduler never displaces a pinned custom layer with a recaptured special', async (t) => {
   await runScenario('PINNED-CUSTOM (fixed-time "Morning Activity", special-heavy day)', {
     morningPin: true,
+    requireMorningPin: true,
+    skipGapCheck: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 13 — REQUIRED-WINDOWED-CUSTOM (stacker band): a required custom whose
+// window is wider than its duration classifies "windowed" and competes with
+// specials. Pre-fix it dropped for most bunks because Phase 2.5 pre-placed
+// specials as walls before the Phase-3 custom need ran (live Harmony bug:
+// Morning Activity landed for only 1 of 4 bunks). Phase 2.45 now reserves it for
+// every bunk before specials. Asserts every bunk keeps exactly one.
+test('auto scheduler reserves a required windowed custom layer for every bunk', async (t) => {
+  await runScenario('REQUIRED-WINDOWED-CUSTOM (wide-window "Morning Activity", stacker band)', {
+    morningPin: true,
+    morningWide: true,
     requireMorningPin: true,
     skipGapCheck: true,
   });
