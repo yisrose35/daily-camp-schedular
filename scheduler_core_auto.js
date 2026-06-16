@@ -13809,6 +13809,29 @@
                         var _sStart = info.start + _swimSlot * _swimExp;
                         var _sEnd = _sStart + _swimExp;
                         if (_sEnd > info.end) { _sEnd = info.end; _sStart = Math.max(info.start, _sEnd - _swimExp); }
+                        // ★ LUNCH-AVOID: never let the swim band land on the grade's lunch
+                        //   wall. When it overlaps, the swim block (or its Change) carves
+                        //   lunch below its dMin (live bug: Prop swim 13:00-13:40 over lunch
+                        //   13:15-13:45 → lunch shrank to 5min). Walk the round-robin slots
+                        //   for the first that clears lunch; if none, drop the band just
+                        //   after lunch (clamped to the day).
+                        try {
+                            var _lunchL = (layersByGrade[grade] || []).find(function (l) { return (l.type || '').toLowerCase() === 'lunch'; });
+                            var _lS = _lunchL && _lunchL.startMin, _lE = _lunchL && _lunchL.endMin;
+                            if (_lS != null && _lE != null && _sStart < _lE && _sEnd > _lS) {
+                                var _found = false;
+                                for (var _k = 1; _k < _nSwimSlots; _k++) {
+                                    var _alt = (_swimSlot + _k) % _nSwimSlots;
+                                    var _aS = info.start + _alt * _swimExp, _aE = _aS + _swimExp;
+                                    if (_aE > info.end) { _aE = info.end; _aS = Math.max(info.start, _aE - _swimExp); }
+                                    if (!(_aS < _lE && _aE > _lS)) { _sStart = _aS; _sEnd = _aE; _found = true; break; }
+                                }
+                                if (!_found) { // fall back to just after lunch, clamped
+                                    _sStart = Math.min(_lE, Math.max(info.start, info.end - _swimExp));
+                                    _sEnd = Math.min(info.end, _sStart + _swimExp);
+                                }
+                            }
+                        } catch (_eLunchAvoid) {}
                         bandStart = _sStart;
                         bandEnd = _sEnd;
                     }
