@@ -340,6 +340,14 @@
         if (!existingGrades || existingGrades.length === 0) return true;
         for (let i = 0; i < existingGrades.length; i++) {
             const eg = existingGrades[i];
+            // ★ Same-division concurrency is NOT a cross-division share — always allow
+            //   it (capacity still gates via the count check in rtCanUse). Without this,
+            //   a cross_division resource (e.g. a shared Pool with allowedPairs) blocked
+            //   two bunks of the SAME grade from swimming at once, because the
+            //   'Grade|Grade' self-pair was never listed in allowedPairs. That forced
+            //   a grade's bunks to stagger one-per-slot and overflow a tight swim window
+            //   (live Harmony bug: only 2 of 4 bunks could swim).
+            if (String(eg) === String(newGrade)) continue;
             const key = [newGrade, eg].sort().join('|');
             if (pairs[key] !== true) return false;
         }
@@ -14468,6 +14476,14 @@
 
                     var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
                     var _p23SwimDur = _p23SC.dMin || 40;
+                    // ★ SWIM CHANGE ENVELOPE: reserve room for pre/post Change INSIDE the
+                    //   candidate period so swim positions as Change|Swim|Change with no
+                    //   leading gap and no pre-change spilling before the day start. Without
+                    //   this, swim was placed flush at the window edge (10:50) and its
+                    //   pre-change landed at 10:35 — before the day began. Per-period
+                    //   fallback to 0 (below) keeps tight windows placeable.
+                    var _p23PreCfg  = (_p23SwimLayer.preChangeMin  > 0) ? _p23SwimLayer.preChangeMin  : 0;
+                    var _p23PostCfg = (_p23SwimLayer.postChangeMin > 0) ? _p23SwimLayer.postChangeMin : 0;
                     var _p23GradeStart = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).startTime) || 540;
                     var _p23GradeEnd   = parseTimeToMinutes((divisions[grade] || divisions[String(grade)]) && (divisions[grade] || divisions[String(grade)]).endTime)   || 960;
                     var _p23WinStart = Math.max(_p23SwimLayer.startMin || 0, _p23GradeStart);
@@ -14572,8 +14588,15 @@
                             //   minutes over. Real bell-schedule periods stay period-aligned
                             //   (Phase 2.4's wet-bundle needs swim snapped to a single period).
                             var _p23Step = _p23P._synthetic ? 5 : _p23SwimDur;
-                            for (var _p23tryS = _p23P.startMin;
-                                     _p23tryS + _p23SwimDur <= _p23P.endMin;
+                            // Reserve the change pad inside THIS period when the full
+                            //   envelope fits; else fall back to 0 (swim places, change
+                            //   spills to an adjacent period via computeSwimChangeAnchors).
+                            var _p23Pre = _p23PreCfg, _p23Post = _p23PostCfg;
+                            if ((_p23Pre + _p23Post) > 0 && (_p23P.endMin - _p23P.startMin) < (_p23SwimDur + _p23Pre + _p23Post)) {
+                                _p23Pre = 0; _p23Post = 0;
+                            }
+                            for (var _p23tryS = _p23P.startMin + _p23Pre;
+                                     _p23tryS + _p23SwimDur + _p23Post <= _p23P.endMin;
                                      _p23tryS += _p23Step) {
                                 var _p23tryE = _p23tryS + _p23SwimDur;
                                 if (!canUsePoolAtTime(grade, _p23tryS, _p23tryE)) continue;
