@@ -2376,6 +2376,19 @@
     // ★ Export helper functions for external use
     window.refreshSpecialtyLeagues = refreshFromStorage;
     window.cleanupSpecialtyLeagues = cleanup;
+
+    // ★ LG-10: public saver. calendar.js startNewHalf (~L702) and
+    // playoff_hub.js (~L74) both mutate window.specialtyLeagues in place
+    // (standings/playoff reset, bracket persist) then call
+    // window.saveSpecialtyLeaguesData() — but it was never defined, so those
+    // resets/brackets were never written to cloud/localStorage. saveData is
+    // module-private; expose it here. window.specialtyLeagues is the same
+    // object reference saveData serializes (declared once, never reassigned),
+    // so external in-place mutations persist. Force cloud sync — both callers
+    // are cross-session persistence operations.
+    window.saveSpecialtyLeaguesData = function() {
+        try { saveData(true); } catch (e) { console.warn('[saveSpecialtyLeaguesData] failed:', e); }
+    };
     
     // ★ Export getter that always returns current state
     window.getSpecialtyLeagues = function() {

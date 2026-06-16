@@ -921,7 +921,13 @@
 
         // Process each division/time combination
         for (const [key, blocks] of Object.entries(blocksByDivisionTime)) {
-            const [divName, startTime] = key.split('_');
+            // LG-18: key is `${divName}_${startTime}` (built ~L906). Division
+            // names can contain '_' (e.g. "Junior_Boys") but startTime never
+            // does, so split on the LAST '_' — a plain split('_') truncated the
+            // div name ("Junior_Boys" -> "Junior") and the league never resolved.
+            const _ki = key.lastIndexOf('_');
+            const divName = _ki >= 0 ? key.slice(0, _ki) : key;
+            const startTime = _ki >= 0 ? key.slice(_ki + 1) : '';
 
             console.log(`\n[SpecialtyLeagues] Processing ${divName} @ ${startTime}`);
 
