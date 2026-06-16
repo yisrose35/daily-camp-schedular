@@ -26027,6 +26027,180 @@
             }
         } catch (_e685) { try { warn('[STEP 6.85 SPACING SWEEP] error: ' + (_e685 && _e685.message)); } catch (_x) {} }
 
+        // ★ STEP 6.86 — SPORT-FLEX GAP CLOSER (FN-26, FINAL gap-closer, runs LAST among
+        //   placement passes — after FN-22, FREE-ABSORB, perfection, dead-cont, share-fill,
+        //   spacing sweep). Mops up the residual Free / dead-time slivers those passes
+        //   leave behind, by letting an ADJACENT real SPORT *flex* to cover the gap — the
+        //   "sports can stretch to fill the day" behavior. Two operations:
+        //
+        //   (A) SAME-ACTIVITY MERGE — when a bunk has the SAME activity on the SAME field
+        //       on both sides of a gap (e.g. Kickball …–650, [Free 650–670], Kickball
+        //       670–…), the gap is just a seam: merge both blocks + the seam into one
+        //       continuous block. Also merges directly-adjacent same-activity anchors that
+        //       a prior pass split. No new field needed (it's already that field).
+        //
+        //   (B) NEIGHBOUR FLEX-ABSORB — for any remaining Free gap (or a sub-dMin leftover
+        //       block too small to be its own activity) bounded on AT LEAST ONE side by a
+        //       non-wall SPORT for the same bunk, extend that neighbour over the gap. Prefer
+        //       extending a SAME-FIELD neighbour (no new field claim). dMax is intentionally
+        //       NOT enforced here — a slightly-over-max sport is strictly better than a Free
+        //       hole; the overrun is bounded by the gap size (the sport grows by exactly the
+        //       gap, nothing more). This is the documented "absorption exemption".
+        //
+        //   SAFE-ONLY — mirrors the FREE-ABSORB gate exactly:
+        //   - NEVER demote/move walls: _pinned/_fixed-anchor/_staggerReserved/lunch/swim/
+        //     snack/dismissal/Main Activity/league/chinuch/trip/special/prep are never grown
+        //     over a Free AND never absorbed-away (a sub-dMin wall is left as-is).
+        //   - the extension must stay inside ONE period (staysInPeriod),
+        //   - the field must have capacity across the gap (isFieldAvailable) AND pass the
+        //     write gate (_validateWritePlacement) → no cross-grade/over-cap conflict.
+        //   - a Free that is Free purely because NO field is available with NO extendable
+        //     neighbour is LEFT ALONE (hard capacity limit — can't fix in code) and stays
+        //     surfaced by the Impossibility Report below.
+        //   Index-stable in-place mutation (slot indices align with _perBunkSlots): we grow
+        //   the anchor's _endMin and flip covered slots to continuations of it — the exact
+        //   continuation model the multi-period special write + FREE-ABSORB use.
+        try {
+            var _flexDt = window.divisionTimes || {};
+            var _flexGrade = {};
+            allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _flexGrade[String(b)] = g; }); });
+            // walls / strict-bound activities that must never be grown or absorbed away
+            var _FLEX_WALL_ACT = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|league game|specialty league|chinuch|trip)$/i;
+            var _flexNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+            // is M a real, flexible, placed SPORT (not a wall/anchor)?
+            var _flexElig = function (M) {
+                return M && !M.continuation && M.field && M.field !== 'Free' && M.sport &&
+                    !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch ||
+                      M._bunkOverride || M._isPrep || M._autoSpecial || M._isRotationEvent ||
+                      M._activityLocked || M._staggerReserved || M._intentionalFree) &&
+                    !_FLEX_WALL_ACT.test(_flexNorm(M._activity));
+            };
+            // a slot is a closeable hole if it's Free, OR a sub-dMin leftover sport that is
+            //   itself flexible (we may absorb a too-small sport into a neighbour). Walls are
+            //   never holes.
+            var _flexGateOK = function (field, act, sport, mergeStart, mergeEnd, gapS, gapE, bunk, g) {
+                if (typeof staysInPeriod === 'function' && !staysInPeriod(mergeStart, mergeEnd, g)) return false;
+                if (typeof isFieldAvailable === 'function' && !isFieldAvailable(field, gapS, gapE, bunk, g, sport || act)) return false;
+                if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(field, act, g, bunk, gapS, gapE) !== null) return false;
+                return true;
+            };
+            var _flexMerged = 0, _flexAbsorbed = 0;
+            Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                var slots = window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots)) return;
+                var g = _flexGrade[String(bunk)];
+                if (!g) return;
+                var pbs = (_flexDt[g] && _flexDt[g]._perBunkSlots && _flexDt[g]._perBunkSlots[bunk])
+                    || (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][bunk]) || [];
+                var _S = function (s, i) { return (s && s._startMin != null) ? s._startMin : (pbs[i] && pbs[i].startMin); };
+                var _E = function (s, i) { return (s && s._endMin != null) ? s._endMin : (pbs[i] && pbs[i].endMin); };
+                // find the head index of the block that slot j belongs to (walk back over continuations)
+                var _headOf = function (j) { var h = j; while (h > 0 && slots[h] && slots[h].continuation === true) h--; return h; };
+
+                // ─── (A) SAME-ACTIVITY MERGE across a Free seam (or directly adjacent) ───
+                for (var i = 0; i < slots.length; i++) {
+                    var H = slots[i];
+                    if (!_flexElig(H)) continue;
+                    var hHead = _headOf(i);
+                    if (hHead !== i) continue;          // only operate from a block head
+                    // H's true block tail (walk its own continuations)
+                    var hTail = i; while (hTail + 1 < slots.length && slots[hTail + 1] && slots[hTail + 1].continuation === true) hTail++;
+                    // collect intervening Free seam (indices after H's block, before next anchor)
+                    var j = hTail + 1;
+                    while (j < slots.length && slots[j] && !slots[j].continuation && slots[j].field === 'Free' &&
+                           !slots[j]._intentionalFree && slots[j]._source !== 'bunk-delete-override') {
+                        j++;
+                    }
+                    var Nx = (j < slots.length) ? slots[j] : null;
+                    if (!Nx || Nx.continuation || !_flexElig(Nx)) continue;
+                    // same activity AND same field?
+                    if (_flexNorm(H._activity || H.sport) !== _flexNorm(Nx._activity || Nx.sport)) continue;
+                    if (_flexNorm(H.field) !== _flexNorm(Nx.field)) continue;
+                    // Nx's true block tail (so H absorbs Nx AND all of Nx's continuations)
+                    var nxTail = j; while (nxTail + 1 < slots.length && slots[nxTail + 1] && slots[nxTail + 1].continuation === true) nxTail++;
+                    var mergeStart = _S(H, i), mergeEnd = _E(slots[nxTail], nxTail);
+                    if (mergeStart == null || mergeEnd == null) continue;
+                    var seamS = _E(slots[hTail], hTail), seamE = _S(Nx, j);
+                    var actM = H._activity || H.sport;
+                    // gate ONLY the seam window (H + Nx already legally hold their own minutes)
+                    if (seamE > seamS && !_flexGateOK(H.field, actM, H.sport, mergeStart, mergeEnd, seamS, seamE, bunk, g)) continue;
+                    // grow H to cover everything up to Nx's full end; flip [hTail+1 .. nxTail] to continuations of H
+                    H._endMin = mergeEnd;
+                    for (var k = hTail + 1; k <= nxTail; k++) {
+                        slots[k] = { field: H.field, sport: (H.sport != null ? H.sport : null), _activity: actM,
+                            continuation: true, _startMin: _S(slots[k], k), _endMin: _E(slots[k], k),
+                            _autoMode: true, _flexMerged: true };
+                    }
+                    if (seamE > seamS) { try { if (typeof claimField === 'function') claimField(H.field, seamS, seamE, bunk, g, actM); } catch (_e) {} }
+                    _flexMerged++;
+                    i--; // re-process H (now extended) so a chain of same-activity seams all merge
+                }
+
+                // ─── (B) NEIGHBOUR FLEX-ABSORB of a residual Free hole ───
+                for (var ii = 0; ii < slots.length; ii++) {
+                    var F = slots[ii];
+                    if (!F || F.continuation || F.field !== 'Free') continue;
+                    if (F._intentionalFree || F._source === 'bunk-delete-override') continue;
+                    var fs = _S(F, ii), fe = _E(F, ii);
+                    if (fs == null || fe == null || fe <= fs) continue;
+                    // (B1) prefer extending the PRECEDING same-bunk sport forward over the hole.
+                    var P = ii > 0 ? slots[ii - 1] : null;
+                    var pHead = P ? slots[_headOf(ii - 1)] : null;
+                    if (P && pHead && _flexElig(pHead)) {
+                        var pe = _E(P, ii - 1);
+                        if (pe === fs) {
+                            var actP = pHead._activity || pHead.sport;
+                            // gate only the gap window — dMax intentionally NOT checked (absorption
+                            //   exemption); the sport grows by exactly the gap, nothing more.
+                            if (_flexGateOK(pHead.field, actP, pHead.sport, _S(pHead, _headOf(ii - 1)), fe, fs, fe, bunk, g)) {
+                                pHead._endMin = fe;
+                                slots[ii] = { field: pHead.field, sport: (pHead.sport != null ? pHead.sport : null), _activity: actP,
+                                    continuation: true, _startMin: fs, _endMin: fe, _autoMode: true, _flexAbsorbed: true };
+                                try { if (typeof claimField === 'function') claimField(pHead.field, fs, fe, bunk, g, actP); } catch (_e) {}
+                                _flexAbsorbed++;
+                                continue;
+                            }
+                        }
+                    }
+                    // (B2) else pull the FOLLOWING same-bunk sport back over the hole. The
+                    //   continuation model merges into the PRECEDING slot, so we make the Free
+                    //   slot the ANCHOR (spanning fs..A.end) and flip the original next anchor +
+                    //   its continuations to continuations — index-stable rewrite.
+                    var A = (ii < slots.length - 1) ? slots[ii + 1] : null;
+                    if (A && _flexElig(A) && !A.continuation) {
+                        var as = _S(A, ii + 1), ae = _E(A, ii + 1);
+                        // extend A's full block end (walk its continuations)
+                        var aTail = ii + 1; while (aTail + 1 < slots.length && slots[aTail + 1] && slots[aTail + 1].continuation === true) aTail++;
+                        var aFullEnd = _E(slots[aTail], aTail);
+                        if (as === fe && aFullEnd != null) {
+                            var actA = A._activity || A.sport;
+                            if (_flexGateOK(A.field, actA, A.sport, fs, aFullEnd, fs, fe, bunk, g)) {
+                                slots[ii] = { field: A.field, sport: (A.sport != null ? A.sport : null), _activity: actA,
+                                    continuation: false, _startMin: fs, _endMin: aFullEnd, _autoMode: true, _flexAbsorbed: true };
+                                // original head A + its continuations all become continuations of the new anchor
+                                for (var ka = ii + 1; ka <= aTail; ka++) {
+                                    slots[ka] = { field: A.field, sport: (A.sport != null ? A.sport : null), _activity: actA,
+                                        continuation: true, _startMin: _S(slots[ka], ka), _endMin: _E(slots[ka], ka),
+                                        _autoMode: true, _flexAbsorbed: true };
+                                }
+                                try { if (typeof claimField === 'function') claimField(A.field, fs, fe, bunk, g, actA); } catch (_e) {}
+                                _flexAbsorbed++;
+                                continue;
+                            }
+                        }
+                    }
+                    // no extendable neighbour → leave Free (true capacity impossibility).
+                }
+            });
+            if (_flexMerged > 0 || _flexAbsorbed > 0) {
+                log('  🏃 [STEP 6.86 SPORT-FLEX] merged ' + _flexMerged + ' same-activity seam(s), absorbed ' + _flexAbsorbed + ' residual gap(s) into a neighbour sport.');
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+            } else {
+                log('[STEP 6.86 SPORT-FLEX] no extendable-neighbour gaps to close.');
+            }
+            try { console.log('[SPORT-FLEX] merged=' + _flexMerged + ' absorbed=' + _flexAbsorbed); } catch (_e) {}
+        } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
+
         // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
         //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
         //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes
