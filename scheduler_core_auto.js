@@ -1467,14 +1467,23 @@
             try {
                 const _gsP = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
                 const _pf = (_gsP.app1?.fields || _gsP.fields || []).find(f => { const n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
-                if (_pf && _pf.sharableWith) {
-                    const _sw = _pf.sharableWith;
-                    const _st = _sw.type || _sw.shareType || 'all';
-                    const _cap = _st === 'not_sharable' ? 1 : (parseInt(_sw.capacity) > 0 ? parseInt(_sw.capacity) : (_st === 'all' ? 999 : 12));
-                    log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_sw.allowedPairs || {}).length));
+                // Resolve the SWIM general-activity sharing too (preferred by canUsePoolAtTime).
+                let _swimGASW = null, _swimGASrc = '';
+                (( _gsP.facilities) || []).forEach(fac => {
+                    (fac && fac.generalActivities || []).forEach(ga => {
+                        if (!_swimGASW && ga && ((String(ga.quickType||'').toLowerCase()==='swim') || (String(ga.name||'').toLowerCase()==='swim')) && ga.sharableWith) {
+                            _swimGASW = ga.sharableWith; _swimGASrc = (fac.name || '?') + '→' + (ga.name || 'Swim');
+                        }
+                    });
+                });
+                const _swEff = _swimGASW || (_pf && _pf.sharableWith) || null;
+                if (_swEff) {
+                    const _st = _swEff.type || _swEff.shareType || 'all';
+                    const _cap = _st === 'not_sharable' ? 1 : (parseInt(_swEff.capacity) > 0 ? parseInt(_swEff.capacity) : (_st === 'all' ? 999 : 12));
+                    log('[STEP 1.5] Pool sharing config: type="' + _st + '" capacity=' + _cap + ' (counts BUNKS) allowedPairs=' + (Object.keys(_swEff.allowedPairs || {}).length) + ' [source=' + (_swimGASW ? ('swim-activity ' + _swimGASrc) : 'pool-field') + ']');
                 } else {
                     const _legacy = (window.globalSettings?.app1?.poolLaneCapacity);
-                    log('[STEP 1.5] Pool sharing config: NO Pool field sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
+                    log('[STEP 1.5] Pool sharing config: NO Pool field OR Swim-activity sharableWith found → default capacity=' + (typeof _legacy === 'number' && _legacy > 0 ? _legacy : 12) + ' (counts BUNKS, type="all")');
                 }
             } catch (_epc) {}
         }
@@ -2000,8 +2009,29 @@
                         const n = (f && f.name || '').toLowerCase();
                         return n === 'pool' || n.indexOf('pool') !== -1;
                     });
-                if (_poolField && _poolField.sharableWith) {
-                    const _sw = _poolField.sharableWith;
+                // ★ SWIM-ACTIVITY SHARING (v18): the user configures pool concurrency
+                //   on the "Swim" GENERAL ACTIVITY (facilities[].generalActivities[]),
+                //   not on a field named "Pool". Previously this gate read ONLY the
+                //   pool FIELD's sharableWith and, finding none, defaulted to capacity
+                //   12 — so swim failed for every bunk past the 12th concurrent even
+                //   though the Swim activity was set "shared". Resolve the Swim general
+                //   activity's sharableWith and PREFER it (it is the authoritative
+                //   intent for how many may swim at once); fall back to the Pool field.
+                var _swimGA_SW = null;
+                try {
+                    var _facsP = _gsPool.facilities || (window.globalSettings && window.globalSettings.facilities) || [];
+                    for (var _fpi = 0; _fpi < _facsP.length && !_swimGA_SW; _fpi++) {
+                        var _gasP = (_facsP[_fpi] && _facsP[_fpi].generalActivities) || [];
+                        for (var _gpi = 0; _gpi < _gasP.length; _gpi++) {
+                            var _gaP = _gasP[_gpi]; if (!_gaP) continue;
+                            var _qtP = String(_gaP.quickType || '').toLowerCase();
+                            var _gnP = String(_gaP.name || '').toLowerCase();
+                            if ((_qtP === 'swim' || _gnP === 'swim') && _gaP.sharableWith) { _swimGA_SW = _gaP.sharableWith; break; }
+                        }
+                    }
+                } catch (_eGAsw) {}
+                const _sw = _swimGA_SW || (_poolField && _poolField.sharableWith) || null;
+                if (_sw) {
                     _poolShareType = _sw.type || _sw.shareType || 'all';
                     _poolAllowedPairs = _sw.allowedPairs || {};
                     if (_poolShareType === 'not_sharable') {
@@ -3130,8 +3160,15 @@
                         var _gs = (typeof globalSettings !== 'undefined' && globalSettings) ? globalSettings : (window.globalSettings || {});
                         var _flds = (_gs.app1 && _gs.app1.fields) || _gs.fields || [];
                         var _pf = _flds.find(function (f) { var n = (f && f.name || '').toLowerCase(); return n === 'pool' || n.indexOf('pool') !== -1; });
-                        if (_pf && _pf.sharableWith) {
-                            var _sw = _pf.sharableWith;
+                        // Mirror v18: prefer the Swim general-activity sharing over the field.
+                        var _swimGAsw = null;
+                        ((_gs.facilities) || []).forEach(function (fac) {
+                            (fac && fac.generalActivities || []).forEach(function (ga) {
+                                if (!_swimGAsw && ga && ((String(ga.quickType||'').toLowerCase()==='swim') || (String(ga.name||'').toLowerCase()==='swim')) && ga.sharableWith) _swimGAsw = ga.sharableWith;
+                            });
+                        });
+                        var _sw = _swimGAsw || (_pf && _pf.sharableWith) || null;
+                        if (_sw) {
                             _poolShareType = _sw.type || _sw.shareType || 'all';
                             _poolAllowedPairs = _sw.allowedPairs || {};
                             if (_poolShareType === 'not_sharable') _poolCap = 1;
