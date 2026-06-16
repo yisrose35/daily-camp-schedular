@@ -75,11 +75,58 @@ const CHAIR_END = HM(12, 40);    // shifted 60m later (grid-aligned), same span
 const AUTO_BUNKS = ['Auto 1', 'Auto 2', 'Auto 3', 'Auto 4', 'Auto 5', 'Auto 6', 'Auto 7', 'Auto 8'];
 const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Chair 6'];
 
+// ---------------------------------------------------------------------------
+// Per-scenario camp window resolution.
+//
+// The TRUE division window (what counselors actually run, and what the gapless
+// criterion is measured against) can be OFF the 5-minute grid. Production builds
+// the internal period grid by snapping the start UP and the end DOWN to the
+// enclosing 5-min boundaries (so the grid stays clean), which historically left
+// the start/end sliver outside every period — permanently uncoverable.
+//
+// opts.offGrid shifts Auto's window edges off the 5-min grid (start 9:58, end
+// 11:42) to exercise exactly that boundary. The grade.startTime/endTime, the
+// layer windows, and the analyse()/criteria all use the TRUE edge; the period
+// grid + divisionTimes are snapped (mirroring production) via gridSnap().
+// ---------------------------------------------------------------------------
+function campConfig(opts) {
+  opts = opts || {};
+  if (opts.offGrid) {
+    // TRUE Auto window 8:58 -> 11:42. Snapping start UP to 9:00 and end DOWN to
+    // 11:40 yields EXACTLY the fair grid (8 × 20-min periods, 9:00-11:40) — so
+    // the period count, layer fit, and field capacity are IDENTICAL to the fair
+    // scenario; the ONLY difference is the 8:58-9:00 leading and 11:40-11:42
+    // trailing slivers that fall outside the snapped grid. This isolates the
+    // off-grid boundary bug without altering anything else the test exercises.
+    return {
+      autoStart: HM(8, 58),  autoEnd: HM(11, 42),   // OFF-grid edges (true window)
+      chairStart: CHAIR_START, chairEnd: CHAIR_END,  // Chair stays on-grid
+      autoStartStr: '8:58', autoEndStr: '11:42',
+    };
+  }
+  return {
+    autoStart: AUTO_START, autoEnd: AUTO_END,
+    chairStart: CHAIR_START, chairEnd: CHAIR_END,
+    autoStartStr: '9:00', autoEndStr: '11:40',
+  };
+}
+
+// Snap a true window OUTWARD-then-inward to clean 5-min period grid edges:
+// start UP to the next :05 boundary, end DOWN to the previous :05 boundary —
+// exactly what the production grid does, so the test reproduces the real sliver.
+function gridSnap(start, end) {
+  const gs = Math.ceil(start / 5) * 5;
+  const ge = Math.floor(end / 5) * 5;
+  return { gs, ge };
+}
+
 // Build a period grid (array of {startMin,endMin}) snapping to PERIOD between
-// start and end.
+// start and end. Start/end are first snapped to the 5-min grid (production
+// behaviour) so periods always begin/end on clean boundaries.
 function buildPeriods(start, end) {
+  const { gs, ge } = gridSnap(start, end);
   const out = [];
-  for (let t = start; t + PERIOD <= end; t += PERIOD) {
+  for (let t = gs; t + PERIOD <= ge; t += PERIOD) {
     out.push({ startMin: t, endMin: t + PERIOD });
   }
   return out;
@@ -145,12 +192,13 @@ function specialConfig(s) {
 //   - special layer (>=1 special)
 //   - sport layer (>=1 sport, fills the rest)
 // ---------------------------------------------------------------------------
-function buildLayers() {
+function buildLayers(cfg) {
+  cfg = cfg || campConfig({});
   const layers = [];
 
   for (const grade of ['Auto', 'Chair']) {
-    const start = grade === 'Auto' ? AUTO_START : CHAIR_START;
-    const end = grade === 'Auto' ? AUTO_END : CHAIR_END;
+    const start = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
+    const end = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const bunks = grade === 'Auto' ? AUTO_BUNKS : CHAIR_BUNKS;
 
     // CUSTOM "Main Activity" layer — same-grade-only cross sharing.
@@ -214,20 +262,23 @@ function makeEl() {
 
 function buildSandbox(opts) {
   opts = opts || {};
+  const cfg = campConfig(opts);
   const disabledFields = Array.isArray(opts.disabledFields) ? opts.disabledFields.slice() : [];
   const divisions = {
-    Auto:  { bunks: AUTO_BUNKS.slice(),  startTime: '9:00', endTime: '11:40' },
+    // TRUE division window — off-grid edges (e.g. 9:58) flow through here so the
+    // solver sees the real boundary, exactly like a real camp config.
+    Auto:  { bunks: AUTO_BUNKS.slice(),  startTime: cfg.autoStartStr, endTime: cfg.autoEndStr },
     Chair: { bunks: CHAIR_BUNKS.slice(), startTime: '10:00', endTime: '12:40' },
   };
 
   const divisionTimes = {
-    Auto:  buildDivisionTimes(AUTO_START, AUTO_END),
-    Chair: buildDivisionTimes(CHAIR_START, CHAIR_END),
+    Auto:  buildDivisionTimes(cfg.autoStart, cfg.autoEnd),
+    Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd),
   };
 
   const campPeriods = {
-    Auto:  buildPeriods(AUTO_START, AUTO_END),
-    Chair: buildPeriods(CHAIR_START, CHAIR_END),
+    Auto:  buildPeriods(cfg.autoStart, cfg.autoEnd),
+    Chair: buildPeriods(cfg.chairStart, cfg.chairEnd),
   };
 
   const sportMetaData = {};
@@ -353,7 +404,8 @@ function loadModules(sandbox) {
 // ---------------------------------------------------------------------------
 // Analyse the produced schedule.
 // ---------------------------------------------------------------------------
-function analyse(sandbox) {
+function analyse(sandbox, cfg) {
+  cfg = cfg || campConfig({});
   const sa = sandbox.scheduleAssignments || {};
   const dt = sandbox.divisionTimes || {};
   const bunkDiv = {};
@@ -369,8 +421,8 @@ function analyse(sandbox) {
   const results = {};
   for (const bunk of [...AUTO_BUNKS, ...CHAIR_BUNKS]) {
     const grade = bunkDiv[bunk];
-    const winStart = grade === 'Auto' ? AUTO_START : CHAIR_START;
-    const winEnd = grade === 'Auto' ? AUTO_END : CHAIR_END;
+    const winStart = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
+    const winEnd = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const slots = Array.isArray(sa[bunk]) ? sa[bunk] : [];
     const divSlots = dt[grade] || [];
 
@@ -456,13 +508,15 @@ function printTable(results, sandbox) {
 // Shared runner: build sandbox, run the solver, analyse, print, assert.
 // ---------------------------------------------------------------------------
 async function runScenario(label, opts) {
+  opts = opts || {};
+  const cfg = campConfig(opts);
   const sandbox = buildSandbox(opts);
   loadModules(sandbox);
 
   assert.equal(typeof sandbox.runAutoScheduler, 'function',
     'window.runAutoScheduler must be defined after loading modules');
 
-  const layers = buildLayers();
+  const layers = buildLayers(cfg);
   let ranOk;
   try {
     ranOk = await sandbox.runAutoScheduler(layers, { allowedDivisions: null });
@@ -472,7 +526,7 @@ async function runScenario(label, opts) {
     throw e;
   }
 
-  const results = analyse(sandbox);
+  const results = analyse(sandbox, cfg);
   console.error('\n===== SCENARIO: ' + label + ' =====');
   printTable(results, sandbox);
 
@@ -527,5 +581,27 @@ test('auto scheduler fills a perfect day for all 14 bunks', async (t) => {
 test('auto scheduler fills a gapless day for all 14 bunks under field starvation', async (t) => {
   await runScenario('STARVED (2 Basketball Courts disabled → 6 sport fields for 8 bunks)', {
     disabledFields: ['Basketball A', 'Basketball B'],
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 3 — OFF-GRID config: a grade's true start/end is NOT on the 5-minute
+// grid (Auto runs 8:58 → 11:42). Production snaps the internal period grid to
+// the enclosing 5-min boundaries (start UP to 9:00, end DOWN to 11:40), which
+// yields EXACTLY the fair 8-period grid — so the only difference from the fair
+// case is the leading 8:58-9:00 sliver and the trailing 11:40-11:42 sliver,
+// which fall outside every period and were historically uncoverable: a tiny
+// permanent gap that breaks the gapless criterion.
+//
+// The fix (STEP 6.87 EDGE-CLIP) extends the first scheduled block back to begin
+// at the TRUE division start (8:58) and the last block forward to end at the
+// TRUE division end (11:42), so coverage spans the real window. No one's day is
+// shortened, and on-grid divisions (Chair) are untouched (sliver == 0 → no-op).
+// The four criteria are NOT weakened — the edge slivers, being adjacent to a
+// real activity, get absorbed.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day for all 14 bunks with an off-grid division start/end', async (t) => {
+  await runScenario('OFF-GRID (Auto 8:58→11:42, grid snaps to 9:00→11:40)', {
+    offGrid: true,
   });
 });

@@ -26234,6 +26234,100 @@
             try { console.log('[SPORT-FLEX] merged=' + _flexMerged + ' absorbed=' + _flexAbsorbed); } catch (_e) {}
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.87 — OFF-GRID EDGE-CLIP (cover the TRUE division boundary)
+        // ═══════════════════════════════════════════════════════════════════
+        // When a division's true start/end is NOT on the 5-minute grid (e.g.
+        // 9:58 / 11:42), the internal period grid is snapped to the enclosing
+        // clean boundaries (start UP to 10:00, end DOWN to 11:40). Every block
+        // therefore begins/ends on the snapped grid, leaving a tiny sliver at
+        // the very start (9:58-10:00) and/or end (11:40-11:42) outside every
+        // period — permanently uncoverable, so a gapless day is impossible.
+        //
+        // Fix: clip the FIRST real block of each bunk back to begin at the TRUE
+        // (un-snapped) division start, and the LAST real block forward to end at
+        // the TRUE division end — i.e. let the activity adjacent to the boundary
+        // absorb the edge sliver. This covers the real window without shortening
+        // anyone's day; on-grid divisions (sliver == 0) are a no-op. We only ever
+        // GROW the edge block by the sliver and never bridge a real dead gap (the
+        // sliver is, by construction, contiguous with the snapped grid edge that
+        // the edge block already starts/ends on).
+        try {
+            var _ecGrade = {};
+            allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _ecGrade[String(b)] = g; }); });
+            // walls that must never be silently stretched across the boundary
+            var _EC_WALL = /^(change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free)$/i;
+            var _ecNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+            var _ecClippedStart = 0, _ecClippedEnd = 0;
+            // Per-grade TRUE window edges (un-snapped, from the division config).
+            var _ecWin = {};
+            allGrades.forEach(function (g) {
+                var div = divisions[g] || divisions[String(g)] || {};
+                var gs = parseTimeToMinutes(div.startTime);
+                var ge = parseTimeToMinutes(div.endTime);
+                _ecWin[g] = { gs: (gs != null ? gs : null), ge: (ge != null ? ge : null) };
+            });
+            Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                var slots = window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots) || !slots.length) return;
+                var g = _ecGrade[String(bunk)];
+                if (!g) return;
+                var win = _ecWin[g];
+                if (!win || win.gs == null || win.ge == null) return;
+                // A block is "edge-clippable" if it's a real placed block (has a
+                // start/end and is not a Free placeholder / wall). It may be a sport,
+                // special, custom, rotation event, etc. — anything real that already
+                // butts up against the snapped grid edge.
+                var _ecReal = function (s) {
+                    if (!s || s.continuation) return false;
+                    if (s._startMin == null || s._endMin == null) return false;
+                    if (_ecNorm(s.field) === 'free') return false;
+                    if (s._intentionalFree || s._source === 'bunk-delete-override') return false;
+                    if (_EC_WALL.test(_ecNorm(s._activity))) return false;
+                    return true;
+                };
+                // (1) LEADING sliver: find the earliest real block; if it starts
+                //     after the true window start by a small sliver, grow it back.
+                var firstIdx = -1, firstStart = Infinity;
+                for (var i = 0; i < slots.length; i++) {
+                    if (!_ecReal(slots[i])) continue;
+                    if (slots[i]._startMin < firstStart) { firstStart = slots[i]._startMin; firstIdx = i; }
+                }
+                if (firstIdx >= 0) {
+                    var lead = firstStart - win.gs;
+                    // only an off-grid sliver (< one 5-min cell short of a period) —
+                    // never a real mid-morning gap.
+                    if (lead > 0 && lead < 5) {
+                        slots[firstIdx]._startMin = win.gs;
+                        _ecClippedStart++;
+                    }
+                }
+                // (2) TRAILING sliver: find the latest real block; if it ends before
+                //     the true window end by a small sliver, grow it forward. Walk to
+                //     the block's true tail (cover its continuations).
+                var lastIdx = -1, lastEnd = -Infinity;
+                for (var j = 0; j < slots.length; j++) {
+                    if (!_ecReal(slots[j])) continue;
+                    // tail end including continuations
+                    var t = j; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++;
+                    var te = (slots[t] && slots[t]._endMin != null) ? slots[t]._endMin : slots[j]._endMin;
+                    if (te > lastEnd) { lastEnd = te; lastIdx = t; }
+                }
+                if (lastIdx >= 0) {
+                    var trail = win.ge - lastEnd;
+                    if (trail > 0 && trail < 5) {
+                        slots[lastIdx]._endMin = win.ge;
+                        _ecClippedEnd++;
+                    }
+                }
+            });
+            if (_ecClippedStart > 0 || _ecClippedEnd > 0) {
+                log('  📐 [STEP 6.87 EDGE-CLIP] extended ' + _ecClippedStart + ' leading + ' + _ecClippedEnd +
+                    ' trailing edge block(s) to cover the off-grid division boundary.');
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+            }
+        } catch (_e687) { try { warn('[STEP 6.87 EDGE-CLIP] error: ' + (_e687 && _e687.message)); } catch (_x) {} }
+
         // ★ STEP 6.9 — AUTHORITATIVE ROTATION COUNT (relocated from STEP 5). Runs AFTER every
         //   post-complete pass mutated window.scheduleAssignments, so rotation counts reflect
         //   the ACTUAL final schedule — not the pre-pass grid the solver "intended". Refreshes
