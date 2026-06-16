@@ -91,6 +91,34 @@ const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Cha
 // ---------------------------------------------------------------------------
 function campConfig(opts) {
   opts = opts || {};
+  if (opts.sliver) {
+    // SLIVER-BAND scenario — faithful reproduction of the user's live regen bug.
+    //
+    // The day runs 9:00 -> 12:30 on an explicit mixed-size period grid (see
+    // buildSandbox's sliverPeriods):
+    //   - a 60-min off-field special band period (9:00-10:00) that must hold a
+    //     45-min special — leaving a 15-min sub-floor remainder (< the 25-min
+    //     sport floor) that NOTHING can fill on its own;
+    //   - a 20-min "Main Activity" wall period immediately after (10:00-10:20);
+    //   - 45/40-min afternoon periods that hold the sports.
+    // So the 15-min remainder is wedged between the 45-min special (a pinned wall)
+    // and the Main-Activity wall (immune) — neither neighbour is a flexible sport,
+    // so STEP 6.86 SPORT-FLEX cannot absorb it ("no extendable-neighbour gaps to
+    // close") and it survives as the exact REBAL-STUCK / REAL-GAP the user saw:
+    //   prev=[special/Lake 45min pinned]  gap 15min  next=[custom/Main Activity wall].
+    //
+    // Because special(45) + a fillable sport(25) = 70 > the 60-min band, NO flush
+    // placement can avoid the sliver here — it MUST be absorbed (last-resort fix:
+    // stretch the bounding special over the sliver). Both grades (8 Auto + 6 Chair)
+    // run on the SAME grid so the same-grade-staggered Auditorium Main Activity must
+    // take its own lane during the overlap (the cross-grade-restricted case).
+    return {
+      autoStart: HM(9, 0),  autoEnd: HM(12, 30),
+      chairStart: HM(9, 0), chairEnd: HM(12, 30),
+      autoStartStr: '9:00', autoEndStr: '12:30',
+      sliver: true,
+    };
+  }
   if (opts.offGrid) {
     // TRUE Auto window 8:58 -> 11:42. Snapping start UP to 9:00 and end DOWN to
     // 11:40 yields EXACTLY the fair grid (8 × 20-min periods, 9:00-11:40) — so
@@ -123,19 +151,20 @@ function gridSnap(start, end) {
 // Build a period grid (array of {startMin,endMin}) snapping to PERIOD between
 // start and end. Start/end are first snapped to the 5-min grid (production
 // behaviour) so periods always begin/end on clean boundaries.
-function buildPeriods(start, end) {
+function buildPeriods(start, end, period) {
+  const P = period || PERIOD;
   const { gs, ge } = gridSnap(start, end);
   const out = [];
-  for (let t = gs; t + PERIOD <= ge; t += PERIOD) {
-    out.push({ startMin: t, endMin: t + PERIOD });
+  for (let t = gs; t + P <= ge; t += P) {
+    out.push({ startMin: t, endMin: t + P });
   }
   return out;
 }
 
 // divisionTimes slots carry slotIndex + a default event/type the solver treats
 // as an open slot.
-function buildDivisionTimes(start, end) {
-  return buildPeriods(start, end).map((p, i) => ({
+function buildDivisionTimes(start, end, period) {
+  return buildPeriods(start, end, period).map((p, i) => ({
     slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
   }));
 }
@@ -171,13 +200,14 @@ const SPECIALS = [
 
 // Special activity config objects (globalSettings.app1.specialActivities).
 // Each is sharable enough not to starve, ~20 min, available all days.
-function specialConfig(s) {
+function specialConfig(s, specialDur) {
+  const dur = specialDur || PERIOD;
   return {
     name: s.name,
     location: s.location,
     type: 'Special',
-    duration: PERIOD,
-    durationMin: PERIOD,
+    duration: dur,
+    durationMin: dur,
     sharableWith: { type: 'cross_division', divisions: [], capacity: 20,
       allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
     // available every day, all hours
@@ -194,12 +224,31 @@ function specialConfig(s) {
 // ---------------------------------------------------------------------------
 function buildLayers(cfg) {
   cfg = cfg || campConfig({});
+  // In the sliver scenario the band geometry depends on a 20-min Main Activity
+  // wall and 45-min specials on a 5-min grid; elsewhere everything is 20-min.
+  const mainDur = cfg.sliver ? 20 : PERIOD;
+  const specialDur = cfg.sliver ? 45 : PERIOD;
+  const sportMin = cfg.sliver ? 25 : PERIOD;
+  // The 45-min special is confined to the 60-min off-field band (9:00-10:00),
+  // leaving a 15-min sub-floor sliver in the band. The 20-min Main Activity wall
+  // is confined to the very next period (10:00-10:20). So the band sliver is
+  // bounded by the special (a pinned wall) on the left and the Main Activity
+  // (a wall) on the right — neither neighbour is a flexible sport, so STEP 6.86
+  // cannot absorb it: the exact REBAL-STUCK / REAL-GAP the user reported.
+  const bandStart = cfg.sliver ? HM(9, 0) : null;
+  const bandEnd = cfg.sliver ? HM(10, 0) : null;
+  const mainWallStart = cfg.sliver ? HM(10, 0) : null;
+  const mainWallEnd = cfg.sliver ? HM(10, 20) : null;
   const layers = [];
 
   for (const grade of ['Auto', 'Chair']) {
     const start = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
     const end = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const bunks = grade === 'Auto' ? AUTO_BUNKS : CHAIR_BUNKS;
+    const mainStart = cfg.sliver ? mainWallStart : start;
+    const mainEnd = cfg.sliver ? mainWallEnd : end;
+    const specStart = cfg.sliver ? bandStart : start;
+    const specEnd = cfg.sliver ? bandEnd : end;
 
     // CUSTOM "Main Activity" layer — same-grade-only cross sharing.
     layers.push({
@@ -209,11 +258,11 @@ function buildLayers(cfg) {
       customActivity: 'Main Activity',
       customField: 'Auditorium',
       customBunks: bunks.slice(),
-      periodMin: PERIOD,
-      durationMin: PERIOD,
-      durationMax: PERIOD,
-      startMin: start,
-      endMin: end,           // window = whole day; solver places one 20m block
+      periodMin: mainDur,
+      durationMin: mainDur,
+      durationMax: mainDur,
+      startMin: mainStart,
+      endMin: mainEnd,       // sliver: confined to the band; else whole day
       qty: 1, op: '=',
       customSharing: {
         capacity: 20,
@@ -223,18 +272,21 @@ function buildLayers(cfg) {
       color: '#7C3AED',
     });
 
-    // SPECIAL layer — at least 1 special.
+    // SPECIAL layer — at least 1 special. In the sliver scenario, EXACTLY one
+    // 45-min special per bunk confined to the 60-min band (9:00-10:00), so it
+    // leaves a 15-min sub-floor remainder bounded by the next period's
+    // Main-Activity wall — the wall-bounded sliver bug.
     layers.push({
       grade, type: 'special', name: 'Special',
-      periodMin: PERIOD, durationMin: PERIOD,
-      startMin: start, endMin: end,
-      qty: 1, op: '>=',
+      periodMin: specialDur, durationMin: specialDur,
+      startMin: specStart, endMin: specEnd,
+      qty: 1, op: cfg.sliver ? '=' : '>=',
     });
 
     // SPORT layer — at least 1 sport; cap unbounded so it fills remaining slots.
     layers.push({
       grade, type: 'sport', name: 'Sports',
-      periodMin: PERIOD, durationMin: PERIOD,
+      periodMin: sportMin, durationMin: sportMin,
       startMin: start, endMin: end,
       qty: 1, op: '>=',
     });
@@ -264,33 +316,85 @@ function buildSandbox(opts) {
   opts = opts || {};
   const cfg = campConfig(opts);
   const disabledFields = Array.isArray(opts.disabledFields) ? opts.disabledFields.slice() : [];
+  // Period granularity: 5-min grid for the sliver scenario (so a 45-min special
+  // can float mid-band and orphan a 20-min sub-floor sliver), 20-min elsewhere.
+  const period = cfg.sliver ? 5 : PERIOD;
+  // Special duration: 45-min specials in the sliver scenario, else one period.
+  const specialDur = cfg.sliver ? 45 : PERIOD;
+  const chairStartStr = cfg.sliver ? '9:00' : '10:00';
+  const chairEndStr = cfg.sliver ? '12:30' : '12:40';
   const divisions = {
     // TRUE division window — off-grid edges (e.g. 9:58) flow through here so the
     // solver sees the real boundary, exactly like a real camp config.
     Auto:  { bunks: AUTO_BUNKS.slice(),  startTime: cfg.autoStartStr, endTime: cfg.autoEndStr },
-    Chair: { bunks: CHAIR_BUNKS.slice(), startTime: '10:00', endTime: '12:40' },
+    Chair: { bunks: CHAIR_BUNKS.slice(), startTime: chairStartStr, endTime: chairEndStr },
   };
 
-  const divisionTimes = {
-    Auto:  buildDivisionTimes(cfg.autoStart, cfg.autoEnd),
-    Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd),
+  // SLIVER scenario uses an EXPLICIT mixed-size period grid (not a uniform one):
+  //   - a 60-min off-field special "band" period (9:00-10:00) that holds a 45-min
+  //     special and leaves a 15-min sub-floor remainder (the sliver)
+  //   - a 20-min Main-Activity wall period immediately after (10:00-10:20) so the
+  //     sliver is wall-bounded on BOTH sides (special | sliver | Main-Activity)
+  //   - 45/40-min afternoon periods so 25-min sports tile cleanly (a uniform 5-min
+  //     grid can't assemble 25-min sports and leaves spurious 5/15-min Frees)
+  // Both grades share the structure so the same-grade-staggered Auditorium Main
+  // Activity must take its own lane during the overlap (the exact failing case).
+  const sliverPeriods = () => ([
+    { startMin: HM(9, 0),  endMin: HM(10, 0) },  // 60-min off-field special band (45 special → 15-min sliver)
+    { startMin: HM(10, 0), endMin: HM(10, 20) }, // 20-min Main Activity wall period
+    { startMin: HM(10, 20), endMin: HM(11, 5) }, // 45 sport
+    { startMin: HM(11, 5), endMin: HM(11, 50) }, // 45 sport
+    { startMin: HM(11, 50), endMin: HM(12, 30) }, // 40 sport
+  ]);
+  const sliverDivTimes = () => sliverPeriods().map((p, i) => ({
+    slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
+  }));
+
+  const divisionTimes = cfg.sliver ? {
+    Auto:  sliverDivTimes(),
+    Chair: sliverDivTimes(),
+  } : {
+    Auto:  buildDivisionTimes(cfg.autoStart, cfg.autoEnd, period),
+    Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd, period),
   };
 
-  const campPeriods = {
-    Auto:  buildPeriods(cfg.autoStart, cfg.autoEnd),
-    Chair: buildPeriods(cfg.chairStart, cfg.chairEnd),
+  const campPeriods = cfg.sliver ? {
+    Auto:  sliverPeriods(),
+    Chair: sliverPeriods(),
+  } : {
+    Auto:  buildPeriods(cfg.autoStart, cfg.autoEnd, period),
+    Chair: buildPeriods(cfg.chairStart, cfg.chairEnd, period),
   };
+
+  // In the sliver scenario BOTH grades (8 Auto + 6 Chair = 14 bunks) run on the
+  // SAME period grid, so all 14 want a sport simultaneously in the afternoon
+  // periods. The base 8 fields would starve 6 bunks (an unrelated capacity
+  // failure). Provision extra fields/sports so capacity matches the 14-bunk
+  // simultaneous demand — isolating the sliver bug from field starvation.
+  const sportList = cfg.sliver
+    ? SPORTS.concat(['Tennis', 'Dodgeball', 'Kickball', 'Frisbee', 'Lacrosse', 'Handball'])
+    : SPORTS.slice();
+  const fieldList = cfg.sliver
+    ? FIELDS.concat([
+        { name: 'Tennis Court',    activities: ['Tennis'] },
+        { name: 'Dodgeball Gym',   activities: ['Dodgeball'] },
+        { name: 'Kickball Field',  activities: ['Kickball'] },
+        { name: 'Frisbee Field',   activities: ['Frisbee'] },
+        { name: 'Lacrosse Field',  activities: ['Lacrosse'] },
+        { name: 'Handball Wall',   activities: ['Handball'] },
+      ])
+    : FIELDS.slice();
 
   const sportMetaData = {};
-  SPORTS.forEach(s => { sportMetaData[s] = { minPlayers: 1, maxPlayers: 99 }; });
+  sportList.forEach(s => { sportMetaData[s] = { minPlayers: 1, maxPlayers: 99 }; });
 
   const activityProperties = {};
-  SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s); });
+  SPECIALS.forEach(s => { activityProperties[s.name] = specialConfig(s, specialDur); });
 
   const globalSettings = {
     app1: {
-      fields: FIELDS.slice(),
-      specialActivities: SPECIALS.map(specialConfig),
+      fields: fieldList.slice(),
+      specialActivities: SPECIALS.map(s => specialConfig(s, specialDur)),
       sportMetaData,
       disabledFields,
       divisions,
@@ -373,11 +477,11 @@ function buildSandbox(opts) {
   sandbox.loadCurrentDailyData = () => ({});
   sandbox.loadAllDailyData = () => ({});
   sandbox.getDivisions = () => divisions;
-  sandbox.getAllGlobalSports = () => SPORTS.slice().sort();
+  sandbox.getAllGlobalSports = () => sportList.slice().sort();
   sandbox.getSportMetaData = () => sportMetaData;
   sandbox.getBunkMetaData = () => bunkMetaData;
-  sandbox.getGlobalSpecialActivities = () => SPECIALS.map(specialConfig);
-  sandbox.getAllSpecialActivities = () => SPECIALS.map(specialConfig);
+  sandbox.getGlobalSpecialActivities = () => SPECIALS.map(s => specialConfig(s, specialDur));
+  sandbox.getAllSpecialActivities = () => SPECIALS.map(s => specialConfig(s, specialDur));
   sandbox.getFacilities = () => [];
 
   vm.createContext(sandbox);
@@ -412,7 +516,10 @@ function analyse(sandbox, cfg) {
   Object.entries(sandbox.divisions).forEach(([div, d]) => (d.bunks || []).forEach(b => { bunkDiv[String(b)] = div; }));
 
   const specialNames = new Set(SPECIALS.map(s => s.name.toLowerCase()));
-  const sportNames = new Set(SPORTS.map(s => s.toLowerCase()));
+  // Sport names come from the sandbox's live sportMetaData (the sliver scenario
+  // provisions extra sports/fields to match its 14-bunk simultaneous demand).
+  const sportNames = new Set(Object.keys(sandbox.sportMetaData || {}).map(s => s.toLowerCase()));
+  SPORTS.forEach(s => sportNames.add(s.toLowerCase()));
   const isFree = (name) => {
     const a = String(name || '').toLowerCase().trim();
     return !a || a === 'free' || a === 'free play' || a.startsWith('free ');
@@ -530,6 +637,11 @@ async function runScenario(label, opts) {
   console.error('\n===== SCENARIO: ' + label + ' =====');
   printTable(results, sandbox);
 
+  if (process.env.DUMPLOG) {
+    const pat = new RegExp(process.env.DUMPLOG, 'i');
+    (sandbox.__logs || []).forEach(l => { if (pat.test(l)) console.error('LOG: ' + l); });
+  }
+
   if (process.env.DUMP) {
     for (const bunk of [...AUTO_BUNKS, ...CHAIR_BUNKS]) {
       console.error(`\nRAW ENTRIES — ${bunk}:`);
@@ -603,5 +715,44 @@ test('auto scheduler fills a gapless day for all 14 bunks under field starvation
 test('auto scheduler fills a gapless day for all 14 bunks with an off-grid division start/end', async (t) => {
   await runScenario('OFF-GRID (Auto 8:58→11:42, grid snaps to 9:00→11:40)', {
     offGrid: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 4 — SLIVER-BAND config: the user's live regen bug that NONE of the
+// first three scenarios reproduce.
+//
+// Mixed-size period grid (see campConfig({sliver}) / buildSandbox sliverPeriods):
+// a 60-min off-field special band period (9:00-10:00) holds one 45-min special,
+// a 20-min Main-Activity wall period follows (10:00-10:20), then 45/40-min sport
+// periods to 12:30. Both grades (8 Auto + 6 Chair = 14 bunks) run the same grid,
+// with extra fields provisioned so the 14-bunk simultaneous sport demand never
+// starves (isolating the sliver bug from field capacity).
+//
+// THE BUG: the 45-min special tiles the band flush at 9:00-9:45, leaving a 15-min
+// remainder (9:45-10:00). 15 < the 25-min sport floor, so it can't host its own
+// activity; and it is wedged between the special (a pinned wall) and the next
+// period's Main-Activity wall (immune). Neither neighbour is a flexible sport, so
+// STEP 6.86 SPORT-FLEX reports "no extendable-neighbour gaps to close" and the
+// 15-min remainder survives as a [REAL-GAP] — exactly the user's REBAL-STUCK case
+//   prev=[special/Lake 45min pinned]  next=[custom/Main Activity 20min pinned].
+// special(45) + a fillable sport(25) = 70 > 60-min band, so NO flush placement
+// can avoid the sliver — it MUST be absorbed.
+//
+// THE FIX:
+//   (a) PRIMARY (Phase 2.5 FLUSH-CONSOLIDATION): when a band IS wide enough,
+//       place the special flush against a wall so the leftover consolidates into
+//       one >= floor chunk instead of floating mid-band and orphaning a sliver on
+//       each side (prevents the user's live mid-band float).
+//   (b) LAST RESORT (STEP 6.865 WALL-BOUNDED SLIVER-ABSORB): when a sub-floor
+//       sliver bounded by walls still remains, stretch a bounding block over it —
+//       prefer an adjacent flexible sport; if both neighbours are walls, stretch
+//       the bounding SPECIAL (a slightly longer special beats a Free hole). Gated
+//       by isFieldAvailable + _validateWritePlacement + coveredByContiguousPeriods.
+// The four criteria are NOT weakened.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day with a sub-floor sliver band (flush-placement bug)', async (t) => {
+  await runScenario('SLIVER-BAND (45-min special in a 60-min band + 20-min Main Activity wall, mixed-size periods)', {
+    sliver: true,
   });
 });

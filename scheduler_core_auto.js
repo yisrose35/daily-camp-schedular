@@ -16880,6 +16880,33 @@
                                 if (leftGap === 0 || rightGap === 0) score += 100;
                                 if (leftGap === 0 && rightGap === 0) score += 50; // perfect fit
 
+                                // ★ FLUSH-CONSOLIDATION (anti-orphan PRIMARY).
+                                //   The leftover inside THIS gap should consolidate into a
+                                //   SINGLE contiguous chunk flush against a wall, not split
+                                //   into a sliver on each side. A later wall (e.g. the Phase
+                                //   2.6 Main-Activity stagger, not yet placed) will land in
+                                //   that leftover; if the special floated mid-gap and left a
+                                //   sliver < the sport floor on the OTHER side, that sliver is
+                                //   wall-bounded and unfillable (the REBAL-STUCK bug). So:
+                                //   - heavily reward placing the special flush against the gap
+                                //     start OR end (leftover is one contiguous chunk), and
+                                //   - penalize floating mid-gap (a non-zero gap on BOTH sides),
+                                //     scaled up when the SMALLER side is below the sport floor
+                                //     (an immediate orphan) — bounded so it never overrides the
+                                //     -2500 dead-gap or capacity/reservation gates.
+                                if (leftGap > 0 && rightGap > 0) {
+                                    // mid-gap float: leftover is fragmented into two pieces
+                                    var _minSide = Math.min(leftGap, rightGap);
+                                    score -= 120;                         // prefer flush over floating
+                                    if (_minSide < sportFillMin) score -= 200; // an orphaned sliver already
+                                } else {
+                                    // flush placement → one contiguous leftover chunk: reward it,
+                                    // and prefer the side that leaves the LARGER fillable chunk.
+                                    score += 120;
+                                    var _chunk = Math.max(leftGap, rightGap);
+                                    if (_chunk >= sportFillMin) score += 30;
+                                }
+
                                 // ★ Day 22.5: Time-density penalty.
                                 //   When many specials cluster at the same time, they
                                 //   collectively saturate field availability — leaving
@@ -26233,6 +26260,178 @@
             }
             try { console.log('[SPORT-FLEX] merged=' + _flexMerged + ' absorbed=' + _flexAbsorbed); } catch (_e) {}
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.865 — WALL-BOUNDED SLIVER ABSORB (last-resort gap closer)
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.86 closes Free gaps that have an EXTENDABLE SPORT neighbour. But
+        // a sub-floor sliver can be wedged between two WALLS — e.g. a 45-min
+        // special pinned in a 60-min band leaves a 15-min remainder bounded by
+        // the special on one side and a Main-Activity / lunch wall (or the band /
+        // next-period edge) on the other. No sport is adjacent, so 6.86 reports
+        // "no extendable-neighbour gaps to close" and the sliver stays a [REAL-GAP]
+        // — exactly the user's REBAL-STUCK case
+        //   ( prev=[special/Lake 45min pinned]  next=[custom/Main Activity 20min pinned] ).
+        //
+        // A sliver below the sport floor can NEVER be filled by its own activity
+        // (makeBlock rejects sub-dMin slots), so the only gapless outcome is to
+        // ABSORB it into a bounding block. Preference order, mirroring the task's
+        // "stretch an adjacent flexible SPORT first; if both neighbours are walls,
+        // stretch the bounding SPECIAL (a slightly longer special beats a Free
+        // hole)":
+        //   (1) extend an adjacent flexible SPORT over the sliver (covers implicit
+        //       slot-less gaps 6.86's Free-slot scan can miss), else
+        //   (2) extend the bounding SPECIAL over the sliver (its room must be free
+        //       across the extra minutes; Main-Activity / swim / lunch / league /
+        //       trip walls are NEVER stretched — they are immune).
+        // SAFE-ONLY: same gate as 6.86 — isFieldAvailable + _validateWritePlacement
+        // + coveredByContiguousPeriods, growth bounded to EXACTLY the sliver.
+        try {
+            var _sabDt = window.divisionTimes || {};
+            var _sabGrade = {};
+            allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _sabGrade[String(b)] = g; }); });
+            var _sabNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+            // Walls that must NEVER be stretched (immune). Specials are NOT here —
+            // a special may legally grow to swallow a sliver (last resort).
+            var _SAB_IMMUNE = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|league game|specialty league|chinuch|trip)$/i;
+            // Per-grade sport floor: the smallest fillable block. A gap below this
+            // can't host its own activity and must be absorbed.
+            var _sabFloor = function (g, bunk) {
+                var sl = (typeof shoppingLists !== 'undefined') ? shoppingLists[bunk] : null;
+                var d = (sl && sl.sports && sl.sports.constraints && sl.sports.constraints.dMin) || 25;
+                return Math.max(d, (TYPE_FLOORS && TYPE_FLOORS.sport) || 25);
+            };
+            var _sabReal = function (s) {
+                return s && !s.continuation && s._startMin != null && s._endMin != null &&
+                    _sabNorm(s.field) !== 'free' && !s._intentionalFree &&
+                    s._source !== 'bunk-delete-override' && s._endMin > s._startMin;
+            };
+            // A block is a flexible sport (extendable) — same predicate spirit as 6.86.
+            var _sabSportElig = function (M) {
+                return M && M.field && _sabNorm(M.field) !== 'free' && M.sport &&
+                    !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch ||
+                      M._isPrep || M._autoSpecial || M._isRotationEvent || M._staggerReserved ||
+                      M._intentionalFree) &&
+                    !_SAB_IMMUNE.test(_sabNorm(M._activity));
+            };
+            // A block is a stretchable SPECIAL (last resort). Specials carry
+            // _autoSpecial / _isSpecialLocation / type 'special'.
+            var _sabSpecialElig = function (M) {
+                if (!M) return false;
+                var t = _sabNorm(M.type);
+                var isSpecial = (t === 'special') || M._autoSpecial || M._isSpecialLocation ||
+                    M._assignedSpecial || M._specialLocation;
+                if (!isSpecial) return false;
+                // Never stretch an immune-named block even if mis-flagged as special.
+                if (_SAB_IMMUNE.test(_sabNorm(M._activity))) return false;
+                return !!(M.field && _sabNorm(M.field) !== 'free');
+            };
+            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0;
+            Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                var slots = window.scheduleAssignments[bunk];
+                if (!Array.isArray(slots)) return;
+                var g = _sabGrade[String(bunk)];
+                if (!g) return;
+                var floor = _sabFloor(g, bunk);
+                // _headOf walks back over continuations to the owning block head.
+                var _headOf = function (j) { var h = j; while (h > 0 && slots[h] && slots[h].continuation === true) h--; return h; };
+                // tail of the block that head index h belongs to
+                var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
+
+                // Build the ordered list of real block HEADS with their span.
+                var heads = [];
+                for (var i = 0; i < slots.length; i++) {
+                    if (!_sabReal(slots[i])) continue;
+                    if (_headOf(i) !== i) continue; // only heads
+                    var tail = _tailOf(i);
+                    heads.push({ head: i, tail: tail, s: slots[i]._startMin, e: slots[tail]._endMin });
+                }
+                heads.sort(function (a, b) { return a.s - b.s; });
+
+                // For each adjacent pair of real blocks, find an uncovered sliver
+                // between them (prev.e .. next.s). If it's sub-floor, absorb it.
+                for (var hi = 0; hi + 1 < heads.length; hi++) {
+                    var L = heads[hi], R = heads[hi + 1];
+                    var gapS = L.e, gapE = R.s;
+                    if (gapE <= gapS) continue;               // no gap / overlap
+                    var gapDur = gapE - gapS;
+                    if (gapDur >= floor) continue;            // fillable on its own → not our job
+                    // Don't bridge a real inter-period dead zone (lunch break etc.).
+                    if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(gapS, gapE, g)) continue;
+
+                    var Lh = slots[L.head], Rh = slots[R.head];
+                    // (1) Prefer extending a flexible SPORT neighbour over the sliver.
+                    //     Try the LEFT block forward first, then the RIGHT block back.
+                    var done = false;
+                    if (_sabSportElig(Lh)) {
+                        var actL = Lh._activity || Lh.sport;
+                        if ((typeof isFieldAvailable !== 'function' || isFieldAvailable(Lh.field, gapS, gapE, bunk, g, Lh.sport || actL)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(Lh.field, actL, g, bunk, gapS, gapE) === null)) {
+                            Lh._endMin = gapE;
+                            // flip the sliver to a continuation of L (insert if no slot exists)
+                            for (var ks = L.tail + 1; ks <= R.head - 1; ks++) {
+                                slots[ks] = { field: Lh.field, sport: (Lh.sport != null ? Lh.sport : null), _activity: actL,
+                                    continuation: true, _startMin: slots[ks] ? slots[ks]._startMin : gapS, _endMin: slots[ks] ? slots[ks]._endMin : gapE,
+                                    _autoMode: true, _sliverAbsorbed: true };
+                            }
+                            try { if (typeof claimField === 'function') claimField(Lh.field, gapS, gapE, bunk, g, actL); } catch (_e) {}
+                            _sabAbsorbed++; _sabBySport++; done = true;
+                        }
+                    }
+                    if (!done && _sabSportElig(Rh)) {
+                        var actR = Rh._activity || Rh.sport;
+                        if ((typeof isFieldAvailable !== 'function' || isFieldAvailable(Rh.field, gapS, gapE, bunk, g, Rh.sport || actR)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(Rh.field, actR, g, bunk, gapS, gapE) === null)) {
+                            Rh._startMin = gapS;
+                            _sabAbsorbed++; _sabBySport++; done = true;
+                        }
+                    }
+                    if (done) continue;
+
+                    // (2) Both neighbours are walls (or non-stretchable). Stretch the
+                    //     bounding SPECIAL over the sliver — a slightly longer special
+                    //     beats a Free hole. Try LEFT special forward, then RIGHT back.
+                    if (_sabSpecialElig(Lh)) {
+                        var sActL = Lh._activity || Lh.event;
+                        var sFieldL = Lh.field || Lh._specialLocation;
+                        if (sFieldL && _sabNorm(sFieldL) !== 'free' &&
+                            (typeof isFieldAvailable !== 'function' || isFieldAvailable(sFieldL, gapS, gapE, bunk, g, sActL)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(sFieldL, sActL, g, bunk, gapS, gapE) === null)) {
+                            Lh._endMin = gapE;
+                            if (Lh._specialDuration != null) Lh._specialDuration = Lh._endMin - Lh._startMin;
+                            for (var kss = L.tail + 1; kss <= R.head - 1; kss++) {
+                                slots[kss] = { field: Lh.field, _activity: sActL, type: Lh.type,
+                                    continuation: true, _startMin: slots[kss] ? slots[kss]._startMin : gapS, _endMin: slots[kss] ? slots[kss]._endMin : gapE,
+                                    _autoMode: true, _sliverAbsorbed: true, _specialLocation: Lh._specialLocation };
+                            }
+                            try { if (typeof claimField === 'function') claimField(sFieldL, gapS, gapE, bunk, g, sActL); } catch (_e) {}
+                            _sabAbsorbed++; _sabBySpecial++; continue;
+                        }
+                    }
+                    if (_sabSpecialElig(Rh)) {
+                        var sActR = Rh._activity || Rh.event;
+                        var sFieldR = Rh.field || Rh._specialLocation;
+                        if (sFieldR && _sabNorm(sFieldR) !== 'free' &&
+                            (typeof isFieldAvailable !== 'function' || isFieldAvailable(sFieldR, gapS, gapE, bunk, g, sActR)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(sFieldR, sActR, g, bunk, gapS, gapE) === null)) {
+                            Rh._startMin = gapS;
+                            if (Rh._specialDuration != null) Rh._specialDuration = Rh._endMin - Rh._startMin;
+                            try { if (typeof claimField === 'function') claimField(sFieldR, gapS, gapE, bunk, g, sActR); } catch (_e) {}
+                            _sabAbsorbed++; _sabBySpecial++; continue;
+                        }
+                    }
+                    // No stretchable bounding block → leave Free (true impossibility).
+                }
+            });
+            if (_sabAbsorbed > 0) {
+                log('  🩹 [STEP 6.865 SLIVER-ABSORB] absorbed ' + _sabAbsorbed + ' wall-bounded sub-floor sliver(s) (' +
+                    _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special).');
+                try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+            } else {
+                log('[STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.');
+            }
+            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial); } catch (_e) {}
+        } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.87 — OFF-GRID EDGE-CLIP (cover the TRUE division boundary)
