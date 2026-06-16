@@ -212,7 +212,9 @@ function makeEl() {
   return el;
 }
 
-function buildSandbox() {
+function buildSandbox(opts) {
+  opts = opts || {};
+  const disabledFields = Array.isArray(opts.disabledFields) ? opts.disabledFields.slice() : [];
   const divisions = {
     Auto:  { bunks: AUTO_BUNKS.slice(),  startTime: '9:00', endTime: '11:40' },
     Chair: { bunks: CHAIR_BUNKS.slice(), startTime: '10:00', endTime: '12:40' },
@@ -239,7 +241,7 @@ function buildSandbox() {
       fields: FIELDS.slice(),
       specialActivities: SPECIALS.map(specialConfig),
       sportMetaData,
-      disabledFields: [],
+      disabledFields,
       divisions,
     },
     campPeriods,
@@ -451,10 +453,10 @@ function printTable(results, sandbox) {
 }
 
 // ---------------------------------------------------------------------------
-// THE TEST
+// Shared runner: build sandbox, run the solver, analyse, print, assert.
 // ---------------------------------------------------------------------------
-test('auto scheduler fills a perfect day for all 14 bunks', async (t) => {
-  const sandbox = buildSandbox();
+async function runScenario(label, opts) {
+  const sandbox = buildSandbox(opts);
   loadModules(sandbox);
 
   assert.equal(typeof sandbox.runAutoScheduler, 'function',
@@ -466,16 +468,16 @@ test('auto scheduler fills a perfect day for all 14 bunks', async (t) => {
     ranOk = await sandbox.runAutoScheduler(layers, { allowedDivisions: null });
   } catch (e) {
     console.error('runAutoScheduler threw:', e && e.stack || e);
-    // Dump a tail of logs to help diagnose.
     console.error((sandbox.__logs || []).slice(-40).join('\n'));
     throw e;
   }
 
   const results = analyse(sandbox);
+  console.error('\n===== SCENARIO: ' + label + ' =====');
   printTable(results, sandbox);
 
   if (process.env.DUMP) {
-    for (const bunk of ['Auto 8', 'Chair 1']) {
+    for (const bunk of [...AUTO_BUNKS, ...CHAIR_BUNKS]) {
       console.error(`\nRAW ENTRIES — ${bunk}:`);
       (sandbox.scheduleAssignments[bunk] || []).forEach((s, i) => {
         if (!s) { console.error(`  [${i}] <null>`); return; }
@@ -494,5 +496,36 @@ test('auto scheduler fills a perfect day for all 14 bunks', async (t) => {
     if (!r.pass.sport)   failures.push(`${bunk}: sport count = ${r.sportCount} (want >=1)`);
     if (!r.pass.nogap)   failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   }
-  assert.deepEqual(failures, [], 'per-bunk criteria failures:\n  ' + failures.join('\n  '));
+  assert.deepEqual(failures, [], '[' + label + '] per-bunk criteria failures:\n  ' + failures.join('\n  '));
+}
+
+// ---------------------------------------------------------------------------
+// TEST 1 — FAIR config (fields >= largest grade's bunk count). Achievable
+// perfect day with no field starvation.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a perfect day for all 14 bunks', async (t) => {
+  await runScenario('FAIR (8 sport fields, no starvation)', {});
+});
+
+// ---------------------------------------------------------------------------
+// TEST 2 — STARVED config: the user's REAL situation. They disabled their two
+// Basketball Courts, so sport-field capacity is SHORT relative to demand.
+//
+// Auto grade has 8 bunks; because they all share the same Main-Activity +
+// special bands, their sport slots land in the SAME two periods — all 8 need a
+// sport field SIMULTANEOUSLY. We disable "Basketball A" + "Basketball B"
+// (mirroring the disabled-courts reality), leaving only 6 sport fields for the
+// 8 simultaneous Auto demands. With Basketball removed there are also only 5
+// distinct sports left.
+//
+// The point: even though 2 bunks per sport band physically CANNOT claim their
+// own field, the STEP 6.86 sport-flex gap closer + FREE-ABSORB must stretch an
+// ADJACENT sport (on that neighbour's OWN field — no new field needed) over the
+// hole, so the day is GAPLESS. Each bunk still keeps >=1 real (un-stretched)
+// sport + its Main Activity + special. The four criteria are NOT weakened.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day for all 14 bunks under field starvation', async (t) => {
+  await runScenario('STARVED (2 Basketball Courts disabled → 6 sport fields for 8 bunks)', {
+    disabledFields: ['Basketball A', 'Basketball B'],
+  });
 });

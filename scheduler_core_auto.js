@@ -2745,6 +2745,32 @@
             return periods.some(function(p) { return p.startMin <= blkStart && p.endMin >= newEnd; });
         }
 
+        // Like staysInPeriod but tolerant of crossing PERIOD BOUNDARIES: returns true
+        // when [blkStart,newEnd] is CONTIGUOUSLY covered by the union of the grade's
+        // periods (i.e. it's all real schedulable time, with no inter-period dead gap
+        // such as a lunch band sitting between two periods). A merge that bridges two
+        // back-to-back grid periods (e.g. a 20-min sport stretched over an adjacent
+        // 20-min hole → one 40-min block) is allowed; a merge that would span a real
+        // dead gap between periods is rejected. Used by the gap-closer / free-absorb
+        // passes so a full-period hole next to a same-size sport can still be absorbed
+        // even when no single period contains the whole merge window.
+        function coveredByContiguousPeriods(blkStart, newEnd, grade) {
+            var periods = window.campPeriods && window.campPeriods[grade];
+            if (!periods || !periods.length) return true;
+            if (newEnd <= blkStart) return true;
+            // walk period coverage from blkStart; advance cursor across any period that
+            // touches the cursor (period.startMin <= cursor) and extends it.
+            var ranges = periods.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+            var cursor = blkStart;
+            for (var i = 0; i < ranges.length && cursor < newEnd; i++) {
+                var p = ranges[i];
+                if (p.startMin <= cursor && p.endMin > cursor) {
+                    cursor = Math.max(cursor, p.endMin);
+                }
+            }
+            return cursor >= newEnd;
+        }
+
         const _minFillableByGrade = {};
         function getMinFillable(grade) {
             if (_minFillableByGrade[grade]) return _minFillableByGrade[grade];
@@ -25433,7 +25459,10 @@
                         !_ANCHOR_ABS.test(String(M._activity || ''));
                 };
                 var _gateOK = function (field, act, sport, mergeStart, mergeEnd, gapS, gapE) {
-                    if (typeof staysInPeriod === 'function' && !staysInPeriod(mergeStart, mergeEnd, g)) return false;
+                    // Allow the absorbing block to cross a period boundary (a full-period hole
+                    // next to a same-size sport makes a multi-period block); reject only merges
+                    // that would bridge a real inter-period dead gap (e.g. lunch).
+                    if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(mergeStart, mergeEnd, g)) return false;
                     if (typeof isFieldAvailable === 'function' && !isFieldAvailable(field, gapS, gapE, bunk, g, sport || act)) return false;
                     if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(field, act, g, bunk, gapS, gapE) !== null) return false;
                     return true;
@@ -26079,7 +26108,11 @@
             //   itself flexible (we may absorb a too-small sport into a neighbour). Walls are
             //   never holes.
             var _flexGateOK = function (field, act, sport, mergeStart, mergeEnd, gapS, gapE, bunk, g) {
-                if (typeof staysInPeriod === 'function' && !staysInPeriod(mergeStart, mergeEnd, g)) return false;
+                // Absorbing a full-period hole next to a same-size sport inherently makes a
+                // block that crosses a period boundary, so use the contiguous-period check
+                // (rejects only merges that would bridge a real inter-period dead gap such
+                // as lunch) rather than the single-period staysInPeriod gate.
+                if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(mergeStart, mergeEnd, g)) return false;
                 if (typeof isFieldAvailable === 'function' && !isFieldAvailable(field, gapS, gapE, bunk, g, sport || act)) return false;
                 if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(field, act, g, bunk, gapS, gapE) !== null) return false;
                 return true;
