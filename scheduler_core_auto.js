@@ -26383,16 +26383,28 @@
                         var _t = _rfSlotTime(bunk, g, idx, e); if (!_t || _t.s == null || _t.e == null) return;
                         var width = _t.e - _t.s;
                         var done = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
-                        for (var i = 0; i < todaysSpecials.length; i++) {
-                            var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
-                            var nm = String(sp.name).toLowerCase().trim();
-                            if (done[nm]) continue;
-                            try { if (!isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
-                            var dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0;
-                            if (dur !== width) continue;                          // exact fit → no new gap
-                            if (instructorConflictAt(sp.name, _t.s, _t.e, bunk)) continue;
-                            var info = getSpecialSharingInfo(sp.name, activityProperties, globalSettings);
-                            if (_rfConc(nm, _t.s, _t.e, bunk) >= (info.capacity || 1)) continue; // would over-cap
+                        // Pick a fitting special with spare capacity. Pass 1 prefers a special
+                        // the bunk hasn't done today; pass 2 allows a repeat as a last resort so
+                        // the slot still fills. Duration only needs to FIT the cell (dur<=width),
+                        // not match exactly — the cell is the unit; a too-short nominal duration
+                        // just labels the cell (better than an empty slot).
+                        var _pick = function (allowRepeat) {
+                            for (var i = 0; i < todaysSpecials.length; i++) {
+                                var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
+                                var nm = String(sp.name).toLowerCase().trim();
+                                if (!allowRepeat && done[nm]) continue;
+                                try { if (!isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                                var dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0;
+                                if (dur <= 0 || dur > width) continue;            // must fit the cell
+                                if (instructorConflictAt(sp.name, _t.s, _t.e, bunk)) continue;
+                                var info = getSpecialSharingInfo(sp.name, activityProperties, globalSettings);
+                                if (_rfConc(nm, _t.s, _t.e, bunk) >= (info.capacity || 1)) continue; // would over-cap
+                                return sp;
+                            }
+                            return null;
+                        };
+                        var sp = _pick(false) || _pick(true);
+                        if (sp) {
                             var loc = sp.location || null;
                             slots[idx] = {
                                 field: loc || sp.name, sport: null, _activity: sp.name, event: sp.name, type: 'special',
@@ -26402,7 +26414,6 @@
                             };
                             try { registerSpecialUsage(sp.name, g, _t.s, _t.e); } catch (_e) {}
                             _rfFilled++;
-                            break;
                         }
                     });
                 });
