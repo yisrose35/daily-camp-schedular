@@ -8572,7 +8572,39 @@ function init() {
         const sa = window.scheduleAssignments || {};
         const divs = window.divisions || {};
         const b2g = {}; Object.keys(divs).forEach(g => ((divs[g] && divs[g].bunks) || []).forEach(b => { b2g[String(b)] = g; }));
-        const isProt = e => !!(e && (e._league || e._postEdit || e._isTrip));
+        // ★ Build protection + sport-gate sets from the configured layers (same
+        //   source the engine uses: daAutoLayers). The gate must NEVER demote a
+        //   custom-layer activity (Morning Activity, Davening, Main Activity, …) or
+        //   a configured special and refill it with a field sport — that both wiped
+        //   the required custom and re-introduced sports into a sports-free camp
+        //   (live Harmony bug: Morning Activity → Elbow Tag / Trench / Gaga after the
+        //   post-gen save). It may only demote solver-placed field sports.
+        const _capCustomNames = {};
+        const _capSportGrades = {}; let _capSportAll = false;
+        try {
+            const _alSrc = (typeof daAutoLayers === 'object' && daAutoLayers) ? daAutoLayers : {};
+            Object.keys(_alSrc).forEach(g => {
+                (_alSrc[g] || []).forEach(l => {
+                    if (!l) return;
+                    const t = String(l.type || '').toLowerCase();
+                    if (t === 'custom') {
+                        const nm = String(l.customActivity || l.event || l.name || '').toLowerCase().trim();
+                        if (nm) _capCustomNames[nm] = 1;
+                    }
+                    if (t === 'sport' || t === 'sports') { if (!g || g === '_all') _capSportAll = true; else _capSportGrades[g] = 1; }
+                });
+            });
+        } catch (_eAL) {}
+        const isProt = e => {
+            if (!e) return false;
+            if (e._league || e._postEdit || e._isTrip) return true;
+            // Custom-layer activities + configured specials are user intent — never demote.
+            if (e._activityLocked || e.type === 'custom' || e.type === 'special' ||
+                e._isSpecialLocation || e._autoSpecial) return true;
+            const a = String(e._activity || e.event || e.sport || '').toLowerCase().trim();
+            if (a && _capCustomNames[a]) return true;
+            return false;
+        };
         const findSlot = (bunk, fieldName) => {
           const arr = sa[bunk] || []; const fl = String(fieldName || '').toLowerCase().trim();
           for (let i = 0; i < arr.length; i++) { const e = arr[i]; if (e && !e.continuation && e.field !== 'Free' && !isProt(e) && String(e.field || e._specialLocation || '').toLowerCase().trim() === fl) return i; }
@@ -8612,7 +8644,7 @@ function init() {
             Object.keys(sa).forEach(b => { done[b] = {}; (sa[b] || []).forEach(e => { if (!e || e.continuation) return; const a = e._activity || e.sport; if (a && String(a).toLowerCase() !== 'free') done[b][String(a).toLowerCase()] = 1; const fl = String(e.field || e._specialLocation || '').toLowerCase().trim(); if (!fl || fl === 'free') return; if (e._startMin == null) return; (occ[fl] = occ[fl] || []).push({ s: e._startMin, e: e._endMin }); }); });
             const fieldFree = (fl, s, en) => { const a = occ[fl] || []; for (let i = 0; i < a.length; i++) if (a[i].s < en && a[i].e > s) return false; return true; };
             const access = (f, g) => { const ar = f.accessRestrictions; if (!ar || !ar.enabled) return true; const d = ar.divisions || {}; if (!Object.keys(d).length) return true; return !!d[g]; };
-            Object.keys(sa).forEach(b => { const g = b2g[String(b)] || '?'; (sa[b] || []).forEach((e, i) => { if (!e || e.continuation || !e._constraintDemoted) return; const s = e._startMin, en = e._endMin; if (s == null) return; for (let fi = 0; fi < sportFields.length; fi++) { const f = sportFields[fi]; const fl = String(f.name).toLowerCase().trim(); if (!fieldFree(fl, s, en) || !access(f, g)) continue; let act = null; for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !done[b][String(c).toLowerCase()]) { act = c; break; } } if (!act) continue; sa[b][i] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, continuation: false }; (occ[fl] = occ[fl] || []).push({ s: s, e: en }); done[b][String(act).toLowerCase()] = 1; filled++; break; } }); });
+            Object.keys(sa).forEach(b => { const g = b2g[String(b)] || '?'; if (!_capSportAll && !_capSportGrades[g]) return; /* ★ sports-free grade → never inject a field sport on refill */ (sa[b] || []).forEach((e, i) => { if (!e || e.continuation || !e._constraintDemoted) return; const s = e._startMin, en = e._endMin; if (s == null) return; for (let fi = 0; fi < sportFields.length; fi++) { const f = sportFields[fi]; const fl = String(f.name).toLowerCase().trim(); if (!fieldFree(fl, s, en) || !access(f, g)) continue; let act = null; for (let ai = 0; ai < f.activities.length; ai++) { const c = f.activities[ai]; if (c && !done[b][String(c).toLowerCase()]) { act = c; break; } } if (!act) continue; sa[b][i] = { field: f.name, sport: act, _activity: act, _startMin: s, _endMin: en, _fixed: true, _freeFilled: true, continuation: false }; (occ[fl] = occ[fl] || []).push({ s: s, e: en }); done[b][String(act).toLowerCase()] = 1; filled++; break; } }); });
           } catch (_eff) {}
           console.warn('[CAPACITY REPAIR GATE] demoted ' + repaired + ' validator-flagged placement(s) → Free, refilled ' + filled);
           try { window.renderStaggeredView?.(); window.updateTable?.(); renderGrid?.(); } catch (_e) {}
