@@ -165,7 +165,16 @@
                      window.CampistryDB?.getRole?.() ||
                      localStorage.getItem('campistry_role') ||
                      'viewer';
-        return role === 'owner' || role === 'admin';
+        // ★ LG-2: schedulers may now write camp_state_kv (leagues / league
+        //   history / config). Previously owner/admin only, so a scheduler's
+        //   saves were dropped here and never reached cloud while the league
+        //   code logged "saved to cloud". Requires migration 009 (scheduler
+        //   INSERT/UPDATE on camp_state_kv) to actually land — until then the
+        //   upsert is caught (non-fatal) by executeBatchSync. Viewers stay
+        //   read-only. NOTE: camp_state_kv writes are whole-key/last-writer-wins
+        //   (no merge except app1/campistryMe fetch-merge), so a scheduler with a
+        //   stale in-memory copy can overwrite another writer's value for a key.
+        return role === 'owner' || role === 'admin' || role === 'scheduler';
     }
 
     function _canReadCampState() {
