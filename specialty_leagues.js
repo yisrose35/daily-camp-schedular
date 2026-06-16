@@ -2147,7 +2147,21 @@
                 );
 
                 if (existingIdx >= 0) {
-                    league.games[existingIdx] = newGame;
+                    // ★ LG-29: MERGE, don't replace. Wholesale replacement overwrote
+                    //   the existing game with all-null scores, destroying results
+                    //   already entered (e.g. by the FN-58s auto-save) with no warning.
+                    //   Mirror the regular-league import (leagues.js): keep the existing
+                    //   matches + their scores, append only matchups not already present
+                    //   (team pair, either order).
+                    const existing = league.games[existingIdx];
+                    if (!existing.matches) existing.matches = [];
+                    newGame.matches.forEach(nm => {
+                        const found = existing.matches.find(em =>
+                            (em.teamA === nm.teamA && em.teamB === nm.teamB) ||
+                            (em.teamA === nm.teamB && em.teamB === nm.teamA)
+                        );
+                        if (!found) existing.matches.push(nm);
+                    });
                 } else {
                     league.games.push(newGame);
                 }

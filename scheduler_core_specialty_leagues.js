@@ -220,10 +220,19 @@
                         if (!leagueData || !leagueData.isSpecialtyLeague) continue;
                         if (leagueData.leagueName !== leagueName && leagueData.leagueName !== leagueId) continue;
                         
-                        const slotKey = `${slotIdx}`;
+                        // ★ LG-31: dedup by actual TIME, not raw slot index — different
+                        //   divisions use different slot indices for the same clock time,
+                        //   so a bare-index key counted one shared game as several and
+                        //   inflated future game numbers. Mirrors the regular engine.
+                        const divTimes = window.divisionTimes?.[divName] || [];
+                        const slotTimeObj = divTimes[parseInt(slotIdx)];
+                        const timeKey = slotTimeObj?.startTime || slotTimeObj?.start || `fallback_${slotIdx}`;
+                        const Utils = window.SchedulerCoreUtils;
+                        const normalizedTimeKey = Utils?.parseTimeToMinutes?.(timeKey) ?? timeKey;
+                        const slotKey = `time_${normalizedTimeKey}`;
                         if (processedSlots.has(slotKey)) continue;
                         processedSlots.add(slotKey);
-                        
+
                         const currentLabel = leagueData.gameLabel || '';
                         const match = currentLabel.match(/Game\s+(\d+)/i);
                         
@@ -236,12 +245,22 @@
                             if (currentNum !== correctNum) {
                                 console.log(`[SpecialtyLeagues] 📝 Updating ${leagueName} on ${futureDate}: Game ${currentNum} → Game ${correctNum}`);
                                 
-                                // Update in ALL divisions that have this slot
+                                // ★ LG-31: update every division cell at the SAME TIME
+                                //   (not the same slot index) — a shared game can sit at
+                                //   different slot indices per division.
                                 for (const d of divNames) {
-                                    if (leagueAssignments[d]?.[slotIdx]?.isSpecialtyLeague &&
-                                        (leagueAssignments[d][slotIdx].leagueName === leagueName || 
-                                         leagueAssignments[d][slotIdx].leagueName === leagueId)) {
-                                        leagueAssignments[d][slotIdx].gameLabel = `Game ${correctNum}`;
+                                    const dData = leagueAssignments[d] || {};
+                                    for (const dSlot of Object.keys(dData)) {
+                                        const cell = dData[dSlot];
+                                        if (!cell || !cell.isSpecialtyLeague) continue;
+                                        if (cell.leagueName !== leagueName && cell.leagueName !== leagueId) continue;
+                                        const dTimes = window.divisionTimes?.[d] || [];
+                                        const dTimeObj = dTimes[parseInt(dSlot)];
+                                        const dTimeKey = dTimeObj?.startTime || dTimeObj?.start || `fallback_${dSlot}`;
+                                        const dNormalized = Utils?.parseTimeToMinutes?.(dTimeKey) ?? dTimeKey;
+                                        if (`time_${dNormalized}` === slotKey) {
+                                            cell.gameLabel = `Game ${correctNum}`;
+                                        }
                                     }
                                 }
                                 dayUpdated = true;
@@ -254,7 +273,11 @@
                 
                 // Also update scheduleAssignments
                 const processedBunkSlots = new Set();
-                
+                // ★ LG-31 / FN-10: sequential per-day counter for the per-bunk copy.
+                //   The old code did indexOf(`${i}`) into the time_-keyed processedSlots
+                //   set — never matched, so every game on the date got the same number.
+                let bunkGameIndexWithinDay = 0;
+
                 for (const bunk of Object.keys(assignments)) {
                     const bunkSchedule = assignments[bunk];
                     if (!Array.isArray(bunkSchedule)) continue;
@@ -275,8 +298,11 @@
                         
                         if (match) {
                             const currentNum = parseInt(match[1], 10);
-                            const slotGameIndex = Array.from(processedSlots).indexOf(`${i}`);
-                            const correctNum = gamesBeforeThisDate + (slotGameIndex >= 0 ? slotGameIndex : 0) + 1;
+                            // ★ LG-31 / FN-10: number by sequential per-day game order —
+                            //   the old indexOf into the time_-keyed processedSlots set
+                            //   never matched a bare bunk-schedule index, so every game
+                            //   on the date got numbered identically in the per-bunk copy.
+                            const correctNum = gamesBeforeThisDate + bunkGameIndexWithinDay + 1;
                             
                             if (currentNum !== correctNum) {
                                 const newLabel = `${leagueName} Game ${correctNum}`;
@@ -298,6 +324,7 @@
                                 }
                                 dayUpdated = true;
                             }
+                            bunkGameIndexWithinDay++;
                         }
                     }
                     break;
@@ -778,7 +805,10 @@
             if (!history.matchupHistory[fullKey]) history.matchupHistory[fullKey] = [];
             history.matchupHistory[fullKey].push(currentDate);
 
-            history.gameLog[id][currentDate].push({ tA: game.teamA, tB: game.teamB, field: game.field, g: gameLabel || null });
+            // ★ FN-55: record slotOrder (s) so rollbackDayRecords can subtract the
+            //   exact late-slot wait this game contributed to the cumulative slotDebt —
+            //   a regen / date-delete previously left slotDebt inflated forever.
+            history.gameLog[id][currentDate].push({ tA: game.teamA, tB: game.teamB, field: game.field, g: gameLabel || null, s: game.slotOrder });
         });
     }
 
@@ -791,7 +821,9 @@
     // and matchup date-arrays inflate) and deleting a date left them behind.
     // Every recorded game now also lands in history.gameLog[id][date] so a
     // regeneration or date-delete can subtract exactly what that date
-    // contributed. lastSlotOrder is overwrite-only and needs no rollback.
+    // contributed. lastSlotOrder is overwrite-only and needs no rollback;
+    // slotDebt is cumulative, so it IS rolled back here (FN-55) using the
+    // per-game slotOrder now stored on each gameLog entry.
 
     function rollbackDayRecords(leagueId, date, history) {
         const entries = history.gameLog?.[leagueId]?.[date];
@@ -813,6 +845,21 @@
                     const di = dates.indexOf(date);
                     if (di !== -1) dates.splice(di, 1);
                     if (dates.length === 0) delete history.matchupHistory[mk];
+                }
+            }
+            // ★ FN-55: subtract this game's late-slot wait from the cumulative
+            //   slotDebt (added in updateHistoryAfterScheduling). Older gameLog
+            //   entries predate the `s` field → they added 0 wait then, so skip.
+            if (history.slotDebt && e.s != null) {
+                const w = Math.max(0, (e.s || 1) - 1);
+                if (w > 0) {
+                    [e.tA, e.tB].forEach(function (team) {
+                        if (!team) return;
+                        const k = `${leagueId}|${team}`;
+                        if (history.slotDebt[k] != null) {
+                            history.slotDebt[k] = Math.max(0, history.slotDebt[k] - w);
+                        }
+                    });
                 }
             }
         });
@@ -1202,7 +1249,16 @@ if (_playoffRoundNum && league.playoff && Array.isArray(league.playoff.reservedA
                 }
             });
 
-            updateHistoryAfterScheduling(league, assignments, history, currentDate, gameLabel);
+            // ★ LG-32: never record playoff TBD placeholders ('TBD vs TBD',
+            //   teamA/teamB='TBD') into history — they would pollute
+            //   teamFieldRotation['id|TBD'] / slotDebt['id|TBD'] /
+            //   matchupHistory['id|TBD|TBD'] / gameLog, and the FN-58 sync below
+            //   (which reads gameLog) would then auto-save a bogus 'TBD vs TBD'
+            //   result game. The regular engine likewise skips recording for TBD.
+            //   A real game in another slot/division this day still records normally.
+            if (!_playoffIsTBD) {
+                updateHistoryAfterScheduling(league, assignments, history, currentDate, gameLabel);
+            }
 
             // ★ Record this league+slot so other divisions that share the same
             //   specialty league at the same time reuse this single game.
