@@ -26364,13 +26364,22 @@
                     });
                     return n;
                 };
-                var _rfFilled = 0;
+                var _rfFilled = 0, _rfCands = 0;
                 Object.keys(_rfSA).forEach(function (bunk) {
                     var slots = _rfSA[bunk]; if (!Array.isArray(slots)) return;
                     var g = _rfB2G[String(bunk)] || '?';
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
-                        if (!e._constraintDemoted || !/fn1921/.test(String(e._demotedReason || ''))) return;
+                        // Fill: (a) FN-19/21 cap demotions — tagged 'fn1921_type_cap'
+                        // (over-cap) or 'fn21_stagger' (anti-stagger), in any grade; OR
+                        // (b) ANY Free slot in a grade with NO sport layer (sports-free),
+                        // where FN-22's sport-fill is a no-op so the slot would stay empty.
+                        var _actL = String(e._activity || e.field || '').toLowerCase().trim();
+                        var _isFree = !_actL || _actL === 'free';
+                        var _isDemoted = e._constraintDemoted && /stagger|cap/.test(String(e._demotedReason || ''));
+                        var _sportless = (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(g);
+                        if (!_isDemoted && !(_isFree && _sportless)) return;
+                        _rfCands++;
                         var _t = _rfSlotTime(bunk, g, idx, e); if (!_t || _t.s == null || _t.e == null) return;
                         var width = _t.e - _t.s;
                         var done = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
@@ -26397,7 +26406,7 @@
                         }
                     });
                 });
-                if (_rfFilled > 0) log('[FN-19/21 REFILL] filled ' + _rfFilled + ' capped slot(s) with an alternate special');
+                if (_rfCands > 0 || _rfFilled > 0) log('[FN-19/21 REFILL] filled ' + _rfFilled + '/' + _rfCands + ' capped/demoted slot(s) with an alternate special');
             } catch (_eRf) { try { warn('[FN-19/21 REFILL] error: ' + (_eRf && _eRf.message)); } catch (_e) {} }
         })();
 
