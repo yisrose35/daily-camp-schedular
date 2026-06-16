@@ -91,6 +91,58 @@ const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Cha
 // ---------------------------------------------------------------------------
 function campConfig(opts) {
   opts = opts || {};
+  if (opts.swimWalls) {
+    // SWIM-WALLS scenario — the user's LIVE swim-era regen bug. None of the
+    // first five scenarios include SWIM; the moment the user enabled swim, two
+    // new wall-bounded gaps appeared that the existing STEP 6.865 absorber
+    // could NOT close:
+    //
+    //   [REAL-GAP] (Main|gap|special)  25m  — between the Main-Activity wall
+    //              (immune) and the FOLLOWING special (Lake). No sport field is
+    //              free in the window, so the gap can only close by pulling the
+    //              following special's START backward over it (Lake's room free).
+    //   [REAL-GAP] (swim|gap|Main)     15m  — between SWIM and the Main-Activity
+    //              wall. Both neighbours were immune (swim WAS in _SAB_IMMUNE,
+    //              Main always is), so neither a sport nor a special is adjacent.
+    //              The ONLY gapless outcome is to stretch the SWIM block forward
+    //              (its pool is free). The OLD _SAB_IMMUNE listed `swim`, so swim
+    //              was NEVER stretched → the sliver survived as a [REAL-GAP].
+    //
+    // Geometry (explicit mixed-size period grid, both grades, 9:00-12:15 = 195min):
+    //   P0 09:00-09:45 (45m)  sport
+    //   P1 09:45-10:30 (45m)  SWIM band (custom "Swim" in Pool, pins to P1)
+    //   P2 10:30-10:45 (15m)  empty, sub-floor → swim|gap|Main sliver
+    //   P3 10:45-11:05 (20m)  Main-Activity wall
+    //   P4 11:05-11:30 (25m)  empty, floor-sized → Main|gap|special gap
+    //   P5 11:30-12:15 (45m)  SPECIAL band (custom "Lake" in Lake field)
+    //
+    // FEASIBILITY-ORACLE (a perfect, gapless day EXISTS per bunk):
+    //   sport 9:00-9:45 | swim 9:45-10:45 (45 + absorbed P2 15) |
+    //   Main 10:45-11:05 | special/Lake 11:05-12:15 (absorbed P4 25 + 45,
+    //   pulled start back) → 1 main, 1 special, 1 sport, swim covered, ZERO gap
+    //   minutes. Both absorptions stretch a STRETCHABLE block (swim, special)
+    //   over the gap; NEITHER stretches the immune Main-Activity wall.
+    //
+    // Sport fields are made Unavailable 10:30-11:30 (mirroring "no sport field
+    // free in that window") so NO sport can fill P2/P4 — isolating the
+    // wall-bounded absorption requirement. Sports place freely in P0; the Pool
+    // (swim) and Lake (special) rooms stay free across their gaps so the swim /
+    // special stretch CAN close them.
+    //
+    // NOTE on test fidelity: swim and the special are modeled as CUSTOM layers
+    // (named "Swim"/"Lake", hosted in "Pool"/"Lake") so they pin deterministically
+    // and sidestep the swim-era GlobalPlanner pool-staggering + special-
+    // distribution interaction (which, with a real type:'swim' layer present,
+    // places 0 concrete specials). The blocks are still named/roomed as a real
+    // swim / catalog special, so STEP 6.865 identifies them exactly as it would
+    // in production (swim by name/pool field, special by catalog name/room).
+    return {
+      autoStart: HM(9, 0),  autoEnd: HM(12, 15),
+      chairStart: HM(9, 0), chairEnd: HM(12, 15),
+      autoStartStr: '9:00', autoEndStr: '12:15',
+      swimWalls: true,
+    };
+  }
   if (opts.sliver2) {
     // SLIVER-RESIDUAL scenario — the user's LIVE residual gap that the original
     // STEP 6.865 (commit 8badb70) STILL missed. Distinct from the SLIVER-BAND
@@ -259,9 +311,9 @@ function buildLayers(cfg) {
   cfg = cfg || campConfig({});
   // In the sliver scenario the band geometry depends on a 20-min Main Activity
   // wall and 45-min specials on a 5-min grid; elsewhere everything is 20-min.
-  const mainDur = cfg.sliver ? 20 : PERIOD;
-  const specialDur = (cfg.sliver || cfg.sliver2) ? 45 : PERIOD;
-  const sportMin = (cfg.sliver || cfg.sliver2) ? 25 : PERIOD;
+  const mainDur = (cfg.sliver || cfg.swimWalls) ? 20 : PERIOD;
+  const specialDur = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? 45 : PERIOD;
+  const sportMin = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? 25 : PERIOD;
   // SLIVER-RESIDUAL band geometry: 45-min special confined to a 55-min band
   // (9:00-9:55) leaving a 10-min in-band remainder; a 15-min empty period
   // (9:55-10:10); then the 20-min Main-Activity wall (10:10-10:30). The 25-min
@@ -282,16 +334,53 @@ function buildLayers(cfg) {
   const bandEnd = cfg.sliver ? HM(10, 0) : null;
   const mainWallStart = cfg.sliver ? HM(10, 0) : null;
   const mainWallEnd = cfg.sliver ? HM(10, 20) : null;
+  // SWIM-WALLS band geometry (see campConfig({swimWalls})):
+  //   swim band  09:30-10:15 (fullGrade swim → 45m snaps to P1),
+  //   Main wall  10:30-10:50 (20m, confined to P3),
+  //   special    11:15-12:00 (45m, confined to P5). The empty P2 (10:15-10:30,
+  //   15m) and P4 (10:50-11:15, 25m) are the two wall-bounded gaps to absorb.
+  const swimBandStart = cfg.swimWalls ? HM(9, 45) : null;
+  const swimBandEnd = cfg.swimWalls ? HM(10, 30) : null;
+  const mainWallSWStart = cfg.swimWalls ? HM(10, 45) : null;
+  const mainWallSWEnd = cfg.swimWalls ? HM(11, 5) : null;
   const layers = [];
 
   for (const grade of ['Auto', 'Chair']) {
     const start = grade === 'Auto' ? cfg.autoStart : cfg.chairStart;
     const end = grade === 'Auto' ? cfg.autoEnd : cfg.chairEnd;
     const bunks = grade === 'Auto' ? AUTO_BUNKS : CHAIR_BUNKS;
-    const mainStart = cfg.sliver2 ? mainWall2Start : (cfg.sliver ? mainWallStart : start);
-    const mainEnd = cfg.sliver2 ? mainWall2End : (cfg.sliver ? mainWallEnd : end);
+    const mainStart = cfg.swimWalls ? mainWallSWStart : (cfg.sliver2 ? mainWall2Start : (cfg.sliver ? mainWallStart : start));
+    const mainEnd = cfg.swimWalls ? mainWallSWEnd : (cfg.sliver2 ? mainWall2End : (cfg.sliver ? mainWallEnd : end));
     const specStart = cfg.sliver2 ? band2Start : (cfg.sliver ? bandStart : start);
     const specEnd = cfg.sliver2 ? band2End : (cfg.sliver ? bandEnd : end);
+
+    // SWIM layer (SWIM-WALLS only) — a 45-min swim confined to P1 (09:45-10:30).
+    // Modeled as a CUSTOM layer named "Swim" hosted in the "Pool" field so it
+    // pins deterministically to its single period (exactly like the Main
+    // Activity custom layer), sidestepping the swim-type planner's cross-grade
+    // pool staggering which would otherwise relocate the swim window and break
+    // this test's fixed geometry. The block is still NAMED "Swim" and lives in
+    // the Pool, so STEP 6.865 identifies it as a stretchable swim block (pool is
+    // free 10:30-10:45 → it can grow over the P2 sliver). Its end (10:30) abuts
+    // the 15-min P2 sliver (10:30-10:45).
+    if (cfg.swimWalls) {
+      layers.push({
+        grade,
+        type: 'custom',
+        name: 'Swim',
+        customActivity: 'Swim',
+        customField: 'Pool',
+        customBunks: bunks.slice(),
+        periodMin: 45, durationMin: 45, durationMax: 45,
+        startMin: swimBandStart, endMin: swimBandEnd,
+        qty: 1, op: '=',
+        customSharing: {
+          capacity: 20,
+          allowedGrades: ['Auto', 'Chair'],
+        },
+        color: '#0EA5E9',
+      });
+    }
 
     // CUSTOM "Main Activity" layer — same-grade-only cross sharing.
     layers.push({
@@ -315,16 +404,40 @@ function buildLayers(cfg) {
       color: '#7C3AED',
     });
 
-    // SPECIAL layer — at least 1 special. In the sliver scenario, EXACTLY one
-    // 45-min special per bunk confined to the 60-min band (9:00-10:00), so it
-    // leaves a 15-min sub-floor remainder bounded by the next period's
-    // Main-Activity wall — the wall-bounded sliver bug.
-    layers.push({
-      grade, type: 'special', name: 'Special',
-      periodMin: specialDur, durationMin: specialDur,
-      startMin: specStart, endMin: specEnd,
-      qty: 1, op: (cfg.sliver || cfg.sliver2) ? '=' : '>=',
-    });
+    if (cfg.swimWalls) {
+      // SWIM-WALLS: model the special as a CUSTOM layer named "Lake" hosted in
+      // "Lake Dock", confined to P5 (11:30-12:15), so it pins deterministically
+      // (like Main Activity / Swim) and sidesteps the swim-era GlobalPlanner
+      // special-distribution interaction that otherwise places 0 specials when a
+      // swim layer is present. "Lake" IS one of the catalog SPECIALS, so
+      // analyse() counts it as a real special (criterion 2). It sits AFTER the
+      // Main wall (P3) with the 25-min P4 gap between → the bounding-special
+      // start-pull-back path must close that gap (Lake Dock is free 11:05-11:30).
+      layers.push({
+        grade,
+        type: 'custom',
+        name: 'Lake',
+        customActivity: 'Lake',
+        customField: 'Lake Dock',
+        customBunks: bunks.slice(),
+        periodMin: 45, durationMin: 45, durationMax: 45,
+        startMin: HM(11, 30), endMin: HM(12, 15),
+        qty: 1, op: '=',
+        customSharing: { capacity: 20, allowedGrades: ['Auto', 'Chair'] },
+        color: '#10B981',
+      });
+    } else {
+      // SPECIAL layer — at least 1 special. In the sliver scenario, EXACTLY one
+      // 45-min special per bunk confined to the 60-min band (9:00-10:00), so it
+      // leaves a 15-min sub-floor remainder bounded by the next period's
+      // Main-Activity wall — the wall-bounded sliver bug.
+      layers.push({
+        grade, type: 'special', name: 'Special',
+        periodMin: specialDur, durationMin: specialDur,
+        startMin: specStart, endMin: specEnd,
+        qty: 1, op: (cfg.sliver || cfg.sliver2) ? '=' : '>=',
+      });
+    }
 
     // SPORT layer — at least 1 sport; cap unbounded so it fills remaining slots.
     layers.push({
@@ -363,9 +476,9 @@ function buildSandbox(opts) {
   // can float mid-band and orphan a 20-min sub-floor sliver), 20-min elsewhere.
   const period = cfg.sliver ? 5 : PERIOD;
   // Special duration: 45-min specials in the sliver scenarios, else one period.
-  const specialDur = (cfg.sliver || cfg.sliver2) ? 45 : PERIOD;
-  const chairStartStr = (cfg.sliver || cfg.sliver2) ? '9:00' : '10:00';
-  const chairEndStr = (cfg.sliver || cfg.sliver2) ? '12:30' : '12:40';
+  const specialDur = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? 45 : PERIOD;
+  const chairStartStr = (cfg.sliver || cfg.sliver2 || cfg.swimWalls) ? '9:00' : '10:00';
+  const chairEndStr = cfg.swimWalls ? '12:15' : ((cfg.sliver || cfg.sliver2) ? '12:30' : '12:40');
   const divisions = {
     // TRUE division window — off-grid edges (e.g. 9:58) flow through here so the
     // solver sees the real boundary, exactly like a real camp config.
@@ -413,7 +526,24 @@ function buildSandbox(opts) {
     slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
   }));
 
-  const divisionTimes = cfg.sliver2 ? {
+  // SWIM-WALLS grid (see campConfig({swimWalls})): swim band | sub-floor sliver |
+  // Main wall | floor-sized gap | special band | sport, both grades the same.
+  const swimWallsPeriods = () => ([
+    { startMin: HM(9, 0),   endMin: HM(9, 45) },  // 45 sport
+    { startMin: HM(9, 45),  endMin: HM(10, 30) }, // 45 swim band
+    { startMin: HM(10, 30), endMin: HM(10, 45) }, // 15 empty (swim|gap|Main sliver)
+    { startMin: HM(10, 45), endMin: HM(11, 5) },  // 20 Main Activity wall
+    { startMin: HM(11, 5),  endMin: HM(11, 30) }, // 25 empty (Main|gap|special)
+    { startMin: HM(11, 30), endMin: HM(12, 15) }, // 45 special band (Lake)
+  ]);
+  const swimWallsDivTimes = () => swimWallsPeriods().map((p, i) => ({
+    slotIndex: i, startMin: p.startMin, endMin: p.endMin, event: 'GA', type: 'slot'
+  }));
+
+  const divisionTimes = cfg.swimWalls ? {
+    Auto:  swimWallsDivTimes(),
+    Chair: swimWallsDivTimes(),
+  } : cfg.sliver2 ? {
     Auto:  sliver2DivTimes(),
     Chair: sliver2DivTimes(),
   } : cfg.sliver ? {
@@ -424,7 +554,10 @@ function buildSandbox(opts) {
     Chair: buildDivisionTimes(cfg.chairStart, cfg.chairEnd, period),
   };
 
-  const campPeriods = cfg.sliver2 ? {
+  const campPeriods = cfg.swimWalls ? {
+    Auto:  swimWallsPeriods(),
+    Chair: swimWallsPeriods(),
+  } : cfg.sliver2 ? {
     Auto:  sliver2Periods(),
     Chair: sliver2Periods(),
   } : cfg.sliver ? {
@@ -440,10 +573,10 @@ function buildSandbox(opts) {
   // periods. The base 8 fields would starve 6 bunks (an unrelated capacity
   // failure). Provision extra fields/sports so capacity matches the 14-bunk
   // simultaneous demand — isolating the sliver bug from field starvation.
-  const sportList = (cfg.sliver || cfg.sliver2)
+  const sportList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls)
     ? SPORTS.concat(['Tennis', 'Dodgeball', 'Kickball', 'Frisbee', 'Lacrosse', 'Handball'])
     : SPORTS.slice();
-  const fieldList = (cfg.sliver || cfg.sliver2)
+  const fieldList = (cfg.sliver || cfg.sliver2 || cfg.swimWalls)
     ? FIELDS.concat([
         { name: 'Tennis Court',    activities: ['Tennis'] },
         { name: 'Dodgeball Gym',   activities: ['Dodgeball'] },
@@ -453,6 +586,30 @@ function buildSandbox(opts) {
         { name: 'Handball Wall',   activities: ['Handball'] },
       ])
     : FIELDS.slice();
+
+  // SWIM-WALLS: add a high-capacity, cross-grade-shared Pool so all 14 bunks
+  // (8 Auto + 6 Chair) can swim simultaneously in the 9:30-10:15 band without
+  // pool-capacity starvation (isolating the wall-bounded-gap bug). The pool is
+  // free 10:15-10:30, so the swim block can legally stretch over the P2 sliver.
+  if (cfg.swimWalls) {
+    fieldList.push({
+      name: 'Pool',
+      activities: ['Swim'],
+      sharableWith: { type: 'all', divisions: [], capacity: 20,
+        allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
+    });
+    // The "Lake" special is modeled as a custom layer hosted in a "Lake" field
+    // (custom layers render field == activity name). Register that field with
+    // high cross-grade capacity so all 14 bunks can hold Lake in the same band,
+    // and so isFieldAvailable("Lake", ...) is TRUE across the 11:05-11:30 gap —
+    // letting STEP 6.865 pull the Lake start back over the Main|gap|special hole.
+    fieldList.push({
+      name: 'Lake',
+      activities: ['Lake'],
+      sharableWith: { type: 'all', divisions: [], capacity: 20,
+        allowedPairs: { 'Auto|Auto': true, 'Chair|Chair': true, 'Auto|Chair': true } },
+    });
+  }
 
   const sportMetaData = {};
   sportList.forEach(s => { sportMetaData[s] = { minPlayers: 1, maxPlayers: 99 }; });
@@ -470,6 +627,23 @@ function buildSandbox(opts) {
       if (!f || !Array.isArray(f.activities) || !f.activities.length) return;
       activityProperties[f.name] = Object.assign(activityProperties[f.name] || {}, {
         timeRules: [{ type: 'Unavailable', startMin: 0, endMin: HM(10, 30), divisions: null }],
+      });
+    });
+  }
+  // SWIM-WALLS: make every SPORT field Unavailable 10:15-11:15 so NO sport can
+  // fill the P2 (15m) or P4 (25m) gaps in that window — exactly the user's "no
+  // sport field free in that window". Sports place freely in P0 (9:00-9:30) and
+  // P6 (12:00-12:30), so criterion (3) holds. The Pool (swim) and Lake Dock /
+  // special rooms stay free across the gaps, so the swim/special stretch CAN
+  // close them. The Pool is excluded from the sport-field block.
+  if (cfg.swimWalls) {
+    const _nonSport = new Set(['pool', 'lake', 'auditorium']);
+    fieldList.forEach(f => {
+      if (!f || !Array.isArray(f.activities) || !f.activities.length) return;
+      if (_nonSport.has(String(f.name).toLowerCase())) return;       // pool/lake/auditorium stay open
+      if (f.activities.some(a => ['swim', 'lake', 'main activity'].includes(String(a).toLowerCase()))) return;
+      activityProperties[f.name] = Object.assign(activityProperties[f.name] || {}, {
+        timeRules: [{ type: 'Unavailable', startMin: HM(10, 30), endMin: HM(11, 30), divisions: null }],
       });
     });
   }
@@ -872,5 +1046,44 @@ test('auto scheduler fills a gapless day with a sub-floor sliver band (flush-pla
 test('auto scheduler fills a gapless day with a floor-sized period-crossing residual gap', async (t) => {
   await runScenario('SLIVER-RESIDUAL (25-min gap = sport floor, straddles a period boundary, special|gap|Main wall)', {
     sliver2: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 6 — SWIM-WALLS config: the user's LIVE swim-era regen bug. NONE of the
+// first five scenarios include SWIM; the moment swim was enabled, two new
+// wall-bounded gaps appeared that the existing STEP 6.865 absorber could NOT
+// close (see campConfig({swimWalls}) for full geometry + feasibility-oracle):
+//
+//   [REAL-GAP] (Main|gap|special) 25m  Main-Activity wall (immune) | gap |
+//              FOLLOWING special (Lake). The fix pulls the following special's
+//              START backward over the gap (the wall on the left is immune, no
+//              sport field is free in the 10:30-11:30 window).
+//   [REAL-GAP] (swim|gap|Main) 15m  SWIM (immune in the OLD _SAB_IMMUNE set) |
+//              gap | Main-Activity wall (immune). Both neighbours were immune,
+//              so 6.865 could absorb NOTHING. The fix lets a NORMAL swim block
+//              stretch forward over the sliver (its pool is free), while STILL
+//              never stretching the Main-Activity wall.
+//
+// A perfect, gapless day EXISTS per bunk (feasibility-oracle in campConfig):
+//   sport 9:00-9:45 | swim 9:45-10:45 (P1 45 + absorbed P2 15) |
+//   Main 10:45-11:05 | special/Lake 11:05-12:15 (absorbed P4 25 + P5 45)
+//   → 1 main, 1 special, 1 sport, swim covered, ZERO gap minutes.
+//
+// THE FIX (extends STEP 6.865 WALL-BOUNDED SLIVER-ABSORB):
+//   - Add a stretchable-SWIM last-resort path (tried after sport, after special)
+//     so a NORMAL swim block can grow over a swim|gap|Main sliver, gated by
+//     isFieldAvailable on the pool + _validateWritePlacement +
+//     coveredByContiguousPeriods — but NEVER stretch the Main-Activity wall,
+//     lunch, league, trip, etc. (swim stays in _SAB_IMMUNE for the sport/special
+//     predicates; the dedicated swim path is the only thing that may grow it).
+//   - Recognize a special by its catalog NAME or registered ROOM (not just the
+//     _autoSpecial/_isSpecialLocation flags), so the following-special-start-
+//     pull-back path fires for the Main|gap|special case.
+// The four criteria are NOT weakened.
+// ---------------------------------------------------------------------------
+test('auto scheduler fills a gapless day with swim-bounded and Main-wall-bounded gaps', async (t) => {
+  await runScenario('SWIM-WALLS (swim|gap|Main 15m + Main|gap|special 25m, mixed-size periods, fields blocked 10:30-11:30)', {
+    swimWalls: true,
   });
 });

@@ -26314,17 +26314,54 @@
                       M._intentionalFree) &&
                     !_SAB_IMMUNE.test(_sabNorm(M._activity));
             };
+            // Catalog of special ROOMS + special NAMES so a special block is
+            // recognized even when it carries no _autoSpecial/_isSpecialLocation
+            // flag (e.g. a custom layer hosting a real special like "Lake" in
+            // "Lake Dock"). A block sitting in a registered special room, or whose
+            // activity matches a configured special name, IS a special.
+            var _sabSpecGS = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+            var _sabSpecCfgs = (_sabSpecGS.app1 && _sabSpecGS.app1.specialActivities) || _sabSpecGS.specialActivities || [];
+            var _sabSpecialNameSet = {}, _sabSpecialRoomSet = {};
+            _sabSpecCfgs.forEach(function (s) {
+                if (!s) return;
+                if (s.name) _sabSpecialNameSet[_sabNorm(s.name)] = 1;
+                if (s.location) _sabSpecialRoomSet[_sabNorm(s.location)] = 1;
+            });
             // A block is a stretchable SPECIAL (last resort). Specials carry
-            // _autoSpecial / _isSpecialLocation / type 'special'.
+            // _autoSpecial / _isSpecialLocation / type 'special', OR live in a
+            // registered special room, OR are named after a configured special.
             var _sabSpecialElig = function (M) {
                 if (!M) return false;
                 var t = _sabNorm(M.type);
+                var fld = _sabNorm(M.field || M._specialLocation);
+                var act = _sabNorm(M._activity);
                 var isSpecial = (t === 'special') || M._autoSpecial || M._isSpecialLocation ||
-                    M._assignedSpecial || M._specialLocation;
+                    M._assignedSpecial || M._specialLocation ||
+                    (fld && _sabSpecialRoomSet[fld]) || (act && _sabSpecialNameSet[act]);
                 if (!isSpecial) return false;
                 // Never stretch an immune-named block even if mis-flagged as special.
-                if (_SAB_IMMUNE.test(_sabNorm(M._activity))) return false;
+                if (_SAB_IMMUNE.test(act)) return false;
                 return !!(M.field && _sabNorm(M.field) !== 'free');
+            };
+            // A block is a stretchable SWIM block (LAST-resort, only after sport
+            // and special). The user's swim-era regen leaves a sub-floor sliver
+            // bounded by SWIM (left) and the Main-Activity wall (right) — both
+            // were immune, so nothing could absorb it. A NORMAL swim block CAN
+            // grow over the sliver when its pool is free, the only gapless
+            // outcome here. We NEVER stretch the Main-Activity wall (it stays in
+            // _SAB_IMMUNE); swim is identified by its activity name or its pool
+            // field, and must NOT be a change/lunch/league/etc. block.
+            var _sabSwimElig = function (M) {
+                if (!M) return false;
+                var act = _sabNorm(M._activity);
+                var fld = _sabNorm(M.field || M._specialLocation);
+                if (act !== 'swim' && fld.indexOf('pool') === -1) return false;
+                // Guard: only swim — never a mis-named immune wall (Main/lunch/etc.)
+                // other than swim itself, never a trip/league/prep/rotation block.
+                if (act && act !== 'swim' && _SAB_IMMUNE.test(act)) return false;
+                if (M._isTrip || M._trip || M._league || M._isChinuch || M._isPrep ||
+                    M._isRotationEvent) return false;
+                return !!(M.field && fld !== 'free');
             };
             // Sport-field occupancy index (mirrors FN-22 FREE-FILL) so we can ask:
             // "could a brand-new sport actually take this gap?" A gap that EQUALS or
@@ -26368,7 +26405,7 @@
                 }
                 return false;
             };
-            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0;
+            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0;
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -26468,17 +26505,54 @@
                             _sabAbsorbed++; _sabBySpecial++; continue;
                         }
                     }
+
+                    // (3) Neither a sport nor a special neighbour can take it — try a
+                    //     bounding SWIM block (swim-era last resort). The user's live
+                    //     regen leaves a sub-floor sliver bounded by SWIM (left) and
+                    //     the Main-Activity wall (right): the wall is immune, no sport
+                    //     field is free, no special is adjacent — so the ONLY gapless
+                    //     outcome is to grow the swim block over the sliver when its
+                    //     POOL is free. Try LEFT swim forward, then RIGHT swim back.
+                    //     The Main-Activity wall is NEVER stretched (it is not swim).
+                    if (_sabSwimElig(Lh)) {
+                        var wActL = Lh._activity || 'Swim';
+                        var wFieldL = Lh.field || Lh._specialLocation;
+                        if (wFieldL && _sabNorm(wFieldL) !== 'free' &&
+                            (typeof isFieldAvailable !== 'function' || isFieldAvailable(wFieldL, gapS, gapE, bunk, g, wActL)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(wFieldL, wActL, g, bunk, gapS, gapE) === null)) {
+                            Lh._endMin = gapE;
+                            for (var kw = L.tail + 1; kw <= R.head - 1; kw++) {
+                                slots[kw] = { field: Lh.field, _activity: wActL, type: Lh.type,
+                                    continuation: true, _startMin: slots[kw] ? slots[kw]._startMin : gapS, _endMin: slots[kw] ? slots[kw]._endMin : gapE,
+                                    _autoMode: true, _sliverAbsorbed: true };
+                            }
+                            try { if (typeof claimField === 'function') claimField(wFieldL, gapS, gapE, bunk, g, wActL); } catch (_e) {}
+                            _sabAbsorbed++; _sabBySwim++; continue;
+                        }
+                    }
+                    if (_sabSwimElig(Rh)) {
+                        var wActR = Rh._activity || 'Swim';
+                        var wFieldR = Rh.field || Rh._specialLocation;
+                        if (wFieldR && _sabNorm(wFieldR) !== 'free' &&
+                            (typeof isFieldAvailable !== 'function' || isFieldAvailable(wFieldR, gapS, gapE, bunk, g, wActR)) &&
+                            (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(wFieldR, wActR, g, bunk, gapS, gapE) === null)) {
+                            Rh._startMin = gapS;
+                            try { if (typeof claimField === 'function') claimField(wFieldR, gapS, gapE, bunk, g, wActR); } catch (_e) {}
+                            _sabAbsorbed++; _sabBySwim++; continue;
+                        }
+                    }
                     // No stretchable bounding block → leave Free (true impossibility).
                 }
             });
             if (_sabAbsorbed > 0) {
                 log('  🩹 [STEP 6.865 SLIVER-ABSORB] absorbed ' + _sabAbsorbed + ' wall-bounded sub-floor sliver(s) (' +
-                    _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special).');
+                    _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special, ' +
+                    _sabBySwim + ' into a bounding swim block).');
                 try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
             } else {
                 log('[STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.');
             }
-            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial); } catch (_e) {}
+            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
