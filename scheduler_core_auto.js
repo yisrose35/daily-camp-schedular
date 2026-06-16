@@ -26261,15 +26261,25 @@
                     var g = _b2g[String(bunk)] || '?';
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
-                        // ★ Never touch leagues, trips, rotation events, or whole-grade
-                        //   custom layers — these are user-intent or legitimately concurrent
-                        //   (a whole grade does its custom "Morning Activity" together).
+                        // ★ Never touch leagues, trips, or rotation events — user-intent or
+                        //   legitimately concurrent.
                         if (e._league || e._isTrip || e._isRotationEvent) return;
-                        if (e.type === 'custom' || e._customActivity) return;
                         var _actNmEarly = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
                         var _flEarly = String(e.field || e._specialLocation || '').toLowerCase().trim();
+                        // ★ Is this entry actually a SPECIAL? Tagged (_assignedSpecial /
+                        //   _autoSpecial / type:'special') OR recognized by name. CRITICAL:
+                        //   specials are sometimes written into the "custom lane" (type:'custom'
+                        //   while carrying _assignedSpecial) — see materialize. So compute this
+                        //   BEFORE the custom-layer exemption below, and let a special override
+                        //   the exemption (otherwise cap-1 specials riding the custom lane, e.g.
+                        //   2 bunks in Accessorize at 10:50, are skipped here yet flagged by the
+                        //   validator).
                         var _isSpecialEntry = !!(e._assignedSpecial || e._autoSpecial || e.type === 'special')
                             || !!_knownSpecial[_actNmEarly] || !!_knownSpecial[_flEarly];
+                        // ★ Exempt ONLY a TRUE whole-grade custom layer (e.g. user-named
+                        //   "Morning Activity") — type:'custom' / _customActivity AND not a
+                        //   special. A special in the custom lane is NOT exempt.
+                        if ((e.type === 'custom' || e._customActivity) && !_isSpecialEntry) return;
                         // ★ A _pinned block is protected UNLESS it's an auto-placed special.
                         //   The planner pins specials as scheduling "walls" (Phase 2.5 etc.),
                         //   but an over-cap auto special must STILL be enforceable — the
