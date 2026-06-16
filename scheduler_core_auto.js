@@ -26199,12 +26199,25 @@
                 ((_gs.app1 && _gs.app1.fields) || _gs.fields || []).forEach(function (f) {
                     if (!f || !f.name) return;
                     var sw = f.sharableWith || f.sharing || {};
-                    _cfg[String(f.name).toLowerCase().trim()] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: f.gradeShareRules || {} };
+                    // Fields always have a meaningful capacity — `explicit:true` so the
+                    // sweep below always enforces field cap (a field IS a finite resource).
+                    _cfg[String(f.name).toLowerCase().trim()] = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: f.gradeShareRules || {}, explicit: true };
                 });
                 ((_gs.app1 && _gs.app1.specialActivities) || _gs.specialActivities || []).forEach(function (s) {
                     if (!s || !s.name) return;
                     var sw = s.sharableWith || {};
-                    var entry = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {} };
+                    // ★ EXPLICIT-ONLY cap enforcement for specials. A special is only
+                    //   cap-enforced here when the user ACTUALLY configured its sharing
+                    //   (a `capacity` number or a sharing `type`). Specials with no sharing
+                    //   config default to not_sharable/cap-1 in getSpecialSharingInfo — but
+                    //   many of those are general-fill / game-like activities (Machanayim,
+                    //   7 Sticks, Arts & Crafts) that the AutoSolver + DROP-REFILL place
+                    //   concurrently across many bunks ON PURPOSE. Treating their cap as 1
+                    //   here demoted 88 legit placements camp-wide and gutted the schedule.
+                    //   So: only the explicitly-limited specials (e.g. Baking/VR set to 2)
+                    //   are enforced; unconfigured specials are left shareable (never demoted).
+                    var _explicit = !!(sw && (sw.capacity != null || sw.type));
+                    var entry = { type: sw.type || 'not_sharable', cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {}, divs: Array.isArray(sw.divisions) ? sw.divisions : [], gsr: {}, explicit: _explicit, isSpecial: true };
                     // ★ Key by the special's ACTIVITY NAME (authoritative) so this sweep
                     //   matches the placement by what it IS, not by the field string it
                     //   happens to carry. The saved slot's `field` is often the activity
@@ -26251,8 +26264,55 @@
                         (byLoc[key] = byLoc[key] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
                     });
                 });
-                var demoted = 0, staggerD = 0, capD = 0;
+                var demoted = 0, staggerD = 0, capD = 0, swapped = 0;
                 function _live(u) { var c = _sa[u.bunk] && _sa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
+                // ★ Live concurrency counter for a candidate special at [s,e) — counts
+                //   occupants in OTHER bunks whose timed window overlaps. Reads from the
+                //   live scheduleAssignments so sequential swaps below never over-cap.
+                function _concAt(nameLow, s, e, exclBunk) {
+                    var n = 0;
+                    Object.keys(_sa).forEach(function (b) {
+                        if (String(b) === String(exclBunk)) return;
+                        var arr = _sa[b]; if (!Array.isArray(arr)) return;
+                        arr.forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null || x._endMin == null) return;
+                            var a = String(x._assignedSpecial || x._activity || x.event || '').toLowerCase().trim();
+                            if (a === nameLow && x._startMin < e && x._endMin > s) n++;
+                        });
+                    });
+                    return n;
+                }
+                // ★ Find an in-place replacement special for an over-cap occupant: a
+                //   DIFFERENT special the bunk hasn't done today, that fits the cell
+                //   (dur<=width), is access-available, has no instructor conflict, and has
+                //   spare capacity at this exact window. Pass 1 prefers a non-repeat; pass 2
+                //   allows a repeat as a last resort so the cell still fills rather than
+                //   going Free. Returns the special object or null.
+                function _trySwap(u) {
+                    if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials) || !todaysSpecials.length) return null;
+                    var width = u.e - u.s; if (!(width > 0)) return null;
+                    var slots = _sa[u.bunk] || [];
+                    var curNm = String((slots[u.idx] && (slots[u.idx]._assignedSpecial || slots[u.idx]._activity)) || '').toLowerCase().trim();
+                    var done = {};
+                    slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
+                    var pick = function (allowRepeat) {
+                        for (var i = 0; i < todaysSpecials.length; i++) {
+                            var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
+                            var nm = String(sp.name).toLowerCase().trim();
+                            if (nm === curNm) continue;                       // must be a DIFFERENT special
+                            if (!allowRepeat && done[nm]) continue;
+                            try { if (!isSpecialAvailableForBunk(sp.name, u.grade, u.bunk, globalSettings)) continue; } catch (_e) { continue; }
+                            var dur = 0; try { dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0; } catch (_e) { dur = 0; }
+                            if (dur <= 0 || dur > width) continue;            // must fit the cell
+                            try { if (instructorConflictAt(sp.name, u.s, u.e, u.bunk)) continue; } catch (_e) {}
+                            var info; try { info = getSpecialSharingInfo(sp.name, activityProperties, globalSettings); } catch (_e) { info = { capacity: 1 }; }
+                            if (_concAt(nm, u.s, u.e, u.bunk) >= (info.capacity || 1)) continue; // would over-cap
+                            return sp;
+                        }
+                        return null;
+                    };
+                    return pick(false) || pick(true);
+                }
                 // ★ Staggered shared-room custom reserve (mirrors STEP 4.5 / FN-15). Two
                 //   occupants are a LEGITIMATE adjacent tiling — NOT a violation — when BOTH
                 //   are _staggerReserved uses of the SAME custom activity. The grades are
@@ -26270,14 +26330,40 @@
                 }
                 function _demote(u, reason) {
                     if (!_live(u)) return false;
-                    _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
                     var sl = _sa[u.bunk];
+                    // ★ "Don't just demote — come up with a new solution." Before blanking
+                    //   the cell, try to SWAP in a real alternative special that fits and has
+                    //   spare capacity at this window. If found, the slot stays FULL (no hole)
+                    //   and we never count it as a demotion. Only when nothing fits do we fall
+                    //   back to Free (the refill / FN-22 passes get a last crack at it).
+                    var swap = null; try { swap = _trySwap(u); } catch (_e) { swap = null; }
+                    if (swap) {
+                        var loc = swap.location || null;
+                        sl[u.idx] = {
+                            field: loc || swap.name, sport: null, _activity: swap.name, event: swap.name, type: 'special',
+                            _assignedSpecial: swap.name, _specialLocation: loc, _isSpecialLocation: !!loc,
+                            _autoSpecial: true, _autoMode: true, _startMin: u.s, _endMin: u.e,
+                            _source: 'fn1921-swap', _swappedFrom: reason, continuation: false
+                        };
+                        // The replacement is single-cell here; blank any trailing continuations
+                        // of the old (possibly multi-period) block so nothing renders stranded.
+                        for (var ks = u.idx + 1; ks < sl.length; ks++) { if (sl[ks] && sl[ks].continuation) { sl[ks] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false }; } else break; }
+                        try { registerSpecialUsage(swap.name, u.grade, u.s, u.e); } catch (_e) {}
+                        swapped++; return true;
+                    }
+                    _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };
                     for (var k = u.idx + 1; k < sl.length; k++) { if (sl[k] && sl[k].continuation) { sl[k] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false }; } else break; }
                     demoted++; return true;
                 }
                 Object.keys(byLoc).forEach(function (fl) {
                     var cfg = _cfg[fl];
                     var arr = byLoc[fl];
+                    // ★ Skip specials that have NO explicitly-configured sharing — they are
+                    //   general-fill / game-like activities placed concurrently on purpose,
+                    //   not finite limited rooms. Enforcing a default cap-1 on them gutted
+                    //   the schedule (88 spurious demotions). Only explicitly-limited specials
+                    //   (and all real fields) are enforced. (See _cfg build above.)
+                    if (cfg && cfg.isSpecial && !cfg.explicit) return;
                     // PASS 1 — anti-stagger: among OVERLAPPING occupants, keep the longest/earliest
                     //   as primary; demote any overlapping occupant whose [start,end] differs.
                     arr.sort(function (a, b) { return (b.dur - a.dur) || (a.s - b.s) || (a.idx - b.idx); });
@@ -26325,7 +26411,7 @@
                         });
                     });
                 });
-                if (demoted > 0) { log('[FN-19/21 SWEEP] demoted ' + demoted + ' (' + staggerD + ' staggered, ' + capD + ' over-cap/cross-grade) special|field placement(s) → Free'); try { warnings.push({ type: 'fn1921_demotions', count: demoted, staggered: staggerD, capacity: capD }); } catch (_w) {} }
+                if (demoted > 0 || swapped > 0) { log('[FN-19/21 SWEEP] resolved ' + (demoted + swapped) + ' over-cap/staggered placement(s): ' + swapped + ' swapped in-place → alternate special, ' + demoted + ' → Free (no fit) [' + staggerD + ' staggered, ' + capD + ' over-cap/cross-grade detected]'); try { warnings.push({ type: 'fn1921_demotions', count: demoted, swapped: swapped, staggered: staggerD, capacity: capD }); } catch (_w) {} }
                 else { log('[FN-19/21 SWEEP] ✅ no special-capacity / staggered violations'); }
             } catch (_eFn1921) { try { warn('[FN-19/21 SWEEP] error: ' + (_eFn1921 && _eFn1921.message)); } catch (_e) {} }
         })();
