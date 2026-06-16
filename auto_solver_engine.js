@@ -171,17 +171,42 @@
         Object.entries(fieldsBySport).forEach(([sport, fieldList]) => {
             const meta = sportMeta[sport] || {};
             const maxPlayers = parseInt(meta.maxPlayers) || null;
+            // ★ SPECIAL-ACTIVITY CAPACITY: when this activity is a configured SPECIAL
+            //   with its own Sharing Rules, the SPECIAL's capacity/share config is
+            //   authoritative — NOT the facility field's. The user sets "max N at a
+            //   time" on the special (activityProperties[name].sharableWith); the
+            //   facility field it happens to occupy may have a looser/default cap, so
+            //   without this the solver fills "Baking"/"VR" to the field's capacity and
+            //   lets >N bunks share a capacity-limited special concurrently (live bug:
+            //   Baking/VR limit=2 but 4 bunks got them at once). Take the special's
+            //   sharing as the override (capacity = min of the two when both exist).
+            const _spSharing = ap[sport] && ap[sport].sharableWith;
+            let _spType = null, _spCap = null, _spDivs = [], _spPairs = {};
+            if (_spSharing && _spSharing.type) {
+                _spType = _spSharing.type;
+                _spCap = parseInt(_spSharing.capacity) || (_spSharing.type === 'not_sharable' ? 1 : 2);
+                _spDivs = _spSharing.type === 'custom' ? (_spSharing.divisions || []) : [];
+                _spPairs = _spSharing.allowedPairs || {};
+            }
             fieldList.forEach(field => {
+                // Effective sharing: special's rules win; capacity is the tighter of
+                // the field cap and the special cap so neither limit is exceeded.
+                const _effType = _spType || field.shareType;
+                const _effCap = (_spCap != null)
+                    ? Math.min(_spCap, field.capacity || _spCap)
+                    : field.capacity;
+                const _effDivs = _spType ? _spDivs : field.allowedDivisions;
+                const _effPairs = _spType ? _spPairs : field.allowedPairs;
                 candidates.push({
                     sport: sport,
                     field: field.name,
                     fieldNorm: normName(field.name),
                     sportNorm: normName(sport),
-                    capacity: field.capacity,
-                    shareType: field.shareType,
-                    allowedDivisions: field.allowedDivisions,
-                    allowedPairs: field.allowedPairs,
-                    gradeShareRules: field.gradeShareRules,
+                    capacity: _effCap,
+                    shareType: _effType,
+                    allowedDivisions: _effDivs,
+                    allowedPairs: _effPairs,
+                    gradeShareRules: _spType ? {} : field.gradeShareRules,
                     preferences: field.preferences,
                     isIndoor: field.isIndoor,
                     accessRestrictions: field.accessRestrictions,
