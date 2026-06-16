@@ -26307,42 +26307,6 @@
                         (byLoc[key] = byLoc[key] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
                     });
                 });
-                // ★ DIAGNOSTIC (FN-19/21 DIAG): independently scan the live grid for
-                //   same-grade / same-special / overlapping pairs and report whether each
-                //   member made it into byLoc. This pinpoints WHY a cap-1 double (e.g. 2
-                //   Quints in "Arts and Crafts 2" at 10:50) survives the sweep — i.e. which
-                //   filter excluded it. Remove once the root exclusion is fixed.
-                try {
-                    // ★ Always emit a heartbeat so we can tell from the log whether THIS
-                    //   build (with the diagnostic) is actually running vs a cached older
-                    //   bundle. If you don't see this line, the deployed scheduler_core_auto.js
-                    //   is stale — hard-refresh / clear cache.
-                    log('[FN-19/21 DIAG] build=v2 active — scanning ' + Object.keys(byLoc).length + ' byLoc key(s)');
-                    var _inByLoc = {};
-                    Object.keys(byLoc).forEach(function (k) { byLoc[k].forEach(function (u) { _inByLoc[u.bunk + '|' + u.idx] = k; }); });
-                    var _diagGroups = {};
-                    Object.keys(_sa).forEach(function (bunk) {
-                        var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
-                        var g = _b2g[String(bunk)] || '?';
-                        slots.forEach(function (e, idx) {
-                            if (!e || e.continuation) return;
-                            var a = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
-                            // ★ UNCONDITIONAL: report ANY repeated same-grade/same-name/overlapping
-                            //   activity (not gated on _knownSpecial), so a name that isn't in the
-                            //   known-special set can't hide. Skip only obvious non-resources.
-                            if (!a || a === 'free' || _skip[a]) return;
-                            var t = _slotTime(bunk, g, idx, e);
-                            var key = g + '|' + a + '|' + (t ? (t.s + '-' + t.e) : 'NOTIME');
-                            (_diagGroups[key] = _diagGroups[key] || []).push({ bunk: bunk, idx: idx, inByLoc: !!_inByLoc[bunk + '|' + idx], timed: !!t, pinned: !!e._pinned, type: e.type || '', cust: !!e._customActivity, asg: !!e._assignedSpecial, auto: !!e._autoSpecial, known: !!_knownSpecial[a], fld: e.field || '' });
-                        });
-                    });
-                    Object.keys(_diagGroups).forEach(function (k) {
-                        var grp = _diagGroups[k];
-                        if (grp.length < 2) return;
-                        log('[FN-19/21 DIAG] over-occupied "' + k + '" ×' + grp.length + ' → ' +
-                            grp.map(function (x) { return x.bunk + '(byLoc=' + x.inByLoc + ',timed=' + x.timed + ',pin=' + x.pinned + ',type=' + (x.type || '-') + ',asg=' + x.asg + ',auto=' + x.auto + ',cust=' + x.cust + ',known=' + x.known + ',fld=' + x.fld + ')'; }).join(' | '));
-                    });
-                } catch (_eDiag) { try { warn('[FN-19/21 DIAG] ' + (_eDiag && _eDiag.message)); } catch (_e) {} }
                 var demoted = 0, staggerD = 0, capD = 0, swapped = 0;
                 function _live(u) { var c = _sa[u.bunk] && _sa[u.bunk][u.idx]; return c && c.field !== 'Free'; }
                 // ★ Live concurrency counter for a candidate special at [s,e) — counts
@@ -27600,73 +27564,6 @@
             try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge + ' soft=' + _sabBySoft); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
-        // ═══════════════════════════════════════════════════════════════════
-        // STEP 6.866 — FINAL SPECIAL-CAPACITY GATE (mirror auto_validator)
-        // ═══════════════════════════════════════════════════════════════════
-        // The FN-19/21 sweep enforces caps on the grid AS IT FINDS IT, but its
-        // own swap-refill — and the later fill/absorb passes — can place two
-        // same-grade bunks into the SAME cap-1 special at the SAME window AFTER
-        // the sweep already ran. The diagnostic proved this: pre-sweep those
-        // Period-1 slots held Baking (correctly capped to 2); the displaced
-        // bunks were then refilled with Arts&Crafts/Accessorize/etc., landing 2
-        // of the same grade in one cap-1 room. This DEAD-LAST gate re-checks
-        // every special by its real cap and demotes the surplus occupant(s) to
-        // Free, so nothing over-cap can reach the validator. Only specials are
-        // touched (real fields keep their own capacity/sharing); explicit
-        // cap-2 specials (Baking/VR) keep 2; leagues/trips/rotation events and
-        // whole-grade custom layers are never touched.
-        try {
-            var _fcgSA = window.scheduleAssignments || {};
-            var _fcgDivs = window.divisions || {};
-            var _fcgDT = window.divisionTimes || {};
-            var _fcgB2G = {}; Object.keys(_fcgDivs).forEach(function (g) { ((_fcgDivs[g] && _fcgDivs[g].bunks) || []).forEach(function (b) { _fcgB2G[String(b)] = g; }); });
-            var _fcgApp1 = (function () { try { return _fn24DurableApp1(); } catch (_e) { return null; } })();
-            var _fcgKnown = {};
-            ((_fcgApp1 && _fcgApp1.specialActivities) || []).forEach(function (s) { if (s && s.name) { _fcgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _fcgKnown[String(s.location).toLowerCase().trim()] = 1; } });
-            try { if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) todaysSpecials.forEach(function (s) { if (s && s.name) { _fcgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _fcgKnown[String(s.location).toLowerCase().trim()] = 1; } }); } catch (_e) {}
-            var _fcgTime = function (bunk, grade, idx, e) {
-                if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
-                var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_fcgDT[grade] && _fcgDT[grade]._perBunkSlots && _fcgDT[grade]._perBunkSlots[bunk]);
-                if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
-                var ds = _fcgDT[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
-                return null;
-            };
-            var _fcgGroups = {};
-            Object.keys(_fcgSA).forEach(function (bunk) {
-                var slots = _fcgSA[bunk]; if (!Array.isArray(slots)) return;
-                var g = _fcgB2G[String(bunk)] || '?';
-                slots.forEach(function (e, idx) {
-                    if (!e || e.continuation) return;
-                    if (e._league || e._isTrip || e._isRotationEvent) return;
-                    if (e.type === 'custom' || e._customActivity) return;
-                    var nm = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
-                    if (!nm || !_fcgKnown[nm]) return;          // specials only — sports/fields untouched
-                    var t = _fcgTime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
-                    var key = g + '|' + nm + '|' + t.s + '-' + t.e;
-                    (_fcgGroups[key] = _fcgGroups[key] || []).push({ bunk: bunk, idx: idx, nm: nm });
-                });
-            });
-            var _fcgDemoted = 0;
-            Object.keys(_fcgGroups).forEach(function (k) {
-                var grp = _fcgGroups[k];
-                if (grp.length < 2) return;
-                var cap = 1;
-                try { var info = getSpecialSharingInfo(grp[0].nm, activityProperties, globalSettings); cap = (info && info.capacity) || 1; } catch (_e) { cap = 1; }
-                if (grp.length <= cap) return;
-                grp.sort(function (a, b) { return String(a.bunk).localeCompare(String(b.bunk)) || (a.idx - b.idx); });
-                for (var i = cap; i < grp.length; i++) {
-                    var u = grp[i];
-                    var cur = _fcgSA[u.bunk] && _fcgSA[u.bunk][u.idx];
-                    if (!cur || cur.field === 'Free') continue;
-                    var st = (cur._startMin != null) ? cur._startMin : null, en = (cur._endMin != null) ? cur._endMin : null;
-                    _fcgSA[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _startMin: st, _endMin: en, _source: 'final-cap-gate', continuation: false };
-                    _fcgDemoted++;
-                }
-            });
-            if (_fcgDemoted > 0) log('[STEP 6.866 FINAL-CAP GATE] demoted ' + _fcgDemoted + ' over-cap special occupant(s) → Free (created after the FN-19/21 sweep)');
-            else log('[STEP 6.866 FINAL-CAP GATE] ✅ no post-sweep over-cap specials');
-        } catch (_eFcg) { try { warn('[STEP 6.866 FINAL-CAP GATE] error: ' + (_eFcg && _eFcg.message)); } catch (_x) {} }
-
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.87 — OFF-GRID EDGE-CLIP (cover the TRUE division boundary)
@@ -28326,6 +28223,144 @@
                 if (demotedX) log('  ⛔ Sharing-invariant backstop: demoted ' + demotedX + ' illegal share(s) to Free.');
             })();
         } catch (_eXB) { try { warn('[XDIV-BACKSTOP] ' + (_eXB && _eXB.message)); } catch (_e3) {} }
+
+        // ★ FN-54: FINAL SPECIAL-ACTIVITY INVARIANT BACKSTOP — the sibling of the
+        //   field backstop above, for SPECIALS (which FN-53 deliberately skips).
+        //   This is the single authoritative guarantee that NO special is ever
+        //   over-capacity OR staggered in the saved grid, regardless of which
+        //   upstream pass placed it (GlobalPlanner, Phase 2.5 walls, DROP-REFILL
+        //   filler, the FN-19/21 swap, SLIVER-ABSORB, or FQ-REOPT). It runs dead
+        //   last — after the final FQ-REOPT — so nothing can re-introduce a
+        //   violation afterward. Mirrors auto_validator exactly: a special is
+        //   keyed by its ACTIVITY NAME (off-field specials carry no real field),
+        //   occupants are gathered across ALL grades, and a senior-first greedy
+        //   admit enforces, per special's real sharing config:
+        //     • not_sharable  → only ONE bunk at a time (no overlap at all)
+        //     • same_division → identical window + same grade, up to capacity
+        //     • cross_division→ identical window + isCrossDivAllowed pairs, ≤ cap
+        //     • all/custom    → identical window, ≤ capacity
+        //   Any overlapping occupant that breaks these (a different-window overlap
+        //   = stagger, or an over-cap / illegal-grade share) is demoted to Free.
+        //   Per the owner's rule "if sharing is off, one bunk at a time", a Free
+        //   hole is the correct stricter outcome. Leagues/trips/rotation events
+        //   and whole-grade custom layers are never touched.
+        try {
+            (function _specialIntegrityBackstop() {
+                var _sgGS = (function () { try { return { app1: _fn24DurableApp1() }; } catch (_e) { return {}; } })();
+                var _sgKnown = {};
+                ((_sgGS.app1 && _sgGS.app1.specialActivities) || []).forEach(function (s) { if (s && s.name) { _sgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _sgKnown[String(s.location).toLowerCase().trim()] = 1; } });
+                try { if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) todaysSpecials.forEach(function (s) { if (s && s.name) { _sgKnown[String(s.name).toLowerCase().trim()] = 1; if (s.location) _sgKnown[String(s.location).toLowerCase().trim()] = 1; } }); } catch (_e) {}
+                if (!Object.keys(_sgKnown).length) return;
+                // Senior-first ordering (0 = most senior) so juniors are demoted last.
+                var _sgSen = {};
+                try {
+                    var _of = (typeof window.getDivisionAgeOrder === 'function') ? window.getDivisionAgeOrder(Object.keys(divisions || {})) : Object.keys(divisions || {});
+                    _of.forEach(function (n, i) { _sgSen[n] = i; });
+                } catch (_eS) {}
+                var _sgBG = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _sgBG[String(b)] = g; }); });
+                var _sgDT = window.divisionTimes || {};
+                var _sgTime = function (bunk, grade, idx, e) {
+                    if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_sgDT[grade] && _sgDT[grade]._perBunkSlots && _sgDT[grade]._perBunkSlots[bunk]);
+                    if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                    var ds = _sgDT[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                    return null;
+                };
+                var _sa = window.scheduleAssignments || {};
+                // Collect every live special occupant once, tagged with its (grade, window).
+                //   Two complementary guarantees run off this single index — they mirror the
+                //   auto-validator's two special-facing checks exactly so the engine can never
+                //   emit a grid the validator would flag:
+                //     • CAPACITY — per (special, grade): peak concurrent ≤ cap   (Check B)
+                //     • STAGGER  — per special: any two overlapping occupants must share an
+                //                  IDENTICAL window, unless the special's own sharing config
+                //                  legitimately permits that cross-division pairing  (Check C)
+                //   Leagues / trips / rotation events / whole-grade custom layers are never
+                //   touched (they are not contended special resources).
+                var _byName = {};   // special name → [occupants across all grades]
+                var _byNG = {};     // special name||grade → [occupants in that grade]
+                Object.keys(_sa).forEach(function (bunk) {
+                    var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _sgBG[String(bunk)]; if (!g) return;
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        if (e._league || e._leagueGame || e.leagueName || e._isTrip || e._isRotationEvent) return;
+                        if (e.type === 'custom' || e._customActivity) return;   // whole-grade custom layer
+                        var rawNm = String(e._assignedSpecial || e._activity || e.event || '').trim();
+                        var nm = rawNm.toLowerCase();
+                        if (!nm || nm === 'free' || !_sgKnown[nm]) return;       // specials only
+                        var t = _sgTime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        var occ = { e: e, bunk: String(bunk), grade: g, nm: nm, raw: rawNm, st: t.s, en: t.e, demoted: false };
+                        (_byName[nm] = _byName[nm] || []).push(occ);
+                        (_byNG[nm + '||' + g] = _byNG[nm + '||' + g] || []).push(occ);
+                    });
+                });
+                // Per-special sharing config (capacity + shareType), resolved once.
+                var _spInfo = {};
+                Object.keys(_byName).forEach(function (nm) {
+                    var cap = 1, st = 'not_sharable';
+                    try { var info = getSpecialSharingInfo(_byName[nm][0].raw || _byName[nm][0].nm, activityProperties, _sgGS); if (info) { cap = info.capacity || 1; st = info.shareType || 'not_sharable'; } } catch (_e) {}
+                    _spInfo[nm] = { cap: cap, shareType: st };
+                });
+                // A cross-grade overlap is LEGITIMATE (not a stagger violation) only when the
+                //   special is explicitly configured for cross-division use. Same-grade overlap
+                //   is always governed by the identical-window rule. This is the exact pivot the
+                //   validator now uses too, so engine + report agree on one definition.
+                var _crossDivOK = function (st) { return st === 'cross_division' || st === 'any_division' || st === 'custom'; };
+                var _toFree = function (u) {
+                    if (u.demoted || u.e.field === 'Free') { u.demoted = true; return; }
+                    u.e.field = 'Free'; u.e.sport = null; u.e._activity = 'Free';
+                    u.e._assignedSpecial = null; u.e._autoSpecial = false; u.e._source = 'special-backstop';
+                    u.demoted = true;
+                };
+                var _demotedCap = 0, _demotedStag = 0;
+                // PASS 1 — CAPACITY (per special, per grade). Admit earliest/longest first;
+                //   demote any occupant whose admission would push concurrent count over cap.
+                Object.keys(_byNG).forEach(function (k) {
+                    var occ = _byNG[k].slice();
+                    if (occ.length < 2) return;
+                    var cap = (_spInfo[occ[0].nm] && _spInfo[occ[0].nm].cap) || 1;
+                    occ.sort(function (a, b) { return (a.st - b.st) || ((b.en - b.st) - (a.en - a.st)) || String(a.bunk).localeCompare(String(b.bunk)); });
+                    var kept = [];
+                    occ.forEach(function (u) {
+                        if (u.demoted) return;
+                        var ovCount = 0;
+                        for (var i = 0; i < kept.length; i++) { if (kept[i].en > u.st && kept[i].st < u.en) ovCount++; }
+                        if (ovCount < cap) { kept.push(u); return; }
+                        _toFree(u); _demotedCap++;
+                    });
+                });
+                // PASS 2 — STAGGER (per special, across grades). The disruptive case the
+                //   owner means by "staggering" — and the rule's operational rationale — is a
+                //   LATE JOIN: a bunk walks into a session already in progress (shows up at
+                //   9:25 to a VR room another bunk started at 9:00). Two bunks that START
+                //   TOGETHER but run different durations (an early departure, or a multi-period
+                //   bunk staying longer) is benign — nobody joins mid-session. So flag overlap
+                //   with DIFFERENT start times only, and demote the later arrival. Legitimately
+                //   configured cross-division shares are exempt (each division runs its own clock).
+                Object.keys(_byName).forEach(function (nm) {
+                    var info = _spInfo[nm] || { cap: 1, shareType: 'not_sharable' };
+                    var occ = _byName[nm].filter(function (u) { return !u.demoted; });
+                    if (occ.length < 2) return;
+                    occ.sort(function (a, b) { return (a.st - b.st) || ((b.en - b.st) - (a.en - a.st)) || String(a.bunk).localeCompare(String(b.bunk)); });
+                    for (var i = 0; i < occ.length; i++) {
+                        var a = occ[i]; if (a.demoted) continue;
+                        for (var j = i + 1; j < occ.length; j++) {
+                            var b = occ[j]; if (b.demoted) continue;
+                            if (!(a.en > b.st && a.st < b.en)) continue;          // no overlap
+                            if (a.st === b.st) continue;                          // same start → benign (no late join)
+                            if (a.grade !== b.grade && _crossDivOK(info.shareType)) continue; // legit cross-div share
+                            _toFree(b); _demotedStag++;                            // late join → demote the later arrival
+                        }
+                    }
+                });
+                var _demoted = _demotedCap + _demotedStag;
+                if (_demoted) log('  ⛔ [FN-54 SPECIAL BACKSTOP] demoted ' + _demoted + ' special occupant(s) → Free (' + _demotedCap + ' over-cap, ' + _demotedStag + ' staggered) — final guarantee: no special exceeds capacity or staggers');
+                else log('  ✅ [FN-54 SPECIAL BACKSTOP] no over-cap / staggered specials');
+            })();
+        } catch (_eSB) { try { warn('[FN-54 SPECIAL BACKSTOP] ' + (_eSB && _eSB.message)); } catch (_e3) {} }
+
 
         // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
         //   the final null sweep can't refill our cleared slots with violations.

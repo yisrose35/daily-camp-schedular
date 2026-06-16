@@ -416,8 +416,26 @@
                     if (a.flags._staggerReserved && b.flags._staggerReserved &&
                         a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
 
-                    // If they overlap but don't have identical times → staggered violation
-                    if (a.startMin !== b.startMin || a.endMin !== b.endMin) {
+                    // ★ Legitimate cross-division share exemption: a resource the camp
+                    //   explicitly configured for cross-division use (cross_division /
+                    //   any_division, or custom with a divisions list) is DESIGNED for
+                    //   different divisions to use the same high-capacity resource on their
+                    //   own division clocks. Two divisions arriving at offset times to a
+                    //   shared arts room (cap 20) is the intended state, not a broken
+                    //   single-game share. Same-grade overlap is never exempt — within one
+                    //   division an offset arrival is always a real stagger. This is the
+                    //   exact pivot FN-54 in the engine uses, so engine + report agree.
+                    if (a.grade !== b.grade &&
+                        (sharing.type === 'cross_division' || sharing.type === 'any_division' || sharing.type === 'custom')) continue;
+
+                    // ★ Stagger = LATE JOIN (different start times). The disruptive case is a
+                    //   bunk walking into a session already in progress — "shows up at 9:25 to
+                    //   find another 25 min into the game." Two bunks that START TOGETHER but
+                    //   run different durations (early departure / a multi-period bunk staying
+                    //   longer) is benign: nobody joins mid-session, and rotated/multi-period
+                    //   schedules legitimately produce this. Flag only on a differing START.
+                    //   (Engine FN-54 uses the identical pivot, so report + engine agree.)
+                    if (a.startMin !== b.startMin) {
                         const key = [fieldNorm, a.bunk, b.bunk, a.startMin, b.startMin].sort().join('|');
                         if (seen.has(key)) continue;
                         seen.add(key);
@@ -432,7 +450,7 @@
                                 `${a.bunk} (${a.grade}, ${formatTime(a.startMin)}-${formatTime(a.endMin)}) and ` +
                                 `${b.bunk} (${b.grade}, ${formatTime(b.startMin)}-${formatTime(b.endMin)})` +
                                 (sameGrade ? '' : ' (cross-grade)') +
-                                `. Bunks sharing a field must start and end at the same time.`
+                                `. Bunks sharing a field must start at the same time (no mid-session joins).`
                         });
                     }
                 }
