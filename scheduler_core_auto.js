@@ -13639,6 +13639,21 @@
                 if (offField.length > maxOffField) maxOffField = offField.length;
             });
 
+            // ★ POOL-AWARE SWIM STAGGER (v17): the single pool can host only a
+            // limited number of grades at once, but the Latin-square rotation below
+            // has only `bandCount` (≈3) distinct band positions — so with many grades
+            // 3-4 of them get the SAME swim window and all collide at the one pool,
+            // leaving most bunks with no swim. Give each swim-bearing grade a DISTINCT
+            // 40-min swim window, round-robined across the day, so the pool is used at
+            // different points throughout the day for different grades instead of all
+            // at once. (Rotated by typeOrderSeed so the tabu search still explores
+            // different absolute placements per iteration.)
+            var _swimOrdinal = {};
+            var _swimGradeN = 0;
+            shuffled.forEach(function (g) {
+                if (gradeInfo[g] && gradeInfo[g].offField.indexOf('swim') >= 0) { _swimOrdinal[g] = _swimGradeN++; }
+            });
+
             // If no grade has any off-field types, skip rotation entirely
             if (maxOffField === 0) {
                 const plan = {};
@@ -13722,6 +13737,23 @@
                         var bandWidth = bandEnd - bandStart;
                         bandStart = Math.max(info.start, Math.min(info.end - bandWidth, bandStart + nudge));
                         bandEnd = bandStart + bandWidth;
+                    }
+
+                    // ★ POOL-AWARE SWIM WINDOW: override the Latin-square position for
+                    // SWIM so each grade swims at a DIFFERENT point in the day. One
+                    // shared pool can't host many grades at once, so round-robin grades
+                    // across the day's 40-min swim windows (rotated by the iteration
+                    // seed for search diversity). This spreads pool demand across the
+                    // whole day instead of piling 3-4 grades into one window.
+                    if (type === 'swim' && _swimOrdinal[grade] != null) {
+                        var _swimExp = TYPE_EXPECTED_MINS.swim || 40;
+                        var _nSwimSlots = Math.max(1, Math.floor(info.duration / _swimExp));
+                        var _swimSlot = (_swimOrdinal[grade] + (typeOrderSeed || 0)) % _nSwimSlots;
+                        var _sStart = info.start + _swimSlot * _swimExp;
+                        var _sEnd = _sStart + _swimExp;
+                        if (_sEnd > info.end) { _sEnd = info.end; _sStart = Math.max(info.start, _sEnd - _swimExp); }
+                        bandStart = _sStart;
+                        bandEnd = _sEnd;
                     }
 
                     typeBands[type] = { start: bandStart, end: bandEnd };
