@@ -112,6 +112,7 @@ function campConfig(opts) {
       autoStartStr: '9:00', autoEndStr: '12:20',
       swimReal: true,
       swimGAShare: !!opts.swimGAShare,
+      swimRotated: !!opts.swimRotated,
     };
   }
   if (opts.swimWalls) {
@@ -437,9 +438,18 @@ function buildLayers(cfg) {
         type: 'swim',
         name: 'Swim',
         event: 'Swim',
-        fullGrade: true,
+        // swimRotated: model the live camp's PER-BUNK rotated swim (fullGrade:false).
+        //   getSwimmersForToday returns ALL bunks when bunksPerDay>=count (harness
+        //   default), so every bunk needs swim today — but a non-fullGrade swim is
+        //   NOT pinned in Phase 0; it must be reserved by Phase 2.3 BEFORE specials
+        //   or it gets crowded out (the live "missing SWIM: 0min free" bug).
+        fullGrade: cfg.swimRotated ? false : true,
         periodMin: 45, durationMin: 45, durationMax: 45,
-        startMin: swimBandRStart, endMin: swimBandREnd,
+        // swimRotated mirrors the live shape: a WIDE (whole-day) swim window
+        // (ratio<1, "leeway") rather than a tight band. This is the case where
+        // specials can pack the day before swim is reserved.
+        startMin: cfg.swimRotated ? start : swimBandRStart,
+        endMin:   cfg.swimRotated ? end   : swimBandREnd,
         qty: 1, op: '=',
         color: '#0EA5E9',
       });
@@ -1329,6 +1339,23 @@ test('auto scheduler pins a non-fullGrade, wide-window lunch layer for every bun
     requireLunch: true,
     // This scenario validates lunch coverage specifically; the wide lunch wall
     // can leave a small tiling residue that is not what we're testing here.
+    skipGapCheck: true,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TEST 10 — SWIM-ROTATED: a type:'swim' layer that is NOT fullGrade (the live
+// camp's per-bunk rotated swim). Every bunk needs swim today (bunksPerDay >=
+// count), but a non-fullGrade swim is not pinned in Phase 0 — it must be
+// reserved by Phase 2.3 as a wall BEFORE Phase 2.5 distributes specials, or the
+// specials pack the swim window and the bunk ends the day with no swim ("missing
+// SWIM: window ... has only 0min free" in the live log). Asserts every bunk
+// gets swim.
+test('auto scheduler reserves rotated (non-fullGrade) swim before specials for every bunk', async (t) => {
+  await runScenario('SWIM-ROTATED (type:swim, fullGrade:false, reserved before specials)', {
+    swimReal: true,
+    swimRotated: true,
+    requireSwim: true,
     skipGapCheck: true,
   });
 });

@@ -14336,7 +14336,14 @@
                         return (l.type || '').toLowerCase() === 'swim';
                     });
                     if (!_p23SwimLayer) return;
-                    if (!todaysSwimmers[grade] || todaysSwimmers[grade].size === 0) return;
+                    // Reserve for the rotation-scoped swimmers. This MUST match the
+                    //   swim-placement driver (~L8018: swimsToday = set ? has(bunk) :
+                    //   false) so we never reserve swim the CSP won't demand, nor skip
+                    //   swim the CSP will demand: undefined set → nobody (CSP places
+                    //   none), empty set → nobody, non-empty → exactly those bunks.
+                    var _p23Today = todaysSwimmers[grade];
+                    if (!_p23Today || _p23Today.size === 0) return;
+                    var _p23AllSwim = false;
 
                     var _p23SC = resolveConstraints(_p23SwimLayer, 'swim');
                     var _p23SwimDur = _p23SC.dMin || 40;
@@ -14401,7 +14408,7 @@
                     // event) > earliest. Bunks with conflicting pinned activities at
                     // slot A naturally fall to slot B, creating the stagger organically.
                     getBunksForGrade(grade, divisions).forEach(function(bunk) {
-                        if (!todaysSwimmers[grade].has(String(bunk))) return;
+                        if (!_p23AllSwim && !_p23Today.has(String(bunk))) return;
                         if ((bunkTimelines[bunk] || []).some(function(b) {
                             return (b.type || '').toLowerCase() === 'swim';
                         })) return;
@@ -14539,8 +14546,10 @@
                     });
                 });
 
+                // Always log the summary (even 0) so a live log definitively shows
+                // whether swim was reserved BEFORE specials, vs left to Phase 3.
+                log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change block(s) as walls (before specials)');
                 if (_p23Count > 0) {
-                    log('[Phase2.3] ★ PRE-PLACED ' + _p23Count + ' staggered swim+change blocks as walls');
                     allGrades.forEach(function(grade) {
                         getBunksForGrade(grade, divisions).forEach(function(bunk) { ensureTimelineIntegrity(bunk); });
                     });
@@ -23690,6 +23699,16 @@
                 } catch (_ebg) {}
                 return null;
             };
+            // A bunk only "wants swim today" if the swim rotation scoped it in. Match
+            //   the swim-placement driver (~L8018: swimsToday = set ? has(bunk) :
+            //   false) EXACTLY so we never flag a rotation-excused bunk as "missing
+            //   swim": undefined/empty set → nobody is expected to swim today.
+            const _swimsToday = (g, bk) => {
+                try {
+                    const set = (typeof todaysSwimmers !== 'undefined' && todaysSwimmers) ? todaysSwimmers[g] : undefined;
+                    return set ? set.has(String(bk)) : false;
+                } catch (_e) { return false; }
+            };
             const _missSwim = [], _missLunch = [];
             Object.keys(_saCV).forEach(bk => {
                 const arr = _saCV[bk];
@@ -23698,7 +23717,7 @@
                 const g = _bunkGrade(bk);
                 const wants = (g && _gradeWants[g]) || null;
                 if (!wants) return; // grade didn't ask for swim/lunch — nothing to flag
-                if (wants.has('swim')  && !_hasType(row, 'swim'))  _missSwim.push({ bk, row });
+                if (wants.has('swim')  && _swimsToday(g, bk) && !_hasType(row, 'swim')) _missSwim.push({ bk, row });
                 if (wants.has('lunch') && !_hasType(row, 'lunch')) _missLunch.push({ bk, row });
             });
             const _dumpCV = (label, list) => {
