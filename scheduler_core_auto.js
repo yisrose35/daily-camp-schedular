@@ -14376,6 +14376,73 @@
                 if (isFullGrade && layer._classification !== 'pinned') placeLeagueForGrade(grade, layer);
             });
 
+            // ── Phase 1.4: Reserve REQUIRED band-constrained custom layers ──
+            // A custom layer the user drew (e.g. "Morning Activity") is REQUIRED:
+            // every selected bunk should get it. When its window is wider than its
+            // duration it classifies "windowed" (floats). It must be reserved BEFORE
+            // the shopping lists / free windows are built (just below) — otherwise the
+            // GlobalPlanner sees its slot as free, packs a special there, and the
+            // windowed custom (placed later in Phase 3) is crowded out and silently
+            // dropped (live Harmony bug: Gaga took the 12:10 slot; Morning Activity
+            // vanished). Reserving it here makes buildBunkShoppingList exclude it from
+            // freeWindows, so the planner distributes specials AROUND it — the engine
+            // still chooses the slot per bunk (first free slot in the window, given
+            // that bunk's other walls); it is NOT hard-pinned. Skips: pinned customs
+            // (Phase 0), connect-to (Phase 2.4), consecutive-bunk generals (Phase
+            // 2.35), and whole-day FLOATERS (window >= full grade day) — those keep
+            // their free Phase-3 placement so the optimizer can roam.
+            try {
+                var _p14Count = 0;
+                allGrades.forEach(function (grade) {
+                    (layersByGrade[grade] || []).forEach(function (cl) {
+                        if ((cl.type || '').toLowerCase() !== 'custom') return;
+                        if (cl._classification === 'pinned') return;
+                        if (cl.adjacentTo) return;
+                        var _nm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                        if (!_nm) return;
+                        if ((window.__cbGeneralNamesLow || []).indexOf(_nm) >= 0) return;
+                        var _gd = divisions[grade] || divisions[String(grade)] || {};
+                        var gs = parseTimeToMinutes(_gd.startTime) || 540;
+                        var ge = parseTimeToMinutes(_gd.endTime) || 960;
+                        var winStart = Math.max(cl.startMin || 0, gs);
+                        var winEnd = Math.min(cl.endMin || 1440, ge);
+                        var dur = cl.durationMin || cl.periodMin || 30;
+                        if (winEnd - winStart < dur) return;
+                        if ((winEnd - winStart) >= (ge - gs)) return; // whole-day floater → let it roam
+                        var _allB = getBunksForGrade(grade, divisions);
+                        var targetBunks = (cl.customBunks && cl.customBunks.length > 0)
+                            ? _allB.filter(function (b) { return cl.customBunks.includes(String(b)); })
+                            : _allB;
+                        targetBunks.forEach(function (bunk) {
+                            var tl = bunkTimelines[bunk] || (bunkTimelines[bunk] = []);
+                            if (tl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _nm; })) return;
+                            for (var s = winStart; s + dur <= winEnd; s += 5) {
+                                var e = s + dur, clash = false;
+                                for (var i = 0; i < tl.length; i++) {
+                                    var b = tl[i];
+                                    if (!b || !(b._committed || b._fixed || b._classification === 'pinned')) continue;
+                                    if (b.startMin < e && b.endMin > s) { clash = true; break; }
+                                }
+                                if (clash) continue;
+                                tl.push({
+                                    startMin: s, endMin: e,
+                                    type: 'custom', event: cl.customActivity || cl.event || 'Custom',
+                                    layer: cl, field: cl.customField || null,
+                                    _activity: cl.customActivity || cl.event || 'Custom',
+                                    _customActivity: cl.customActivity || null, _customField: cl.customField || null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _source: 'phase1.4-required-custom'
+                                });
+                                if (typeof ensureTimelineIntegrity === 'function') { try { ensureTimelineIntegrity(bunk); } catch (_eti) {} }
+                                _p14Count++;
+                                break;
+                            }
+                        });
+                    });
+                });
+                if (_p14Count > 0) log('[Phase1.4] ★ Reserved ' + _p14Count + ' required custom-layer block(s) before special distribution');
+            } catch (_e14) { try { warn('[Phase1.4] error: ' + (_e14 && _e14.message)); } catch (_x) {} }
+
             // Phase 1: Shopping lists
             const shoppingLists = {};
             allGrades.forEach(grade => getBunksForGrade(grade, divisions).forEach(bunk => { shoppingLists[bunk] = buildBunkShoppingList(bunk, grade); }));
@@ -16588,77 +16655,6 @@
                     if (_dpPackErr && _dpPackErr.stack) warn(_dpPackErr.stack);
                 }
             }
-
-            // ── Phase 2.45: Reserve REQUIRED windowed custom layers per bunk ──
-            // A custom layer the user drew (e.g. "Morning Activity") is REQUIRED:
-            // every selected bunk should get it. When its window is drawn WIDER than
-            // its duration it classifies "windowed" (floats) and is placed as a
-            // Phase-3 need — but Phase 3 runs AFTER Phase 2.5 fills the band with
-            // specials, so for bunks where the specials claimed the window first it
-            // silently dropped (live Harmony bug: Morning Activity landed for only 1
-            // of 4 bunks; the others showed a special — or a leaked sport — in its
-            // place). Reserve it as a wall NOW, before Phase 2.5, so the specials pack
-            // AROUND it and every bunk keeps its required custom. Mirrors the swim
-            // reservation (Phase 2.3). Pinned customs (narrow window) are already
-            // placed in Phase 0; connect-to and consecutive-bunk customs have their
-            // own phases — all skipped here.
-            try {
-                var _p245Count = 0;
-                allGrades.forEach(function (grade) {
-                    (layersByGrade[grade] || []).forEach(function (cl) {
-                        if ((cl.type || '').toLowerCase() !== 'custom') return;
-                        if (cl._classification === 'pinned') return;          // Phase 0
-                        if (cl.adjacentTo) return;                            // Phase 2.4 connect-to
-                        var _nm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
-                        if (!_nm) return;
-                        if ((window.__cbGeneralNamesLow || []).indexOf(_nm) >= 0) return; // Phase 2.35
-                        var _gd = divisions[grade] || divisions[String(grade)] || {};
-                        var gs = parseTimeToMinutes(_gd.startTime) || 540;
-                        var ge = parseTimeToMinutes(_gd.endTime) || 960;
-                        var winStart = Math.max(cl.startMin || 0, gs);
-                        var winEnd = Math.min(cl.endMin || 1440, ge);
-                        var dur = cl.durationMin || cl.periodMin || 30;
-                        if (winEnd - winStart < dur) return;
-                        // ★ Only reserve a BAND-constrained required custom (a stacker
-                        //   layer the user pinned to a portion of the day). A custom drawn
-                        //   across (nearly) the whole grade day is a free FLOATER the
-                        //   optimizer should place wherever it fits — reserving it at its
-                        //   window start would over-constrain the day and starve other
-                        //   needs (e.g. sports). Skip those; they keep their Phase-3
-                        //   per-bunk need placement.
-                        if ((winEnd - winStart) >= (ge - gs)) return;
-                        var _allB = getBunksForGrade(grade, divisions);
-                        var targetBunks = (cl.customBunks && cl.customBunks.length > 0)
-                            ? _allB.filter(function (b) { return cl.customBunks.includes(String(b)); })
-                            : _allB;
-                        targetBunks.forEach(function (bunk) {
-                            var tl = bunkTimelines[bunk] || (bunkTimelines[bunk] = []);
-                            if (tl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _nm; })) return;
-                            for (var s = winStart; s + dur <= winEnd; s += 5) {
-                                var e = s + dur, clash = false;
-                                for (var i = 0; i < tl.length; i++) {
-                                    var b = tl[i];
-                                    if (!b || !(b._committed || b._fixed || b._classification === 'pinned')) continue;
-                                    if (b.startMin < e && b.endMin > s) { clash = true; break; }
-                                }
-                                if (clash) continue;
-                                tl.push({
-                                    startMin: s, endMin: e,
-                                    type: 'custom', event: cl.customActivity || cl.event || 'Custom',
-                                    layer: cl, field: cl.customField || null,
-                                    _activity: cl.customActivity || cl.event || 'Custom',
-                                    _customActivity: cl.customActivity || null, _customField: cl.customField || null,
-                                    _classification: 'pinned', _committed: true, _fixed: true,
-                                    _activityLocked: true, _source: 'phase2.45-required-custom'
-                                });
-                                _p245Count++;
-                                break;
-                            }
-                        });
-                    });
-                });
-                if (_p245Count > 0) log('[Phase2.45] ★ Reserved ' + _p245Count + ' required custom-layer block(s) as walls (before specials)');
-            } catch (_e245) { try { warn('[Phase2.45] error: ' + (_e245 && _e245.message)); } catch (_x) {} }
 
             // ── Phase 2.5: Pre-place ALL specials as walls for ALL bunks ──
             // The GlobalPlanner fairly assigned 1 special per bunk with time+field.
