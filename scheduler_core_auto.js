@@ -26330,6 +26330,77 @@
             } catch (_eFn1921) { try { warn('[FN-19/21 SWEEP] error: ' + (_eFn1921 && _eFn1921.message)); } catch (_e) {} }
         })();
 
+        // ★ FN-19/21 REFILL — the cap sweep above demotes over-cap specials to Free.
+        //   For a grade with NO sport layer those Frees can't be sport-filled (FN-22
+        //   skips sports-free grades), so without this they stay empty (live: capped
+        //   Baking to 2, leaving 2 Frees). Refill each fn1921-demoted slot with a
+        //   DIFFERENT available special that fits the slot exactly, the bunk hasn't
+        //   done today, and has spare capacity at that time — so the slot ends up
+        //   both capped AND full. Sequential: each fill updates scheduleAssignments so
+        //   the next concurrency count sees it (refills never over-cap each other).
+        (function _fn1921Refill() {
+            try {
+                if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials) || !todaysSpecials.length) return;
+                var _rfSA = window.scheduleAssignments || {};
+                var _rfDivs = window.divisions || {};
+                var _rfB2G = {}; Object.keys(_rfDivs).forEach(function (g) { ((_rfDivs[g] && _rfDivs[g].bunks) || []).forEach(function (b) { _rfB2G[String(b)] = g; }); });
+                var _rfDT = window.divisionTimes || {};
+                var _rfSlotTime = function (bunk, grade, idx, e) {
+                    if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk])
+                            || (_rfDT[grade] && _rfDT[grade]._perBunkSlots && _rfDT[grade]._perBunkSlots[bunk]);
+                    if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                    return null;
+                };
+                var _rfConc = function (nameLow, s, e, exclBunk) {
+                    var n = 0;
+                    Object.keys(_rfSA).forEach(function (b) {
+                        if (b === exclBunk) return;
+                        (_rfSA[b] || []).forEach(function (x) {
+                            if (!x || x.continuation || x._startMin == null) return;
+                            var a = String(x._assignedSpecial || x._activity || x.event || '').toLowerCase().trim();
+                            if (a === nameLow && x._startMin < e && x._endMin > s) n++;
+                        });
+                    });
+                    return n;
+                };
+                var _rfFilled = 0;
+                Object.keys(_rfSA).forEach(function (bunk) {
+                    var slots = _rfSA[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _rfB2G[String(bunk)] || '?';
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        if (!e._constraintDemoted || !/fn1921/.test(String(e._demotedReason || ''))) return;
+                        var _t = _rfSlotTime(bunk, g, idx, e); if (!_t || _t.s == null || _t.e == null) return;
+                        var width = _t.e - _t.s;
+                        var done = {}; slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
+                        for (var i = 0; i < todaysSpecials.length; i++) {
+                            var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
+                            var nm = String(sp.name).toLowerCase().trim();
+                            if (done[nm]) continue;
+                            try { if (!isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) { continue; }
+                            var dur = getSpecialDuration(sp.name, activityProperties, globalSettings) || 0;
+                            if (dur !== width) continue;                          // exact fit → no new gap
+                            if (instructorConflictAt(sp.name, _t.s, _t.e, bunk)) continue;
+                            var info = getSpecialSharingInfo(sp.name, activityProperties, globalSettings);
+                            if (_rfConc(nm, _t.s, _t.e, bunk) >= (info.capacity || 1)) continue; // would over-cap
+                            var loc = sp.location || null;
+                            slots[idx] = {
+                                field: loc || sp.name, sport: null, _activity: sp.name, event: sp.name, type: 'special',
+                                _assignedSpecial: sp.name, _specialLocation: loc, _isSpecialLocation: !!loc,
+                                _autoSpecial: true, _autoMode: true, _startMin: _t.s, _endMin: _t.e,
+                                _source: 'fn1921-refill', continuation: false
+                            };
+                            try { registerSpecialUsage(sp.name, g, _t.s, _t.e); } catch (_e) {}
+                            _rfFilled++;
+                            break;
+                        }
+                    });
+                });
+                if (_rfFilled > 0) log('[FN-19/21 REFILL] filled ' + _rfFilled + ' capped slot(s) with an alternate special');
+            } catch (_eRf) { try { warn('[FN-19/21 REFILL] error: ' + (_eRf && _eRf.message)); } catch (_e) {} }
+        })();
+
         // ★ FN-22: now fill any remaining Free slots — both solver-left (special-room
         //   contention) AND slots the FN-15/19/21 sweeps just demoted — with a sport on a
         //   completely-empty field. Runs LAST: empty-field fills are conflict-free by
