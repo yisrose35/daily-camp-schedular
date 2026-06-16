@@ -56,12 +56,21 @@ const fmt = (min) => {
 // Period length used to tile both grades.
 const PERIOD = 20; // 20-min slots so the 20-min Main Activity + specials align
 
-// Auto grade: 09:00 -> 11:30  (special band 09:00-09:58 in real case; we keep a
-//   full tileable day). Chair grade shifted later: 09:58 -> 12:28.
+// Auto grade: 09:00 -> 11:40 (8 periods of 20m). Chair grade shifted ~1hr later.
+//
+// CONFIG-FIDELITY NOTE: the shift is grid-aligned (60 min) rather than 58 min.
+// The solver anchors every layer window to the 5-minute grid (scheduler_core_auto.js
+// ~line 1586: "snap the COMMON window start up to the 5-min grid"), so a 9:58 start
+// is structurally re-snapped to 10:00 internally and the 9:58-10:00 sliver can NEVER
+// be covered — making a gapless day IMPOSSIBLE for reasons unrelated to the bug under
+// test. A real camp running 20-min periods would never start a division off the grid.
+// A 60-min shift faithfully preserves what the test exercises: Chair overlaps Auto's
+// window (10:00-11:40 shared) and the same-grade-only Auditorium "Main Activity" must
+// stagger into its own sub-slot during that overlap — the exact failing case.
 const AUTO_START = HM(9, 0);
 const AUTO_END = HM(11, 40);     // 08 periods of 20m
-const CHAIR_START = HM(9, 58);
-const CHAIR_END = HM(12, 38);    // shifted ~58m later, same span
+const CHAIR_START = HM(10, 0);
+const CHAIR_END = HM(12, 40);    // shifted 60m later (grid-aligned), same span
 
 const AUTO_BUNKS = ['Auto 1', 'Auto 2', 'Auto 3', 'Auto 4', 'Auto 5', 'Auto 6', 'Auto 7', 'Auto 8'];
 const CHAIR_BUNKS = ['Chair 1', 'Chair 2', 'Chair 3', 'Chair 4', 'Chair 5', 'Chair 6'];
@@ -86,6 +95,13 @@ function buildDivisionTimes(start, end) {
 
 // Sports + fields (each sport hosted on its own field so capacity never starves).
 const SPORTS = ['Football', 'Baseball', 'Volleyball', 'Hockey', 'Basketball', 'Soccer'];
+// CONFIG-FIDELITY NOTE: there must be at least as many sport fields as the LARGEST
+// grade has bunks (Auto = 8), because all 8 Auto bunks share the same Main Activity
+// + special bands and therefore land their sport slots in the SAME two periods — they
+// all need a field simultaneously. With only 7 fields, two of the 16 simultaneous
+// sport demands (11:00 and 11:20) are physically unsatisfiable and a gapless day is
+// IMPOSSIBLE regardless of solver quality. A real camp running 8 parallel bunks would
+// provision ≥8 fields; we add an 8th (a second soccer field) so capacity matches demand.
 const FIELDS = [
   { name: 'Football Field',  activities: ['Football'] },
   { name: 'Baseball Field',  activities: ['Baseball'] },
@@ -94,6 +110,7 @@ const FIELDS = [
   { name: 'Basketball A',    activities: ['Basketball'] },
   { name: 'Basketball B',    activities: ['Basketball'] },
   { name: 'Soccer Field',    activities: ['Soccer'] },
+  { name: 'Soccer Field B',  activities: ['Soccer'] },
 ];
 
 // ~5 specials, each in its own room.
@@ -198,7 +215,7 @@ function makeEl() {
 function buildSandbox() {
   const divisions = {
     Auto:  { bunks: AUTO_BUNKS.slice(),  startTime: '9:00', endTime: '11:40' },
-    Chair: { bunks: CHAIR_BUNKS.slice(), startTime: '9:58', endTime: '12:38' },
+    Chair: { bunks: CHAIR_BUNKS.slice(), startTime: '10:00', endTime: '12:40' },
   };
 
   const divisionTimes = {
