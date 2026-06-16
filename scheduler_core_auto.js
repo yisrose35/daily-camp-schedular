@@ -8456,11 +8456,25 @@
                     function getValidPositions(need, tmpl, gs, ge, fMin, otherNeeds) {
                         var positions = [];
                         var gaps = findGaps(tmpl, gs, ge);
-                        // Swim is placed as a standalone period-aligned block.
-                        // Pre/post change live in adjacent bell-schedule periods
-                        // (see attachSwimChangeBlocks + computeSwimChangeAnchors)
-                        // and don't need to share swim's gap.
-                        var _swimPre = 0, _swimPost = 0;
+                        // ★ SWIM CHANGE ENVELOPE: reserve room for the pre/post Change
+                        //   blocks INSIDE swim's free gap so swim lands as a contiguous
+                        //   Change→Swim→Change unit. Previously _swimPre/_swimPost were
+                        //   hardcoded 0 on the theory that the changes spill into adjacent
+                        //   bell periods — but when swim's gap is bounded by a wall (e.g. a
+                        //   pinned Davening immediately after), there is no adjacent free
+                        //   period to spill into: swim got placed flush against the wall,
+                        //   the post-change was dropped, and a dead gap opened before the
+                        //   pre-change (live Harmony bug: gap 10:50-11:05 | Change 11:05 |
+                        //   Swim 11:20-11:50 | Davening, no post-change). Reserving the pad
+                        //   in-gap positions swim as Change|Swim|Change with no leading gap.
+                        //   Applied per-gap with a fallback to 0 (below) so a tight
+                        //   single-period swim window still places (change spills as before).
+                        var _swimPreCfg = 0, _swimPostCfg = 0;
+                        if ((need.type || '').toLowerCase() === 'swim' && need.layer) {
+                            _swimPreCfg  = need.layer.preChangeMin  > 0 ? need.layer.preChangeMin  : 0;
+                            _swimPostCfg = need.layer.postChangeMin > 0 ? need.layer.postChangeMin : 0;
+                        }
+                        var _swimPre = 0, _swimPost = 0;  // set per-gap inside the loop
                         var _bundleExtra = 0;
                         // Note: staggered swim (the only kind that reaches CSP — fullGrade
                         // is pinned in Phase 0) is intentionally not constrained to a
@@ -8493,6 +8507,15 @@
                                 dur = Math.min(dur, we - ws); // can't exceed available window
                             } else {
                                 dur = Math.min(need.dMax, we - ws);
+                            }
+
+                            // ★ Per-gap swim change-pad: reserve pre+post inside THIS gap
+                            //   only when the whole envelope fits; otherwise fall back to 0
+                            //   so the swim still places and the change spills to an adjacent
+                            //   period (attachSwimChangeBlocks), exactly as before.
+                            _swimPre = _swimPreCfg; _swimPost = _swimPostCfg;
+                            if ((_swimPre + _swimPost) > 0 && (gap.end - gap.start) < (dur + _swimPre + _swimPost)) {
+                                _swimPre = 0; _swimPost = 0;
                             }
 
                             // Scan every 5-min position within the valid range.
