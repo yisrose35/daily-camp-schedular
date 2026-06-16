@@ -26251,14 +26251,34 @@
                     var g = _b2g[String(bunk)] || '?';
                     slots.forEach(function (e, idx) {
                         if (!e || e.continuation) return;
-                        if (e._pinned || e._league) return; // hard constraints — never demote
+                        // ★ Never touch leagues, trips, rotation events, or whole-grade
+                        //   custom layers — these are user-intent or legitimately concurrent
+                        //   (a whole grade does its custom "Morning Activity" together).
+                        if (e._league || e._isTrip || e._isRotationEvent) return;
+                        if (e.type === 'custom' || e._customActivity) return;
+                        var _isSpecialEntry = !!(e._assignedSpecial || e._autoSpecial || e.type === 'special');
+                        // ★ A _pinned block is protected UNLESS it's an auto-placed special.
+                        //   The planner pins specials as scheduling "walls" (Phase 2.5 etc.),
+                        //   but an over-cap auto special must STILL be enforceable — the
+                        //   auto-validator counts it regardless of the pin, so skipping pinned
+                        //   specials here let cap-1 doubles (e.g. 2 bunks in Accessorize at
+                        //   10:50) survive the sweep and surface as validator violations.
+                        if (e._pinned && !_isSpecialEntry) return;
                         // ★ Resolve the capacity key by the special's ACTIVITY NAME first
                         //   (so all "Baking" placements group together regardless of the
                         //   field string they carry), then fall back to the field/location.
                         var actNm = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
                         var fl = String(e.field || e._specialLocation || '').toLowerCase().trim();
-                        var key = (actNm && _cfg[actNm]) ? actNm : fl;
-                        if (!key || _skip[key] || /^game\s*\d+$/i.test(key) || !_cfg[key]) return;
+                        var key = (actNm && _cfg[actNm]) ? actNm : ((fl && _cfg[fl]) ? fl : (actNm || fl));
+                        if (!key || _skip[key] || /^game\s*\d+$/i.test(key)) return;
+                        // ★ Require config for non-special entries (sports on real fields keep
+                        //   their configured capacity / sharing). An unmapped SPECIAL — one
+                        //   whose name doesn't exactly match a configured field/special — now
+                        //   DEFAULTS to not_sharable / cap-1 per the owner's "sharing off = one
+                        //   bunk at a time" rule, mirroring the auto-validator's unmapped
+                        //   default. Without this, a slightly-misnamed special was skipped here
+                        //   yet flagged by the validator (the count/cleanup mismatch).
+                        if (!_cfg[key] && !_isSpecialEntry) return;
                         var _t = _slotTime(bunk, g, idx, e);
                         if (!_t || _t.s == null || _t.e == null) return;
                         (byLoc[key] = byLoc[key] || []).push({ bunk: bunk, grade: g, idx: idx, s: _t.s, e: _t.e, dur: _t.e - _t.s });
@@ -26356,7 +26376,9 @@
                     demoted++; return true;
                 }
                 Object.keys(byLoc).forEach(function (fl) {
-                    var cfg = _cfg[fl];
+                    // Unmapped key → not_sharable / cap-1 default (owner's rule; mirrors the
+                    //   auto-validator). Mapped fields/specials use their real configured cfg.
+                    var cfg = _cfg[fl] || { type: 'not_sharable', cap: 1, pairs: {}, divs: [], gsr: {}, explicit: false, isSpecial: true };
                     var arr = byLoc[fl];
                     // ★ Per the camp owner's rule: "if sharing is off, only one bunk at a
                     //   time." Every special is enforced by its REAL config — an unconfigured
