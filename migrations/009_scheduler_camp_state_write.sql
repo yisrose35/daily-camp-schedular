@@ -51,10 +51,10 @@ CREATE POLICY camp_state_kv_update ON camp_state_kv
 -- DELETE intentionally UNCHANGED (owner-only, from migration 001).
 
 -- ─── Sanity check (run manually after applying) ────────────────────────────
---   SELECT polname, cmd, qual, with_check
+--   SELECT policyname, cmd, roles, qual, with_check
 --   FROM pg_policies
 --   WHERE tablename = 'camp_state_kv'
---   ORDER BY polname;
+--   ORDER BY policyname;
 --
 -- Expect camp_state_kv_insert (cmd=INSERT) + camp_state_kv_update (cmd=UPDATE)
 -- to list 'scheduler' alongside 'owner'/'admin'; camp_state_kv_delete still
