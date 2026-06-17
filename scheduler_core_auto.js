@@ -18627,9 +18627,16 @@
                 //   resize these. Everything else is a tile-able piece whose flex
                 //   comes from its real layer config (resolveConstraints) and the
                 //   layer's allowed time window.
+                // ★ "Quest to perfection" (user directive): ONLY swim & davening are
+                //   true immovable walls. Everything else may be slid to close slivers.
+                //   Swim-bonded change blocks stay bonded (a change is the swim
+                //   transition — moving it away from swim breaks the wet-side guard),
+                //   and externally-timed events (league/trip/rotation/scheduled) keep
+                //   their fixtures. Lunch / dismissal / custom anchors are NOT here —
+                //   they become window-movable below.
                 var _TILER_HARD_FIXED = new Set([
-                    'swim', 'change', 'pre-change', 'post-change', 'lunch', 'snacks',
-                    'dismissal', 'league', 'specialty_league', 'davening',
+                    'swim', 'change', 'pre-change', 'post-change', 'davening',
+                    'league', 'specialty_league',
                     'rotation_event', 'scheduled_activity', 'trip'
                 ]);
                 allGrades.forEach(function (grade) {
@@ -18724,9 +18731,18 @@
                             //   stay fixed — they bound the tiles.
                             var isSpecialBlk = (t === 'special');
                             if (!isSpecialBlk) { try { isSpecialBlk = !!getSpecialConfig(name, globalSettings); } catch (_eSB) {} }
+                            // ★ Window-movable pieces (lunch, dismissal, custom anchors
+                            //   like Main/Morning Activity): per the user directive these
+                            //   may slide — but ONLY inside their own configured layer
+                            //   window (enforced in the start-window block below), so a
+                            //   movable lunch stays lunch-time and an anchor stays in its
+                            //   band. Duration stays locked (no stretching). This is what
+                            //   lets the tiler pull the mid-day slivers together instead
+                            //   of treating these anchors as immovable region walls.
+                            var isWindowMovable = (t === 'custom' || t === 'lunch' || t === 'dismissal');
                             var movable = isSnack ? !isChange
-                                        : (isSpecialBlk ? !isHardFixed
-                                                        : (!isHardFixed && !isPinned));
+                                        : ((isSpecialBlk || isWindowMovable) ? !isHardFixed
+                                                                             : (!isHardFixed && !isPinned));
                             var resizable = movable && (dMax > dMin);
 
                             // Start-time window: a movable piece may slide anywhere inside
@@ -18743,8 +18759,14 @@
                             } else if (isSnack) {
                                 earliestStart = Math.max(0, b.startMin - 15);
                                 latestStart = b.startMin + 15;
+                            } else if (isSpecialBlk) {
+                                earliestStart = 0; latestStart = 1440; // region gaps bound it
                             } else {
-                                earliestStart = 0; latestStart = 1440; // period gaps bound it
+                                // Window-movable piece (lunch / dismissal / anchor) that
+                                //   has NO configured layer window: keep it put rather than
+                                //   let it drift across the day. It only earns its freedom
+                                //   when a real window bounds it (the branch above).
+                                earliestStart = b.startMin; latestStart = b.startMin;
                             }
                             return {
                                 name: name,
