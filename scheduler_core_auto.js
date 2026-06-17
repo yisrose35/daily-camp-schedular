@@ -6423,6 +6423,48 @@
                 });
                 if (_asSessions > 0) log(GP + ' [A4.6] active sharing: opened ' + _asSessions + ' new shared session(s), seating ' + _asSeated + ' bunk(s) together');
                 else log(GP + ' [A4.6] active sharing: no new shared sessions formed');
+
+                // A4.6-DIAG: quantify how much sharing is blocked by capacity.
+                //   For every placed special, count how many SEPARATE same-grade
+                //   sessions it runs as (distinct start times). Each extra session
+                //   beyond one is field-time that COULD be freed if the special
+                //   were shareable enough to seat those bunks together. cap-1
+                //   ("one group per room") specials can never collapse — so this
+                //   number is the concrete ceiling on what raising capacity buys.
+                try {
+                    var _blockedCap1 = 0, _blockedShareCapped = 0, _diagTop = [];
+                    Object.keys(globalSpecialUsage).forEach(function (sName) {
+                        var info = getSpecialSharingInfo(sName, activityProperties, globalSettings);
+                        var cap = (info && info.capacity) || 1;
+                        var byG = {};
+                        (globalSpecialUsage[sName] || []).forEach(function (e) {
+                            (byG[e.grade] = byG[e.grade] || {})[e.startMin] = 1;
+                        });
+                        Object.keys(byG).forEach(function (g) {
+                            var distinct = Object.keys(byG[g]).length;
+                            if (distinct > 1) {
+                                // ideal sessions if perfectly shared = ceil(distinct / cap)
+                                var ideal = Math.ceil(distinct / Math.max(1, cap));
+                                var savable = distinct - ideal;
+                                if (savable > 0) {
+                                    if (cap <= 1) _blockedCap1 += savable; else _blockedShareCapped += savable;
+                                    _diagTop.push({ s: sName, g: g, distinct: distinct, cap: cap, savable: savable });
+                                }
+                            }
+                        });
+                    });
+                    _diagTop.sort(function (a, b) { return b.savable - a.savable; });
+                    if (_blockedCap1 + _blockedShareCapped > 0) {
+                        log(GP + ' [A4.6-DIAG] ' + (_blockedCap1 + _blockedShareCapped) +
+                            ' separate session(s) could collapse with more sharing (' + _blockedCap1 +
+                            ' blocked by cap-1 "not-sharable" specials, ' + _blockedShareCapped + ' by cap limit). Raise those specials\' capacity to free that field-time.');
+                        _diagTop.slice(0, 6).forEach(function (x) {
+                            log(GP + '   [A4.6-DIAG] ' + x.s + ' (' + x.g + '): ' + x.distinct + ' separate sessions @ cap ' + x.cap + ' → could be ' + Math.ceil(x.distinct / Math.max(1, x.cap)) + ' if shareable');
+                        });
+                    } else {
+                        log(GP + ' [A4.6-DIAG] no further sharing possible — specials already run one session per grade or are at capacity.');
+                    }
+                } catch (_eDiag) {}
             } catch (_eAS) { try { warn('[A4.6 active-share] ' + (_eAS && _eAS.message)); } catch (e) {} }
 
             // Log Phase A results
