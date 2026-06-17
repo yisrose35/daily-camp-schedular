@@ -171,6 +171,20 @@
         Object.entries(fieldsBySport).forEach(([sport, fieldList]) => {
             const meta = sportMeta[sport] || {};
             const maxPlayers = parseInt(meta.maxPlayers) || null;
+            // ★ PER-SPORT CONFIGURED DURATION (mirrors specials): when the user
+            //   sets a fixed length for this sport in the Rules tab, the solver
+            //   may only place it into a slot whose length matches — exactly the
+            //   way a special is locked to its configured duration. Canonical
+            //   store is `durations[]`; scalar `duration` is the legacy mirror.
+            //   Empty ⇒ no constraint (slot keeps its layer-derived length).
+            let _sportDurs = [];
+            if (Array.isArray(meta.durations)) {
+                _sportDurs = meta.durations.map(d => parseInt(d, 10)).filter(d => d > 0);
+            }
+            if (!_sportDurs.length && parseInt(meta.duration, 10) > 0) {
+                _sportDurs = [parseInt(meta.duration, 10)];
+            }
+            _sportDurs = Array.from(new Set(_sportDurs)).sort((a, b) => a - b);
             // ★ SPECIAL-ACTIVITY CAPACITY: when this activity is a configured SPECIAL
             //   with its own Sharing Rules, the SPECIAL's capacity/share config is
             //   authoritative — NOT the facility field's. The user sets "max N at a
@@ -214,6 +228,7 @@
                     disabledSports: field.disabledSports,
                     maxPlayers,
                     minPlayers: parseInt(meta.minPlayers) || null,
+                    configuredDurs: _sportDurs,  // [] = no per-sport duration lock
                     qualityRank: (field.qualityRank != null ? field.qualityRank : null),
                     fieldGroup: field.fieldGroup || null,
                     _activity: sport  // for scheduleAssignments compatibility
@@ -875,6 +890,14 @@
 
                 // Field availability (time-based)
                 if (!isFieldAvailableByTime(cand.field, startMin, endMin, bunk, grade, fieldIndex, cand)) continue;
+
+                // ★ PER-SPORT DURATION LOCK — a sport with a configured length
+                //   may only fill a slot of exactly that length (one of its
+                //   allowed durations). Mirrors specials: the duration is
+                //   absolute, so we'd rather leave the slot for a sport that
+                //   fits than overrun/underrun this one. No config ⇒ no gate.
+                if (cand.configuredDurs && cand.configuredDurs.length &&
+                    !cand.configuredDurs.includes(endMin - startMin)) continue;
 
                 // Rainy day: skip outdoor
                 if (isRainy && !cand.isIndoor) continue;

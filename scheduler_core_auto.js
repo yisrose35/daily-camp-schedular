@@ -289,6 +289,33 @@
         return [];
     }
 
+    // Per-sport configured durations (mirrors getSpecialDurations). Source is
+    // sportMetaData[name].durations (canonical) or .duration (legacy scalar),
+    // set in the Rules tab. Empty array = user has not pinned a length → the
+    // sport keeps whatever slot length the layer/gap-splitter produces. When
+    // non-empty, the solver's duration gate only lets this sport fill a slot
+    // of a matching length, and the gap-splitter is told to OFFER such slots.
+    function getSportDurations(sportName, gs) {
+        if (!sportName) return [];
+        const settings = gs || globalSettings || {};
+        const meta = (settings.app1 && settings.app1.sportMetaData)
+            || (window.getSportMetaData ? window.getSportMetaData() : null)
+            || window.sportMetaData || {};
+        // Case-insensitive lookup so layer/field name casing can't hide config.
+        let entry = meta[sportName];
+        if (!entry) {
+            const low = String(sportName).toLowerCase();
+            for (const k in meta) { if (String(k).toLowerCase() === low) { entry = meta[k]; break; } }
+        }
+        if (!entry) return [];
+        let arr = Array.isArray(entry.durations)
+            ? entry.durations.map(d => parseInt(d, 10)).filter(d => d > 0)
+            : [];
+        if (!arr.length && parseInt(entry.duration, 10) > 0) arr = [parseInt(entry.duration, 10)];
+        return Array.from(new Set(arr)).sort((a, b) => a - b);
+    }
+    try { window.getSportDurations = getSportDurations; } catch (e) {}
+
     function getSpecialDuration(specialName, activityProperties, gs) {
         const all = getSpecialDurations(specialName, activityProperties, gs);
         const base = all.length > 0 ? all[0] : null;
@@ -18422,6 +18449,23 @@
                                 }
                             } catch (_eSD) { /* not a known special — keep layer/type flex */ }
 
+                            // ★ Per-sport configured duration: an assigned sport
+                            //   pinned to a fixed length is locked the same way a
+                            //   special is — the tiler must not shrink/stretch it
+                            //   away from the length the user set. Read the sport
+                            //   off the placed block (b._activity / b.sport), not
+                            //   the slot name (which is the generic slot label).
+                            try {
+                                var _sportNm = b._activity || b.sport || null;
+                                if (_sportNm) {
+                                    var _spDurs = getSportDurations(_sportNm, globalSettings);
+                                    if (_spDurs && _spDurs.length) {
+                                        dMin = _spDurs[0];
+                                        dMax = _spDurs[_spDurs.length - 1];
+                                    }
+                                }
+                            } catch (_eSpD) { /* not a configured sport — keep flex */ }
+
                             // Snacks are the prime sliver creators — always tile-able,
                             //   even if pinned. Otherwise: movable/resizable unless the
                             //   piece is a structural wall or pinned.
@@ -19210,6 +19254,22 @@
                     addDur(parseInt(l.periodMin, 10));
                     addDur(parseInt(l.duration, 10));
                 });
+                // ★ PER-SPORT DURATIONS: offer slot sizes that match any sport
+                //   the user has pinned to a fixed length, so the packer can
+                //   carve a slot that lets that sport land (the solver's gate
+                //   then keeps the sport to exactly that length). No-op for
+                //   camps that haven't configured sport durations. addDur()
+                //   already filters by gap floor + 5-min step.
+                try {
+                    const _smd = (globalSettings && globalSettings.app1 && globalSettings.app1.sportMetaData)
+                        || (window.getSportMetaData ? window.getSportMetaData() : null)
+                        || window.sportMetaData || {};
+                    for (const _sp in _smd) {
+                        const _m = _smd[_sp] || {};
+                        let _ds = Array.isArray(_m.durations) ? _m.durations : (_m.duration ? [_m.duration] : []);
+                        _ds.forEach(d => addDur(parseInt(d, 10)));
+                    }
+                } catch (_eSp) { /* no sport meta — keep layer-derived candidates */ }
                 const cands = [...durations].sort((a,b)=>a-b).map(d => ({ activity: 'd' + d, durationMin: d }));
                 candsCache[key] = cands;
                 return cands;
