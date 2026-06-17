@@ -262,6 +262,9 @@
                     var seg = slotSegs[s];
                     var segEntry = toRenderEntry(seg);
                     if (!segEntry || segEntry._isTransition) continue;
+                    // ★ Free / empty is not a real activity — never render it as a block
+                    //   (a no-layer grade is all-Free; it must show as nothing, not "Free").
+                    if (segEntry.field === 'Free' || segEntry._activity === 'Free' || segEntry.event === 'Free') continue;
                     var segStart = (seg.startMin != null) ? seg.startMin : divSlots[i].startMin;
                     var segEnd   = (seg.endMin   != null) ? seg.endMin   : divSlots[i].endMin;
                     out.push({
@@ -281,6 +284,9 @@
             // Single-segment / empty slot — legacy merge-continuation path.
             var entry = assignments[i];
             if (!entry || entry._isTransition || entry.continuation) { i++; continue; }
+            // ★ Free / empty is not a real activity — skip it so it never renders as a
+            //   "Free" block. A grade with no layers is all-Free and must show as nothing.
+            if (entry.field === 'Free' || entry._activity === 'Free' || entry.event === 'Free') { i++; continue; }
 
             var end = i;
             while (end + 1 < assignments.length && end + 1 < divSlots.length && assignments[end + 1]?.continuation) end++;
@@ -422,6 +428,10 @@
     // ─────────────────────────────────────────────
     function computeFreeGaps(bunk, divName, dayStart, dayEnd) {
         var activities = getBunkActivities(bunk, divName);
+        // ★ A bunk with NO real activities (e.g. a grade with no layers) must render
+        //   blank — not a full day of clickable "Free" stripes. Only paint Free gaps
+        //   between/around actual scheduled activities.
+        if (!activities.length) return [];
         var gaps = [];
         var cursor = dayStart;
 
