@@ -1847,6 +1847,22 @@ function renderDivisionSheet(divName) {
     return html;
 }
 
+// Returns absolutely-positioned vertical tick lines at each _timeIncrement boundary that
+// falls inside (startMin, endMin). The parent div must have position:relative.
+function pcInnerDividers(startMin, endMin) {
+    var inc = _timeIncrement;
+    var dur = endMin - startMin;
+    if (!inc || dur <= inc) return '';
+    var first = (Math.floor(startMin / inc) + 1) * inc;
+    if (first >= endMin) return '';
+    var lines = '';
+    for (var b = first; b < endMin; b += inc) {
+        var pct = ((b - startMin) / dur * 100).toFixed(2);
+        lines += '<div style="position:absolute;top:0;bottom:0;left:' + pct + '%;width:1px;background:rgba(198,198,198,0.9);pointer-events:none;"></div>';
+    }
+    return lines;
+}
+
 // ── AUTO MODE: Spreadsheet grid — bunks on Y, time increments on X ──
 // Two-row header: top row = period sections (merged), bottom row = sub-time increments.
 // Activities spanning multiple increment columns get merged cells (colspan).
@@ -2168,10 +2184,11 @@ function renderAutoDivisionTable(divName, bunks) {
                     }
                     html += '</div></td>';
                 } else {
-                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
+                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
+                    html += pcInnerDividers(matchAct.startMin, matchAct.endMin);
+                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(actText || displayText) + '</span>';
                     // ★ Day 22.5+: duration line tagged with .pc3-dur so CSS toggle can hide it without re-render
-                    if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                    if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
                     html += '</div></td>';
                 }
 
@@ -2915,9 +2932,10 @@ function renderCombinedAutoTable(divBunks) {
                     }
                     html += '</div></td>';
                 } else {
-                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
-                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;">' + durMin + 'm</span>';
+                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
+                    html += pcInnerDividers(matchAct.startMin, matchAct.endMin);
+                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(displayText) + '</span>';
+                    if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
                     html += '</div></td>';
                 }
                 colIdx = nextCol;
