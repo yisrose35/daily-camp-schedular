@@ -6323,6 +6323,108 @@
                 if (_topUp > 0) log(GP + ' Phase A4.5 top-up: filled ' + _topUp + ' shared special seat(s)');
             } catch (_eTopUp) { try { warn('[A4.5 top-up] ' + (_eTopUp && _eTopUp.message)); } catch (e) {} }
 
+            // ─────────────────────────────────────────────────────────
+            // A4.6: ACTIVE SHARED-SESSION FORMER
+            // ─────────────────────────────────────────────────────────
+            // A4.5 can only fill a seat on an ALREADY-placed session, so once
+            //   the greedy pass has staggered each bunk's specials, a partner is
+            //   rarely free at that exact slot (log: "no free window at slot").
+            //   This goes further: for a sharable special, it finds a COMMON free
+            //   window shared by ≥2 same-grade bunks that still have room and
+            //   OPENS A NEW shared session there, seating them all at one aligned
+            //   time. One session then serves many bunks → frees field-time, so
+            //   more specials land in the slack regions and the leftover holes
+            //   shrink. Every seat goes through the same gates as A4.5, so it can
+            //   never create a capacity / pair-rule / field violation.
+            try {
+                var _asSeated = 0, _asSessions = 0;
+                // Collect sharable special names (cap>1) from the shopping lists.
+                var _sharable = {};
+                allBunkList.forEach(function (c) {
+                    var sl = shoppingLists[c.bunk];
+                    if (!sl || !sl.specials || !sl.specials.priorityList) return;
+                    sl.specials.priorityList.forEach(function (it) {
+                        if (!it || !it.name || _sharable[it.name]) return;
+                        var inf = getSpecialSharingInfo(it.name, activityProperties, globalSettings);
+                        if (inf && inf.capacity > 1) _sharable[it.name] = inf.capacity;
+                    });
+                });
+                Object.keys(_sharable).forEach(function (sName) {
+                    var capN = _sharable[sName];
+                    // group eligible candidates by grade
+                    var byGrade = {};
+                    allBunkList.forEach(function (c) {
+                        var b = c.bunk, g = c.grade, r = draftResults[b], sl = shoppingLists[b];
+                        if (!r || !sl) return;
+                        var cap = (sl.specials && sl.specials.cap != null) ? sl.specials.cap : ((sl.specials && sl.specials.required) || 0);
+                        if (r.specials.length >= cap) return;
+                        if (r.usedActivities.has(sName)) return;
+                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sName, g, b, globalSettings)) return; } catch (e) {}
+                        var item = (sl.specials && sl.specials.priorityList || []).find(function (s) { return s.name === sName; });
+                        if (!item) return;
+                        (byGrade[g] = byGrade[g] || []).push({ b: b, g: g, r: r, sl: sl, item: item });
+                    });
+                    Object.keys(byGrade).forEach(function (g) {
+                        var cands = byGrade[g];
+                        if (cands.length < 2) return; // need ≥2 to share
+                        var D = (cands[0].item.totalDuration || cands[0].item.duration || cands[0].item.dMin || 0);
+                        if (!D || D <= 0) return;
+                        // candidate start times = every candidate's free-window starts
+                        var Tset = {};
+                        cands.forEach(function (c) {
+                            getUpdatedFreeWindowsForBunk(c.b, c.sl, c.r).forEach(function (w) {
+                                for (var t = w.start; t + D <= w.end; t += 5) Tset[t] = 1;
+                            });
+                        });
+                        var Ts = Object.keys(Tset).map(Number).sort(function (a, b) { return a - b; });
+                        // pick the time that the most candidates can attend
+                        var bestT = null, bestList = [];
+                        Ts.forEach(function (T) {
+                            var Te = T + D;
+                            var ok = [];
+                            cands.forEach(function (c) {
+                                if (!canAssignSpecialToGrade(sName, g, T, Te)) return;
+                                var loc = (c.item && c.item.location) || sName;
+                                var fw = getUpdatedFreeWindowsForBunk(c.b, c.sl, c.r);
+                                if (!fw.some(function (w) { return w.start <= T && w.end >= Te; })) return;
+                                if (!_canPickSpecialBySubcategory(c.item, c.sl, c.r)) return;
+                                ok.push(c);
+                            });
+                            if (ok.length > bestList.length) { bestT = T; bestList = ok; }
+                        });
+                        if (bestT == null || bestList.length < 2) return;
+                        var Te = bestT + D;
+                        var seated = 0;
+                        for (var k = 0; k < bestList.length && seated < capN; k++) {
+                            var c = bestList[k], loc = (c.item && c.item.location) || sName;
+                            // final field-room guard (updates as we seat)
+                            if (loc && !isFieldStillAvailableGP(loc, bestT, Te, c.b, g, sName)) continue;
+                            if (!canAssignSpecialToGrade(sName, g, bestT, Te)) continue;
+                            if (loc) claimFieldGlobal(loc, bestT, Te, c.b, g, sName);
+                            registerSpecialAssignment(sName, g, bestT, Te);
+                            c.r.specials.push({
+                                name: sName, type: (c.item && c.item.type) || 'special',
+                                rotationScore: c.item && c.item.rotationScore, duration: c.item && c.item.duration,
+                                dMin: c.item && c.item.dMin, dMax: c.item && c.item.dMax, dIdeal: c.item && c.item.dIdeal,
+                                isFlexDuration: c.item && c.item.isFlexDuration, capacity: c.item && c.item.capacity,
+                                location: (c.item && c.item.location) || loc, isScarce: c.item && c.item.isScarce,
+                                isIndoor: c.item && c.item.isIndoor, prepDuration: c.item && c.item.prepDuration,
+                                totalDuration: c.item && c.item.totalDuration, timeWindow: c.item && c.item.timeWindow,
+                                subcategory: (c.item && c.item.subcategory) || '',
+                                claimedTime: { startMin: bestT, endMin: Te }, claimedField: (c.item && c.item.location) || loc,
+                                _sharedSession: true
+                            });
+                            c.r.usedActivities.add(sName);
+                            if (c.item) _markSpecialSubcategoryAssigned(c.item, c.r);
+                            seated++;
+                        }
+                        if (seated >= 2) { _asSessions++; _asSeated += seated; }
+                    });
+                });
+                if (_asSessions > 0) log(GP + ' [A4.6] active sharing: opened ' + _asSessions + ' new shared session(s), seating ' + _asSeated + ' bunk(s) together');
+                else log(GP + ' [A4.6] active sharing: no new shared sessions formed');
+            } catch (_eAS) { try { warn('[A4.6 active-share] ' + (_eAS && _eAS.message)); } catch (e) {} }
+
             // Log Phase A results
             var phaseASpecials = 0;
             var phaseAByGrade = {};
