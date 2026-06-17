@@ -2034,6 +2034,11 @@ function renderAutoDivisionTable(divName, bunks) {
             timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
     }
+    // Trailing day-end tick: a final column whose label is the closing time
+    // (e.g. 3:00), so the schedule visibly reaches the end of day.
+    if (timeCols.length) {
+        timeCols.push({ startMin: dayEnd, endMin: dayEnd, label: minutesToTimeLabel(dayEnd), periodIdx: -1, isEnd: true });
+    }
     var numCols = timeCols.length;
 
     // ─── 4. Render table ─────
@@ -2087,10 +2092,9 @@ function renderAutoDivisionTable(divName, bunks) {
     var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f2f2f2;';
-        // Final column also shows its end time so the day's closing edge is visible.
         var labelTxt = _activityAligned
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : (idx === timeCols.length - 1 ? col.label + ' – ' + minutesToTimeLabel(col.endMin) : col.label);
+            : col.label;
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
         html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:600;color:#1f1f1f;' + bgStyle + '">' + labelTxt + '</th>';
     });
@@ -2109,6 +2113,13 @@ function renderAutoDivisionTable(divName, bunks) {
         while (colIdx < numCols) {
             var colStart = timeCols[colIdx].startMin;
             var colEnd = timeCols[colIdx].endMin;
+
+            // Trailing day-end tick — blank cell under the closing-time column
+            if (timeCols[colIdx].isEnd) {
+                html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="" style="background:#f7f7f7;"></td>';
+                colIdx++;
+                continue;
+            }
 
             // Find which bunk activity covers this time column
             var matchAct = null;
@@ -2806,6 +2817,10 @@ function renderCombinedAutoTable(divBunks) {
             timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
     }
+    // Trailing day-end tick (e.g. 3:00) so the schedule visibly reaches the day end.
+    if (timeCols.length) {
+        timeCols.push({ startMin: dayEnd, endMin: dayEnd, label: minutesToTimeLabel(dayEnd), periodIdx: -1, isEnd: true });
+    }
     var numCols = timeCols.length;
     var colW = _activityAligned
         ? Math.max(80, Math.min(160, 1000 / Math.max(1, numCols)))
@@ -2848,12 +2863,10 @@ function renderCombinedAutoTable(divBunks) {
             s += '<th style="position:sticky;left:0;z-index:2;min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
         }
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        timeCols.forEach(function (col, idx) {
-            // Label each column by its start; on the final column also show the
-            // end time so the day's closing edge (e.g. 3:00) is visible.
+        timeCols.forEach(function (col) {
             var labelTxt = _activityAligned
                 ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-                : (idx === timeCols.length - 1 ? col.label + ' – ' + minutesToTimeLabel(col.endMin) : col.label);
+                : col.label;
             s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + labelTxt + '</th>';
         });
         return s + '</tr>';
@@ -2882,6 +2895,12 @@ function renderCombinedAutoTable(divBunks) {
         while (colIdx < numCols) {
             var colStart = timeCols[colIdx].startMin;
             var colEnd2 = timeCols[colIdx].endMin;
+            // Trailing day-end tick — blank cell under the closing-time column
+            if (timeCols[colIdx].isEnd) {
+                html += '<td style="padding:3px;border:1px solid #c6c6c6;background:#f7f7f7;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text=""><div style="min-height:38px;"></div></td>';
+                colIdx++;
+                continue;
+            }
             var matchAct = null;
             for (var ai = 0; ai < acts.length; ai++) {
                 if (acts[ai].startMin < colEnd2 && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
