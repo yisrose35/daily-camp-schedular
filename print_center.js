@@ -324,14 +324,6 @@ function el(id) { return document.getElementById(id); }
 function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical; now also escapes quotes → closes attr-context gap)
 function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; handles num/Date/am-pm, harness-proven)
 function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
-// Compact spreadsheet-style time tag: 10:50 → "1050", 11:00 → "11", 1:30 PM → "130".
-// No colon, no AM/PM, drop the minutes when they're :00.
-function shortTimeLabel(mins) {
-    var m = ((mins % 60) + 60) % 60;
-    var h = Math.floor(mins / 60);
-    var h12 = h % 12; if (h12 === 0) h12 = 12;
-    return '' + h12 + (m === 0 ? '' : (m < 10 ? '0' + m : '' + m));
-}
 function naturalSort(a, b) {
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
 }
@@ -2095,9 +2087,10 @@ function renderAutoDivisionTable(divName, bunks) {
     var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f2f2f2;';
-        // Compact spreadsheet tag (1050, 11, 1110 …)
-        var labelTxt = shortTimeLabel(col.startMin);
-        var fSize = inc <= 10 ? 9 : 10;
+        var labelTxt = _activityAligned
+            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
+            : col.label;
+        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
         html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:600;color:#1f1f1f;' + bgStyle + '">' + labelTxt + '</th>';
     });
     html += '</tr>';
@@ -2847,16 +2840,18 @@ function renderCombinedAutoTable(divBunks) {
         html += '</tr>';
     }
 
-    // Reusable compact time-ruler row (1050, 11, 1110 …) — shown in the header
-    // and repeated under each division/grade band so every section is labelled.
+    // Reusable time-ruler row — shown once in the header.
     function rulerRowHtml(withLeadCell) {
         var s = '<tr>';
         if (withLeadCell) {
             s += '<th style="position:sticky;left:0;z-index:2;min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
         }
-        var fSize = inc <= 10 ? 9 : 10;
+        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
         timeCols.forEach(function (col) {
-            s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + shortTimeLabel(col.startMin) + '</th>';
+            var labelTxt = _activityAligned
+                ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
+                : col.label;
+            s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + labelTxt + '</th>';
         });
         return s + '</tr>';
     }
@@ -2870,11 +2865,10 @@ function renderCombinedAutoTable(divBunks) {
     divBunks.forEach(function (item, bunkIdx) {
         var bunk = item.bunk, divName = item.div;
 
-        // Division separator row + its own time ruler
+        // Division separator row
         if (divName !== lastDiv) {
             lastDiv = divName;
             html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#d9e1f2;padding:5px 12px;font-size:12px;font-weight:700;color:#1f3864;border:1px solid #b0b0b0;text-transform:none;letter-spacing:0;">' + escHtml(divName) + '</th></tr>';
-            html += rulerRowHtml(true);
         }
 
         html += '<tr>';
@@ -4389,7 +4383,7 @@ function buildExcelRows(item) {
                     }
                 }
 
-                var row = [shortTimeLabel(ts.startMin)];
+                var row = [ts.label];
                 if (isLeagueRow && !_currentTemplate.hideLeagueMatchups) {
                     // League row: same text in every bunk column
                     var leagueText = leagueLabel;
@@ -4419,7 +4413,7 @@ function buildExcelRows(item) {
             grid.push(['Time'].concat(bunks));
 
             blocks.forEach(function (eb) {
-                var row = [shortTimeLabel(eb.startMin)];
+                var row = [eb.label];
                 if (eb.isLeague) {
                     // League row: put the event name + matchups in each bunk cell
                     var matchups = buildLeagueMatchups(eb, item);
