@@ -227,6 +227,126 @@ describe('PeriodTiler — stress and degenerate shapes', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 6. fitBunkRegion — per-bunk "fit math" + region packing
+// (davening 11:50=710 → Main Activity wall 2:20=860; Morning 40 win 710-790,
+//  Lunch 20 win 790-860)
+// ---------------------------------------------------------------------------
+
+describe('PeriodTiler.fitBunkRegion — budget math, verdict, packing', () => {
+    const REGION = { regionStart: 710, regionEnd: 860 }; // 150 min
+    const WALLS = [
+        { name: 'Morning Activity', dur: 40, earliestStart: 710, latestStart: 750 },
+        { name: 'Lunch', dur: 20, earliestStart: 790, latestStart: 840 },
+    ];
+
+    // Assert a layout is contiguous from S to E with no gaps/overlaps, walls in window.
+    function assertContiguous(res) {
+        const lay = res.layout;
+        assert.ok(lay.length > 0, 'expected a layout');
+        let cursor = REGION.regionStart;
+        for (const b of lay) {
+            assert.strictEqual(b.start, cursor, `${b.name} starts ${b.start}, expected ${cursor} (gap/overlap)`);
+            assert.ok(b.end > b.start, `${b.name} non-positive duration`);
+            cursor = b.end;
+        }
+        assert.strictEqual(cursor, REGION.regionEnd, `layout ends ${cursor}, expected ${REGION.regionEnd}`);
+        // walls within their windows
+        for (const w of WALLS) {
+            const placed = lay.find(b => b.name === w.name);
+            if (placed) {
+                assert.ok(placed.start >= w.earliestStart && placed.start <= w.latestStart,
+                    `${w.name} start ${placed.start} outside window [${w.earliestStart},${w.latestStart}]`);
+                assert.strictEqual(placed.dur, w.dur, `${w.name} duration changed to ${placed.dur}`);
+            }
+        }
+    }
+
+    it('Bunk 1 (Art 40 + Painting 20) → slack verdict, all placed, 30-min sport', () => {
+        const res = PeriodTiler.fitBunkRegion({
+            ...REGION, walls: WALLS,
+            due: [
+                { name: 'Art', dur: 40, priority: 2 },
+                { name: 'Painting', dur: 20, priority: 1 },
+            ],
+            minSportDMin: 25, sportsAllowed: true,
+        });
+        assert.strictEqual(res.budget, 90);
+        assert.strictEqual(res.verdict, 'slack');
+        assert.strictEqual(res.slackMin, 30);
+        assert.deepStrictEqual(res.unplaced, []);
+        assert.ok(res.placed.includes('Art') && res.placed.includes('Painting'));
+        assertContiguous(res);
+        // configured durations preserved exactly
+        assert.strictEqual(res.layout.find(b => b.name === 'Art').dur, 40);
+        assert.strictEqual(res.layout.find(b => b.name === 'Painting').dur, 20);
+    });
+
+    it('Bunk 2 (Art 40 + Woodworking 60 = 100 > 90 budget) → over, defers lowest priority', () => {
+        const res = PeriodTiler.fitBunkRegion({
+            ...REGION, walls: WALLS,
+            due: [
+                { name: 'Art', dur: 40, priority: 1 },          // lower priority → deferred
+                { name: 'Woodworking', dur: 60, priority: 2 },  // higher priority → kept
+            ],
+            minSportDMin: 25, sportsAllowed: true,
+        });
+        assert.strictEqual(res.budget, 90);
+        assert.strictEqual(res.dueTotal, 100);
+        assert.strictEqual(res.verdict, 'over');
+        assert.deepStrictEqual(res.unplaced, ['Art']);
+        assert.ok(res.placed.includes('Woodworking'));
+        // Woodworking kept at its EXACT 60 min — never shrunk to fit
+        assert.strictEqual(res.layout.find(b => b.name === 'Woodworking').dur, 60);
+        assertContiguous(res);
+    });
+
+    it('exact fit (Art 40 + Drama 30 + Painting 20 = 90) → fit verdict, no slack/sport', () => {
+        const res = PeriodTiler.fitBunkRegion({
+            ...REGION, walls: WALLS,
+            due: [
+                { name: 'Art', dur: 40, priority: 3 },
+                { name: 'Drama', dur: 30, priority: 2 },
+                { name: 'Painting', dur: 20, priority: 1 },
+            ],
+            minSportDMin: 25, sportsAllowed: true,
+        });
+        assert.strictEqual(res.verdict, 'fit');
+        assert.strictEqual(res.slackMin, 0);
+        assert.ok(!res.layout.some(b => b.kind === 'sport' || b.kind === 'gap'));
+        assertContiguous(res);
+    });
+
+    it('sports-free camp: slack becomes an honest gap, not a sport', () => {
+        const res = PeriodTiler.fitBunkRegion({
+            ...REGION, walls: WALLS,
+            due: [{ name: 'Art', dur: 40, priority: 1 }],
+            minSportDMin: 25, sportsAllowed: false,
+        });
+        assert.strictEqual(res.verdict, 'slack');
+        assert.strictEqual(res.slackMin, 50);
+        assert.ok(res.layout.some(b => b.kind === 'gap'), 'slack should be an honest gap');
+        assert.ok(!res.layout.some(b => b.kind === 'sport'));
+        assertContiguous(res);
+    });
+
+    it('never resizes a configured special, even in over case', () => {
+        const res = PeriodTiler.fitBunkRegion({
+            ...REGION, walls: WALLS,
+            due: [
+                { name: 'Woodworking', dur: 60, priority: 2 },
+                { name: 'Cooking', dur: 60, priority: 1 },
+            ],
+            minSportDMin: 25, sportsAllowed: true,
+        });
+        assert.strictEqual(res.verdict, 'over');
+        // only one 60 fits in the 90 budget; the other is deferred, neither shrunk
+        const placed60 = res.layout.filter(b => b.dur === 60 && (b.name === 'Woodworking' || b.name === 'Cooking'));
+        placed60.forEach(b => assert.strictEqual(b.dur, 60));
+        assert.strictEqual(res.unplaced.length, 1);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // 5. Adversarial: footprint accounting and multi-period spans
 // ---------------------------------------------------------------------------
 
