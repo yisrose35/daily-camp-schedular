@@ -14414,6 +14414,52 @@
             // their free Phase-3 placement so the optimizer can roam.
             try {
                 var _p14Count = 0;
+                // ★ Cross-grade field-usage ledger for required custom layers (e.g.
+                //   "Morning Activity" in a shared, cap-1 Auditorium). Without this,
+                //   each grade scanned only its OWN bunk timeline and both grades grabbed
+                //   the earliest window slot → two grades double-booked a not-cross-grade-
+                //   sharable / over-capacity field at the same time (live bug: Harmony +
+                //   Prop Morning Activity both 12:10). Seeded from already-committed blocks
+                //   so existing pins count; a new grade must stagger into a free window slot.
+                var _p14FieldUse = {};
+                var _p14BunkGrade = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _p14BunkGrade[String(b)] = g; }); });
+                Object.keys(bunkTimelines).forEach(function (b) {
+                    (bunkTimelines[b] || []).forEach(function (blk) {
+                        if (!blk || blk.startMin == null || blk.endMin == null) return;
+                        if (!(blk._committed || blk._fixed || blk._classification === 'pinned')) return;
+                        var fld = blk.field || blk._customField;
+                        if (!fld) return;
+                        var lc = String(fld).toLowerCase();
+                        (_p14FieldUse[lc] = _p14FieldUse[lc] || []).push({ start: blk.startMin, end: blk.endMin, grade: _p14BunkGrade[String(b)] });
+                    });
+                });
+                var _p14FieldShare = function (fieldName) {
+                    var f = getFields(globalSettings).find(function (x) { return x && String(x.name).toLowerCase() === String(fieldName).toLowerCase(); });
+                    var sw = f && f.sharableWith;
+                    if (!sw || !sw.type) return { type: 'not_sharable', cap: 1, pairs: {} };
+                    return { type: sw.type, cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {} };
+                };
+                var _p14FieldOk = function (fieldName, grade, s, e) {
+                    if (!fieldName) return true;
+                    var used = _p14FieldUse[String(fieldName).toLowerCase()] || [];
+                    var others = [];
+                    for (var i = 0; i < used.length; i++) {
+                        var u = used[i];
+                        if (u.start < e && u.end > s && String(u.grade) !== String(grade)) others.push(u.grade);
+                    }
+                    if (!others.length) return true;
+                    var sh = _p14FieldShare(fieldName);
+                    if (sh.type === 'not_sharable' || sh.type === 'same_division') return false;
+                    if (!isCrossDivAllowed(grade, others, sh.pairs)) return false;
+                    var distinct = {}; others.forEach(function (g) { distinct[String(g)] = 1; }); distinct[String(grade)] = 1;
+                    return Object.keys(distinct).length <= sh.cap;
+                };
+                var _p14RecordField = function (fieldName, grade, s, e) {
+                    if (!fieldName) return;
+                    var lc = String(fieldName).toLowerCase();
+                    (_p14FieldUse[lc] = _p14FieldUse[lc] || []).push({ start: s, end: e, grade: grade });
+                };
                 allGrades.forEach(function (grade) {
                     (layersByGrade[grade] || []).forEach(function (cl) {
                         if ((cl.type || '').toLowerCase() !== 'custom') return;
@@ -14445,6 +14491,11 @@
                                     if (b.startMin < e && b.endMin > s) { clash = true; break; }
                                 }
                                 if (clash) continue;
+                                // ★ Cross-grade field capacity: never overlap another grade
+                                //   on a not-cross-grade-sharable / over-capacity field — the
+                                //   second grade staggers into a later window slot. Same grade
+                                //   never blocks itself.
+                                if (!_p14FieldOk(cl.customField, grade, s, e)) continue;
                                 tl.push({
                                     startMin: s, endMin: e,
                                     type: 'custom', event: cl.customActivity || cl.event || 'Custom',
@@ -14455,6 +14506,7 @@
                                     _activityLocked: true, _source: 'phase1.4-required-custom'
                                 });
                                 if (typeof ensureTimelineIntegrity === 'function') { try { ensureTimelineIntegrity(bunk); } catch (_eti) {} }
+                                _p14RecordField(cl.customField, grade, s, e);
                                 _p14Count++;
                                 break;
                             }
