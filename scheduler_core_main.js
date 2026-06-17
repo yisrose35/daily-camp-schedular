@@ -3351,7 +3351,14 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                     // ★★★ FIXED: Find exact slot for this time range ★★★
                     const exactSlot = findExactSlotForTimeRange(divName, start, end);
                     const fallbackSlots = Utils.findSlotsForRange(start, end, divName);
-                    const targetSlots = exactSlot !== -1 ? [exactSlot] : fallbackSlots;
+                    // Strictly filter to slots fully within [start, end] so the boundary
+                    // slot (endMin === midMin) is not shared between both halves.
+                    const _divSlotsArr = window.divisionTimes?.[String(divName)] || [];
+                    const strictSlots = fallbackSlots.filter(si => {
+                        const s = _divSlotsArr[si];
+                        return s && s.startMin >= start && s.endMin <= end;
+                    });
+                    const targetSlots = exactSlot !== -1 ? [exactSlot] : (strictSlots.length > 0 ? strictSlots : fallbackSlots);
 
                     if (targetSlots.length === 0) {
                         console.warn(`[SPLIT] WARNING: No slots found for range ${start}-${end} in ${divName}`);
