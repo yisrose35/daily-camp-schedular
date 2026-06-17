@@ -1421,6 +1421,12 @@ function buildMainUI() {
         '#pc3-sidebar .pc3-item-label{font-size:13.5px;font-weight:600;}' +
         '#pc3-sidebar .pc3-item-count{font-size:11px;background:rgba(0,0,0,.06);color:#6b6254;padding:2px 7px;border-radius:20px;font-weight:700;}' +
         '#pc3-sidebar .pc3-item.selected .pc3-item-count{background:rgba(20,125,145,.12);color:#0f6678;}' +
+        /* ── Focus mode: hide all chrome, just the grid ── */
+        '.pc3-focus-exit{display:none;position:fixed;top:16px;right:16px;z-index:60;align-items:center;gap:7px;padding:8px 14px;border:1px solid #000;border-radius:0;background:#000;color:#fff;font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,.25);}' +
+        '.pc3-focus-exit:hover{background:#222;}' +
+        '.pc3.pc3-focus .pcx-bar,.pc3.pc3-focus .pcx-rail,.pc3.pc3-focus .pc3-zoom-dock,.pc3.pc3-focus .pc3-sidebar-toggle{display:none!important;}' +
+        '.pc3.pc3-focus .pcx-canvas{padding:0;background:#fff;}' +
+        '.pc3.pc3-focus .pc3-focus-exit{display:inline-flex;}' +
     '</style>';
 
     return getStyles() + chrome +
@@ -1447,6 +1453,7 @@ function buildMainUI() {
                 '</div>' +
             '</div>' +
             '<button class="pcx-btn pcx-primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
+            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFocus()" title="Focus mode — just the schedule">' + ICO.grid + '</button>' +
             '<button class="pcx-iconbtn" onclick="window._pc3ToggleFullscreen()" title="Fullscreen">' + ICO.expand + '</button>' +
         '</div>' +
     '</div>' +
@@ -1501,6 +1508,9 @@ function buildMainUI() {
             '</div>' +
         '</main>' +
     '</div>' +
+
+    /* Exit-focus pill — only visible while in focus mode */
+    '<button class="pc3-focus-exit no-print" id="pc3-focus-exit" onclick="window._pc3ToggleFocus()" title="Exit focus (Esc)">' + ICO.expand + ' Exit focus</button>' +
 
     /* Hidden legacy controls (zoom + template state) */
     '<select id="pc3-template-select" style="display:none;"><option value="default">Default Template</option></select>' +
@@ -4801,6 +4811,8 @@ function bindAll() {
             if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFullscreen(); return; }
         }
         if (e.key === 'Escape') {
+            // Exit focus mode first if it's on
+            if (_focusMode) { window._pc3ToggleFocus(); e.preventDefault(); return; }
             // Close any open popover first
             if (_openPopover) {
                 document.querySelectorAll('.pc3-popover.open').forEach(function (m) { m.classList.remove('open'); });
@@ -5183,6 +5195,12 @@ window._pc3ToggleFullscreen = function () {
     _isFullscreen = !_isFullscreen;
     var root = el('pc3-root');
     if (root) root.classList.toggle('pc3-fullscreen', _isFullscreen);
+};
+var _focusMode = false;
+window._pc3ToggleFocus = function () {
+    _focusMode = !_focusMode;
+    var root = el('pc3-root');
+    if (root) root.classList.toggle('pc3-focus', _focusMode);
 };
 window._pc3ToggleSidebar = function () {
     _sidebarCollapsed = !_sidebarCollapsed;
