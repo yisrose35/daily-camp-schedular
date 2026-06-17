@@ -108,6 +108,26 @@
     var bestLayout = null;
     var bestLeftover = -1;
     var bestShiftDist = Infinity;
+    var bestRank = null;
+
+    // Rank a candidate layout. Lower is better, compared field-by-field:
+    //   bucket: 0 = perfect tile (no leftover), 1 = sport-fillable leftover
+    //           (>= minSportDMin), 2 = leaves an unfillable sliver.
+    //   For an unsolvable bucket (2) we then minimize the wasted sliver.
+    //   Finally, among otherwise-equal layouts, minimize how far pieces were
+    //   shifted from their configured starts (least disruption wins). This
+    //   replaces the old logic, which accepted the LAST ok permutation seen and
+    //   so could pick a heavily-shifted layout over an equivalent zero-shift one.
+    function _rankOf(ok, leftover, shiftDist) {
+      var bucket = ok ? (leftover === 0 ? 0 : 1) : 2;
+      return { bucket: bucket, leftover: leftover, shiftDist: shiftDist };
+    }
+    function _isBetter(a, b) {
+      if (!b) return true;
+      if (a.bucket !== b.bucket) return a.bucket < b.bucket;
+      if (a.bucket === 2 && a.leftover !== b.leftover) return a.leftover < b.leftover;
+      return a.shiftDist < b.shiftDist;
+    }
 
     function tryPermutation(perm) {
       // All items in display order = fixed (in their configured order) merged with perm.
@@ -117,11 +137,17 @@
 
       // 1. Build a timeline of fixed items (sorted by start). Reject if any fixed item
       //    overlaps the period boundary or another fixed item.
+      //    ★ A fixed item's footprint is its REAL duration (configuredDur), not dMin.
+      //    Using dMin here let a block longer than its dMin overflow the period
+      //    boundary or overlap its neighbour while the gap math (which uses
+      //    configuredDur) silently disagreed — producing layouts that ran past
+      //    the period end. Measure both checks by the same footprint as the gaps.
       var fixedSorted = _sortBy(fixed, 'configuredStart');
+      var _foot = function (x) { return (x.configuredDur != null ? x.configuredDur : x.dMin); };
       for (var i = 0; i < fixedSorted.length; i++) {
         var f = fixedSorted[i];
-        if (f.configuredStart < period.startMin || f.configuredStart + f.dMin > period.endMin) return;
-        if (i > 0 && fixedSorted[i].configuredStart < fixedSorted[i - 1].configuredStart + fixedSorted[i - 1].dMin) return;
+        if (f.configuredStart < period.startMin || f.configuredStart + _foot(f) > period.endMin) return;
+        if (i > 0 && fixedSorted[i].configuredStart < fixedSorted[i - 1].configuredStart + _foot(fixedSorted[i - 1])) return;
       }
 
       // 2. Compute the gaps between fixed items (within the period).
@@ -206,16 +232,12 @@
         }
       });
 
-      var betterLeftover = false;
-      if (ok && bestLeftover !== 0) betterLeftover = true;       // prefer ok solutions
-      else if (ok && leftover === 0 && bestLeftover !== 0) betterLeftover = true;
-      else if (ok && leftover === bestLeftover && shiftDist < bestShiftDist) betterLeftover = true;
-      else if (!bestLayout) betterLeftover = true;
-
-      if (betterLeftover) {
+      var rank = _rankOf(ok, leftover, shiftDist);
+      if (_isBetter(rank, bestRank)) {
         bestLayout = placements;
         bestLeftover = leftover;
         bestShiftDist = shiftDist;
+        bestRank = rank;
       }
     }
 
@@ -381,7 +403,7 @@
     });
 
     var allPass = results.every(function (r) { return r.pass; });
-    if (window.console && console.log) {
+    if (typeof console !== 'undefined' && console.log) {
       console.log('[PeriodTiler P1] Smoke tests:', allPass ? 'PASS' : 'FAIL');
       results.forEach(function (r) {
         console.log('  - ' + r.name + ': ' + (r.pass ? 'OK' : 'FAIL'),
@@ -392,15 +414,21 @@
   }
 
   // Expose API
-  window.PeriodTiler = {
+  var api = {
     tileBunkDay: tileBunkDay,
     tilePeriod: tilePeriod,
     _smokeTest: _smokeTest
   };
+  if (typeof window !== 'undefined') {
+    window.PeriodTiler = api;
+  }
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = api;
+  }
 
   // Auto-run smoke test on load (only logs; no side effects)
   try {
-    if (window.location && /[?&]tilerSmoke=1/.test(window.location.search)) {
+    if (typeof window !== 'undefined' && window.location && /[?&]tilerSmoke=1/.test(window.location.search)) {
       _smokeTest();
     }
   } catch (e) {}
