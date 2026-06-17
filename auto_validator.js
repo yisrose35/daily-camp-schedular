@@ -156,17 +156,59 @@
                 // "at the Zoo" simultaneously is the intended state, not a
                 // cross-division conflict / capacity violation (FN-59).
                 if (entry._isTrip) return;
-                // Custom-layer blocks (user-named layers like "Morning Activity",
-                // plus Davening / Main activity) are whole-grade activities the
-                // entire grade does TOGETHER by design — not contended physical
-                // rooms. The engine writes them as type:'custom' / _customActivity.
-                // SKIP_FIELDS hard-codes a few generic labels, but a user can name a
-                // custom layer anything ("Morning Activity"), so that list can't catch
-                // them all. Treat any custom-layer entry like lunch/davening and
-                // exclude it from field capacity + stagger checks — otherwise
-                // "Morning Activity has 4 Harmony bunks (capacity 1)" is a false
-                // positive (all 4 bunks SHOULD do their morning activity together).
-                if (entry.type === 'custom' || entry._customActivity) return;
+
+                // Custom-layer blocks (user-named "Morning Activity" / "Main
+                // Activity" / Davening, etc.) used to be skipped wholesale —
+                // assumed to be whole-grade activities the entire grade does
+                // together. That assumption fails once each general activity can
+                // carry its OWN sharing config (per-activity config, "like
+                // specials"). E.g. "Morning Activity" at Auditorium configured
+                // not_sharable cap 1 → having Harmony + Prop on it at the same
+                // time IS a real conflict.
+                //
+                // Now we INCLUDE customs in the index, attach the resolved
+                // per-activity sharing (layer override → ga config → field
+                // fallback) to each entry, and let the share check consult that
+                // resolved rule for same-activity pairs.
+                const isCustomEntry = (entry.type === 'custom') || !!entry._customActivity;
+                const customActLow = String(entry._customActivity || (isCustomEntry ? (entry._activity || entry.field) : '') || '').toLowerCase().trim();
+                let _resolvedCustomSharing = null;
+                if (isCustomEntry && typeof window.getCustomActivitySharingInfo === 'function') {
+                    try {
+                        const _r = window.getCustomActivitySharingInfo(
+                            entry._customActivity || entry._activity,
+                            entry._customField || entry.field,
+                            entry._customSharing || null,
+                            (window.loadGlobalSettings ? window.loadGlobalSettings() : {})
+                        );
+                        // Normalize 'all' and orphan 'custom' to the same buckets
+                        // buildFieldSharingMap uses, so the cross-div check applies
+                        // the same gates.
+                        let _rt = _r.shareType || 'not_sharable';
+                        const _rd = Array.isArray(_r.allowedDivisions) ? _r.allowedDivisions : [];
+                        if (_rt === 'custom' && _rd.length === 0) _rt = 'same_division';
+                        if (_rt === 'all') _rt = 'same_division';
+                        _resolvedCustomSharing = {
+                            type: _rt,
+                            capacity: parseInt(_r.capacity) || (_rt === 'not_sharable' ? 1 : 2),
+                            divisions: _rd,
+                            allowedPairs: _r.allowedPairs || {},
+                            _source: _r.source
+                        };
+                    } catch (_eR) { /* fall through to field lookup */ }
+                }
+                // Honor the legacy whole-grade defaults: if the resolved sharing
+                // came from neither layer nor ga config (i.e. source='field' or
+                // 'default') AND the activity name matches the historically-
+                // exempt set (main activity / morning activity / davening etc.),
+                // keep skipping. This preserves backward compatibility for camps
+                // that haven't configured anything per-activity yet — they don't
+                // suddenly start failing validation.
+                if (isCustomEntry && _resolvedCustomSharing && (_resolvedCustomSharing._source === 'field' || _resolvedCustomSharing._source === 'default') &&
+                    (SKIP_ACTIVITIES.has(customActLow) || customActLow === '')) {
+                    return;
+                }
+                if (isCustomEntry && !_resolvedCustomSharing) return;
 
                 const fn = entry.field.toLowerCase().trim();
                 if (SKIP_FIELDS.has(fn) || isLeagueField(fn)) return;
@@ -184,7 +226,13 @@
                     //   not a violation. Carry the flag + the custom-activity name so the
                     //   share checks can exempt an all-reserved-same-act overlap group.
                     _staggerReserved: !!entry._staggerReserved,
-                    _customAct: String(entry._customActivity || '').toLowerCase().trim()
+                    _customAct: customActLow,
+                    // ★ Resolved per-activity sharing for this custom usage. When
+                    //   two usages of the SAME custom activity overlap, the share
+                    //   check uses this instead of the field's rule (Morning
+                    //   Activity may share even though Auditorium is not_sharable,
+                    //   or vice-versa).
+                    _resolvedSharing: _resolvedCustomSharing
                 };
 
                 if (!index.has(fn)) index.set(fn, []);
@@ -217,8 +265,13 @@
             // Skip special locations — they handle their own cross-div rules
             if (sharing._isSpecial) return;
 
-            // Only check fields where cross-div matters
-            if (sharing.type !== 'same_division' && sharing.type !== 'not_sharable' && sharing.type !== 'custom') return;
+            // Only check fields where cross-div matters, EXCEPT keep iterating
+            // when any usage carries a per-activity resolved sharing rule (a
+            // 'cross_division' field with a 'not_sharable' per-activity rule
+            // would otherwise be skipped here and the conflict missed).
+            const _anyPerActivity = usages.some(u => u.flags && u.flags._resolvedSharing);
+            if (!_anyPerActivity &&
+                sharing.type !== 'same_division' && sharing.type !== 'not_sharable' && sharing.type !== 'custom') return;
 
             for (let i = 0; i < usages.length; i++) {
                 const a = usages[i];
@@ -242,36 +295,60 @@
                     if (a.flags._staggerReserved && b.flags._staggerReserved &&
                         a.flags._customAct && a.flags._customAct === b.flags._customAct) continue;
 
+                    // ★ Per-activity sharing for same-activity custom pairs (like
+                    //   specials). When two grades use the SAME custom activity
+                    //   (e.g. Morning Activity), the activity's own sharing rule
+                    //   governs — not the field's (Auditorium may be not_sharable
+                    //   while Morning Activity allows cross-grade share, or
+                    //   vice-versa). Different activities at the same field fall
+                    //   back to the field's rule.
+                    let effectiveSharing = sharing;
+                    if (a.flags._customAct && a.flags._customAct === b.flags._customAct &&
+                        a.flags._resolvedSharing) {
+                        effectiveSharing = a.flags._resolvedSharing;
+                    }
+
                     // Cross-division overlap detected
                     let isViolation = false;
 
-                    if (sharing.type === 'not_sharable') {
+                    if (effectiveSharing.type === 'not_sharable') {
                         isViolation = true;
-                    } else if (sharing.type === 'same_division') {
+                    } else if (effectiveSharing.type === 'same_division') {
                         isViolation = true;
-                    } else if (sharing.type === 'custom') {
-                        const allowed = sharing.divisions || [];
+                    } else if (effectiveSharing.type === 'custom') {
+                        const allowed = effectiveSharing.divisions || [];
                         if (allowed.length > 0) {
                             isViolation = !allowed.includes(a.grade) || !allowed.includes(b.grade);
                         } else {
                             isViolation = true; // empty custom = same_division
                         }
+                    } else if (effectiveSharing.type === 'cross_division') {
+                        // ★ Pair-gated cross-division share. Each ordered pair must
+                        //   be in allowedPairs; otherwise the pair is a violation.
+                        const pairs = effectiveSharing.allowedPairs || {};
+                        const pk = [String(a.grade), String(b.grade)].sort().join('|');
+                        isViolation = pairs[pk] !== true;
                     }
 
                     if (isViolation) {
                         const timeLabel = `${formatTime(Math.min(a.startMin, b.startMin))} - ${formatTime(Math.max(a.endMin, b.endMin))}`;
+                        // Label by the activity name when the per-activity rule
+                        // is what flagged this (matches the user's mental model:
+                        // "Morning Activity is not_sharable" vs. "Auditorium").
+                        const usedActivityRule = (effectiveSharing !== sharing);
+                        const subject = usedActivityRule && a.flags._customAct ? a.flags._customAct : a.field;
                         errors.push({
                             type: 'cross_division',
                             field: a.field,
                             fieldNorm,
-                            shareType: sharing.type,
+                            shareType: effectiveSharing.type,
                             bunks: [
                                 { bunk: a.bunk, grade: a.grade, time: `${a.startMin}-${a.endMin}` },
                                 { bunk: b.bunk, grade: b.grade, time: `${b.startMin}-${b.endMin}` }
                             ],
                             timeLabel,
-                            message: `<strong>Cross-Division Conflict:</strong> <u>${a.field}</u> ` +
-                                `(${sharing.type}, cap ${sharing.capacity}) used by ` +
+                            message: `<strong>Cross-Division Conflict:</strong> <u>${subject}</u> ` +
+                                `(${effectiveSharing.type}, cap ${effectiveSharing.capacity}) used by ` +
                                 `${a.bunk} (${a.grade}) @ ${formatTime(a.startMin)}-${formatTime(a.endMin)} and ` +
                                 `${b.bunk} (${b.grade}) @ ${formatTime(b.startMin)}-${formatTime(b.endMin)}`
                         });
@@ -313,7 +390,18 @@
             });
 
             Object.entries(byGrade).forEach(([grade, gradeUsages]) => {
-                if (gradeUsages.length <= sharing.capacity) return;
+                // ★ If every usage in this grade group is the SAME custom
+                //   activity with a resolved per-activity sharing, use the
+                //   activity's capacity — Morning Activity's per-activity cap
+                //   may differ from Auditorium's field cap.
+                let effectiveCap = sharing.capacity;
+                const firstAct = gradeUsages[0]?.flags?._customAct || '';
+                const firstShare = gradeUsages[0]?.flags?._resolvedSharing;
+                if (firstShare && firstAct &&
+                    gradeUsages.every(u => u.flags._customAct === firstAct && u.flags._resolvedSharing)) {
+                    effectiveCap = firstShare.capacity;
+                }
+                if (gradeUsages.length <= effectiveCap) return;
 
                 // Find peak concurrent usage using time sweep
                 const events = [];
@@ -343,21 +431,25 @@
                     }
                 });
 
-                if (peak > sharing.capacity) {
+                if (peak > effectiveCap) {
                     // Find which bunks are active at peak time
                     const peakBunks = gradeUsages.filter(u =>
                         u.startMin <= peakTime && u.endMin > peakTime
                     );
+                    // Label by the activity when the per-activity rule applied
+                    // (matches "Morning Activity (cap 4)" mental model).
+                    const usedActivityRule = (effectiveCap !== sharing.capacity);
+                    const subject = (usedActivityRule && firstAct) ? firstAct : gradeUsages[0].field;
                     errors.push({
                         type: 'capacity',
                         field: gradeUsages[0].field,
                         fieldNorm,
                         grade,
                         peak,
-                        capacity: sharing.capacity,
-                        message: `<strong>Capacity Exceeded:</strong> <u>${gradeUsages[0].field}</u> ` +
+                        capacity: effectiveCap,
+                        message: `<strong>Capacity Exceeded:</strong> <u>${subject}</u> ` +
                             `has <strong>${peak}</strong> ${grade} bunks at ${formatTime(peakTime)} ` +
-                            `(capacity: ${sharing.capacity})<br>` +
+                            `(capacity: ${effectiveCap})<br>` +
                             `<small style="color:#666;">Bunks: ${peakBunks.map(u => `${u.bunk} @ ${formatTime(u.startMin)}-${formatTime(u.endMin)}`).join(', ')}</small>`
                     });
                 }

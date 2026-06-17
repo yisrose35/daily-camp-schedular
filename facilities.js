@@ -1342,18 +1342,55 @@ function renderGeneralConfig(container, fac) {
     container.appendChild(section("Instructor", summaryFacilityInstructors(fac),
         () => renderFacilityInstructors(fac)));
 
-    container.appendChild(section("Sharing Rules", summaryGeneralSharing(fieldData),
-        () => renderGeneralSharing(fieldData)));
-
-    // ★ FN-39: CONSECUTIVE BUNKS (auto-only) — the same option special
-    //   activities offer, for this facility's general activities: the whole
-    //   grade cycles through the facility back-to-back, one batch of bunks
-    //   after the next (batched by the sharing capacity above). Hidden in
-    //   manual mode, same as the special-activity version.
+    // ── PER-ACTIVITY SHARING + CONSECUTIVE ───────────────────────────────
+    // Each general activity at this facility may carry its OWN sharing rule
+    // and consecutive-bunks toggle (like specials do). The facility-level
+    // config below (when shown) is the DEFAULT that any unconfigured general
+    // activity falls back to. Two activities at the same facility (e.g. Main
+    // Activity vs. Morning Activity in Auditorium) can have different rules.
     const _gaIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
-    if (_gaIsAutoMode) {
-        container.appendChild(section("Consecutive Bunks", summaryGeneralConsec(fieldData),
-            () => renderGeneralConsec(fieldData, fac, app1)));
+    const _gas = Array.isArray(fac.generalActivities) ? fac.generalActivities.filter(g => g && g.name) : [];
+
+    if (_gas.length === 0) {
+        // No general activities yet — show the facility-level sections so the
+        // user can pre-configure a default before adding activities.
+        container.appendChild(section("Sharing Rules (facility default)", summaryGeneralSharing(fieldData),
+            () => renderGeneralSharing(fieldData)));
+        if (_gaIsAutoMode) {
+            container.appendChild(section("Consecutive Bunks (facility default)", summaryGeneralConsec(fieldData),
+                () => renderGeneralConsec(fieldData, fac, app1)));
+        }
+    } else if (_gas.length === 1) {
+        // Single activity — bind the existing sections directly to the ga
+        // entry (no name suffix; UX matches the prior single-activity look).
+        const onlyGa = _gas[0];
+        container.appendChild(section("Sharing Rules", summaryGaSharing(onlyGa),
+            () => renderGaSharing(onlyGa)));
+        if (_gaIsAutoMode) {
+            container.appendChild(section("Consecutive Bunks", summaryGaConsec(onlyGa),
+                () => renderGaConsec(onlyGa)));
+        }
+    } else {
+        // 2+ activities — render PER-ACTIVITY sections so each can have its
+        // own rule (the user's "like specials" intent: Main vs. Morning
+        // Activity at the same Auditorium can differ).
+        _gas.forEach(ga => {
+            container.appendChild(section("Sharing Rules — " + ga.name, summaryGaSharing(ga),
+                () => renderGaSharing(ga)));
+            if (_gaIsAutoMode) {
+                container.appendChild(section("Consecutive Bunks — " + ga.name, summaryGaConsec(ga),
+                    () => renderGaConsec(ga)));
+            }
+        });
+        // Also keep the facility-level default available (collapsed,
+        // expandable) — when a ga has no per-activity config, the resolver
+        // falls through to this. Hidden until the user clicks; non-disruptive.
+        container.appendChild(section("Facility Sharing default", summaryGeneralSharing(fieldData),
+            () => renderGeneralSharing(fieldData)));
+        if (_gaIsAutoMode) {
+            container.appendChild(section("Facility Consecutive default", summaryGeneralConsec(fieldData),
+                () => renderGeneralConsec(fieldData, fac, app1)));
+        }
     }
 }
 
@@ -1721,6 +1758,110 @@ function renderGeneralSharing(item) {
 
     renderContent();
     return container;
+}
+
+// =========================================================================
+// PER-ACTIVITY (ga entry) Sharing + Consecutive Bunks
+// — same pattern as facility-level, scoped to one activity. The engine
+//   resolves config via getCustomActivitySharingInfo: layer override → this
+//   per-activity entry → facility/field fallback. So two activities at the
+//   same facility (e.g. Main Activity vs. Morning Activity in Auditorium) can
+//   have DIFFERENT sharing rules / consecutive flags, "like specials".
+// =========================================================================
+
+function summaryGaSharing(ga) {
+    // ga has no sharableWith → falls back to facility default at the engine.
+    if (!ga || !ga.sharableWith) return 'Using facility default';
+    return summaryGeneralSharing(ga);
+}
+
+function renderGaSharing(ga) {
+    // renderGeneralSharing is already polymorphic over `item.sharableWith` —
+    // re-use it directly, plus a small "use facility default" reset.
+    const wrap = document.createElement('div');
+    const banner = document.createElement('div');
+    banner.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; padding:8px 10px; background:#F3F4F6; border-radius:6px;';
+    const hint = document.createElement('span');
+    hint.style.cssText = 'font-size:0.78rem; color:#6B7280;';
+    hint.textContent = ga.sharableWith
+        ? 'Per-activity sharing overrides the facility default.'
+        : 'No per-activity sharing set — using the facility default.';
+    banner.appendChild(hint);
+    if (ga.sharableWith) {
+        const clear = document.createElement('button');
+        clear.type = 'button';
+        clear.textContent = 'Use facility default';
+        clear.style.cssText = 'border:1px solid #D1D5DB; background:#fff; color:#374151; padding:4px 10px; border-radius:6px; font-size:0.78rem; cursor:pointer;';
+        clear.onclick = () => {
+            delete ga.sharableWith;
+            saveData();
+            renderDetailPane();
+        };
+        banner.appendChild(clear);
+    } else {
+        const enable = document.createElement('button');
+        enable.type = 'button';
+        enable.textContent = 'Customize for this activity';
+        enable.style.cssText = 'border:1px solid #0F5F6E; background:#0F5F6E; color:#fff; padding:4px 10px; border-radius:6px; font-size:0.78rem; cursor:pointer;';
+        enable.onclick = () => {
+            // Seed from the facility default so the editor is non-empty.
+            const facList = (window.loadGlobalSettings?.() || {}).app1?.fields || [];
+            // Find this ga's facility by iterating in-memory facilities; the
+            // closure has `facilities` available at the module level.
+            let seed = null;
+            try {
+                (facilities || []).forEach(f => {
+                    if (!seed && (f.generalActivities || []).some(g => g === ga)) {
+                        const fld = facList.find(x => x && x.name === f.name);
+                        if (fld && fld.sharableWith) seed = JSON.parse(JSON.stringify(fld.sharableWith));
+                    }
+                });
+            } catch (_e) {}
+            ga.sharableWith = seed || { type: 'not_sharable', divisions: [], capacity: 1, allowedPairs: {} };
+            saveData();
+            renderDetailPane();
+        };
+        banner.appendChild(enable);
+    }
+    wrap.appendChild(banner);
+    if (ga.sharableWith) {
+        // Delegate to the existing renderer — operates on item.sharableWith.
+        wrap.appendChild(renderGeneralSharing(ga));
+    }
+    return wrap;
+}
+
+function summaryGaConsec(ga) {
+    return ga && ga.consecutiveBunks === true
+        ? 'On · slot length set by the layer'
+        : 'Off';
+}
+
+function renderGaConsec(ga) {
+    const wrap = document.createElement('div');
+    const box = document.createElement('div');
+    box.style.cssText = 'display:flex; align-items:flex-start; gap:10px; padding:10px 12px; background:#FEF3C7; border:1px solid #FDE68A; border-radius:8px;';
+    const check = document.createElement('input');
+    check.type = 'checkbox';
+    check.checked = ga.consecutiveBunks === true;
+    check.id = 'ga-act-consec-' + String(ga.name || '').replace(/[^a-z0-9]/gi, '_');
+    check.style.cssText = 'width:16px; height:16px; cursor:pointer; margin-top:2px; flex-shrink:0;';
+    const label = document.createElement('label');
+    label.htmlFor = check.id;
+    label.style.cssText = 'flex:1; cursor:pointer; font-size:0.85rem; color:#374151;';
+    label.innerHTML = '<strong>Schedule bunks consecutively</strong>'
+        + '<div style="font-size:0.75rem; color:#6B7280; margin-top:2px; line-height:1.4;">'
+        + 'Each bunk in the grade comes through this activity one after the next, '
+        + 'starting at the activity\'s layer. The layer\'s length sets each bunk\'s '
+        + 'slot. If sharing is on, bunks share each slot up to capacity.</div>';
+    box.appendChild(check);
+    box.appendChild(label);
+    wrap.appendChild(box);
+    check.addEventListener('change', () => {
+        ga.consecutiveBunks = check.checked;
+        saveData();
+    });
+    return wrap;
 }
 
 // =========================================================================

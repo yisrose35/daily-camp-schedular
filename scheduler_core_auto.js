@@ -374,6 +374,107 @@
         return { shareType, capacity: cap, allowedDivisions: allowedDivs, allowedPairs };
     }
 
+    // ═══ GENERAL / CUSTOM ACTIVITY config resolver ══════════════════════════
+    // Per-activity config (sharing rules + consecutive bunks + instructor), like
+    // specials have. Resolution chain (highest precedence first):
+    //
+    //   1. Per-LAYER override (`layer.customSharing` from the Layer editor;
+    //      shape: { capacity, allowedGrades:[...] }). Lets a single day's layer
+    //      override the global config without touching it.
+    //   2. Per-ACTIVITY config (`facility.generalActivities[name]`):
+    //      `.sharableWith` (full shape, same as specials/fields) and
+    //      `.consecutiveBunks` (boolean). This is the new "like specials" tier:
+    //      Main Activity and Morning Activity at the same Auditorium can have
+    //      DIFFERENT configs.
+    //   3. Per-FACILITY/FIELD config (`field.sharableWith`, `field.consecutiveBunks`).
+    //      The old behavior — kept as fallback so existing camps keep working
+    //      until they configure something per-activity.
+    //
+    // Single source of truth for: scheduler_core_auto.js read sites
+    // (computeStaggeredCustomSlot, Phase 1.4 required-custom stagger, Phase 2.35
+    // consecutive-bunk reservation), auto_validator.js, validator.js,
+    // scheduler_core_utils.js. No future drift.
+    function getCustomActivitySharingInfo(activityName, fieldName, layerOverride, gs) {
+        gs = gs || globalSettings;
+        var out = { shareType: 'not_sharable', capacity: 1, allowedDivisions: [], allowedPairs: {}, consecutiveBunks: false, instructor: '', source: 'default' };
+
+        // (1) Per-layer override — translate { capacity, allowedGrades } → sharableWith.
+        if (layerOverride && (layerOverride.capacity != null || Array.isArray(layerOverride.allowedGrades))) {
+            var grades = Array.isArray(layerOverride.allowedGrades) ? layerOverride.allowedGrades.filter(Boolean) : [];
+            var pairs = {};
+            for (var i = 0; i < grades.length; i++) {
+                for (var j = i; j < grades.length; j++) {
+                    pairs[[String(grades[i]), String(grades[j])].sort().join('|')] = true;
+                }
+            }
+            var lcCap = parseInt(layerOverride.capacity);
+            if (!isFinite(lcCap) || lcCap < 1) lcCap = 1;
+            out.shareType = (lcCap > 1 || grades.length > 1) ? (grades.length > 1 ? 'cross_division' : 'same_division') : 'not_sharable';
+            out.capacity = lcCap;
+            out.allowedDivisions = grades;
+            out.allowedPairs = pairs;
+            out.source = 'layer';
+            // Layer override stops here for sharing; consecutive/instructor still
+            // drawn from the per-activity / facility tier below.
+        }
+
+        // Look up facility + matching general-activity entry.
+        var facList = (gs && gs.facilities) || [];
+        var fac = null;
+        if (fieldName) {
+            var fnLow = String(fieldName).toLowerCase().trim();
+            for (var fi = 0; fi < facList.length; fi++) {
+                var f = facList[fi];
+                if (f && f.name && String(f.name).toLowerCase().trim() === fnLow) { fac = f; break; }
+            }
+        }
+        var ga = null;
+        if (fac && activityName) {
+            var anLow = String(activityName).toLowerCase().trim();
+            var gaList = fac.generalActivities || [];
+            for (var gi = 0; gi < gaList.length; gi++) {
+                var g = gaList[gi];
+                if (g && g.name && String(g.name).toLowerCase().trim() === anLow) { ga = g; break; }
+            }
+        }
+
+        // (2) Per-activity config on the ga entry — only fill what hasn't been set by (1).
+        if (ga) {
+            if (out.source !== 'layer' && ga.sharableWith && ga.sharableWith.type) {
+                out.shareType = ga.sharableWith.type;
+                out.capacity = parseInt(ga.sharableWith.capacity) || (out.shareType === 'not_sharable' ? 1 : 2);
+                out.allowedDivisions = ga.sharableWith.divisions || [];
+                out.allowedPairs = ga.sharableWith.allowedPairs || {};
+                out.source = 'activity';
+            }
+            if (ga.consecutiveBunks === true) out.consecutiveBunks = true;
+            if (typeof ga.instructor === 'string' && ga.instructor.trim()) out.instructor = ga.instructor.trim();
+        }
+
+        // (3) Field-level fallback for whatever still hasn't been filled.
+        var fld = null;
+        if (fieldName) {
+            var fields = getFields(gs);
+            var fnLow2 = String(fieldName).toLowerCase().trim();
+            for (var fdi = 0; fdi < fields.length; fdi++) {
+                var ff = fields[fdi];
+                if (ff && ff.name && String(ff.name).toLowerCase().trim() === fnLow2) { fld = ff; break; }
+            }
+        }
+        if (fld) {
+            if (out.source === 'default' && fld.sharableWith && fld.sharableWith.type) {
+                out.shareType = fld.sharableWith.type;
+                out.capacity = parseInt(fld.sharableWith.capacity) || (out.shareType === 'not_sharable' ? 1 : 2);
+                out.allowedDivisions = fld.sharableWith.divisions || [];
+                out.allowedPairs = fld.sharableWith.allowedPairs || {};
+                out.source = 'field';
+            }
+            if (!out.consecutiveBunks && fld.consecutiveBunks === true) out.consecutiveBunks = true;
+        }
+        return out;
+    }
+    try { window.getCustomActivitySharingInfo = getCustomActivitySharingInfo; } catch (_eXp) {}
+
     function isScarce(specialName, dayName, gs) {
         const cfg = getSpecialConfig(specialName, gs);
         if (!cfg) return false;
@@ -1270,6 +1371,30 @@
                 if (_names.length > 1) log('[STEP 1] Consecutive facility "' + f.name + '" hosts ' + _names.length + ' generals — using "' + _gaName + '" for the run');
                 consecutiveBunkSports.push({ name: _gaName, duration: parseInt(f.consecutiveDuration) || 30, hosts: [f] });
             });
+            // ★ Per-activity consecutive flag (new "like specials" tier).
+            //   Each `facility.generalActivities[i]` may carry its OWN
+            //   `consecutiveBunks: true` + optional `consecutiveDuration`. This
+            //   adds activities that the field-level toggle didn't cover (or
+            //   covered with only the first general) — one entry per activity
+            //   name, never duplicated. Field-level toggle remains backwards-
+            //   compat above.
+            try {
+                var _alreadyByName = {};
+                consecutiveBunkSports.forEach(function (s) { _alreadyByName[String(s.name).toLowerCase().trim()] = true; });
+                (globalSettings.facilities || []).forEach(function (fac) {
+                    if (!fac || !fac.name || !Array.isArray(fac.generalActivities)) return;
+                    fac.generalActivities.forEach(function (ga) {
+                        if (!ga || !ga.name || ga.consecutiveBunks !== true) return;
+                        var lc = String(ga.name).toLowerCase().trim();
+                        if (_alreadyByName[lc]) return;
+                        _alreadyByName[lc] = true;
+                        // Mirror the field-record shape consumers expect.
+                        var hostField = _fldsCB.find(function (xf) { return xf && xf.name && String(xf.name).toLowerCase().trim() === String(fac.name).toLowerCase().trim(); }) || { name: fac.name };
+                        var dur = parseInt(ga.consecutiveDuration) || parseInt(hostField.consecutiveDuration) || 30;
+                        consecutiveBunkSports.push({ name: ga.name, duration: dur, hosts: [hostField] });
+                    });
+                });
+            } catch (_eCBSGa) {}
             if (consecutiveBunkSports.length) {
                 log('[STEP 1] Consecutive-bunk general activities (reserved by Phase 2.35): ' +
                     consecutiveBunkSports.map(function (s) { return s.name + ' @ ' + s.hosts[0].name + ' (' + s.duration + 'm)'; }).join(', '));
@@ -1634,14 +1759,14 @@
             try {
                 var _clFld = cl.customField || null;
                 if (!_clFld) return result;
-                var _clFldCfg = getFields(globalSettings).find(function (f) {
-                    return f && f.name && String(f.name).toLowerCase().trim() === String(_clFld).toLowerCase().trim();
-                });
-                var _clSw = (_clFldCfg && _clFldCfg.sharableWith) || null;
-                var _clShareable = !!_clSw && (
-                    (_clSw.type && _clSw.type !== 'not_sharable') ||
-                    (parseInt(_clSw.capacity) || 0) > 1
-                );
+                // ★ Per-activity config (sharing rules): layer override → ga config →
+                //   field fallback. Without this, two activities at the same field
+                //   were forced to share ONE sharing rule (e.g. Main + Morning both
+                //   in Auditorium got the field's not_sharable cap-1 rule even when
+                //   one was configured to allow sharing).
+                var _clRes = getCustomActivitySharingInfo(cl.customActivity || cl.event, _clFld, cl.customSharing, globalSettings);
+                var _clSw = { type: _clRes.shareType, capacity: _clRes.capacity, divisions: _clRes.allowedDivisions, allowedPairs: _clRes.allowedPairs };
+                var _clShareable = (_clSw.type && _clSw.type !== 'not_sharable') || (parseInt(_clSw.capacity) || 0) > 1;
                 if (!_clShareable) return result;
                 result.isShareableRoom = true;
 
@@ -14434,13 +14559,11 @@
                         (_p14FieldUse[lc] = _p14FieldUse[lc] || []).push({ start: blk.startMin, end: blk.endMin, grade: _p14BunkGrade[String(b)] });
                     });
                 });
-                var _p14FieldShare = function (fieldName) {
-                    var f = getFields(globalSettings).find(function (x) { return x && String(x.name).toLowerCase() === String(fieldName).toLowerCase(); });
-                    var sw = f && f.sharableWith;
-                    if (!sw || !sw.type) return { type: 'not_sharable', cap: 1, pairs: {} };
-                    return { type: sw.type, cap: parseInt(sw.capacity) || (sw.type === 'not_sharable' ? 1 : 2), pairs: sw.allowedPairs || {} };
-                };
-                var _p14FieldOk = function (fieldName, grade, s, e) {
+                // ★ Per-activity-aware sharing resolver: each custom activity at a
+                //   given field may have its OWN sharableWith config (layer override
+                //   → ga config → field fallback). Without this, two activities at
+                //   the same field shared ONE rule.
+                var _p14FieldOk = function (activityName, fieldName, layerOverride, grade, s, e) {
                     if (!fieldName) return true;
                     var used = _p14FieldUse[String(fieldName).toLowerCase()] || [];
                     var others = [];
@@ -14449,11 +14572,11 @@
                         if (u.start < e && u.end > s && String(u.grade) !== String(grade)) others.push(u.grade);
                     }
                     if (!others.length) return true;
-                    var sh = _p14FieldShare(fieldName);
-                    if (sh.type === 'not_sharable' || sh.type === 'same_division') return false;
-                    if (!isCrossDivAllowed(grade, others, sh.pairs)) return false;
+                    var res = getCustomActivitySharingInfo(activityName, fieldName, layerOverride, globalSettings);
+                    if (res.shareType === 'not_sharable' || res.shareType === 'same_division') return false;
+                    if (!isCrossDivAllowed(grade, others, res.allowedPairs)) return false;
                     var distinct = {}; others.forEach(function (g) { distinct[String(g)] = 1; }); distinct[String(grade)] = 1;
-                    return Object.keys(distinct).length <= sh.cap;
+                    return Object.keys(distinct).length <= res.capacity;
                 };
                 var _p14RecordField = function (fieldName, grade, s, e) {
                     if (!fieldName) return;
@@ -14491,11 +14614,13 @@
                                     if (b.startMin < e && b.endMin > s) { clash = true; break; }
                                 }
                                 if (clash) continue;
-                                // ★ Cross-grade field capacity: never overlap another grade
-                                //   on a not-cross-grade-sharable / over-capacity field — the
-                                //   second grade staggers into a later window slot. Same grade
-                                //   never blocks itself.
-                                if (!_p14FieldOk(cl.customField, grade, s, e)) continue;
+                                // ★ Cross-grade capacity: resolves per-activity (layer override
+                                //   → ga config → field). Never overlap another grade on a not-
+                                //   cross-grade-sharable / over-capacity slot — the second grade
+                                //   staggers into a later window slot. Same grade never blocks
+                                //   itself. Two activities at the SAME field can have different
+                                //   sharing rules (so the gate fires for one but not the other).
+                                if (!_p14FieldOk(cl.customActivity || cl.event, cl.customField, cl.customSharing, grade, s, e)) continue;
                                 tl.push({
                                     startMin: s, endMin: e,
                                     type: 'custom', event: cl.customActivity || cl.event || 'Custom',
