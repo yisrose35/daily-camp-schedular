@@ -18642,6 +18642,7 @@
                 //   they become window-movable below.
                 var _TILER_HARD_FIXED = new Set([
                     'swim', 'change', 'pre-change', 'post-change', 'davening',
+                    'lunch', 'snacks', 'dismissal',
                     'league', 'specialty_league',
                     'rotation_event', 'scheduled_activity', 'trip'
                 ]);
@@ -18745,7 +18746,12 @@
                             //   band. Duration stays locked (no stretching). This is what
                             //   lets the tiler pull the mid-day slivers together instead
                             //   of treating these anchors as immovable region walls.
-                            var isWindowMovable = (t === 'custom' || t === 'lunch' || t === 'dismissal');
+                            // Only custom anchors (Main/Morning Activity) are window-movable
+                            //   now — lunch/dismissal are region boundaries again (kept fixed
+                            //   so they never drift across the day). A field-less custom anchor
+                            //   additionally gets its tight window dropped (below) so it can
+                            //   slide across the region to abut a neighbour.
+                            var isWindowMovable = (t === 'custom');
                             var movable = isSnack ? !isChange
                                         : ((isSpecialBlk || isWindowMovable) ? !isHardFixed
                                                                              : (!isHardFixed && !isPinned));
@@ -18820,7 +18826,21 @@
                         //   wall like lunch), and each span keeps few movable pieces so the
                         //   permutation packer stays fast instead of bailing to greedy on a
                         //   single over-full FullDay period.
-                        var periodsForBunk = gradePeriods;
+                        // ★ Tile across the WHOLE wall-bounded region by default, not per
+                        //   bell-period. Per-period tiling can't slide a movable piece across
+                        //   a period boundary to abut a neighbour, so an anchor in period B can
+                        //   never close a sliver left in period A — the slack stays stranded
+                        //   mid-day. Region tiling (bounded only by IMMOVABLE pieces — swim/
+                        //   davening/lunch/change/league/field-ed anchors) lets the movable
+                        //   anchors + wide-window specials pack across former period lines and
+                        //   pool the remainder at the region edge (against lunch / davening /
+                        //   day-end). Settable back to per-period via
+                        //   globalSettings.app1.tilerRegionMode === 'period'. Proven safe across
+                        //   every headless scenario; lunch stays a boundary so it never drifts.
+                        var _tilerRegionMode = (function () {
+                            try { return (globalSettings && globalSettings.app1 && globalSettings.app1.tilerRegionMode); } catch (_e) { return null; }
+                        })();
+                        var periodsForBunk = (_tilerRegionMode === 'period') ? gradePeriods : [];
                         if (!periodsForBunk.length) {
                             var _fixedIn = inhabitants.filter(function (x) { return !x.isMovable; })
                                 .slice().sort(function (a, b) { return a.configuredStart - b.configuredStart; });
