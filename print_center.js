@@ -723,13 +723,13 @@ function pcCellInnerHtml(text, type, opts) {
     if (preMin > 0 || postMin > 0) {
         var html = '<div style="border-radius:5px;overflow:hidden;display:flex;flex-direction:column;">';
         if (preMin > 0) {
-            html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #000;">Change ' + preMin + 'm</div>';
+            html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #fcd34d;">Change ' + preMin + 'm</div>';
         }
         html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;text-align:center;flex:1;">';
         html += '<span style="font-size:11px;font-weight:500;">' + escHtml(text) + '</span>';
         html += '</div>';
         if (postMin > 0) {
-            html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #000;">Change ' + postMin + 'm</div>';
+            html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #fcd34d;">Change ' + postMin + 'm</div>';
         }
         html += '</div>';
         return html;
@@ -1178,7 +1178,7 @@ function getStyles() {
     '.pc3-grid-area{flex:1;overflow:auto;background:#f5f5f4;padding:14px 14px 70px;min-height:0;position:relative;background-image:radial-gradient(rgba(168,162,158,.18) 1px, transparent 1px);background-size:18px 18px;background-position:0 0;}' +
     '.pc3-grid-area.live-bg{background:#111827;padding:0;background-image:none;}' +
     /* Paper-like sheet card — fills available width, no artificial cap */
-    '.pc3-sheet{background:#fff;border:1px solid #000;border-radius:0;box-shadow:none;margin:0 0 18px;overflow:hidden;position:relative;width:100%;}' +
+    '.pc3-sheet{background:#fff;border-radius:12px;box-shadow:0 1px 3px rgba(15,23,42,.06),0 4px 16px -4px rgba(15,23,42,.1);border:1px solid #e5e9ef;margin:0 0 20px;overflow:hidden;position:relative;width:100%;}' +
     /* Sticky sheet header at the top of each card */
     '.pc3-sheet-head{position:sticky;top:0;z-index:4;background:rgba(255,255,255,.94);backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
     /* Floating zoom dock */
@@ -1200,43 +1200,47 @@ function getStyles() {
     '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
-    /* ── Schedule Table — black & white, dead simple ── */
-    '.pc3-tbl{border-collapse:collapse;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
-    '.pc3-tbl th,.pc3-tbl td{border:1px solid #000;padding:10px 14px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;}' +
-    /* Column header (bunk / division names) */
-    '.pc3-tbl th{background:#000;color:#fff;font-weight:700;position:sticky;z-index:2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}' +
+    /* ── Schedule Table — clean, airy, premium ── */
+    '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
+    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #e5e9ef;border-bottom:1px solid #e5e9ef;padding:10px 14px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#1e293b;}' +
+    '.pc3-tbl tr:last-child td,.pc3-tbl tr:last-child th{border-bottom:none;}' +
+    '.pc3-tbl th:last-child,.pc3-tbl td:last-child{border-right:none;}' +
+    /* Period / column headers — dark slate, clean */
+    '.pc3-tbl th{background:#1e293b;color:#fff;font-weight:600;position:sticky;z-index:2;font-size:11px;text-transform:uppercase;letter-spacing:.6px;}' +
     '.pc3-tbl thead th{top:0;}' +
-    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#000;}' +
-    /* Time column */
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fff;color:#000;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;}' +
+    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#1e293b;}' +
+    /* Time column — quiet, left-aligned */
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#f8fafc;color:#64748b;font-weight:600;text-transform:none;letter-spacing:0;font-size:11.5px;text-align:left;font-variant-numeric:tabular-nums;border-right:1px solid #e5e9ef;}' +
     /* Activity cells */
-    '.pc3-tbl td{font-weight:600;color:#000;background:#fff;}' +
+    '.pc3-tbl td{font-weight:600;color:#1e293b;background:#fff;}' +
+    '.pc3-tbl tr:nth-child(even) td{background:#fafbfc;}' +
+    '.pc3-tbl tr:nth-child(even) th.row-head{background:#f4f6f8;}' +
     /* Empty slots recede */
-    '.pc3-tbl .cell-free{color:#bbb;font-weight:400;font-style:normal;}' +
-    '.pc3-tbl .cell-pinned{background:#fff;color:#000;}' +
-    '.pc3-tbl .cell-league{background:#fff;color:#000;}' +
-    '.pc3-tbl .cell-transition{background:#f0f0f0;color:#000;font-size:11px;font-weight:500;font-style:italic;}' +
+    '.pc3-tbl .cell-free{color:#c8cfd8;font-weight:400;}' +
+    '.pc3-tbl .cell-pinned{background:#fffbf0;color:#92400e;}' +
+    '.pc3-tbl .cell-league{background:#f0f7ff;color:#1d4ed8;}' +
+    '.pc3-tbl .cell-transition{background:#f6f4ff;color:#6d28d9;font-size:11px;font-weight:500;font-style:italic;}' +
 
     /* ── Excel-style coordinate headers ── */
-    '.pc3-tbl tr.pc3-coord-row th{background:#e5e5e5!important;color:#000;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #000;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#000!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
-    '.pc3-tbl th.pc3-row-num{background:#e5e5e5!important;color:#000;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #000;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
-    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#e5e5e5!important;}' +
-    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:#d0d0d0!important;}' +
-    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #000!important;outline-offset:-2px;background:#bdbdbd!important;z-index:2;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#000!important;color:#fff!important;}' +
-    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#000!important;color:#fff!important;}' +
+    '.pc3-tbl tr.pc3-coord-row th{background:#e2e8f0!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #cbd5e1;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#94a3b8!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
+    '.pc3-tbl th.pc3-row-num{background:#e2e8f0!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #cbd5e1;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
+    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#e2e8f0!important;}' +
+    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(20,125,145,.12)!important;}' +
+    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #147D91!important;outline-offset:-2px;background:rgba(20,125,145,.22)!important;z-index:2;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
     '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Sheet Header ── */
-    '.pc3-sheet-head{padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #000;}' +
-    '.pc3-sheet-title{font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:700;color:#000;letter-spacing:-.01em;}' +
-    '.pc3-sheet-subtitle{font-size:12px;color:#555;font-weight:500;}' +
-    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:0;background:#000;color:#fff;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
+    '.pc3-sheet-head{padding:14px 20px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #e5e9ef;}' +
+    '.pc3-sheet-title{font-family:"Fraunces",Georgia,serif;font-size:20px;font-weight:700;color:#1e293b;letter-spacing:-.01em;}' +
+    '.pc3-sheet-subtitle{font-size:12px;color:#94a3b8;font-weight:500;}' +
+    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;background:#f1f5f9;color:#475569;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
 
     /* ── League Matchups ── */
-    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:#f0f0f0;border:1px solid #000;border-radius:0;font-size:10px;white-space:nowrap;color:#000;}' +
+    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 7px;background:#f0f7ff;border:1px solid #bfdbfe;border-radius:4px;font-size:10px;white-space:nowrap;color:#1d4ed8;}' +
 
     /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
     '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
@@ -1408,7 +1412,7 @@ function buildMainUI() {
         '.pcx-paper{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px;}' +
         '.pcx-paper select{width:100%;height:36px;padding:0 9px;border:1px solid #e2dccf;border-radius:11px;font-size:12.5px;font-family:inherit;background:#fff;color:#23252a;cursor:pointer;}' +
         /* CANVAS — warm stone; paper sheets float */
-        '.pcx-canvas{flex:1;overflow:auto;background:#f4f4f4;padding:26px 26px 90px;position:relative;min-height:0;}' +
+        '.pcx-canvas{flex:1;overflow:auto;background:#f0f2f5;padding:28px 28px 90px;position:relative;min-height:0;}' +
         '.pcx-empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;color:#9a917f;}' +
         /* sidebar items — more breathing room for the cream rail */
         '#pc3-sidebar .pc3-sidebar-scroll{padding:0 10px 14px;}' +
@@ -2054,7 +2058,7 @@ function renderAutoDivisionTable(divName, bunks) {
             var range = activityRanges[pId];
             var periodName = range.name || ('Period ' + periodNum);
             var periodTxt = periodName + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
-            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#000;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:1px solid #000;">';
+            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#1e293b;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:1px solid #2d3f55;">';
             html += escHtml(periodName);
             html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
             html += '</th>';
@@ -2083,7 +2087,7 @@ function renderAutoDivisionTable(divName, bunks) {
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
             : col.label;
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#000;' + bgStyle + '">' + labelTxt + '</th>';
+        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + labelTxt + '</th>';
     });
     html += '</tr>';
     html += '</thead><tbody>';
@@ -2150,13 +2154,13 @@ function renderAutoDivisionTable(divName, bunks) {
                     var swimMin = durMin - splitPre - splitPost;
                     html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
                     if (splitPre > 0) {
-                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #000;">Change</div>';
+                        html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #fcd34d;">Change</div>';
                     }
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
                     html += '</div>';
                     if (splitPost > 0) {
-                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #000;">Change</div>';
+                        html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #fcd34d;">Change</div>';
                     }
                     html += '</div></td>';
                 } else {
@@ -2409,7 +2413,7 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#000;font-style:italic;background:#f0f0f0;">🚶 Travel</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#475569;font-style:italic;background:#f8fafc;">🚶 Travel</td>';
             html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
             html += '</tr>';
             return;
@@ -2420,9 +2424,9 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#000;font-style:italic;background:#f0f0f0;">' + escHtml(_prepTxt) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#475569;font-style:italic;background:#f8fafc;">' + escHtml(_prepTxt) + '</td>';
             var _prepLoc = slot._prepLocation || '';
-            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#000;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#475569;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
             html += '</tr>';
             return;
         }
@@ -2810,7 +2814,7 @@ function renderCombinedAutoTable(divBunks) {
     // ★ Period header row — ONLY when real Bell Schedule defined
     if (hasRealPeriodsC) {
         html += '<tr>';
-        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#000;border:1px solid #000;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
+        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#1e293b;border:1px solid #2d3f55;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
         var ci = 0;
         while (ci < numCols) {
             var col = timeCols[ci];
@@ -2820,12 +2824,12 @@ function renderCombinedAutoTable(divBunks) {
                 var pSpan = ci - pStart;
                 var range = activityRanges[pId];
                 var periodName = range.name || ('Period ' + (pId + 1));
-                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#000;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #000;border-bottom:none;">';
+                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#1e293b;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #2d3f55;border-bottom:none;">';
                 html += escHtml(periodName);
                 html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
                 html += '</th>';
             } else {
-                html += '<th style="background:#fff;border:1px solid #000;border-bottom:none;padding:2px;"></th>';
+                html += '<th style="background:#1e293b;border:1px solid #2d3f55;border-bottom:none;padding:2px;"></th>';
                 ci++;
             }
         }
@@ -2835,10 +2839,10 @@ function renderCombinedAutoTable(divBunks) {
     // Time label row (the ONLY header row when no Bell Schedule)
     html += '<tr>';
     if (!hasRealPeriodsC) {
-        html += '<th class="corner" style="min-width:80px;width:80px;background:#000;border:1px solid #000;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
+        html += '<th class="corner" style="min-width:80px;width:80px;background:#1e293b;border:1px solid #2d3f55;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
     }
     timeCols.forEach(function (col) {
-        var bg = '#fff';
+        var bg = '#f8fafc';
         var labelTxt = _activityAligned
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
             : col.label;
@@ -2855,11 +2859,11 @@ function renderCombinedAutoTable(divBunks) {
         // Division separator row
         if (divName !== lastDiv) {
             lastDiv = divName;
-            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#e5e5e5;padding:5px 12px;font-size:11px;font-weight:700;color:#000;border:1px solid #000;border-top:2px solid #000;text-transform:uppercase;letter-spacing:.5px;">' + escHtml(divName) + '</th></tr>';
+            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#f1f5f9;padding:5px 14px;font-size:10.5px;font-weight:700;color:#475569;border:1px solid #e5e9ef;border-top:2px solid #1e293b;text-transform:uppercase;letter-spacing:.6px;">' + escHtml(divName) + '</th></tr>';
         }
 
         html += '<tr>';
-        html += '<th style="position:sticky;left:0;z-index:2;background:#fff;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #000;white-space:nowrap;color:#000;">' + escHtml(bunk) + '</th>';
+        html += '<th style="position:sticky;left:0;z-index:2;background:#f8fafc;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #e5e9ef;white-space:nowrap;color:#334155;">' + escHtml(bunk) + '</th>';
 
         var acts = bunkActs[bunk] || [];
         var colIdx = 0;
@@ -2885,20 +2889,20 @@ function renderCombinedAutoTable(divBunks) {
                 var pillBg = '#ffffff';
                 var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
                 var displayText = actText || '—';
-                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #000;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
+                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #e5e9ef;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
                 // ★ Split-swim change: show Change → Swim → Change subdivisions
                 var splitPre2 = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
                 var splitPost2 = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
                 if (splitPre2 > 0 || splitPost2 > 0) {
                     html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
                     if (splitPre2 > 0) {
-                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #000;">Change</div>';
+                        html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #fcd34d;">Change</div>';
                     }
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
                     html += '</div>';
                     if (splitPost2 > 0) {
-                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #000;">Change</div>';
+                        html += '<div style="background:#fef9ec;color:#92400e;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #fcd34d;">Change</div>';
                     }
                     html += '</div></td>';
                 } else {
@@ -2909,7 +2913,7 @@ function renderCombinedAutoTable(divBunks) {
                 }
                 colIdx = nextCol;
             } else {
-                html += '<td style="padding:3px;border:1px solid #000;background:#fff;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
+                html += '<td style="padding:3px;border:1px solid #e5e9ef;background:#fff;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
                 colIdx++;
             }
         }
