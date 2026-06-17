@@ -18756,6 +18756,23 @@
                             //   bound it further). No window ⇒ stay put.
                             var winStart = (b.layer && b.layer.startMin != null) ? b.layer.startMin : null;
                             var winEnd = (b.layer && b.layer.endMin != null) ? b.layer.endMin : null;
+                            // ★ Field-less custom anchors (Main/Morning Activity with NO
+                            //   field — they use their own name as a pseudo-field) often carry
+                            //   a tight layer window (window == duration) that would pin them
+                            //   in place and FRAGMENT the region, stranding a sub-floor sliver
+                            //   on each side. Per the "quest to perfection" directive they may
+                            //   move; FN-55 EXEMPTS custom anchors (never blanks one, wherever
+                            //   it lands) and a field-less block has no capacity to collide —
+                            //   so drop the window and let it region-slide to abut a neighbour.
+                            //   The region's slivers then coalesce into ONE block that a real
+                            //   activity can fill, instead of several dead ones. (Anchors WITH
+                            //   a real field keep their window — moving them could break a
+                            //   shared-room/grade-aligned event.)
+                            if (t === 'custom') {
+                                var _anchorField = b.customField || b.field ||
+                                    (b.layer && (b.layer.customField || b.layer.field)) || null;
+                                if (!_anchorField) { winStart = null; winEnd = null; }
+                            }
                             var earliestStart, latestStart;
                             if (!movable) {
                                 earliestStart = b.startMin; latestStart = b.startMin;
@@ -18765,14 +18782,20 @@
                             } else if (isSnack) {
                                 earliestStart = Math.max(0, b.startMin - 15);
                                 latestStart = b.startMin + 15;
-                            } else if (isSpecialBlk) {
-                                earliestStart = 0; latestStart = 1440; // region gaps bound it
                             } else {
-                                // Window-movable piece (lunch / dismissal / anchor) that
-                                //   has NO configured layer window: keep it put rather than
-                                //   let it drift across the day. It only earns its freedom
-                                //   when a real window bounds it (the branch above).
-                                earliestStart = b.startMin; latestStart = b.startMin;
+                                // Region-slidable: specials AND window-less anchors/lunch/
+                                //   dismissal. Per the "quest to perfection" directive these
+                                //   slide freely inside their region (bounded only by the hard
+                                //   walls — swim/davening/league — that split the day). Custom
+                                //   anchors (Main/Morning Activity) and lunch are field-less
+                                //   (or use their own name as a pseudo-field), so sliding them
+                                //   per-bunk to abut a neighbour cannot create a field-capacity
+                                //   conflict; the downstream cross-grade field sweep (FN-15)
+                                //   still guards any genuinely shared field. This is what lets
+                                //   the tiler pull the last special up to the Main-Activity
+                                //   wall and pool the remainder at the region edge instead of
+                                //   stranding a 15-min gap mid-day.
+                                earliestStart = 0; latestStart = 1440; // region gaps bound it
                             }
                             return {
                                 name: name,
