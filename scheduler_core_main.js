@@ -3388,6 +3388,7 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                                 divName,
                                 bunk: b,
                                 event: normName,
+                                _slotKind: slotKindOf(actName),
                                 type: 'slot',
                                 startTime: start,
                                 endTime: end,
