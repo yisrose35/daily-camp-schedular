@@ -260,7 +260,17 @@
         const errors = [];
 
         fieldIndex.forEach((usages, fieldNorm) => {
-            const sharing = sharingMap.get(fieldNorm) || { type: 'not_sharable', capacity: 1, divisions: [] };
+            const _rawSharing = sharingMap.get(fieldNorm);
+            const _anyPerActivity = usages.some(u => u.flags && u.flags._resolvedSharing);
+            // ★ Configured resources only (mirror of CHECK B's guard). A label NOT in
+            //   the sharing map is an unconfigured custom-layer anchor — e.g. "Morning
+            //   Activity" that each grade does in its own space with no real facility.
+            //   Defaulting it to not_sharable/cap-1 below made the validator invent a
+            //   single shared room and flag every cross-grade co-occurrence as a
+            //   conflict (172 phantom "Morning activity" errors). Skip unless a usage
+            //   carries a real per-activity sharing rule that genuinely governs sharing.
+            if (!_rawSharing && !_anyPerActivity) return;
+            const sharing = _rawSharing || { type: 'not_sharable', capacity: 1, divisions: [] };
 
             // Skip special locations — they handle their own cross-div rules
             if (sharing._isSpecial) return;
@@ -269,7 +279,6 @@
             // when any usage carries a per-activity resolved sharing rule (a
             // 'cross_division' field with a 'not_sharable' per-activity rule
             // would otherwise be skipped here and the conflict missed).
-            const _anyPerActivity = usages.some(u => u.flags && u.flags._resolvedSharing);
             if (!_anyPerActivity &&
                 sharing.type !== 'same_division' && sharing.type !== 'not_sharable' && sharing.type !== 'custom') return;
 
