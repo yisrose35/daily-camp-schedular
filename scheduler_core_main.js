@@ -3259,15 +3259,36 @@ console.log(`[Generation] Rainy Day Mode: ${window.isRainyDay ? 'ACTIVE 🌧️'
                 console.log(`[SPLIT] Processing split tile for ${divName}: ${item.event}`);
                 console.log(`[SPLIT] ═══════════════════════════════════════════════════════`);
 
-                const sortedBunks = [...bunkList].sort((a, b) => {
-                    const numA = parseInt(a.match(/\d+/)?.[0] || 0);
-                    const numB = parseInt(b.match(/\d+/)?.[0] || 0);
-                    return numA - numB || a.localeCompare(b);
-                });
-
-                const half = Math.ceil(sortedBunks.length / 2);
-                const groupA = sortedBunks.slice(0, half);
-                const groupB = sortedBunks.slice(half);
+                let groupA, groupB;
+                if (item.group1Bunks && item.group1Bunks.length > 0) {
+                    // User-defined group assignment: group1Bunks = Group A; rest = Group B
+                    const g1Set = new Set(item.group1Bunks.map(String));
+                    groupA = bunkList.filter(b => g1Set.has(String(b)));
+                    groupB = bunkList.filter(b => !g1Set.has(String(b)));
+                    // Fall back to auto-split if all/none are in g1 (guards stale data)
+                    if (groupA.length === 0 || groupB.length === 0) {
+                        const sortedBunks = [...bunkList].sort((a, b) => {
+                            const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+                            const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+                            return numA - numB || a.localeCompare(b);
+                        });
+                        const half = Math.ceil(sortedBunks.length / 2);
+                        groupA = sortedBunks.slice(0, half);
+                        groupB = sortedBunks.slice(half);
+                        console.log(`[SPLIT] group1Bunks produced empty group — falling back to auto-split`);
+                    } else {
+                        console.log(`[SPLIT] Using user-defined groups — Group1: ${groupA.join(', ')} | Group2: ${groupB.join(', ')}`);
+                    }
+                } else {
+                    const sortedBunks = [...bunkList].sort((a, b) => {
+                        const numA = parseInt(a.match(/\d+/)?.[0] || 0);
+                        const numB = parseInt(b.match(/\d+/)?.[0] || 0);
+                        return numA - numB || a.localeCompare(b);
+                    });
+                    const half = Math.ceil(sortedBunks.length / 2);
+                    groupA = sortedBunks.slice(0, half);
+                    groupB = sortedBunks.slice(half);
+                }
 
                 let act1Name, act2Name;
 

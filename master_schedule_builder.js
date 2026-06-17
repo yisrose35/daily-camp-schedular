@@ -966,6 +966,68 @@ async function deleteTile(id) {
   }
 }
 
+function _buildSplitBunkPicker(overlay, divName, existingGroup1) {
+  const sortNum = (arr) => [...arr].sort((a, b) => {
+    const nA = parseInt(a.match(/\d+/)?.[0] || 0);
+    const nB = parseInt(b.match(/\d+/)?.[0] || 0);
+    return nA - nB || a.localeCompare(b);
+  });
+  const allBunks = sortNum(((window.divisions || {})[divName]?.bunks || []).map(String));
+  if (allBunks.length === 0) return;
+
+  const half = Math.ceil(allBunks.length / 2);
+  const g1Set = new Set(
+    existingGroup1?.length
+      ? sortNum(existingGroup1.map(String).filter(b => allBunks.includes(b)))
+      : allBunks.slice(0, half)
+  );
+  const g2Set = new Set(allBunks.filter(b => !g1Set.has(b)));
+
+  const pickerWrap = document.createElement('div');
+  pickerWrap.style.cssText = 'margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;';
+  pickerWrap.innerHTML =
+    '<div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px;">Bunk Groups'
+    + '<span style="font-size:10px;font-weight:400;color:#64748b;"> — click a bunk to move it</span></div>'
+    + '<div style="display:flex;gap:12px;">'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#1e40af;margin-bottom:4px;">● Group 1 → starts at Main 1</div>'
+    + '<div id="split-g1-panel" style="min-height:32px;background:#eff6ff;border:1px dashed #93c5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:4px;">● Group 2 → starts at Main 2</div>'
+    + '<div id="split-g2-panel" style="min-height:32px;background:#f5f3ff;border:1px dashed #c4b5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '</div>';
+
+  const hiddenInput = document.createElement('input');
+  hiddenInput.type = 'hidden';
+  hiddenInput.setAttribute('data-field', 'group1Bunks');
+  pickerWrap.appendChild(hiddenInput);
+
+  const updateHidden = () => { hiddenInput.value = JSON.stringify(sortNum([...g1Set])); };
+
+  const renderChips = () => {
+    const p1 = pickerWrap.querySelector('#split-g1-panel');
+    const p2 = pickerWrap.querySelector('#split-g2-panel');
+    p1.innerHTML = ''; p2.innerHTML = '';
+    const makeChip = (bunk, inG1) => {
+      const c = document.createElement('span');
+      c.textContent = bunk;
+      c.title = 'Click to move to Group ' + (inG1 ? '2' : '1');
+      c.style.cssText = 'cursor:pointer;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:500;user-select:none;'
+        + (inG1 ? 'background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;' : 'background:#ede9fe;border:1px solid #c4b5fd;color:#7c3aed;');
+      c.addEventListener('click', () => {
+        if (inG1) { g1Set.delete(bunk); g2Set.add(bunk); }
+        else { g2Set.delete(bunk); g1Set.add(bunk); }
+        updateHidden(); renderChips();
+      });
+      return c;
+    };
+    sortNum([...g1Set]).forEach(b => p1.appendChild(makeChip(b, true)));
+    sortNum([...g2Set]).forEach(b => p2.appendChild(makeChip(b, false)));
+  };
+
+  const fieldsContainer = overlay.querySelector('.ms-modal-fields') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+  if (fieldsContainer) fieldsContainer.appendChild(pickerWrap);
+  updateHidden(); renderChips();
+}
+
 async function editTile(id) {
   const ev = dailySkeleton.find(e => e.id === id);
   if (!ev) return;
@@ -988,6 +1050,8 @@ async function editTile(id) {
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const _editDivName = ev.division;
+    const _editExistingG1 = ev.group1Bunks || null;
     const result = await showModal({
       title: 'Edit Split Tile',
       fields: [
@@ -995,7 +1059,8 @@ async function editTile(id) {
         { name: 'endTime', label: 'End Time', type: 'text', default: ev.endTime },
         { name: 'main1', label: 'Main 1 (Group 1)', type: 'text', default: m1.trim() },
         { name: 'main2', label: 'Main 2 (Group 2)', type: 'text', default: m2.trim() }
-      ]
+      ],
+      postRender: function(overlay) { _buildSplitBunkPicker(overlay, _editDivName, _editExistingG1); }
     });
     if (!result || !result.main1 || !result.main2) return;
     const event1 = mapEventNameForOptimizer(result.main1);
@@ -1003,6 +1068,7 @@ async function editTile(id) {
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+    ev.group1Bunks = result.group1Bunks ? JSON.parse(result.group1Bunks) : null;
 
   } else if (ev.type === 'elective') {
     const locations = getAllLocations();
@@ -3995,6 +4061,9 @@ function renderEventTile(ev, top, height) {
   if (ev.type === 'split' && ev.subEvents?.length === 2) {
     innerHtml += `<div style="font-size:9px;opacity:0.8;margin-top:2px;">↔ ${ev.subEvents[0].event} / ${ev.subEvents[1].event}</div>`;
   }
+  if (ev.type === 'split' && ev.group1Bunks?.length) {
+    innerHtml += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
+  }
   // Split tile with swim → show change badge
   if (ev.type === 'split' && (ev._preChangeMin || ev._postChangeMin)) {
     const _pre = ev._preChangeMin || 0;
@@ -4151,6 +4220,7 @@ function addDropListeners(selector) {
             if (main1Input) main1Input.addEventListener('input', checkSwim);
             if (main2Input) main2Input.addEventListener('input', checkSwim);
             checkSwim();
+            _buildSplitBunkPicker(overlay, divName, null);
           }
         });
         if (!result || !result.main1 || !result.main2) return;
@@ -4184,7 +4254,8 @@ function addDropListeners(selector) {
             { ...event2, event: event2.event || result.main2 }
           ],
           _preChangeMin: mbSplitPre || undefined,
-          _postChangeMin: mbSplitPost || undefined
+          _postChangeMin: mbSplitPost || undefined,
+          group1Bunks: result.group1Bunks ? JSON.parse(result.group1Bunks) : null
         };
 
         console.log(`[SPLIT TILE] Created split tile for ${divName}:`, newEvent.subEvents, (mbSplitPre || mbSplitPost) ? '(change: ' + mbSplitPre + 'pre/' + mbSplitPost + 'post)' : '');
