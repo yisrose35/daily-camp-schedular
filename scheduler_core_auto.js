@@ -1467,6 +1467,31 @@
         // =====================================================================
         log('\n[STEP 1.5] Classifying layers...');
 
+        // ★ GENERAL-ACTIVITY NORMALIZATION (swim/lunch/snacks/dinner unification).
+        //   These behaviors are no longer hard-coded quick-layer types — the user
+        //   creates a General Activity (in a facility) named e.g. Swim @ Pool /
+        //   Lunch @ Lunchroom, which drops in as a `custom` layer carrying a
+        //   `quickType`. Here we map that GA-backed custom layer to its BEHAVIOR
+        //   type (swim/lunch/snacks/dinner) so EVERY existing type-keyed branch in
+        //   the solver fires unchanged, while customActivity/customField keep the
+        //   facility link (capacity/sharing). We clone (never mutate the user's
+        //   saved layer objects). Legacy layers that still carry type:'swim' etc.
+        //   are untouched and keep working.
+        var _GA_BEHAVIOR_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack', 'dinner']);
+        layers = (layers || []).map(function (l) {
+            if (!l) return l;
+            var qt = String(l.quickType || '').toLowerCase();
+            if (String(l.type || '').toLowerCase() === 'custom' && _GA_BEHAVIOR_TYPES.has(qt)) {
+                var c = Object.assign({}, l);
+                c.type = (qt === 'snack') ? 'snacks' : qt;   // behavior type
+                c._gaBacked = true;                          // came from a General Activity
+                c._gaQuickType = c.type;
+                if (c.customActivity == null) c.customActivity = l.event || l.name || c.type;
+                return c;
+            }
+            return l;
+        });
+
         const layersByGrade = {};
         layers.forEach(layer => {
             const grade = layer.grade || layer.division || '_all';
@@ -1479,7 +1504,7 @@
             window._divisions = divisions;
         } catch (_e) {}
 
-        const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack']);
+        const FULL_GRADE_TYPES = new Set(['swim', 'lunch', 'snacks', 'snack', 'dinner']);
 
         // ★ Build set of layer types that are wet-bundle targets (any active
         // rotation event whose sequence.targetActivity points to that type).
@@ -1681,7 +1706,7 @@
             //   grade-wide at the same time for every bunk (like a league).
             if (layer.fullGrade === true && FULL_GRADE_TYPES.has(lt)) {
                 classification = 'pinned';
-            } else if (lt === 'lunch' || lt === 'snacks' || lt === 'snack') {
+            } else if (lt === 'lunch' || lt === 'snacks' || lt === 'snack' || lt === 'dinner') {
                 // ★ Lunch/snacks are UNIVERSAL camp walls — every bunk gets them every
                 //   day (unlike swim, which rotates per-bunk). Pin them grade-wide
                 //   regardless of the fullGrade flag or how wide the user drew the

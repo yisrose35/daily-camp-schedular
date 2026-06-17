@@ -129,6 +129,7 @@ function campConfig(opts) {
       swimReal: true,
       swimGAShare: !!opts.swimGAShare,
       swimRotated: !!opts.swimRotated,
+      swimAsGA: !!opts.swimAsGA,
     };
   }
   if (opts.swimWalls) {
@@ -539,7 +540,27 @@ function buildLayers(cfg) {
     // Pool. This is what makes the repro faithful (and may surface the
     // "0 specials placed" entanglement the prior agent sidestepped).
     if (cfg.swimReal) {
-      layers.push({
+      // ★ swimAsGA: model swim the NEW way — a General-Activity-backed `custom`
+      //   layer (quickType:'swim', bound to the Pool facility) instead of a
+      //   hard-coded type:'swim'. The solver's GA normalization must map it to
+      //   swim behavior so ALL swim logic (pool gate, stagger, change blocks,
+      //   coverage) fires identically. Proves the refactor's keystone.
+      layers.push(cfg.swimAsGA ? {
+        grade,
+        type: 'custom',
+        quickType: 'swim',
+        name: 'Swim',
+        event: 'Swim',
+        customActivity: 'Swim',
+        customField: 'Pool',
+        customBunks: bunks.slice(),
+        fullGrade: cfg.swimRotated ? false : true,
+        periodMin: 45, durationMin: 45, durationMax: 45,
+        startMin: cfg.swimRotated ? start : swimBandRStart,
+        endMin:   cfg.swimRotated ? end   : swimBandREnd,
+        qty: 1, op: '=',
+        color: '#0EA5E9',
+      } : {
         grade,
         type: 'swim',
         name: 'Swim',
@@ -1644,6 +1665,20 @@ test('auto scheduler reserves a required windowed custom layer for every bunk', 
 // much dead time the REAL solver leaves per bunk after all post-passes. Run
 // with skipGapCheck so it reports rather than hard-fails while we iterate;
 // requireNoSports asserts the sports-free invariant holds.
+test('auto scheduler drives full swim behavior from a General-Activity layer (quickType:swim)', async (t) => {
+  // Refactor keystone: swim is no longer a hard-coded type — it comes from a
+  //   General Activity (custom layer, quickType:'swim', bound to the Pool
+  //   facility). The solver's GA normalization must map it to swim behavior so
+  //   every bunk still gets swim (pool gate + stagger + change envelope + the
+  //   swim-coverage guarantee all fire). Same assertions as SWIM-REAL.
+  await runScenario('SWIM-VIA-GENERAL-ACTIVITY (custom layer, quickType:swim @ Pool)', {
+    swimReal: true,
+    swimAsGA: true,
+    requireSwim: true,
+    skipGapCheck: true,
+  });
+});
+
 test('auto scheduler builds a fully GAPLESS sportless day when walls are grid-aligned', async (t) => {
   // The PROOF: with anchors/lunch on the 10-min special grid, the real solver
   //   leaves ZERO dead minutes for every bunk in the cleanly-modeled grade.
