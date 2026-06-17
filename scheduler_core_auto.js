@@ -18222,6 +18222,29 @@
                             } catch (_eRC) { /* keep dur as the locked size */ }
                             if (isLocked) { dMin = dur; dMax = dur; } // configured duration is locked
 
+                            // ★ Special-named block: its duration authority is the
+                            //   special's CONFIGURED duration, not the generic slot floor
+                            //   resolveConstraints returns for a slot/activity-typed block.
+                            //   Without this, a 40-min Baking placed in a 45-min slot looked
+                            //   like a 20-min-floor slot and the tiler proposed shrinking it
+                            //   to 20 — a bogus resize that would open a fresh gap. Lock to
+                            //   the real duration (single) or the real durations[] range
+                            //   (multi), with attached prep folded in to match placement.
+                            try {
+                                var _specDurs = getSpecialDurations(name, activityProperties, globalSettings);
+                                if (_specDurs && _specDurs.length) {
+                                    var _prepAdd = 0;
+                                    var _cfg = getSpecialConfig(name, globalSettings);
+                                    if (_cfg) {
+                                        var _pc = _cfg.prepConfig;
+                                        var _pd = parseInt(_cfg.prepDuration) || 0;
+                                        if ((!_pc || _pc.timing !== 'flexible') && _pd > 0) _prepAdd = _pd;
+                                    }
+                                    dMin = _specDurs[0] + _prepAdd;
+                                    dMax = _specDurs[_specDurs.length - 1] + _prepAdd;
+                                }
+                            } catch (_eSD) { /* not a known special — keep layer/type flex */ }
+
                             // Snacks are the prime sliver creators — always tile-able,
                             //   even if pinned. Otherwise: movable/resizable unless the
                             //   piece is a structural wall or pinned.
