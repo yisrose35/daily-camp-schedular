@@ -18706,10 +18706,33 @@
                             var moved = (newStart !== sh.oldStart);
                             var guarded = _isGuarded(nm);
                             // Cross-bunk guard: only MOVES of guarded specials can
-                            // create a new resource collision. Block the unsafe ones.
+                            // create a new resource collision. If the tiler's chosen
+                            // abut-spot is taken on a shared resource, don't abandon
+                            // the shift — slide the piece to the earliest OTHER spot
+                            // inside its own wall-bounded region that's both free for
+                            // this bunk and safe on the shared resource. Only give up
+                            // if the whole region is unsafe.
                             if (moved && guarded && !_moveSafe(nm, job.grade, match, newStart, newStart + newDur)) {
-                                _tilerShiftsBlocked++;
-                                return;
+                                var _repaired = false;
+                                var _pS = sh.periodStart, _pE = sh.periodEnd;
+                                if (_pS != null && _pE != null && (_pE - _pS) >= newDur) {
+                                    var _occ = [];
+                                    for (var _oi = 0; _oi < tl.length; _oi++) {
+                                        var _bb = tl[_oi];
+                                        if (_bb === match || _bb == null || _bb.startMin == null || _bb.endMin == null || _bb.endMin <= _bb.startMin) continue;
+                                        _occ.push([_bb.startMin, _bb.endMin]);
+                                    }
+                                    for (var _cand = _pS; _cand + newDur <= _pE; _cand += 5) {
+                                        var _clash = false;
+                                        for (var _ci = 0; _ci < _occ.length; _ci++) {
+                                            if (_cand < _occ[_ci][1] - 0.0001 && (_cand + newDur) > _occ[_ci][0] + 0.0001) { _clash = true; break; }
+                                        }
+                                        if (_clash) continue;
+                                        if (!_moveSafe(nm, job.grade, match, _cand, _cand + newDur)) continue;
+                                        newStart = _cand; _repaired = true; break;
+                                    }
+                                }
+                                if (!_repaired) { _tilerShiftsBlocked++; return; }
                             }
                             match.startMin = newStart;
                             match.endMin = newStart + newDur;

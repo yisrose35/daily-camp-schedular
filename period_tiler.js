@@ -303,6 +303,8 @@
               name: ref.name,
               bunk: input.bunk,
               period: period.name,
+              periodStart: period.startMin,
+              periodEnd: period.endMin,
               oldStart: oldStart,
               newStart: p.start,
               oldDur: oldDur,
