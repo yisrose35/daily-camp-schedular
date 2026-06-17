@@ -1389,9 +1389,9 @@ function buildMainUI() {
         '.pcx-menu .pcx-menu-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#b3ab9c;padding:7px 11px 3px;}' +
         '.pcx-body{flex:1;display:flex;min-height:0;overflow:hidden;}' +
         /* RAIL — warm cream */
-        '.pcx-rail{width:290px;flex-shrink:0;background:#faf8f3;border-right:1px solid #e7e2d6;display:flex;flex-direction:column;overflow:hidden;}' +
+        '.pcx-rail{width:290px;flex-shrink:0;background:#faf8f3;border-right:1px solid #e7e2d6;display:flex;flex-direction:column;overflow-y:auto;}' +
         '.pcx-section{padding:17px 18px;border-bottom:1px solid #efe9dd;}' +
-        '.pcx-grow{flex:1;min-height:0;display:flex;flex-direction:column;}' +
+        '.pcx-grow{flex:1 0 auto;min-height:0;display:flex;flex-direction:column;}' +
         '.pcx-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:#a79f8e;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;}' +
         '.pcx-count{font-size:10px;font-weight:700;color:#0F5F6E;background:#dff1f4;padding:2px 9px;border-radius:99px;text-transform:none;letter-spacing:0;}' +
         '.pcx-seg{display:grid;grid-template-columns:1fr 1fr;gap:8px;}' +
@@ -1401,7 +1401,7 @@ function buildMainUI() {
         '.pcx-search{width:100%;height:38px;padding:0 13px;border:1px solid #e2dccf;border-radius:12px;font-size:13px;font-family:inherit;background:#fff;color:#23252a;margin-bottom:9px;}' +
         '.pcx-search:focus{outline:none;border-color:#147D91;box-shadow:0 0 0 3px rgba(20,125,145,.14);}' +
         '.pcx-search::placeholder{color:#b3ab9c;}' +
-        '.pcx-list{flex:1;overflow-y:auto;margin:0 -6px;padding:0 6px;}' +
+        '.pcx-list{flex:1;min-height:260px;overflow-y:auto;margin:0 -6px;padding:0 6px;}' +
         '.pcx-rowbtns{display:flex;gap:8px;margin-top:11px;}' +
         '.pcx-rowbtns button{flex:1;height:36px;border:1px solid #e2dccf;border-radius:11px;background:#fff;font-family:inherit;font-size:12px;font-weight:600;color:#5b5446;cursor:pointer;}' +
         '.pcx-rowbtns button:hover{border-color:#147D91;color:#0F5F6E;}' +
