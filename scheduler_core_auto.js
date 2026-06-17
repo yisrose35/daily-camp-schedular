@@ -18173,6 +18173,15 @@
                 var _tilerSampleSlivers = [];
                 var _SNACK_RE = /^(slush|popcorn|ice\s*cream|snack|nit\s*check|nosh|treat)/i;
                 var _CHANGE_RE = /^(pre[-\s]?change|post[-\s]?change|change)/i;
+                // ★ Pieces whose position is structurally fixed — never shift or
+                //   resize these. Everything else is a tile-able piece whose flex
+                //   comes from its real layer config (resolveConstraints) and the
+                //   layer's allowed time window.
+                var _TILER_HARD_FIXED = new Set([
+                    'swim', 'change', 'pre-change', 'post-change', 'lunch', 'snacks',
+                    'dismissal', 'league', 'specialty_league', 'davening',
+                    'rotation_event', 'scheduled_activity', 'trip'
+                ]);
                 allGrades.forEach(function (grade) {
                     var periods = (window.campPeriods && window.campPeriods[grade]) || [];
                     if (!periods.length) return;
@@ -18186,25 +18195,59 @@
                         }).map(function (b) {
                             var name = b.event || (b.layer && b.layer.name) || b.type || 'unknown';
                             var dur = b.endMin - b.startMin;
+                            var t = String(b.type || '').toLowerCase();
                             var isSnack = _SNACK_RE.test(String(name));
                             var isChange = _CHANGE_RE.test(String(name));
-                            var isFixed = !!(b._fixed || b._classification === 'pinned' || b._source === 'phase0');
-                            // Snacks are the prime sliver creators — treat as movable in shadow.
-                            // Change blocks stay glued to their swim (immovable).
-                            // Everything else: respect _fixed.
-                            var movable = isSnack && !isChange;
-                            var resizable = isSnack && !isChange;
+                            var isHardFixed = _TILER_HARD_FIXED.has(t) || isChange;
+                            var isPinned = !!(b._fixed || b._classification === 'pinned' || b._source === 'phase0');
+                            var isLocked = !!(b._activityLocked || b._durationStrict);
+
+                            // Real duration flex from the layer (falls back to type
+                            // floors/ceilings when the block has no layer ref).
+                            var dMin = dur, dMax = dur;
+                            try {
+                                var rc = resolveConstraints(b.layer, b.type, b);
+                                if (rc) {
+                                    dMin = Math.min(dur, rc.dMin != null ? rc.dMin : dur);
+                                    dMax = Math.max(dur, rc.dMax != null ? rc.dMax : dur);
+                                }
+                            } catch (_eRC) { /* keep dur as the locked size */ }
+                            if (isLocked) { dMin = dur; dMax = dur; } // configured duration is locked
+
+                            // Snacks are the prime sliver creators — always tile-able,
+                            //   even if pinned. Otherwise: movable/resizable unless the
+                            //   piece is a structural wall or pinned.
+                            var movable = isSnack ? !isChange : (!isHardFixed && !isPinned);
+                            var resizable = movable && (dMax > dMin);
+
+                            // Start-time window: a movable piece may slide anywhere inside
+                            //   its layer's [startMin, endMin] window (the period gaps
+                            //   bound it further). No window ⇒ stay put.
+                            var winStart = (b.layer && b.layer.startMin != null) ? b.layer.startMin : null;
+                            var winEnd = (b.layer && b.layer.endMin != null) ? b.layer.endMin : null;
+                            var earliestStart, latestStart;
+                            if (!movable) {
+                                earliestStart = b.startMin; latestStart = b.startMin;
+                            } else if (winStart != null && winEnd != null) {
+                                earliestStart = winStart;
+                                latestStart = Math.max(winStart, winEnd - dMin);
+                            } else if (isSnack) {
+                                earliestStart = Math.max(0, b.startMin - 15);
+                                latestStart = b.startMin + 15;
+                            } else {
+                                earliestStart = 0; latestStart = 1440; // period gaps bound it
+                            }
                             return {
                                 name: name,
                                 kind: isSnack ? 'anchor' : (b.type || 'block'),
                                 configuredStart: b.startMin,
                                 configuredDur: dur,
-                                dMin: dur,
-                                dMax: resizable ? Math.min(dur * 2, 25) : dur,
-                                earliestStart: movable ? Math.max(0, b.startMin - 15) : b.startMin,
-                                latestStart: movable ? (b.startMin + 15) : b.startMin,
-                                isMovable: movable && !isFixed,
-                                isResizable: resizable && !isFixed
+                                dMin: dMin,
+                                dMax: dMax,
+                                earliestStart: earliestStart,
+                                latestStart: latestStart,
+                                isMovable: movable,
+                                isResizable: resizable
                             };
                         });
                         var result = window.PeriodTiler.tileBunkDay({
