@@ -27877,7 +27877,55 @@
                 }
                 return false;
             };
-            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0;
+            // ★ EXACT-FIT FILLER (smoothness, non-greedy). A wall-bounded sub-floor
+            //   sliver that no flexible sport can take is NOT closed by stretching
+            //   a fixed block over it (the user's "don't be greedy / fit nicely"
+            //   rule). Instead, if a short filler special's CONFIGURED duration
+            //   matches the sliver EXACTLY, the bunk is under that filler's
+            //   subcategory cap, and it hasn't done it today, drop it in — it fits
+            //   perfectly. Otherwise leave the sliver (never cram a mismatch).
+            var _sabCanonSub = function (s) { var v = (typeof s === 'string') ? s.trim().toLowerCase() : ''; return (!v || v === 'regular' || v === 'uncategorized') ? 'uncategorized' : v; };
+            var _sabSpecSub = {}, _sabFillerByDur = {};
+            try {
+                _sabSpecCfgs.forEach(function (s) {
+                    if (!s || !s.name) return;
+                    var sub = _sabCanonSub(s.subcategory);
+                    _sabSpecSub[String(s.name).toLowerCase()] = sub;
+                    var d = 0; try { d = getSpecialDuration(s.name, activityProperties, globalSettings) || 0; } catch (_eD) { d = 0; }
+                    if (d > 0) (_sabFillerByDur[d] = _sabFillerByDur[d] || []).push({ name: s.name, location: (s.location || s.room || s.name), sub: sub });
+                });
+            } catch (_eFill) {}
+            var _sabBunkSubCount = function (bunk, subKey) {
+                var n = 0, arr = window.scheduleAssignments[bunk] || [];
+                for (var qi = 0; qi < arr.length; qi++) { var s = arr[qi]; if (!s || s.continuation) continue; var anm = String(s._assignedSpecial || s._activity || s.event || '').toLowerCase(); if (anm && _sabSpecSub[anm] === subKey) n++; }
+                return n;
+            };
+            var _sabBunkHasToday = function (bunk, name) {
+                var arr = window.scheduleAssignments[bunk] || [], low = String(name).toLowerCase();
+                for (var hi = 0; hi < arr.length; hi++) { var s = arr[hi]; if (!s || s.continuation) continue; if (String(s._assignedSpecial || s._activity || s.event || '').toLowerCase() === low) return true; }
+                return false;
+            };
+            var _sabTryExactFiller = function (bunk, g, gapS, gapE) {
+                var D = gapE - gapS; if (D <= 0) return null;
+                var cands = _sabFillerByDur[D]; if (!cands || !cands.length) return null;
+                var capEntry = (window._subcatCapsByBunk || {})[bunk];
+                for (var ci = 0; ci < cands.length; ci++) {
+                    var c = cands[ci];
+                    if (_sabBunkHasToday(bunk, c.name)) continue;               // no same-day repeat
+                    if (capEntry && capEntry.enforced) {                        // respect subcategory caps
+                        var caps = capEntry.caps || {}, cap = caps[c.sub];
+                        if (cap == null) continue;                             // not demanded → don't add
+                        if (cap !== Infinity && _sabBunkSubCount(bunk, c.sub) >= cap) continue; // at cap
+                    }
+                    if (c.location && _sabNorm(c.location) !== 'free' &&
+                        (typeof isFieldAvailable !== 'function' || isFieldAvailable(c.location, gapS, gapE, bunk, g, c.name)) &&
+                        (typeof _validateWritePlacement !== 'function' || _validateWritePlacement(c.location, c.name, g, bunk, gapS, gapE) === null)) {
+                        return c;
+                    }
+                }
+                return null;
+            };
+            var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0, _sabByFiller = 0;
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -27958,6 +28006,29 @@
                         }
                     }
                     if (done) continue;
+
+                    // (1.5) EXACT-FIT FILLER — before stretching any bounding block,
+                    //       try to drop a short filler whose configured length equals
+                    //       the sliver exactly (cap-respecting, no same-day repeat).
+                    //       Needs at least one real slot index in the sliver to host
+                    //       it (index-stable; we never splice). Fits nicely or skip.
+                    if (R.head - 1 >= L.tail + 1) {
+                        var _fillC = _sabTryExactFiller(bunk, g, gapS, gapE);
+                        if (_fillC) {
+                            var _ff = L.tail + 1;
+                            slots[_ff] = { field: _fillC.location, sport: null, _activity: _fillC.name,
+                                type: 'special', _autoSpecial: true, _assignedSpecial: _fillC.name,
+                                _specialLocation: _fillC.location, _startMin: gapS, _endMin: gapE,
+                                _autoMode: true, _exactFitFiller: true, _final: true, continuation: false };
+                            for (var kff = _ff + 1; kff <= R.head - 1; kff++) {
+                                slots[kff] = { field: _fillC.location, _activity: _fillC.name, type: 'special',
+                                    continuation: true, _startMin: slots[kff] ? slots[kff]._startMin : gapS, _endMin: slots[kff] ? slots[kff]._endMin : gapE,
+                                    _autoMode: true, _exactFitFiller: true, _specialLocation: _fillC.location };
+                            }
+                            try { if (typeof claimField === 'function') claimField(_fillC.location, gapS, gapE, bunk, g, _fillC.name); } catch (_e) {}
+                            _sabAbsorbed++; _sabByFiller++; continue;
+                        }
+                    }
 
                     // (2) Both neighbours are walls (or non-stretchable). Stretch the
                     //     bounding SPECIAL over the sliver — a slightly longer special
@@ -28153,13 +28224,14 @@
             });
             if (_sabAbsorbed > 0) {
                 log('  🩹 [STEP 6.865 SLIVER-ABSORB] absorbed ' + _sabAbsorbed + ' wall-bounded sub-floor sliver(s) (' +
+                    _sabByFiller + ' filled by an exact-fit short activity, ' +
                     _sabBySport + ' into a neighbour sport, ' + _sabBySpecial + ' into a bounding special, ' +
                     _sabBySwim + ' into a bounding swim block, ' + _sabByEdge + ' day-edge tail(s), ' + _sabBySoft + ' into a soft transition wall).');
                 try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
             } else {
                 log('[STEP 6.865 SLIVER-ABSORB] no wall-bounded slivers to absorb.');
             }
-            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge + ' soft=' + _sabBySoft); } catch (_e) {}
+            try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' filler=' + _sabByFiller + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge + ' soft=' + _sabBySoft); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
 
