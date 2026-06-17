@@ -18606,6 +18606,12 @@
                 var _tilerBunksAnalyzed = 0;
                 var _tilerSampleShifts = [];
                 var _tilerSampleSlivers = [];
+                // Per-grade window-lock tally: for the now-movable lunch/dismissal/
+                //   custom anchors, record whether each has slide room in its layer
+                //   window or is pinned by a tight (window == duration) window. The
+                //   pinned ones are the grades where this change is a no-op and the
+                //   real fix is to widen that layer window — so we surface them by name.
+                var _tilerLockDiag = {};
                 // ★ APPLY MODE — turns the tiler from diagnostic to mutating.
                 //   'apply' (default): slide/resize the movable pieces the tiler
                 //   proposes, closing the sub-floor slivers that otherwise become
@@ -18778,7 +18784,8 @@
                                 earliestStart: earliestStart,
                                 latestStart: latestStart,
                                 isMovable: movable,
-                                isResizable: resizable
+                                isResizable: resizable,
+                                isWindowMovable: isWindowMovable
                             };
                         });
                         // Layer-driven grade with no bell-schedule periods: split the day
@@ -18813,6 +18820,15 @@
                             if (!_regions.length) return;
                             periodsForBunk = _regions;
                         }
+                        // Tally window-lock status for the now-movable anchors/lunch.
+                        inhabitants.forEach(function (x) {
+                            if (!x.isWindowMovable) return;
+                            var slack = x.latestStart - x.earliestStart;
+                            var g = (_tilerLockDiag[grade] = _tilerLockDiag[grade] || {});
+                            var rec = (g[x.name] = g[x.name] || { locked: 0, free: 0, maxSlack: 0 });
+                            if (slack <= 0) rec.locked++;
+                            else { rec.free++; if (slack > rec.maxSlack) rec.maxSlack = slack; }
+                        });
                         var result = window.PeriodTiler.tileBunkDay({
                             bunk: bunk, grade: grade, periods: periodsForBunk,
                             inhabitants: inhabitants, minSportDMin: 25
@@ -18853,6 +18869,32 @@
                         log('  ' + x.bunk + ' @ ' + x.sliver.period + ': ' + x.sliver.why);
                     });
                 }
+
+                // ── TILER-LOCK: which movable anchors/lunch are pinned by a tight
+                //   layer window (window == duration) vs have real slide room. The
+                //   pinned-everywhere ones are exactly the grades where freeing the
+                //   walls did nothing — widening that layer window is the lever that
+                //   unlocks their slivers.
+                try {
+                    var _lockedLines = [], _freeCount = 0;
+                    Object.keys(_tilerLockDiag).sort().forEach(function (g) {
+                        Object.keys(_tilerLockDiag[g]).forEach(function (nm) {
+                            var r = _tilerLockDiag[g][nm];
+                            if (r.free > 0) _freeCount++;
+                            if (r.locked > 0 && r.free === 0) {
+                                _lockedLines.push('  [TILER-LOCK] ' + nm + ' (' + g + '): window-locked on ' +
+                                    r.locked + ' bunk(s) — no slide room. Widen this layer window to let the tiler close its slivers.');
+                            }
+                        });
+                    });
+                    if (_lockedLines.length) {
+                        log('[TILER-LOCK] ' + _lockedLines.length + ' movable piece(s) pinned by a tight window (window == duration) — these grades are why some slivers persist; widen the named layer windows to unlock them:');
+                        _lockedLines.slice(0, 12).forEach(function (l) { log(l); });
+                        if (_freeCount > 0) log('[TILER-LOCK] (' + _freeCount + ' other movable piece(s) DO have slide room and were used to close gaps.)');
+                    } else if (_freeCount > 0) {
+                        log('[TILER-LOCK] all ' + _freeCount + ' movable anchor/lunch piece(s) have slide room — no tight windows are blocking the tiler.');
+                    }
+                } catch (_eLock) {}
 
                 // ───────────────────────────────────────────────────────────
                 // APPLY: commit the proposed shifts to bunkTimelines.
