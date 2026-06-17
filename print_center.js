@@ -1178,7 +1178,7 @@ function getStyles() {
     '.pc3-grid-area{flex:1;overflow:auto;background:#f5f5f4;padding:14px 14px 70px;min-height:0;position:relative;background-image:radial-gradient(rgba(168,162,158,.18) 1px, transparent 1px);background-size:18px 18px;background-position:0 0;}' +
     '.pc3-grid-area.live-bg{background:#111827;padding:0;background-image:none;}' +
     /* Paper-like sheet card — fills available width, no artificial cap */
-    '.pc3-sheet{background:#fff;border-radius:14px;box-shadow:0 1px 2px rgba(15,23,42,.04),0 10px 30px -12px rgba(15,23,42,.13),0 0 0 1px rgba(15,23,42,.04);margin:0 0 18px;overflow:hidden;position:relative;width:100%;}' +
+    '.pc3-sheet{background:#fff;border:1px solid #000;border-radius:0;box-shadow:none;margin:0 0 18px;overflow:hidden;position:relative;width:100%;}' +
     /* Sticky sheet header at the top of each card */
     '.pc3-sheet-head{position:sticky;top:0;z-index:4;background:rgba(255,255,255,.94);backdrop-filter:saturate(140%) blur(8px);-webkit-backdrop-filter:saturate(140%) blur(8px);}' +
     /* Floating zoom dock */
@@ -1200,47 +1200,43 @@ function getStyles() {
     '.pc3-sidebar.collapsed ~ .pc3-sidebar-toggle{left:0;border-left:1px solid #e7e5e4;border-radius:0 6px 6px 0;}' +
     '.pc3-sidebar-toggle-arrow{font-size:16px;font-weight:700;line-height:1;}' +
 
-    /* ── Schedule Table — premium ── */
-    '.pc3-tbl{border-collapse:separate;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
-    '.pc3-tbl th,.pc3-tbl td{border-right:1px solid #eef0f2;border-bottom:1px solid #eef0f2;padding:10px 14px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#1f2933;}' +
-    '.pc3-tbl tr:last-child td,.pc3-tbl tr:last-child th{border-bottom:none;}' +
-    '.pc3-tbl th:last-child,.pc3-tbl td:last-child{border-right:none;}' +
-    /* Column header (bunk / division names) — teal-tinted, calm */
-    '.pc3-tbl th{background:#f1f6f7;font-weight:700;position:sticky;z-index:2;font-size:11px;color:#0f6678;text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid #d9e6e9;}' +
+    /* ── Schedule Table — black & white, dead simple ── */
+    '.pc3-tbl{border-collapse:collapse;border-spacing:0;width:100%;table-layout:auto;user-select:none;}' +
+    '.pc3-tbl th,.pc3-tbl td{border:1px solid #000;padding:10px 14px;text-align:center;white-space:nowrap;position:relative;font-size:13px;color:#000;}' +
+    /* Column header (bunk / division names) */
+    '.pc3-tbl th{background:#000;color:#fff;font-weight:700;position:sticky;z-index:2;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}' +
     '.pc3-tbl thead th{top:0;}' +
-    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#f1f6f7;}' +
-    /* Time column — quiet, left-aligned, tabular */
-    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fafbfb;font-weight:600;text-transform:none;letter-spacing:0;color:#5b6570;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;}' +
-    /* Activity cells — the content the eye should land on */
-    '.pc3-tbl td{font-weight:600;color:#1f2933;}' +
-    '.pc3-tbl tr:nth-child(even) td{background:#fbfcfc;}' +
-    '.pc3-tbl tr:nth-child(even) th.row-head{background:#f6f8f8;}' +
-    /* Empty slots recede so the real activities stand out */
-    '.pc3-tbl .cell-free{color:#cdd3d8;font-weight:400;font-style:normal;}' +
-    '.pc3-tbl .cell-pinned{background:#fff7e8;color:#9a6a00;}' +
-    '.pc3-tbl .cell-league{background:#eef4ff;color:#1e40af;}' +
-    '.pc3-tbl .cell-transition{background:#f6f4fd;color:#7c54d6;font-size:11px;font-weight:500;font-style:italic;}' +
+    '.pc3-tbl th.corner{z-index:3;left:0;top:0;background:#000;}' +
+    /* Time column */
+    '.pc3-tbl th.row-head{position:sticky;left:0;z-index:2;background:#fff;color:#000;font-weight:600;text-transform:none;letter-spacing:0;font-size:12px;text-align:left;font-variant-numeric:tabular-nums;}' +
+    /* Activity cells */
+    '.pc3-tbl td{font-weight:600;color:#000;background:#fff;}' +
+    /* Empty slots recede */
+    '.pc3-tbl .cell-free{color:#bbb;font-weight:400;font-style:normal;}' +
+    '.pc3-tbl .cell-pinned{background:#fff;color:#000;}' +
+    '.pc3-tbl .cell-league{background:#fff;color:#000;}' +
+    '.pc3-tbl .cell-transition{background:#f0f0f0;color:#000;font-size:11px;font-weight:500;font-style:italic;}' +
 
     /* ── Excel-style coordinate headers ── */
-    '.pc3-tbl tr.pc3-coord-row th{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #94a3b8;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#94a3b8!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
-    '.pc3-tbl th.pc3-row-num{background:#dbe2ea!important;color:#475569;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #94a3b8;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
-    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#dbe2ea!important;}' +
-    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:rgba(20,125,145,.18)!important;}' +
-    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #147D91!important;outline-offset:-2px;background:rgba(20,125,145,.28)!important;z-index:2;}' +
-    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
-    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#147D91!important;color:#fff!important;}' +
+    '.pc3-tbl tr.pc3-coord-row th{background:#e5e5e5!important;color:#000;font-size:10px;font-weight:700;text-align:center!important;padding:2px 6px;border:1px solid #000;height:18px;letter-spacing:.4px;top:0;z-index:4;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-corner{background:#000!important;color:transparent;left:0;z-index:5;min-width:36px;width:36px;}' +
+    '.pc3-tbl th.pc3-row-num{background:#e5e5e5!important;color:#000;font-size:10px;font-weight:700;text-align:center!important;padding:2px 4px;border:1px solid #000;width:36px;min-width:36px;position:sticky;left:0;z-index:3;}' +
+    '.pc3-tbl tr:nth-child(even) th.pc3-row-num{background:#e5e5e5!important;}' +
+    '.pc3-tbl td.pc3-cell-selected,.pc3-tbl th.pc3-cell-selected:not(.pc3-row-num):not(.pc3-coord-corner):not(.pc3-coord-row th){background:#d0d0d0!important;}' +
+    '.pc3-tbl td.pc3-cell-active,.pc3-tbl th.pc3-cell-active:not(.pc3-row-num):not(.pc3-coord-corner){outline:2px solid #000!important;outline-offset:-2px;background:#bdbdbd!important;z-index:2;}' +
+    '.pc3-tbl tr.pc3-coord-row th.pc3-coord-active{background:#000!important;color:#fff!important;}' +
+    '.pc3-tbl th.pc3-row-num.pc3-coord-active{background:#000!important;color:#fff!important;}' +
     '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
     /* ── Sheet Header ── */
-    '.pc3-sheet-head{padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #eceae7;}' +
-    '.pc3-sheet-title{font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:700;color:#1c1917;letter-spacing:-.01em;}' +
-    '.pc3-sheet-subtitle{font-size:12px;color:#8a8378;font-weight:500;}' +
-    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;background:#e6f6f9;color:#0f6678;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
+    '.pc3-sheet-head{padding:12px 18px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #000;}' +
+    '.pc3-sheet-title{font-family:"Fraunces",Georgia,serif;font-size:19px;font-weight:700;color:#000;letter-spacing:-.01em;}' +
+    '.pc3-sheet-subtitle{font-size:12px;color:#555;font-weight:500;}' +
+    '.pc3-sheet-badge{font-size:10px;font-weight:700;padding:3px 10px;border-radius:0;background:#000;color:#fff;text-transform:uppercase;letter-spacing:.5px;margin-left:auto;}' +
 
     /* ── League Matchups ── */
-    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:rgba(30,64,175,.06);border:1px solid rgba(30,64,175,.1);border-radius:3px;font-size:10px;white-space:nowrap;}' +
+    '.pc3-matchup{display:inline-block;margin:1px 4px 1px 0;padding:1px 6px;background:#f0f0f0;border:1px solid #000;border-radius:0;font-size:10px;white-space:nowrap;color:#000;}' +
 
     /* ── Live Mode ── high-contrast kiosk theme (TV / big-screen friendly) */
     '.pc3-live-overlay{position:absolute;inset:0;z-index:100;background:#0b1220;display:flex;flex-direction:column;overflow:hidden;font-family:"DM Sans",system-ui,sans-serif;}' +
@@ -1412,7 +1408,7 @@ function buildMainUI() {
         '.pcx-paper{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:11px;}' +
         '.pcx-paper select{width:100%;height:36px;padding:0 9px;border:1px solid #e2dccf;border-radius:11px;font-size:12.5px;font-family:inherit;background:#fff;color:#23252a;cursor:pointer;}' +
         /* CANVAS — warm stone; paper sheets float */
-        '.pcx-canvas{flex:1;overflow:auto;background:#e9e3d7;padding:26px 26px 90px;position:relative;min-height:0;}' +
+        '.pcx-canvas{flex:1;overflow:auto;background:#f4f4f4;padding:26px 26px 90px;position:relative;min-height:0;}' +
         '.pcx-empty{display:flex;align-items:center;justify-content:center;height:100%;text-align:center;color:#9a917f;}' +
         /* sidebar items — more breathing room for the cream rail */
         '#pc3-sidebar .pc3-sidebar-scroll{padding:0 10px 14px;}' +
