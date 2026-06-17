@@ -18391,6 +18391,21 @@
                 var _tilerBunksAnalyzed = 0;
                 var _tilerSampleShifts = [];
                 var _tilerSampleSlivers = [];
+                // ★ APPLY MODE — turns the tiler from diagnostic to mutating.
+                //   'apply' (default): slide/resize the movable pieces the tiler
+                //   proposes, closing the sub-floor slivers that otherwise become
+                //   dead gaps. 'shadow'/'off': analyze only (legacy behaviour).
+                //   Any field/time issue an applied shift could introduce is caught
+                //   and repaired by the downstream gates (STEP 2.6/2.7/4.5 + the
+                //   FN-15/19/21/54/55 sweeps), all of which run AFTER this phase.
+                var _tilerApplyMode = (function () {
+                    try {
+                        var v = (globalSettings && globalSettings.app1 && globalSettings.app1.periodTilerEnabled);
+                        if (v === 'shadow' || v === 'off' || v === false) return false;
+                        return true; // default ON
+                    } catch (_e) { return true; }
+                })();
+                var _tilerApplyQueue = []; // [{ bunk, tl, shifts }]
                 var _SNACK_RE = /^(slush|popcorn|ice\s*cream|snack|nit\s*check|nosh|treat)/i;
                 var _CHANGE_RE = /^(pre[-\s]?change|post[-\s]?change|change)/i;
                 // ★ Pieces whose position is structurally fixed — never shift or
@@ -18550,6 +18565,9 @@
                                 _tilerSampleSlivers.push({ bunk: bunk, sliver: s });
                             });
                         }
+                        if (_tilerApplyMode && result.shifts && result.shifts.length) {
+                            _tilerApplyQueue.push({ bunk: bunk, tl: tl, shifts: result.shifts });
+                        }
                     });
                 });
                 log('[PeriodTiler SHADOW] analyzed ' + _tilerBunksAnalyzed + ' bunks → ' +
@@ -18569,6 +18587,67 @@
                     _tilerSampleSlivers.forEach(function (x) {
                         log('  ' + x.bunk + ' @ ' + x.sliver.period + ': ' + x.sliver.why);
                     });
+                }
+
+                // ───────────────────────────────────────────────────────────
+                // APPLY: commit the proposed shifts to bunkTimelines.
+                //   Each shift moves/resizes ONE block. We match a shift to its
+                //   block by (oldStart, oldDur[, name]) — unique within a bunk —
+                //   then build the would-be timeline and only commit it if every
+                //   block still fits without overlapping a neighbour. The tiler's
+                //   layout is internally coherent, so a clean commit reproduces it;
+                //   the overlap guard fails the bunk safe if a match is ambiguous.
+                // ───────────────────────────────────────────────────────────
+                if (_tilerApplyMode && _tilerApplyQueue.length) {
+                    var _tilerBunksMutated = 0, _tilerShiftsApplied = 0, _tilerBunksSkipped = 0;
+                    _tilerApplyQueue.forEach(function (job) {
+                        var tl = job.tl;
+                        if (!tl || !tl.length) return;
+                        // Snapshot original times so we can roll back on overlap.
+                        var _orig = tl.map(function (b) { return { b: b, s: b.startMin, e: b.endMin }; });
+                        var _appliedHere = 0;
+                        job.shifts.forEach(function (sh) {
+                            var newStart = sh.newStart, newDur = sh.newDur;
+                            if (newStart == null || newDur == null) return;
+                            // Find the unique block this shift refers to.
+                            var match = null;
+                            for (var i = 0; i < tl.length; i++) {
+                                var b = tl[i];
+                                if (b == null || b.startMin == null || b.endMin == null) continue;
+                                if (b.startMin !== sh.oldStart) continue;
+                                if ((b.endMin - b.startMin) !== sh.oldDur) continue;
+                                var nm = b.event || (b.layer && b.layer.name) || b.type || '';
+                                if (sh.name != null && String(nm) !== String(sh.name)) continue;
+                                match = b; break;
+                            }
+                            if (!match) return;
+                            match.startMin = newStart;
+                            match.endMin = newStart + newDur;
+                            _appliedHere++;
+                        });
+                        if (!_appliedHere) return;
+                        // Overlap guard: re-sort and verify no two real blocks collide.
+                        var sorted = tl.filter(function (b) {
+                            return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin;
+                        }).slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                        var clash = false;
+                        for (var k = 1; k < sorted.length; k++) {
+                            if (sorted[k].startMin < sorted[k - 1].endMin - 0.0001) { clash = true; break; }
+                        }
+                        if (clash) {
+                            _orig.forEach(function (o) { o.b.startMin = o.s; o.b.endMin = o.e; });
+                            _tilerBunksSkipped++;
+                            return;
+                        }
+                        _tilerBunksMutated++;
+                        _tilerShiftsApplied += _appliedHere;
+                    });
+                    log('[PeriodTiler APPLY] committed ' + _tilerShiftsApplied + ' shift(s) across ' +
+                        _tilerBunksMutated + ' bunk(s)' +
+                        (_tilerBunksSkipped ? (' — ' + _tilerBunksSkipped + ' bunk(s) skipped (overlap guard)') : '') +
+                        ' — downstream gates will repair any field/time fallout.');
+                } else if (_tilerApplyQueue.length) {
+                    log('[PeriodTiler] apply disabled (periodTilerEnabled=shadow/off) — ran diagnostic only.');
                 }
             }
         } catch (_tilerErr) {
