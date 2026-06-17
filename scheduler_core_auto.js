@@ -18497,10 +18497,21 @@
                                 }
                             } catch (_eSpD) { /* not a configured sport — keep flex */ }
 
-                            // Snacks are the prime sliver creators — always tile-able,
-                            //   even if pinned. Otherwise: movable/resizable unless the
-                            //   piece is a structural wall or pinned.
-                            var movable = isSnack ? !isChange : (!isHardFixed && !isPinned);
+                            // ★ A configured special's PIN is just where the planner
+                            //   happened to drop it — not a constraint the user set. The
+                            //   only real constraints are its duration, its layer window
+                            //   and its sharing. So treat specials (and snacks) as MOVABLE
+                            //   pieces the packer may slide to abut — even when Phase 2.5
+                            //   pinned them. Their duration stays locked (a configured
+                            //   special has dMin==dMax), so this shifts START times only,
+                            //   never stretches. Structural walls (swim/change/lunch/
+                            //   davening/league) and custom anchors (Main/Morning Activity)
+                            //   stay fixed — they bound the tiles.
+                            var isSpecialBlk = (t === 'special');
+                            if (!isSpecialBlk) { try { isSpecialBlk = !!getSpecialConfig(name, globalSettings); } catch (_eSB) {} }
+                            var movable = isSnack ? !isChange
+                                        : (isSpecialBlk ? !isHardFixed
+                                                        : (!isHardFixed && !isPinned));
                             var resizable = movable && (dMax > dMin);
 
                             // Start-time window: a movable piece may slide anywhere inside
@@ -18533,20 +18544,37 @@
                                 isResizable: resizable
                             };
                         });
-                        // Layer-driven grade with no bell-schedule periods: treat the
-                        //   whole occupied day as one period so the tiler can still pack
-                        //   this bunk and surface its real slivers.
+                        // Layer-driven grade with no bell-schedule periods: split the day
+                        //   into the spans BETWEEN immovable pieces (walls, custom anchors,
+                        //   swim, lunch, change…). Each span is tiled on its own — the
+                        //   movable specials inside it slide to abut, pooling any remainder
+                        //   at the span's end. This is the real tiling: a special can shift
+                        //   anywhere inside its own wall-bounded stretch (never across a
+                        //   wall like lunch), and each span keeps few movable pieces so the
+                        //   permutation packer stays fast instead of bailing to greedy on a
+                        //   single over-full FullDay period.
                         var periodsForBunk = gradePeriods;
                         if (!periodsForBunk.length) {
-                            var _minS = Infinity, _maxE = -Infinity;
-                            tl.forEach(function (b) {
-                                if (b && b.startMin != null && b.endMin != null && b.endMin > b.startMin) {
-                                    if (b.startMin < _minS) _minS = b.startMin;
-                                    if (b.endMin > _maxE) _maxE = b.endMin;
-                                }
+                            var _fixedIn = inhabitants.filter(function (x) { return !x.isMovable; })
+                                .slice().sort(function (a, b) { return a.configuredStart - b.configuredStart; });
+                            var _dayS = Infinity, _dayE = -Infinity;
+                            inhabitants.forEach(function (x) {
+                                if (x.configuredStart < _dayS) _dayS = x.configuredStart;
+                                var _e = x.configuredStart + x.configuredDur;
+                                if (_e > _dayE) _dayE = _e;
                             });
-                            if (!isFinite(_minS) || !isFinite(_maxE) || _maxE <= _minS) return;
-                            periodsForBunk = [{ startMin: _minS, endMin: _maxE, name: 'FullDay' }];
+                            if (!isFinite(_dayS) || !isFinite(_dayE) || _dayE <= _dayS) return;
+                            var _regions = [], _cur = _dayS, _rn = 0;
+                            _fixedIn.forEach(function (f) {
+                                if (f.configuredStart > _cur) {
+                                    _regions.push({ startMin: _cur, endMin: f.configuredStart, name: 'R' + (++_rn) });
+                                }
+                                var _fe = f.configuredStart + f.configuredDur;
+                                if (_fe > _cur) _cur = _fe;
+                            });
+                            if (_cur < _dayE) _regions.push({ startMin: _cur, endMin: _dayE, name: 'R' + (++_rn) });
+                            if (!_regions.length) return;
+                            periodsForBunk = _regions;
                         }
                         var result = window.PeriodTiler.tileBunkDay({
                             bunk: bunk, grade: grade, periods: periodsForBunk,
