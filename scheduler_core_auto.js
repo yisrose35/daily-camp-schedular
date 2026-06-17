@@ -28444,6 +28444,103 @@
             })();
         } catch (_eSB) { try { warn('[FN-54 SPECIAL BACKSTOP] ' + (_eSB && _eSB.message)); } catch (_e3) {} }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // FN-55 LAYER-WINDOW GATE — final authority on WHEN a grade may be scheduled.
+        //   Owner rule: "for grades that have no layers, or times that have no
+        //   layers, nothing should be scheduled for that time." The solver builds a
+        //   full division-day grid and fills it; this gate enforces the opposite —
+        //   a grade's schedulable time is the UNION of its own layer windows (every
+        //   layer type counts, anchors included). Any FILL activity (sport / special)
+        //   landing outside that union is blanked to Free. Anchors and structural
+        //   blocks (swim, lunch, change/cleanup, davening, custom/main-activity,
+        //   leagues, trips, rotation events, pinned) are never touched — they sit in
+        //   their own layer windows by construction. A grade with no layers has an
+        //   empty union, so every fill activity in it is blanked → fully clear day.
+        try {
+            (function _layerWindowGate() {
+                if (!Array.isArray(layers) || layers.length === 0) return; // engine already errors on no-layers
+                var _lwgT = function (v) { if (v == null) return null; if (typeof v === 'number') return v; try { return parseTimeToMinutes(v); } catch (_e) { return null; } };
+                // Per-grade layer windows + a grade-agnostic ('_all') bucket applied to every grade.
+                var _winByGrade = {}, _winAll = [];
+                layers.forEach(function (l) {
+                    if (!l) return;
+                    var s = _lwgT(l.startMin != null ? l.startMin : l.startTime);
+                    var e = _lwgT(l.endMin != null ? l.endMin : l.endTime);
+                    if (s == null || e == null || e <= s) return;        // a layer with no usable window can't define coverage
+                    var g = String(l.grade || l.division || '_all');
+                    if (g === '_all') { _winAll.push([s, e]); return; }
+                    (_winByGrade[g] = _winByGrade[g] || []).push([s, e]);
+                });
+                var _merge = function (ivs) {
+                    if (!ivs.length) return [];
+                    var a = ivs.slice().sort(function (x, y) { return x[0] - y[0]; });
+                    var out = [a[0].slice()];
+                    for (var i = 1; i < a.length; i++) {
+                        var last = out[out.length - 1];
+                        if (a[i][0] <= last[1]) { if (a[i][1] > last[1]) last[1] = a[i][1]; }
+                        else out.push(a[i].slice());
+                    }
+                    return out;
+                };
+                var _mergedFor = {};
+                var _coverageFor = function (g) {
+                    if (_mergedFor[g]) return _mergedFor[g];
+                    var ivs = (_winByGrade[g] || []).concat(_winAll);
+                    return (_mergedFor[g] = _merge(ivs));
+                };
+                // Covered fraction of [s,e] against the grade's merged windows.
+                var _coveredFrac = function (mg, s, e) {
+                    if (e <= s) return 1;
+                    var cov = 0;
+                    for (var i = 0; i < mg.length; i++) {
+                        var os = Math.max(s, mg[i][0]), oe = Math.min(e, mg[i][1]);
+                        if (oe > os) cov += (oe - os);
+                    }
+                    return cov / (e - s);
+                };
+                var _lgBG = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _lgBG[String(b)] = g; }); });
+                var _lgDT = window.divisionTimes || {};
+                var _lgTime = function (bunk, grade, idx, e) {
+                    if (e && e._startMin != null && e._endMin != null) return { s: e._startMin, e: e._endMin };
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[grade] && window._perBunkSlots[grade][bunk]) || (_lgDT[grade] && _lgDT[grade]._perBunkSlots && _lgDT[grade]._perBunkSlots[bunk]);
+                    if (pbs && pbs[idx] && pbs[idx].startMin != null) return { s: pbs[idx].startMin, e: pbs[idx].endMin };
+                    var ds = _lgDT[grade]; if (ds && ds[idx] && ds[idx].startMin != null) return { s: ds[idx].startMin, e: ds[idx].endMin };
+                    return null;
+                };
+                // Structural / anchor entry types that are never blanked — they ARE
+                //   the layer windows (swim/lunch/etc.) or are league-managed.
+                var _exemptType = { change: 1, 'pre-change': 1, 'post-change': 1, cleanup: 1, lunch: 1, swim: 1, davening: 1, snack: 1, snacks: 1, custom: 1, dismissal: 1 };
+                var _sa = window.scheduleAssignments || {};
+                var _blanked = 0, _gradesCleared = {};
+                Object.keys(_sa).forEach(function (bunk) {
+                    var slots = _sa[bunk]; if (!Array.isArray(slots)) return;
+                    var g = _lgBG[String(bunk)]; if (!g) return;
+                    var mg = _coverageFor(g);
+                    slots.forEach(function (e, idx) {
+                        if (!e || e.continuation) return;
+                        if (e._pinned || e._isRotationEvent || e._isTrip || e._league || e._leagueGame || e._isPrep) return;
+                        if (e._customActivity) return;
+                        if (_exemptType[String(e.type || '').toLowerCase()]) return;
+                        // Only FILL activities are gated: a placed sport (has a real field)
+                        //   or a special (auto/assigned). Already-Free slots are skipped.
+                        var isSpecial = (String(e.type || '').toLowerCase() === 'special') || e._autoSpecial || e._assignedSpecial;
+                        var hasField = e.field && e.field !== 'Free';
+                        if (!isSpecial && !hasField) return;
+                        var t = _lgTime(bunk, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        // Keep only if the slot is majority-covered by this grade's layer windows.
+                        if (_coveredFrac(mg, t.s, t.e) >= 0.5) return;
+                        e.field = 'Free'; e.sport = null; e._activity = 'Free'; e.event = 'Free';
+                        e._assignedSpecial = null; e._autoSpecial = false; e._source = 'layer-window-gate';
+                        _blanked++; _gradesCleared[g] = (_gradesCleared[g] || 0) + 1;
+                    });
+                });
+                if (_blanked) log('  ⛔ [FN-55 LAYER-WINDOW GATE] blanked ' + _blanked + ' activit(y/ies) outside their grade\'s layer windows → Free [' +
+                    Object.keys(_gradesCleared).map(function (g) { return g + ':' + _gradesCleared[g]; }).join(', ') + '] — only layer-covered time is scheduled');
+                else log('  ✅ [FN-55 LAYER-WINDOW GATE] all activities fall within their grade\'s layer windows');
+            })();
+        } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
+
 
         // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
         //   the final null sweep can't refill our cleared slots with violations.
