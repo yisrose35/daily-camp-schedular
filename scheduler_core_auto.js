@@ -18945,6 +18945,7 @@
             let multiSegSlots = 0;
             const evictedBlocks = [];
             allGrades.forEach(grade => {
+                if (!gradeHasAnyLayer(grade)) return; // ★ LAYER-GATE: no layers → never apply bell-schedule periods (would re-materialize a full empty day the finalizer then fills with Free)
                 const periods = periodMap[grade];
                 if (!periods || periods.length === 0) return;
                 const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
@@ -23143,6 +23144,7 @@
                 log('[STEP 4.97] iterating over ' + divKeys.length + ' grades: ' + divKeys.join(','));
                 for (const grade of divKeys) {
                     if (allowedSet && !allowedSet.has(String(grade))) continue;
+                    if (!gradeHasAnyLayer(grade)) continue; // ★ LAYER-GATE: no layers → never write Free placeholders for this grade
                     const pbs = window._perBunkSlots?.[grade] || window.divisionTimes?.[grade]?._perBunkSlots; // ★ FN-14: prefer the durable per-bunk grid (window._perBunkSlots, reset+populated each run at ~L16345) — window.divisionTimes._perBunkSlots gets clobbered mid-run by the patched loadCurrentDailyData on the 2nd+ gen, which left materialization reading undefined → empty schedule. Mirrors the proven STEP 4.9 fallback (~L20036).
                     if (!pbs) continue;
                     const bunks = getBunksForGrade(grade, divisions);
@@ -23259,6 +23261,7 @@
                 Object.keys(_sa).forEach(function (bunk) {
                     const slots = _sa[bunk]; if (!Array.isArray(slots)) return;
                     const grade = _bg[bunk]; const ds = _dt[grade] || [];
+                    if (!gradeHasAnyLayer(grade)) return; // ★ LAYER-GATE: no layers → never guarantee-fill this grade
                     const done = {}; slots.forEach(function (en) { if (en && !en.continuation) { const a = en._activity || en.sport || en.event; if (a) done[_nm(a)] = true; } });
                     slots.forEach(function (en, idx) {
                         if (!_isFree(en)) return;
