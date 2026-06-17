@@ -1962,9 +1962,9 @@ function renderPalette() {
       { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
       { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
       { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
-      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
-      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
-      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+      { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true, hidden:true },
+      { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true, hidden:true },
+      { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true, hidden:true },
       { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
       { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
       { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
@@ -1978,13 +1978,13 @@ function renderPalette() {
     };
     let html = '';
     html += '<div class="da-tile-label">Floaters</div>';
-    DAW_TYPES.filter(t => !t.anchor).forEach(t => {
+    DAW_TYPES.filter(t => !t.anchor && !t.hidden).forEach(t => {
       const dotColor = getDotColor(t.style);
       html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
     html += '<div class="da-tile-divider"></div>';
     html += '<div class="da-tile-label">Anchors</div>';
-    DAW_TYPES.filter(t => t.anchor).forEach(t => {
+    DAW_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
       const dotColor = getDotColor(t.style);
       html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="${t.type}"><span class="da-tile-dot ms-daw-tile-dot" style="background:${dotColor};"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(t.name)}</span></div>`;
     });
@@ -1996,7 +1996,7 @@ function renderPalette() {
       html += '<div class="da-tile-divider"></div>';
       html += '<div class="da-tile-label">General Activities</div>';
       _gaItems.forEach(ga => {
-        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
+        html += `<div class="da-tile ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_escHtml(ga.name)}" data-ga-facility="${_escHtml(ga.facility)}" data-ga-quicktype="${_escHtml(ga.quickType || 'custom')}" title="${_escHtml(ga.name + ' @ ' + ga.facility)}"><span class="da-tile-dot ms-daw-tile-dot" style="background:#d97706;"></span><span class="da-tile-name ms-daw-tile-name">${_escHtml(ga.name)}</span></div>`;
       });
     }
 
@@ -2006,9 +2006,10 @@ function renderPalette() {
     paletteEl.querySelectorAll('.ms-daw-tile').forEach(tile => {
       tile.addEventListener('dragstart', (e) => {
         e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
-        // ★ FN-40: carry the general-activity binding (read by the shared DAW drop)
+        // ★ FN-40: carry the general-activity binding (read by the shared DAW drop),
+        //   incl. quickType so swim/lunch/snacks/dinner apply their behavior.
         if (tile.dataset.gaName) {
-          e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '' }));
+          e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '', quickType: tile.dataset.gaQuicktype || 'custom' }));
         }
         e.dataTransfer.effectAllowed = 'copy';
       });

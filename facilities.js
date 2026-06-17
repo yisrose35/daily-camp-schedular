@@ -274,12 +274,14 @@ function saveFacilitiesMetadata() {
 //   Auditorium) becomes its own pinned tile in the Master Scheduler / Daily
 //   Adjustments layer palettes — dropping one creates a custom layer pre-
 //   bound to the activity + its facility (customActivity/customField), the
-//   same lane hand-made Custom Pinned layers use. Built-in generals (swim/
-//   lunch/snacks/dismissal quickTypes) are excluded — they have native tiles.
+//   same lane hand-made Custom Pinned layers use. Each item carries its
+//   `quickType` so the drop can tag the layer (swim/lunch/snacks/dinner →
+//   the solver applies that behavior). Only `dismissal` is excluded — it
+//   keeps its native hard-coded tile.
 window.getGeneralActivityPaletteItems = function () {
     try {
         const out = [], seen = {};
-        const _builtin = { swim: 1, lunch: 1, snacks: 1, dismissal: 1 };
+        const _exclude = { dismissal: 1 };
         // The module-local `facilities` array only populates when the
         // Facilities tab initializes — fall back to the persisted registry so
         // the palettes work on a fresh page load too.
@@ -292,9 +294,10 @@ window.getGeneralActivityPaletteItems = function () {
             if (!f || !f.name) return;
             (f.generalActivities || []).forEach(ga => {
                 if (!ga || !ga.name) return;
-                if (_builtin[String(ga.quickType || '').toLowerCase()]) return;
+                const qt = String(ga.quickType || '').toLowerCase();
+                if (_exclude[qt]) return;
                 const k = String(ga.name).toLowerCase() + '|' + String(f.name).toLowerCase();
-                if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name }); }
+                if (!seen[k]) { seen[k] = 1; out.push({ name: ga.name, facility: f.name, quickType: qt || 'custom' }); }
             });
         });
         return out;
@@ -1274,7 +1277,11 @@ function renderGeneralConfig(container, fac) {
         container.appendChild(listLabel);
 
         const _gaIsAutoModeRow = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
-        const _builtinNonConfig = { swim: 1, lunch: 1, snacks: 1, dismissal: 1, dinner: 1 };
+        // Only 'dismissal' stays non-configurable (a simple pin with its own native
+        //   tile). swim/lunch/snacks/dinner are now full General Activities and DO
+        //   take per-activity config (Sharing Rules carry pool/dining capacity into
+        //   the solver — the connection that was previously missing).
+        const _builtinNonConfig = { dismissal: 1 };
 
         fac.generalActivities.forEach(ga => {
             const actBlock = document.createElement("div");

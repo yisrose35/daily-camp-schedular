@@ -1388,9 +1388,14 @@ const DAW_LAYER_TYPES = [
   { type:'sport', name:'Sport', style:'background:#86efac;color:#14532d;' },
   { type:'special', name:'Special Activity', style:'background:#c4b5fd;color:#3b1f6b;' },
   { type:'activity', name:'Activity', style:'background:#93c5fd;color:#1e3a5f;' },
-  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true },
-  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true },
-  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true },
+  // swim/lunch/snacks are no longer addable as quick layers — they come from
+  //   General Activities (facility editor) so their facility config (capacity/
+  //   sharing) connects. Kept here (hidden:true) ONLY so legacy saved layers of
+  //   these types still render/edit; they're filtered out of the palette + the
+  //   type dropdown below.
+  { type:'swim', name:'Swim', style:'background:#67e8f9;color:#155e75;', anchor:true, hidden:true },
+  { type:'lunch', name:'Lunch', style:'background:#fca5a5;color:#7f1d1d;', anchor:true, hidden:true },
+  { type:'snacks', name:'Snacks', style:'background:#fde047;color:#713f12;', anchor:true, hidden:true },
   { type:'dismissal', name:'Dismissal', style:'background:#f87171;color:#fff;', anchor:true },
   { type:'custom', name:'Custom Pinned', style:'background:#d1d5db;color:#374151;', anchor:true },
   { type:'league', name:'League Game', style:'background:#a5b4fc;color:#312e81;' },
@@ -1482,14 +1487,14 @@ function renderDAWPalette() {
   };
 
   let html = '';
-  DAW_LAYER_TYPES.filter(t => !t.anchor).forEach(t => {
+  DAW_LAYER_TYPES.filter(t => !t.anchor && !t.hidden).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
     </div>`;
   });
 
-  DAW_LAYER_TYPES.filter(t => t.anchor).forEach(t => {
+  DAW_LAYER_TYPES.filter(t => t.anchor && !t.hidden).forEach(t => {
     html += `<div class="ms-daw-tile" draggable="true" data-type="${t.type}">
       <span class="ms-daw-tile-dot" style="background:${DAW_DOTS[t.type] || '#64748b'};"></span>
       <span class="ms-daw-tile-name">${t.name}</span>
@@ -1506,7 +1511,7 @@ function renderDAWPalette() {
   if (_gaItems.length) {
     html += '<div class="ms-daw-tile-divider"></div><div class="ms-daw-tile-label">General Activities</div>';
     _gaItems.forEach(ga => {
-      html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
+      html += `<div class="ms-daw-tile" draggable="true" data-type="custom" data-ga-name="${_esc(ga.name)}" data-ga-facility="${_esc(ga.facility)}" data-ga-quicktype="${_esc(ga.quickType || 'custom')}" title="${_esc(ga.name + ' @ ' + ga.facility)}">
         <span class="ms-daw-tile-dot" style="background:#d97706;"></span>
         <span class="ms-daw-tile-name">${_esc(ga.name)}</span>
         <span class="ms-daw-tile-badge">PIN</span>
@@ -1520,11 +1525,12 @@ function renderDAWPalette() {
   // Drag from palette
   pal.querySelectorAll('.ms-daw-tile').forEach(tile => {
     tile.addEventListener('dragstart', (e) => {
-      dawDragData = { source: 'palette', type: tile.dataset.type, gaName: tile.dataset.gaName || null, gaFacility: tile.dataset.gaFacility || null };
+      dawDragData = { source: 'palette', type: tile.dataset.type, gaName: tile.dataset.gaName || null, gaFacility: tile.dataset.gaFacility || null, gaQuickType: tile.dataset.gaQuicktype || null };
       e.dataTransfer.setData('text/daw-layer', tile.dataset.type);
       // ★ FN-40: carry the general-activity binding alongside the layer type
+      //   (incl. quickType so swim/lunch/snacks/dinner apply their behavior).
       if (tile.dataset.gaName) {
-        e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '' }));
+        e.dataTransfer.setData('text/daw-ga', JSON.stringify({ name: tile.dataset.gaName, facility: tile.dataset.gaFacility || '', quickType: tile.dataset.gaQuicktype || 'custom' }));
       }
       e.dataTransfer.effectAllowed = 'copy';
       tile.classList.add('ms-daw-tile-dragging');
@@ -2387,6 +2393,10 @@ function bindDAWEvents(gridEl, globalStart, globalEnd, opts) {
             if (_ga && _ga.name) {
               _newLayer.customActivity = _ga.name;
               if (_ga.facility) _newLayer.customField = _ga.facility;
+              // ★ Carry quickType so a Swim/Lunch/Snacks/Dinner general activity
+              //   applies that behavior in the solver (normalized at STEP 1.5).
+              const _qt = String(_ga.quickType || '').toLowerCase();
+              if (_qt && _qt !== 'custom') _newLayer.quickType = _qt;
             }
           } catch (_eGa) {}
         }
@@ -3252,7 +3262,7 @@ async function dawAddLayerDialog(grade) {
   const divStart = parseTimeToMinutes(div.startTime) || 540;
   const divEnd = parseTimeToMinutes(div.endTime) || 960;
   
-  const typeOptions = DAW_LAYER_TYPES.map(t => ({ value: t.type, label: t.name }));
+  const typeOptions = DAW_LAYER_TYPES.filter(t => !t.hidden).map(t => ({ value: t.type, label: t.name }));
   
   const result = await showModal({
     title: `Add Layer to ${grade}`,
