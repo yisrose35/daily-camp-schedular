@@ -18787,13 +18787,38 @@
                             //   bound it further). No window ⇒ stay put.
                             var winStart = (b.layer && b.layer.startMin != null) ? b.layer.startMin : null;
                             var winEnd = (b.layer && b.layer.endMin != null) ? b.layer.endMin : null;
-                            // ★ MOVABILITY IS THE LAYER WINDOW'S SLACK (user rule): a block whose
-                            //   layer window equals its activity duration (winEnd-winStart == dMin)
-                            //   has NO leeway → the window-bounded branch below pins it
-                            //   (latestStart == winStart == earliestStart) so it never moves. Only
-                            //   a layer window WIDER than the activity grants room to slide. This
-                            //   applies uniformly — custom anchors included; we do NOT drop an
-                            //   anchor's window. To let an anchor shift, widen its layer window.
+                            // ★ MOVABILITY = the layer window's slack — for blocks that hold a
+                            //   REAL field or are structural walls. A block whose layer window
+                            //   equals its activity duration has no leeway, so the window-bounded
+                            //   branch below pins it (latestStart == winStart). Moving such a block
+                            //   could break a shared-room / grade-aligned event, so the user's
+                            //   "tight window ⇒ unmovable" rule applies to them as written.
+                            //
+                            // ★ FIELD-LESS custom anchors (Main/Morning Activity with NO field —
+                            //   they use their own name as a pseudo-field) are the ONE exception,
+                            //   and it is load-bearing: they almost always carry a tight window
+                            //   (window == duration). If we honour that window they pin in place
+                            //   and FRAGMENT the region, stranding a sub-floor sliver on EACH side
+                            //   of the anchor. With off-grid walls (the real camp: lunch 12:25,
+                            //   swim on :X5) that turns one unavoidable remainder per bunk into
+                            //   dead gaps all over the day. So we DROP the window for a field-less
+                            //   anchor and let it region-slide to abut a neighbour — its duration
+                            //   never changes, it has no field to collide on, and FN-55 exempts it
+                            //   from blanking wherever it lands. The region's slivers then coalesce
+                            //   into ONE block instead of several dead ones.
+                            //
+                            //   (Lesson — do NOT re-pin these: a prior change applied the
+                            //   tight-window pin to field-less anchors "uniformly." It passed the
+                            //   suite only because the gapless test used GRID-ALIGNED walls; on the
+                            //   real OFF-GRID camp it produced ~3800 min of dead time. The coalesce
+                            //   that follows must NOT stretch a special past its duration — the
+                            //   region-fill below clamps to dMax and leaves the residual as one
+                            //   sliver; the off-grid sportless test guards both properties.)
+                            if (t === 'custom') {
+                                var _anchorField = b.customField || b.field ||
+                                    (b.layer && (b.layer.customField || b.layer.field)) || null;
+                                if (!_anchorField) { winStart = null; winEnd = null; }
+                            }
                             var earliestStart, latestStart;
                             if (!movable) {
                                 earliestStart = b.startMin; latestStart = b.startMin;
@@ -27453,6 +27478,12 @@
                     var done = {};
                     slots.forEach(function (x) { if (x && !x.continuation) { var a = String(x._activity || x.sport || '').toLowerCase().trim(); if (a && a !== 'free') done[a] = 1; } });
                     var pick = function (allowRepeat) {
+                        // ★ Prefer a candidate whose CONFIGURED duration exactly fills the
+                        //   cell (no stretch, no hole). Only if none fits exactly do we keep
+                        //   the longest sub-cell fit as a fallback — the caller places it at
+                        //   its real length and leaves the (small) residual rather than ever
+                        //   stretching a special past its configured duration.
+                        var fallback = null;
                         for (var i = 0; i < todaysSpecials.length; i++) {
                             var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
                             var nm = String(sp.name).toLowerCase().trim();
@@ -27464,9 +27495,10 @@
                             try { if (instructorConflictAt(sp.name, u.s, u.e, u.bunk)) continue; } catch (_e) {}
                             var info; try { info = getSpecialSharingInfo(sp.name, activityProperties, globalSettings); } catch (_e) { info = { capacity: 1 }; }
                             if (_concAt(nm, u.s, u.e, u.bunk) >= (info.capacity || 1)) continue; // would over-cap
-                            return sp;
+                            if (dur === width) return { sp: sp, dur: dur };   // exact fit — best
+                            if (!fallback || dur > fallback.dur) fallback = { sp: sp, dur: dur };
                         }
-                        return null;
+                        return fallback;
                     };
                     return pick(false) || pick(true);
                 }
@@ -27495,17 +27527,26 @@
                     //   back to Free (the refill / FN-22 passes get a last crack at it).
                     var swap = null; try { swap = _trySwap(u); } catch (_e) { swap = null; }
                     if (swap) {
-                        var loc = swap.location || null;
+                        var swSp = swap.sp, swDur = swap.dur;
+                        var loc = swSp.location || null;
+                        // ★ NEVER stretch the replacement to the displaced cell's width — place
+                        //   it at its OWN configured duration (_trySwap guarantees swDur<=width).
+                        //   Any residual [endM, u.e] is left Free (a small clean sliver) rather
+                        //   than ballooning the special past its set length. _trySwap already
+                        //   prefers an exact-width special, so a residual only appears when no
+                        //   exact-fit special is available.
+                        var endM = u.s + (swDur > 0 ? swDur : (u.e - u.s));
+                        if (endM > u.e) endM = u.e;
                         sl[u.idx] = {
-                            field: loc || swap.name, sport: null, _activity: swap.name, event: swap.name, type: 'special',
-                            _assignedSpecial: swap.name, _specialLocation: loc, _isSpecialLocation: !!loc,
-                            _autoSpecial: true, _autoMode: true, _startMin: u.s, _endMin: u.e,
+                            field: loc || swSp.name, sport: null, _activity: swSp.name, event: swSp.name, type: 'special',
+                            _assignedSpecial: swSp.name, _specialLocation: loc, _isSpecialLocation: !!loc,
+                            _autoSpecial: true, _autoMode: true, _startMin: u.s, _endMin: endM,
                             _source: 'fn1921-swap', _swappedFrom: reason, continuation: false
                         };
                         // The replacement is single-cell here; blank any trailing continuations
                         // of the old (possibly multi-period) block so nothing renders stranded.
                         for (var ks = u.idx + 1; ks < sl.length; ks++) { if (sl[ks] && sl[ks].continuation) { sl[ks] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false }; } else break; }
-                        try { registerSpecialUsage(swap.name, u.grade, u.s, u.e); } catch (_e) {}
+                        try { registerSpecialUsage(swSp.name, u.grade, u.s, endM); } catch (_e) {}
                         swapped++; return true;
                     }
                     _sa[u.bunk][u.idx] = { field: 'Free', sport: null, _activity: 'Free', _autoMode: true, _fixed: true, _constraintDemoted: true, _demotedReason: reason, continuation: false };

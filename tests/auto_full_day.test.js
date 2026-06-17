@@ -1708,6 +1708,30 @@ test('auto scheduler builds a fully GAPLESS sportless day when walls are grid-al
   assert.deepEqual(drifted, [], 'tight-window (field-less) anchors must stay fixed at their configured times:\n  ' + drifted.join('\n  '));
 });
 
+test('auto scheduler coalesces the off-grid remainder into one small sliver (field-less anchors slide, no stretch)', async (t) => {
+  // REGRESSION GUARD for the df31dd5 mistake. The real camp has OFF-GRID walls
+  //   (lunch +5, Main shifted) and FIELD-LESS Davening/Morning/Main anchors with
+  //   tight windows. If those anchors are PINNED, every region fragments and a
+  //   sub-floor sliver is stranded on each side → catastrophic dead time. Because
+  //   they are window-dropped and region-slide, the off-grid remainder coalesces
+  //   into at most ONE small sliver per bunk — AND no special is stretched past
+  //   its configured duration to fill the coalesced space (the careful fix:
+  //   slide-but-never-stretch). This is the test that would have caught the
+  //   3800-min regression; the grid-aligned test could not (grid walls hide it).
+  const { results } = await runScenario('SMOOTH-DAY OFF-GRID (field-less anchors slide; no special stretch)', {
+    smooth: true, smoothOffGrid: true, requireNoSports: true, skipGapCheck: true,
+  });
+  const auto = Object.entries(results).filter(([b, r]) => r.grade === 'Auto');
+  // (specialDur is asserted for ALL bunks inside runScenario — a stretched
+  //   special hard-fails there. Here we add the anti-fragmentation bound.)
+  const COALESCED_MAX = 20; // one sub-floor remainder; fragmentation leaves many
+  const fragmented = auto
+    .filter(([b, r]) => r.gapMin > COALESCED_MAX)
+    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+  assert.deepEqual(fragmented, [], 'off-grid day must coalesce to one small sliver per bunk — ' +
+    'fragmentation here means field-less anchors are wrongly pinned again:\n  ' + fragmented.join('\n  '));
+});
+
 test('auto scheduler keeps a pinned lunch at its configured time (never nudges it)', async (t) => {
   // Regression guard: a pinned lunch must NOT be moved by the tiler to swallow a
   //   sliver. (A prior "snap wall" change nudged lunch off its configured 12:20
