@@ -5097,9 +5097,25 @@
                     }
                     if (!_canEverPair) return; // skip this sport — pairing is impossible for this bunk
                 }
+                // ★ PER-SPORT CONFIGURED DURATION: if the user pinned a fixed
+                //   length for this sport (Facilities → Durations), it OVERRIDES
+                //   the layer's dMin/dMax/dIdeal so the planner places the sport
+                //   at exactly that length (like a special). Single value ⇒ hard
+                //   lock (dMin=dMax=dIdeal). Multiple allowed lengths ⇒ range with
+                //   the longest as the ideal (best fill). No config ⇒ layer flex.
+                let _spDMin = sportConstraints.dMin, _spDMax = sportConstraints.dMax, _spDIdeal = sportConstraints.dIdeal;
+                try {
+                    const _cfgDurs = getSportDurations(name, globalSettings);
+                    if (_cfgDurs && _cfgDurs.length) {
+                        _spDMin = _cfgDurs[0];
+                        _spDMax = _cfgDurs[_cfgDurs.length - 1];
+                        _spDIdeal = _cfgDurs[_cfgDurs.length - 1];
+                    }
+                } catch (_eSpDur) { /* keep layer flex */ }
                 sportPriorityList.push({
                     name, type: 'sport', rotationScore: score,
-                    dMin: sportConstraints.dMin, dMax: sportConstraints.dMax, dIdeal: sportConstraints.dIdeal,
+                    dMin: _spDMin, dMax: _spDMax, dIdeal: _spDIdeal,
+                    _durLocked: (_spDMin === _spDMax),
                     fields: sport.fields, needsPairing, playerReqs, bunkSize,
                     isIndoor: sport.isIndoor, _layer: sportLayer
                 });
