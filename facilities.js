@@ -1226,7 +1226,9 @@ function renderGeneralConfig(container, fac) {
         //   meal pinning, …). Everything else is a plain custom general activity.
         const _qtByName = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner' };
         const _qt = _qtByName[name.toLowerCase()] || 'custom';
-        fac.generalActivities.push({ name: name, quickType: _qt });
+        // Each activity is self-contained — seed its OWN sharing config (no
+        //   facility default). The user tightens it per activity.
+        fac.generalActivities.push({ name: name, quickType: _qt, sharableWith: _defaultGaSharing() });
         customInput.value = "";
         saveData();
         renderDetailPane();
@@ -1431,25 +1433,11 @@ function renderGeneralConfig(container, fac) {
     divider.style.cssText = "border-top:1px solid #E5E7EB; margin:20px 0 14px;";
     container.appendChild(divider);
 
-    // ★ INSTRUCTOR — names the person who runs each general activity at this
-    //   facility. Two activities tagged with the same instructor (specials +
-    //   general) are mutex at any slot (canBlockFit gate). Listed FIRST per
-    //   user preference, before Sharing Rules.
-    // Instructor / Sharing Rules / Consecutive Bunks are now per-activity
-    // (inline dropdown on each "Configured Activities" row above). The only
-    // remaining facility-level sections appear when there are NO general
-    // activities yet — they let the user pre-configure facility defaults
-    // that any future general activity will fall back to via the resolver.
-    const _gas = Array.isArray(fac.generalActivities) ? fac.generalActivities.filter(g => g && g.name) : [];
-    if (_gas.length === 0) {
-        const _gaIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
-        container.appendChild(section("Sharing Rules (facility default)", summaryGeneralSharing(fieldData),
-            () => renderGeneralSharing(fieldData)));
-        if (_gaIsAutoMode) {
-            container.appendChild(section("Consecutive Bunks (facility default)", summaryGeneralConsec(fieldData),
-                () => renderGeneralConsec(fieldData, fac, app1)));
-        }
-    }
+    // Instructor / Sharing Rules / Consecutive Bunks are configured PER ACTIVITY
+    //   (inline dropdown on each "Configured Activities" row above). There are no
+    //   facility-level defaults anymore — every general activity is self-contained
+    //   (seeded with its own config when added). Removed the facility-default
+    //   Sharing / Consecutive Bunks sections per user request.
 }
 
 // =========================================================================
@@ -1827,65 +1815,30 @@ function renderGeneralSharing(item) {
 //   have DIFFERENT sharing rules / consecutive flags, "like specials".
 // =========================================================================
 
+// Per-activity default sharing — every general activity is SELF-CONTAINED
+//   (no facility default to fall back to). Sharing on within-grade by default,
+//   cross-grade opt-in; capacity high (the user tightens it per activity, e.g.
+//   real pool capacity on a Swim activity).
+function _defaultGaSharing() {
+    const divs = Object.keys(window.divisions || window.getGlobalDivisions?.() || {});
+    const pairs = {};
+    divs.forEach(g => { pairs[[g, g].sort().join('|')] = true; });
+    return { type: 'cross_division', divisions: [], capacity: 20, allowedPairs: pairs };
+}
+
 function summaryGaSharing(ga) {
-    // ga has no sharableWith → falls back to facility default at the engine.
-    if (!ga || !ga.sharableWith) return 'Using facility default';
-    return summaryGeneralSharing(ga);
+    if (!ga) return 'Off';
+    // Self-contained — report this activity's own config (default if not yet set);
+    //   no facility fallback. (renderGaSharing seeds the default when edited.)
+    return summaryGeneralSharing({ sharableWith: ga.sharableWith || _defaultGaSharing() });
 }
 
 function renderGaSharing(ga) {
-    // renderGeneralSharing is already polymorphic over `item.sharableWith` —
-    // re-use it directly, plus a small "use facility default" reset.
+    // Each activity owns its sharing config (renderGeneralSharing is polymorphic
+    //   over `item.sharableWith`). No facility default / fallback anymore.
+    if (ga && !ga.sharableWith) ga.sharableWith = _defaultGaSharing();
     const wrap = document.createElement('div');
-    const banner = document.createElement('div');
-    banner.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; padding:8px 10px; background:#F3F4F6; border-radius:6px;';
-    const hint = document.createElement('span');
-    hint.style.cssText = 'font-size:0.78rem; color:#6B7280;';
-    hint.textContent = ga.sharableWith
-        ? 'Per-activity sharing overrides the facility default.'
-        : 'No per-activity sharing set — using the facility default.';
-    banner.appendChild(hint);
-    if (ga.sharableWith) {
-        const clear = document.createElement('button');
-        clear.type = 'button';
-        clear.textContent = 'Use facility default';
-        clear.style.cssText = 'border:1px solid #D1D5DB; background:#fff; color:#374151; padding:4px 10px; border-radius:6px; font-size:0.78rem; cursor:pointer;';
-        clear.onclick = () => {
-            delete ga.sharableWith;
-            saveData();
-            renderDetailPane();
-        };
-        banner.appendChild(clear);
-    } else {
-        const enable = document.createElement('button');
-        enable.type = 'button';
-        enable.textContent = 'Customize for this activity';
-        enable.style.cssText = 'border:1px solid #0F5F6E; background:#0F5F6E; color:#fff; padding:4px 10px; border-radius:6px; font-size:0.78rem; cursor:pointer;';
-        enable.onclick = () => {
-            // Seed from the facility default so the editor is non-empty.
-            const facList = (window.loadGlobalSettings?.() || {}).app1?.fields || [];
-            // Find this ga's facility by iterating in-memory facilities; the
-            // closure has `facilities` available at the module level.
-            let seed = null;
-            try {
-                (facilities || []).forEach(f => {
-                    if (!seed && (f.generalActivities || []).some(g => g === ga)) {
-                        const fld = facList.find(x => x && x.name === f.name);
-                        if (fld && fld.sharableWith) seed = JSON.parse(JSON.stringify(fld.sharableWith));
-                    }
-                });
-            } catch (_e) {}
-            ga.sharableWith = seed || { type: 'not_sharable', divisions: [], capacity: 1, allowedPairs: {} };
-            saveData();
-            renderDetailPane();
-        };
-        banner.appendChild(enable);
-    }
-    wrap.appendChild(banner);
-    if (ga.sharableWith) {
-        // Delegate to the existing renderer — operates on item.sharableWith.
-        wrap.appendChild(renderGeneralSharing(ga));
-    }
+    wrap.appendChild(renderGeneralSharing(ga));
     return wrap;
 }
 
