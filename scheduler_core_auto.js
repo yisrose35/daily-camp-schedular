@@ -26615,10 +26615,22 @@
                         if (!e || e.continuation || e._pinned || e._league) return;
                         var a = e._activity || e.sport; if (a && a !== 'Free') return;
                         var t = _stime(b, g, idx, e); if (!t || t.s == null || t.e == null) return;
+                        var _slotLen22 = t.e - t.s;
                         for (var fi = 0; fi < _sportFields.length; fi++) {
                             var f = _sportFields[fi]; var fl = String(f.name).toLowerCase().trim();
                             if (_skip2[fl] || !_fieldFree(fl, t.s, t.e) || !_access(f, g)) continue;
-                            var act = null; for (var ai = 0; ai < f.activities.length; ai++) { var c = f.activities[ai]; if (c && !_done[b][String(c).toLowerCase()] && _validateWritePlacement(f.name, c, g, b, t.s, t.e) === null) { act = c; break; } } // ★ FN-24: was access-only — now full gate (time-rules/exclusive). An EMPTY field can still be time-Unavailable (Belts until 12:30).
+                            // ★ DURATION LOCK: a sport with a configured duration may only
+                            //   fill a slot of a matching length — never cut it to fit a
+                            //   smaller Free slot (the user's Trench-40-cut-to-30 bug). An
+                            //   unset sport fills any slot as before.
+                            var act = null;
+                            for (var ai = 0; ai < f.activities.length; ai++) {
+                                var c = f.activities[ai];
+                                if (!c || _done[b][String(c).toLowerCase()]) continue;
+                                var _cDurs = null; try { _cDurs = getSportDurations(c, globalSettings); } catch (_eCd) { _cDurs = null; }
+                                if (_cDurs && _cDurs.length && _cDurs.indexOf(_slotLen22) === -1) continue;
+                                if (_validateWritePlacement(f.name, c, g, b, t.s, t.e) === null) { act = c; break; }
+                            } // ★ FN-24: full gate (time-rules/exclusive). An EMPTY field can still be time-Unavailable (Belts until 12:30).
                             if (!act) continue;
                             _sa[b][idx] = { field: f.name, sport: act, _activity: act, _startMin: t.s, _endMin: t.e, _autoMode: true, _freeFilled: true, continuation: false };
                             (_occ[fl] = _occ[fl] || []).push({ s: t.s, e: t.e }); _done[b][String(act).toLowerCase()] = 1; _filled++;
