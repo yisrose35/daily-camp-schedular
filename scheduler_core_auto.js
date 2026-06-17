@@ -18566,7 +18566,7 @@
                             });
                         }
                         if (_tilerApplyMode && result.shifts && result.shifts.length) {
-                            _tilerApplyQueue.push({ bunk: bunk, tl: tl, shifts: result.shifts });
+                            _tilerApplyQueue.push({ bunk: bunk, grade: grade, tl: tl, shifts: result.shifts });
                         }
                     });
                 });
@@ -18592,41 +18592,113 @@
                 // ───────────────────────────────────────────────────────────
                 // APPLY: commit the proposed shifts to bunkTimelines.
                 //   Each shift moves/resizes ONE block. We match a shift to its
-                //   block by (oldStart, oldDur[, name]) — unique within a bunk —
-                //   then build the would-be timeline and only commit it if every
-                //   block still fits without overlapping a neighbour. The tiler's
-                //   layout is internally coherent, so a clean commit reproduces it;
-                //   the overlap guard fails the bunk safe if a match is ambiguous.
+                //   block by (oldStart, oldDur[, name]) — unique within a bunk.
+                //
+                //   ★ CROSS-BUNK SAFETY. The tiler plans each bunk in isolation,
+                //   so naively sliding a SHARED special (Slush, Ice Cream, …) to
+                //   abut a wall can pile several bunks onto the same cap-limited
+                //   resource at the same minute — exactly the over-capacity /
+                //   same-division collisions the F2 gate then demotes to Free
+                //   (turning slivers into bigger holes). To prevent that we keep a
+                //   live occupancy map of every shared special across ALL bunks and
+                //   reject a MOVE whose destination would breach the resource's
+                //   capacity or same-division rule. Resize-in-place only shrinks a
+                //   footprint, so it can never create a new overlap — always safe.
+                //   The within-bunk overlap guard still fails a bunk safe.
                 // ───────────────────────────────────────────────────────────
                 if (_tilerApplyMode && _tilerApplyQueue.length) {
-                    var _tilerBunksMutated = 0, _tilerShiftsApplied = 0, _tilerBunksSkipped = 0;
+                    var _normNm = function (s) { return String(s == null ? '' : s).toLowerCase().trim(); };
+                    var _blkNm = function (b) { return b.event || (b.layer && b.layer.name) || b.type || ''; };
+                    // A block is a guarded shared resource iff it resolves to a real
+                    // special config (sports/Free/custom anchors/swim/lunch are not).
+                    var _isGuarded = function (name) {
+                        try { return !!getSpecialConfig(name, globalSettings); } catch (_e) { return false; }
+                    };
+                    // Build the live occupancy map from CURRENT positions of every
+                    // guarded special across all bunks. Each entry tracks its own
+                    // block ref so a committed move updates in place.
+                    var _resOcc = {}; // normName → [{ s, e, grade, ref }]
+                    allGrades.forEach(function (g) {
+                        if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(g)) return;
+                        getBunksForGrade(g, divisions).forEach(function (bk) {
+                            (bunkTimelines[bk] || []).forEach(function (b) {
+                                if (!b || b.startMin == null || b.endMin == null || b.endMin <= b.startMin) return;
+                                var nm = _blkNm(b);
+                                if (!_isGuarded(nm)) return;
+                                var key = _normNm(nm);
+                                (_resOcc[key] || (_resOcc[key] = [])).push({ s: b.startMin, e: b.endMin, grade: g, ref: b });
+                            });
+                        });
+                    });
+                    // Would placing special `name` (grade G, ref) at [ns,ne] breach
+                    // its capacity / same-division rule against the other occupants?
+                    var _moveSafe = function (name, grade, ref, ns, ne) {
+                        var key = _normNm(name);
+                        var arr = _resOcc[key] || [];
+                        var info;
+                        try { info = getSpecialSharingInfo(name, activityProperties, globalSettings); }
+                        catch (_e) { info = { shareType: 'not_sharable', capacity: 1 }; }
+                        var cap = info.capacity || (info.shareType === 'not_sharable' ? 1 : 2);
+                        var overlaps = 0, crossGrade = false;
+                        for (var i = 0; i < arr.length; i++) {
+                            var o = arr[i];
+                            if (o.ref === ref) continue;
+                            if (ns < o.e - 0.0001 && ne > o.s + 0.0001) { // intervals overlap
+                                overlaps++;
+                                if (o.grade !== grade) crossGrade = true;
+                            }
+                        }
+                        if (info.shareType === 'not_sharable') return overlaps === 0;
+                        if (info.shareType === 'same_division' && crossGrade) return false;
+                        return (overlaps + 1) <= cap;
+                    };
+                    var _tilerBunksMutated = 0, _tilerShiftsApplied = 0, _tilerBunksSkipped = 0, _tilerShiftsBlocked = 0;
                     _tilerApplyQueue.forEach(function (job) {
                         var tl = job.tl;
                         if (!tl || !tl.length) return;
-                        // Snapshot original times so we can roll back on overlap.
-                        var _orig = tl.map(function (b) { return { b: b, s: b.startMin, e: b.endMin }; });
+                        // Snapshot block times + the occupancy entries we touch so the
+                        // whole bunk can roll back cleanly on a within-bunk clash.
+                        var _origBlk = tl.map(function (b) { return { b: b, s: b.startMin, e: b.endMin }; });
+                        var _occTouched = []; // { entry, s, e }
                         var _appliedHere = 0;
                         job.shifts.forEach(function (sh) {
                             var newStart = sh.newStart, newDur = sh.newDur;
                             if (newStart == null || newDur == null) return;
-                            // Find the unique block this shift refers to.
                             var match = null;
                             for (var i = 0; i < tl.length; i++) {
                                 var b = tl[i];
                                 if (b == null || b.startMin == null || b.endMin == null) continue;
                                 if (b.startMin !== sh.oldStart) continue;
                                 if ((b.endMin - b.startMin) !== sh.oldDur) continue;
-                                var nm = b.event || (b.layer && b.layer.name) || b.type || '';
-                                if (sh.name != null && String(nm) !== String(sh.name)) continue;
+                                if (sh.name != null && String(_blkNm(b)) !== String(sh.name)) continue;
                                 match = b; break;
                             }
                             if (!match) return;
+                            var nm = _blkNm(match);
+                            var moved = (newStart !== sh.oldStart);
+                            var guarded = _isGuarded(nm);
+                            // Cross-bunk guard: only MOVES of guarded specials can
+                            // create a new resource collision. Block the unsafe ones.
+                            if (moved && guarded && !_moveSafe(nm, job.grade, match, newStart, newStart + newDur)) {
+                                _tilerShiftsBlocked++;
+                                return;
+                            }
                             match.startMin = newStart;
                             match.endMin = newStart + newDur;
                             _appliedHere++;
+                            // Keep the occupancy map in sync with this commit.
+                            if (guarded) {
+                                var key = _normNm(nm);
+                                var arr = _resOcc[key] || (_resOcc[key] = []);
+                                var ent = null;
+                                for (var j = 0; j < arr.length; j++) { if (arr[j].ref === match) { ent = arr[j]; break; } }
+                                if (!ent) { ent = { s: newStart, e: newStart + newDur, grade: job.grade, ref: match }; arr.push(ent); }
+                                _occTouched.push({ entry: ent, s: ent.s, e: ent.e });
+                                ent.s = newStart; ent.e = newStart + newDur;
+                            }
                         });
                         if (!_appliedHere) return;
-                        // Overlap guard: re-sort and verify no two real blocks collide.
+                        // Within-bunk overlap guard.
                         var sorted = tl.filter(function (b) {
                             return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin;
                         }).slice().sort(function (a, b) { return a.startMin - b.startMin; });
@@ -18635,7 +18707,8 @@
                             if (sorted[k].startMin < sorted[k - 1].endMin - 0.0001) { clash = true; break; }
                         }
                         if (clash) {
-                            _orig.forEach(function (o) { o.b.startMin = o.s; o.b.endMin = o.e; });
+                            _origBlk.forEach(function (o) { o.b.startMin = o.s; o.b.endMin = o.e; });
+                            _occTouched.forEach(function (o) { o.entry.s = o.s; o.entry.e = o.e; });
                             _tilerBunksSkipped++;
                             return;
                         }
@@ -18644,8 +18717,9 @@
                     });
                     log('[PeriodTiler APPLY] committed ' + _tilerShiftsApplied + ' shift(s) across ' +
                         _tilerBunksMutated + ' bunk(s)' +
+                        (_tilerShiftsBlocked ? (' — ' + _tilerShiftsBlocked + ' move(s) blocked (shared-resource guard)') : '') +
                         (_tilerBunksSkipped ? (' — ' + _tilerBunksSkipped + ' bunk(s) skipped (overlap guard)') : '') +
-                        ' — downstream gates will repair any field/time fallout.');
+                        '.');
                 } else if (_tilerApplyQueue.length) {
                     log('[PeriodTiler] apply disabled (periodTilerEnabled=shadow/off) — ran diagnostic only.');
                 }
