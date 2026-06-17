@@ -1231,6 +1231,31 @@ function getStyles() {
     '.pc3-tbl td,.pc3-tbl th{cursor:cell;}' +
     '.pc3-tbl tr.pc3-coord-row th,.pc3-tbl th.pc3-row-num{cursor:default;}' +
 
+    /* ── Auto TIMELINE (brick model): each bunk = one track, cards sized to duration ── */
+    '.pc3-tl{font-family:Calibri,"Segoe UI",Arial,sans-serif;background:#fff;width:100%;user-select:none;}' +
+    '.pc3-tl-row{display:flex;align-items:stretch;border-bottom:1px solid #e6e6e6;}' +
+    '.pc3-tl-row:last-child{border-bottom:none;}' +
+    '.pc3-tl-headrow{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid #c6c6c6;}' +
+    '.pc3-tl-periodrow{background:#fafafa;border-bottom:1px solid #d6d6d6;}' +
+    '.pc3-tl-corner,.pc3-tl-bunk{width:120px;min-width:120px;flex-shrink:0;display:flex;align-items:center;padding:6px 10px;font-size:13px;color:#1f1f1f;border-right:1px solid #c6c6c6;background:#f2f2f2;position:sticky;left:0;z-index:2;box-sizing:border-box;}' +
+    '.pc3-tl-corner{font-weight:700;}' +
+    '.pc3-tl-bunk{font-weight:600;}' +
+    '.pc3-tl-track{position:relative;flex:1;min-width:0;height:48px;}' +
+    '.pc3-tl-headrow .pc3-tl-track{height:30px;}' +
+    '.pc3-tl-periodrow .pc3-tl-track{height:26px;}' +
+    '.pc3-tl-tick{position:absolute;top:0;bottom:0;border-left:1px solid #ededed;}' +
+    '.pc3-tl-tick.major{border-left-color:#c6c6c6;}' +
+    '.pc3-tl-tick span{position:absolute;top:8px;left:3px;font-size:10px;color:#555;white-space:nowrap;}' +
+    '.pc3-tl-vline{position:absolute;top:0;bottom:0;border-left:1px solid #f0f0f0;}' +
+    '.pc3-tl-vline.major{border-left-color:#dcdcdc;}' +
+    '.pc3-tl-period{position:absolute;top:3px;bottom:3px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#1f1f1f;background:#e6e6e6;border:1px solid #b0b0b0;border-radius:4px;overflow:hidden;white-space:nowrap;padding:0 6px;box-sizing:border-box;}' +
+    '.pc3-tl-block{position:absolute;top:4px;bottom:4px;border:1px solid #c9c9c9;border-radius:6px;background:#fff;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.06);display:flex;box-sizing:border-box;}' +
+    '.pc3-tl-block-in{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;padding:3px 8px;}' +
+    '.pc3-tl-name{font-size:12px;font-weight:600;color:#000;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+    '.pc3-tl-sub{font-size:10px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}' +
+    '.pc3-tl-dur{font-size:9px;color:#999;margin-top:1px;}' +
+    '.pc3-tl-chg{flex-shrink:0;display:flex;align-items:center;justify-content:center;background:#fce4d6;color:#833c00;font-size:9px;font-weight:600;min-width:14px;}' +
+
     /* ── Sheet Header — Excel sheet-tab feel ── */
     '.pc3-sheet-head{padding:10px 14px;display:flex;align-items:center;gap:12px;border-bottom:1px solid #c6c6c6;background:#f7f7f7;}' +
     '.pc3-sheet-title{font-family:Calibri,"Segoe UI",Arial,sans-serif;font-size:16px;font-weight:700;color:#1f1f1f;letter-spacing:0;}' +
@@ -2029,200 +2054,92 @@ function renderAutoDivisionTable(divName, bunks) {
 
     try { console.log('[PrintCenter] div=' + divName + ' periods=' + activityRanges.length + ' hasReal=' + hasRealPeriods, activityRanges.map(function(r){return r.name||'?';})); } catch(e){}
 
-    // ─── 3. Build the time-column array ─────
-    // Two modes:
-    //   (a) Activity-aligned (NEW default): columns are sized by activity
-    //       boundaries — every unique activity start/end across all bunks
-    //       becomes a column boundary. Activities never span an awkward
-    //       number of "15-min subcolumns" because there are no subcolumns.
-    //   (b) Fixed-increment (legacy): every _timeIncrement minutes is a
-    //       column. Activities of varying durations span uneven colspans.
-    var timeCols = []; // [ { startMin, endMin, label, periodIdx (-1 if not in a period) } ]
-    var t, colEnd, pIdx, ri;
-    if (_activityAligned) {
-        // Collect unique boundaries across all bunks' activities
-        var boundarySet = {};
-        boundarySet[dayStart] = true;
-        boundarySet[dayEnd] = true;
-        Object.keys(bunkActs).forEach(function (bk) {
-            (bunkActs[bk] || []).forEach(function (a) {
-                if (a.startMin >= dayStart && a.startMin <= dayEnd) boundarySet[a.startMin] = true;
-                if (a.endMin >= dayStart && a.endMin <= dayEnd) boundarySet[a.endMin] = true;
-            });
-        });
-        var boundaries = Object.keys(boundarySet).map(Number).sort(function (a, b) { return a - b; });
-        for (var bi = 0; bi < boundaries.length - 1; bi++) {
-            t = boundaries[bi];
-            colEnd = boundaries[bi + 1];
-            pIdx = -1;
-            for (ri = 0; ri < activityRanges.length; ri++) {
-                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
-            }
-            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
-        }
-    } else {
-        for (t = dayStart; t < dayEnd; t += inc) {
-            colEnd = Math.min(t + inc, dayEnd);
-            pIdx = -1;
-            for (ri = 0; ri < activityRanges.length; ri++) {
-                if (t >= activityRanges[ri].startMin && t < activityRanges[ri].endMin) { pIdx = ri; break; }
-            }
-            timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
-        }
-    }
-    var numCols = timeCols.length;
+    // ─── 3. Time-proportional TIMELINE layout (brick model) ─────
+    // Each bunk row is an independent track. Activities are cards sized to
+    // their true duration on a SHARED time axis, so equal durations read as
+    // equal widths and every row keeps its own break pattern (bricks in one
+    // mold). Free time is left as a blank gap between cards.
+    var totalMin = Math.max(1, dayEnd - dayStart);
+    function pctL(min) { return ((min - dayStart) / totalMin) * 100; }
+    function pctW(min) { return (min / totalMin) * 100; }
 
-    // ─── 4. Render table ─────
-    // Total visible data columns = 1 (bunk) + numCols (time)
-    var totalDataCols = 1 + numCols;
     var sheetId = pcNextSheetId();
+    var minW = Math.max(720, Math.round(totalMin * 4));
     var html = '<div class="pc3-sheet-table-wrap" style="overflow:auto;position:relative;">';
-    html += '<table class="pc3-tbl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="table-layout:fixed;">';
-    html += '<thead>';
+    html += '<div class="pc3-tl" id="' + sheetId + '" data-sheet-id="' + sheetId + '" data-grid-mode="auto-timeline" data-day-start="' + dayStart + '" data-day-end="' + dayEnd + '" style="min-width:' + minW + 'px;">';
 
-    // ── HEADER ROW 1 (data row 1): Period labels (only over variable-activity columns) ──
-    // ★ Day 22.5+: only render the period header row when REAL periods exist.
+    var gridStart = Math.ceil(dayStart / inc) * inc;
+
+    // ── Period band (only when a REAL Bell Schedule defines numbered periods) ──
     if (hasRealPeriods) {
-    html += '<tr>';
-    html += '<th class="corner" rowspan="2" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
-
-    var ci = 0;
-    while (ci < numCols) {
-        var col = timeCols[ci];
-        if (col.periodIdx >= 0) {
-            // Count consecutive columns in this period
-            var pStart = ci;
-            var pId = col.periodIdx;
-            while (ci < numCols && timeCols[ci].periodIdx === pId) ci++;
-            var pSpan = ci - pStart;
-            var periodNum = pId + 1;
-            var range = activityRanges[pId];
-            var periodName = range.name || ('Period ' + periodNum);
-            var periodTxt = periodName + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
-            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#e6e6e6;color:#1f1f1f;font-size:12px;font-weight:700;padding:5px 4px;border-bottom:none;border-right:1px solid #b0b0b0;border-top:1px solid #b0b0b0;border-left:1px solid #b0b0b0;">';
-            html += escHtml(periodName);
-            html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
-            html += '</th>';
-        } else {
-            // Non-period column — just an empty top header cell
-            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#fff;border-bottom:none;padding:2px;"></th>';
-            ci++;
-        }
+        html += '<div class="pc3-tl-row pc3-tl-periodrow">';
+        html += '<div class="pc3-tl-corner"></div>';
+        html += '<div class="pc3-tl-track">';
+        activityRanges.forEach(function (r, ri) {
+            var pname = r.name || ('Period ' + (ri + 1));
+            html += '<div class="pc3-tl-period" style="left:' + pctL(r.startMin).toFixed(2) + '%;width:calc(' + pctW(r.endMin - r.startMin).toFixed(2) + '% - 2px);">' + escHtml(pname) + '</div>';
+        });
+        html += '</div></div>';
     }
-    html += '</tr>';
-    }  // end if (hasRealPeriods)
 
-    // ── HEADER ROW 2 (time-label row) — the ONLY header row when no periods ──
-    html += '<tr>';
-    if (!hasRealPeriods) {
-        html += '<th class="corner" data-r="0" data-c="0" data-cell-text="Bunk" style="min-width:80px;width:80px;vertical-align:middle;">Bunk</th>';
+    // ── Header row: corner + time ruler ──
+    html += '<div class="pc3-tl-row pc3-tl-headrow">';
+    html += '<div class="pc3-tl-corner">Bunk</div>';
+    html += '<div class="pc3-tl-track pc3-tl-ruler">';
+    for (var tm = gridStart; tm <= dayEnd; tm += inc) {
+        var isMajor = tm % 60 === 0;
+        html += '<div class="pc3-tl-tick' + (isMajor ? ' major' : '') + '" style="left:' + pctL(tm).toFixed(2) + '%;"><span>' + escHtml(minutesToTimeLabel(tm)) + '</span></div>';
     }
-    var colW = _activityAligned
-        ? Math.max(70, Math.min(140, 900 / Math.max(1, numCols)))
-        : Math.max(36, Math.min(80, 700 / numCols));
-    var hdrRowAttr = hasRealPeriods ? '1' : '0';
-    timeCols.forEach(function (col, idx) {
-        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f2f2f2;';
-        var labelTxt = _activityAligned
-            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
-        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:600;color:#1f1f1f;' + bgStyle + '">' + labelTxt + '</th>';
-    });
-    html += '</tr>';
-    html += '</thead><tbody>';
+    html += '</div></div>';
 
-    // ─── 5. Bunk rows ─────
-    bunks.forEach(function (bunk, bunkIdx) {
-        var rowR = 2 + bunkIdx;
-        html += '<tr>';
-        html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(bunk) + '" style="min-width:80px;">' + escHtml(bunk) + '</th>';
+    // ── Bunk rows ──
+    bunks.forEach(function (bunk) {
+        html += '<div class="pc3-tl-row">';
+        html += '<div class="pc3-tl-bunk">' + escHtml(bunk) + '</div>';
+        html += '<div class="pc3-tl-track">';
 
-        var acts = bunkActs[bunk] || [];
-        var colIdx = 0;
-
-        while (colIdx < numCols) {
-            var colStart = timeCols[colIdx].startMin;
-            var colEnd = timeCols[colIdx].endMin;
-
-            // Find which bunk activity covers this time column
-            var matchAct = null;
-            for (var ai = 0; ai < acts.length; ai++) {
-                if (acts[ai].startMin < colEnd && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
-            }
-
-            if (matchAct) {
-                // Calculate colspan: how many consecutive columns this activity spans
-                var span = 1;
-                var nextCol = colIdx + 1;
-                while (nextCol < numCols && timeCols[nextCol].startMin < matchAct.endMin) {
-                    span++;
-                    nextCol++;
-                }
-
-                var type = matchAct.type;
-                var actText = '', locText = '';
-                if (matchAct.entry) {
-                    actText = matchAct.entry._activity || matchAct.entry.sport || '';
-                    locText = typeof matchAct.entry.field === 'string' ? matchAct.entry.field : (matchAct.entry.field && matchAct.entry.field.name ? matchAct.entry.field.name : '');
-                    if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
-                    if (!actText && locText) { actText = locText; locText = ''; }
-                }
-                var displayText = actText || '\u2014';
-                // \u2605 Day 22.5+: respect _hideLocations toggle
-                if (locText && !_hideLocations) displayText += ' \u2013 ' + locText;
-                if (matchAct.entry && matchAct.slotIdx != null && displayText !== '\u2014' && !_hideLocations) {
-                    var _autoSh = pcFindFieldSharers(bunk, matchAct.slotIdx, divName);
-                    if (_autoSh.length) {
-                        var _autoNames = _autoSh.map(function(b){ return /^\d/.test(String(b)) ? 'Bunk ' + b : b; });
-                        displayText += ' vs ' + _autoNames.join(', ');
-                    }
-                }
-                var durMin = matchAct.endMin - matchAct.startMin;
-
-                html += '<td';
-                if (span > 1) html += ' colspan="' + span + '"';
-                html += ' class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
-                html += ' title="' + escHtml(displayText + ' (' + durMin + ' min)') + '"';
-                var pillBg = '#ffffff';
-                var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
-                html += ' style="padding:3px;vertical-align:middle;">';
-                // ★ Split-swim change: show Change → Swim → Change subdivisions
-                var splitPre = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
-                var splitPost = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
-                if (splitPre > 0 || splitPost > 0) {
-                    var swimMin = durMin - splitPre - splitPost;
-                    html += '<div style="overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
-                    if (splitPre > 0) {
-                        html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-bottom:1px solid #c6c6c6;">Change</div>';
-                    }
-                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
-                    html += '</div>';
-                    if (splitPost > 0) {
-                        html += '<div style="background:#fce4d6;color:#833c00;padding:2px 6px;text-align:center;font-size:10px;font-weight:400;border-top:1px solid #c6c6c6;">Change</div>';
-                    }
-                    html += '</div></td>';
-                } else {
-                    html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
-                    html += pcInnerDividers(timeCols, colIdx, span);
-                    html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(actText || displayText) + '</span>';
-                    // ★ Day 22.5+: duration line tagged with .pc3-dur so CSS toggle can hide it without re-render
-                    if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
-                    html += '</div></td>';
-                }
-
-                colIdx = nextCol;
-            } else {
-                html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="\u2014" style="text-align:center;font-size:9px;">\u2014</td>';
-                colIdx++;
-            }
+        // Sub-period mold lines (shared across every row — the same vertical grid)
+        for (var gm = gridStart; gm < dayEnd; gm += inc) {
+            html += '<div class="pc3-tl-vline' + (gm % 60 === 0 ? ' major' : '') + '" style="left:' + pctL(gm).toFixed(2) + '%;"></div>';
         }
 
-        html += '</tr>';
+        (bunkActs[bunk] || []).forEach(function (a) {
+            if (a.type === 'free' || !a.entry) return; // blank gap
+            var dur = a.endMin - a.startMin;
+            if (dur < 1) return;
+
+            var actText = a.entry._activity || a.entry.sport || '';
+            var locText = typeof a.entry.field === 'string' ? a.entry.field : (a.entry.field && a.entry.field.name ? a.entry.field.name : '');
+            if (actText && locText && (actText === locText || locText.indexOf(actText) >= 0)) locText = '';
+            if (!actText && locText) { actText = locText; locText = ''; }
+            var nameTxt = actText || '—';
+
+            var sharers = '';
+            if (a.slotIdx != null && !_hideLocations) {
+                var sh = pcFindFieldSharers(bunk, a.slotIdx, divName);
+                if (sh.length) sharers = ' vs ' + sh.map(function (b) { return /^\d/.test(String(b)) ? 'Bunk ' + b : b; }).join(', ');
+            }
+            var subTxt = (!_hideLocations && locText) ? locText : '';
+            var exportTxt = nameTxt + (subTxt ? ' – ' + subTxt : '') + sharers;
+
+            var splitPre = a.entry._splitPreChange || 0;
+            var splitPost = a.entry._splitPostChange || 0;
+
+            html += '<div class="pc3-tl-block cell-' + a.type + '" style="left:' + pctL(a.startMin).toFixed(2) + '%;width:calc(' + pctW(dur).toFixed(2) + '% - 4px);" title="' + escHtml(exportTxt + ' (' + dur + ' min)') + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + a.slotIdx + '" data-div="' + escHtml(divName) + '" data-cell-text="' + escHtml(exportTxt) + '">';
+            if (splitPre > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPre / dur * 100).toFixed(2) + '%;">Chg</div>';
+            html += '<div class="pc3-tl-block-in">';
+            html += '<span class="pc3-tl-name">' + escHtml(nameTxt + sharers) + '</span>';
+            if (subTxt) html += '<span class="pc3-tl-sub">' + escHtml(subTxt) + '</span>';
+            if (dur > inc) html += '<span class="pc3-tl-dur pc3-dur">' + dur + 'm</span>';
+            html += '</div>';
+            if (splitPost > 0) html += '<div class="pc3-tl-chg" style="width:' + (splitPost / dur * 100).toFixed(2) + '%;">Chg</div>';
+            html += '</div>';
+        });
+
+        html += '</div></div>';
     });
 
-    html += '</tbody></table></div>';
+    html += '</div></div>';
     return html;
 }
 
