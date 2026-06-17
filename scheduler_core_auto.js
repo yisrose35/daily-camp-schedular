@@ -5618,6 +5618,57 @@
             }
 
             // ─────────────────────────────────────────────────────────
+            // FORCE-SHARE AT PLACEMENT: join an existing session first
+            // ─────────────────────────────────────────────────────────
+            // The greedy A1–A4 pass picks each bunk's special time
+            //   independently (period-aligned), so two same-grade bunks that
+            //   COULD share one session of a cap>1 special instead land at
+            //   DIFFERENT start times — running the special as two half-empty
+            //   sessions and burning double the field-time (the A4.6-DIAG
+            //   "4 sessions @ cap 2 → could be 2"). A4.5/A4.6 can't fix this
+            //   after the fact: by the time they run every bunk is already
+            //   placed, so none is free to join. This runs DURING placement —
+            //   it finds an already-placed, same-grade, under-capacity session
+            //   of the special that THIS bunk is free to join, so the greedy
+            //   pass packs bunks onto shared sessions instead of staggering
+            //   them. One shared session then frees the field-time the second
+            //   session would have burned, opening slots that shrink the
+            //   leftover holes. Same gate chain as A4.5/A4.6 (capacity, pair
+            //   rule, field room, subcategory, free window) → it can never
+            //   overbook a field or break a rule; if nothing is safely
+            //   joinable it returns null and normal placement proceeds.
+            function _findJoinableSession(sName, grade, bunk, sl, result, info, loc, dur) {
+                if (!info || !(info.capacity > 1)) return null;
+                var usage = globalSpecialUsage[sName];
+                if (!usage || !usage.length) return null;
+                var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
+                if (!fw.length) return null;
+                var item = (sl.specials && sl.specials.priorityList || [])
+                    .find(function (s) { return s.name === sName; });
+                // distinct same-grade sessions, with current occupancy
+                var sessions = {};
+                usage.forEach(function (e) {
+                    if (e.grade !== grade) return;
+                    var key = e.startMin + '-' + e.endMin;
+                    (sessions[key] = sessions[key] || { startMin: e.startMin, endMin: e.endMin, occ: 0 }).occ++;
+                });
+                var best = null;
+                Object.keys(sessions).forEach(function (k) {
+                    var s = sessions[k];
+                    if (s.occ >= info.capacity) return;                              // session already full
+                    if ((s.endMin - s.startMin) !== dur) return;                     // only join same-duration sessions
+                    if (!fw.some(function (w) { return w.start <= s.startMin && w.end >= s.endMin; })) return; // bunk not free here
+                    if (!canAssignSpecialToGrade(sName, grade, s.startMin, s.endMin)) return;
+                    if (loc && !isFieldStillAvailableGP(loc, s.startMin, s.endMin, bunk, grade, sName)) return; // field full
+                    if (item && !_canPickSpecialBySubcategory(item, sl, result)) return;
+                    // pack the fullest joinable session first — fill it to
+                    //   capacity before opening another (tightest packing).
+                    if (!best || s.occ > best.occ || (s.occ === best.occ && s.startMin < best.startMin)) best = s;
+                });
+                return best ? { startMin: best.startMin, endMin: best.endMin } : null;
+            }
+
+            // ─────────────────────────────────────────────────────────
             // GLOBAL-PLANNER POSITION SCORING (period-aware best-fit)
             // ─────────────────────────────────────────────────────────
             // Old behavior was first-fit (earliest valid position wins).
@@ -6103,6 +6154,7 @@
             log(GP + ' Phase A2.5 Composer (pre-A3): ' + composerPlaced + ' specials placed into period subsets (non-scarce only)');
 
             // A3: For each special, assign round-robin across grades
+            var _forceShareJoins = 0; // bunks packed onto an existing shared session at placement time
             for (var si = 0; si < sortedSpecials.length; si++) {
                 var specialInfo = sortedSpecials[si];
 
@@ -6159,10 +6211,20 @@
                             var dur = specialInfo.duration;
                             var time = null;
 
+                            // FORCE-SHARE: if this special can share (cap>1), try
+                            //   to join an existing same-grade session before
+                            //   picking a fresh staggered slot. Packs bunks onto
+                            //   shared sessions → frees field-time → fewer holes.
+                            var _shInfoA3 = getSpecialSharingInfo(specialInfo.name, activityProperties, globalSettings);
+                            if (_shInfoA3 && _shInfoA3.capacity > 1) {
+                                time = _findJoinableSession(specialInfo.name, grade, bunk, sl, result, _shInfoA3, specialInfo.location, dur);
+                                if (time) _forceShareJoins++;
+                            }
+
                             // Prefer stagger band
                             var specialBand = staggerPlan[grade] && staggerPlan[grade].typeBands
                                 ? staggerPlan[grade].typeBands.special : null;
-                            if (specialBand) {
+                            if (!time && specialBand) {
                                 time = findTimeInRange(specialInfo.location, bunk, grade, dur, fw,
                                     specialBand.start, specialBand.end, specialInfo.name);
                             }
@@ -6230,7 +6292,14 @@
 
                     var fw = getUpdatedFreeWindowsForBunk(bunk, sl, result);
                     var dur = special.totalDuration || special.dMin || 30;
-                    var time = findTimeAnywhere(special.location, bunk, grade, dur, fw, special.name);
+                    var time = null;
+                    // FORCE-SHARE: join an existing same-grade session first.
+                    var _shInfoA4 = getSpecialSharingInfo(special.name, activityProperties, globalSettings);
+                    if (_shInfoA4 && _shInfoA4.capacity > 1) {
+                        time = _findJoinableSession(special.name, grade, bunk, sl, result, _shInfoA4, special.location, dur);
+                        if (time) _forceShareJoins++;
+                    }
+                    if (!time) time = findTimeAnywhere(special.location, bunk, grade, dur, fw, special.name);
                     if (!time) continue;
 
                     if (special.location) claimFieldGlobal(special.location, time.startMin, time.endMin, bunk, grade, special.name);
@@ -6251,6 +6320,8 @@
                     _markSpecialSubcategoryAssigned(special, result);
                 }
             });
+
+            if (_forceShareJoins > 0) log(GP + ' [FORCE-SHARE] packed ' + _forceShareJoins + ' bunk(s) onto existing shared sessions at placement time (fewer staggered sessions → more free field-time)');
 
             // ─────────────────────────────────────────────────────────
             // A4.5: SHARABLE-SPECIAL TOP-UP
