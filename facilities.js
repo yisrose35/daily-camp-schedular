@@ -1195,50 +1195,19 @@ function renderGeneralConfig(container, fac) {
     if (!fac.generalActivities) fac.generalActivities = [];
     _ensureFacInstructorDatalist();
 
-    // Quick-push buttons
-    const quickLabel = document.createElement("div");
-    quickLabel.style.cssText = "font-weight:500; font-size:0.9rem; margin-bottom:10px; color:#374151;";
-    quickLabel.textContent = "Quick Add:";
-    container.appendChild(quickLabel);
+    // Quick-Add preset buttons were removed: every general activity is added by
+    //   name below. A general activity literally named Swim / Lunch / Snacks /
+    //   Dinner is recognized (quickType inferred from the name) and the solver
+    //   applies that behavior; anything else is a plain custom general activity.
+    //   So swim/snacks/etc. only exist (and only appear in the layer palette) if
+    //   the user actually created them here.
 
-    const quickRow = document.createElement("div");
-    quickRow.style.cssText = "display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;";
-
-    const quickOptions = [
-        { name: 'Lunch', quickType: 'lunch' },
-        { name: 'Snacks', quickType: 'snacks' },
-        { name: 'Dinner', quickType: 'dinner' },
-        { name: 'Swim', quickType: 'swim' }
-    ];
-
-    quickOptions.forEach(opt => {
-        const exists = fac.generalActivities.some(ga => ga.quickType === opt.quickType);
-        const btn = document.createElement("button");
-        btn.style.cssText = `padding:8px 14px; border-radius:8px; cursor:pointer; font-size:0.85rem; font-weight:500; transition:all 0.2s; display:flex; align-items:center; gap:6px;
-            border:1px solid ${exists ? '#D97706' : '#E5E7EB'}; background:${exists ? '#FEF3C7' : 'white'}; color:${exists ? '#92400E' : '#6B7280'};`;
-        btn.textContent = opt.name;
-
-        btn.onclick = () => {
-            if (exists) {
-                fac.generalActivities = fac.generalActivities.filter(ga => ga.quickType !== opt.quickType);
-            } else {
-                fac.generalActivities.push({ name: opt.name, quickType: opt.quickType });
-            }
-            saveData();
-            renderDetailPane();
-        };
-
-        quickRow.appendChild(btn);
-    });
-
-    container.appendChild(quickRow);
-
-    // Custom input
+    // Add-activity input
     const customRow = document.createElement("div");
     customRow.style.cssText = "display:flex; gap:8px; margin-bottom:16px;";
 
     const customInput = document.createElement("input");
-    customInput.placeholder = "Custom activity name...";
+    customInput.placeholder = "Activity name (e.g. Swim, Lunch, Snacks, or custom)...";
     customInput.style.cssText = "flex:1; padding:8px 12px; border:1px solid #D1D5DB; border-radius:8px; font-size:0.9rem; outline:none;";
 
     const customBtn = document.createElement("button");
@@ -1252,7 +1221,12 @@ function renderGeneralConfig(container, fac) {
             alert("This activity already exists at this facility.");
             return;
         }
-        fac.generalActivities.push({ name: name, quickType: 'custom' });
+        // Infer behavior from the NAME: an activity called Swim/Lunch/Snacks/Dinner
+        //   gets that quickType so the solver applies its behavior (pool capacity,
+        //   meal pinning, …). Everything else is a plain custom general activity.
+        const _qtByName = { swim: 'swim', lunch: 'lunch', snacks: 'snacks', snack: 'snacks', dinner: 'dinner' };
+        const _qt = _qtByName[name.toLowerCase()] || 'custom';
+        fac.generalActivities.push({ name: name, quickType: _qt });
         customInput.value = "";
         saveData();
         renderDetailPane();
