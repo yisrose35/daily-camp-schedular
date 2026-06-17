@@ -1333,57 +1333,52 @@ function renderGeneralConfig(container, fac) {
             actBlock.appendChild(row);
 
             // ── Per-activity config panel (hidden until caret is clicked) ──
+            //   Each config knob is its OWN collapsible section inside the
+            //   activity's dropdown — Instructor, Sharing Rules, Consecutive
+            //   Bunks — so the user can drill into one without seeing all
+            //   three open at once. Same accordion pattern as the facility
+            //   editor's top-level sections.
             if (!isBuiltin) {
                 const panel = document.createElement("div");
-                panel.style.cssText = "display:none; padding:12px 14px 14px; border-top:1px solid #FDE68A; background:#FEFCF3;";
+                panel.style.cssText = "display:none; padding:8px 12px 12px; border-top:1px solid #FDE68A; background:#FEFCF3;";
 
-                // Instructor sub-section (single input, mirrors the existing
-                // per-activity Instructor input in renderFacilityInstructors).
-                const instrWrap = document.createElement("div");
-                instrWrap.style.cssText = "margin-bottom:14px;";
-                const instrHdr = document.createElement("div");
-                instrHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
-                instrHdr.textContent = "Instructor";
-                instrWrap.appendChild(instrHdr);
-                const instrDesc = document.createElement("div");
-                instrDesc.style.cssText = "font-size:0.74rem; color:#6B7280; margin-bottom:6px;";
-                instrDesc.textContent = "Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can't be scheduled at the same time.";
-                instrWrap.appendChild(instrDesc);
-                const instrInput = document.createElement("input");
-                instrInput.type = "text";
-                instrInput.placeholder = "No instructor";
-                instrInput.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
-                // Reuse the existing shared datalist from renderFacilityInstructors
-                instrInput.setAttribute('list', 'fac-instructor-list');
-                instrInput.style.cssText = "padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:100%; max-width:300px; background:#fff;";
-                instrInput.addEventListener('change', () => {
-                    const v = (instrInput.value || '').trim();
-                    if ((ga.instructor || '') === v) return;
-                    ga.instructor = v;
-                    saveData();
-                });
-                instrWrap.appendChild(instrInput);
-                panel.appendChild(instrWrap);
+                // Instructor section — summary shows current name (or empty).
+                const instrSummary = () => {
+                    const v = (typeof ga.instructor === 'string') ? ga.instructor.trim() : '';
+                    return v || 'No instructor set';
+                };
+                const buildInstructor = () => {
+                    const wrap = document.createElement('div');
+                    const desc = document.createElement('div');
+                    desc.style.cssText = "font-size:0.74rem; color:#6B7280; margin-bottom:8px;";
+                    desc.textContent = "Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can't be scheduled at the same time.";
+                    wrap.appendChild(desc);
+                    const input = document.createElement('input');
+                    input.type = 'text';
+                    input.placeholder = 'No instructor';
+                    input.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+                    input.setAttribute('list', 'fac-instructor-list');
+                    input.style.cssText = "padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:100%; max-width:300px; background:#fff;";
+                    input.addEventListener('change', () => {
+                        const v = (input.value || '').trim();
+                        if ((ga.instructor || '') === v) return;
+                        ga.instructor = v;
+                        saveData();
+                        // Refresh this section's summary line in place.
+                        const summaryEl = wrap.closest('.detail-section')?.querySelector('.detail-section-summary');
+                        if (summaryEl) summaryEl.textContent = instrSummary();
+                    });
+                    wrap.appendChild(input);
+                    return wrap;
+                };
+                panel.appendChild(section('Instructor', instrSummary(), buildInstructor));
 
-                // Sharing Rules sub-section.
-                const shareWrap = document.createElement("div");
-                shareWrap.style.cssText = "margin-bottom:14px;";
-                const shareHdr = document.createElement("div");
-                shareHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
-                shareHdr.textContent = "Sharing Rules";
-                shareWrap.appendChild(shareHdr);
-                shareWrap.appendChild(renderGaSharing(ga));
-                panel.appendChild(shareWrap);
+                // Sharing Rules section (summary + builder already exist).
+                panel.appendChild(section('Sharing Rules', summaryGaSharing(ga), () => renderGaSharing(ga)));
 
-                // Consecutive Bunks sub-section (auto-mode only, same as today).
+                // Consecutive Bunks section (auto-mode only).
                 if (_gaIsAutoModeRow) {
-                    const consecWrap = document.createElement("div");
-                    const consecHdr = document.createElement("div");
-                    consecHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
-                    consecHdr.textContent = "Consecutive Bunks";
-                    consecWrap.appendChild(consecHdr);
-                    consecWrap.appendChild(renderGaConsec(ga));
-                    panel.appendChild(consecWrap);
+                    panel.appendChild(section('Consecutive Bunks', summaryGaConsec(ga), () => renderGaConsec(ga)));
                 }
 
                 actBlock.appendChild(panel);
