@@ -18762,23 +18762,13 @@
                             //   bound it further). No window ⇒ stay put.
                             var winStart = (b.layer && b.layer.startMin != null) ? b.layer.startMin : null;
                             var winEnd = (b.layer && b.layer.endMin != null) ? b.layer.endMin : null;
-                            // ★ Field-less custom anchors (Main/Morning Activity with NO
-                            //   field — they use their own name as a pseudo-field) often carry
-                            //   a tight layer window (window == duration) that would pin them
-                            //   in place and FRAGMENT the region, stranding a sub-floor sliver
-                            //   on each side. Per the "quest to perfection" directive they may
-                            //   move; FN-55 EXEMPTS custom anchors (never blanks one, wherever
-                            //   it lands) and a field-less block has no capacity to collide —
-                            //   so drop the window and let it region-slide to abut a neighbour.
-                            //   The region's slivers then coalesce into ONE block that a real
-                            //   activity can fill, instead of several dead ones. (Anchors WITH
-                            //   a real field keep their window — moving them could break a
-                            //   shared-room/grade-aligned event.)
-                            if (t === 'custom') {
-                                var _anchorField = b.customField || b.field ||
-                                    (b.layer && (b.layer.customField || b.layer.field)) || null;
-                                if (!_anchorField) { winStart = null; winEnd = null; }
-                            }
+                            // ★ MOVABILITY IS THE LAYER WINDOW'S SLACK (user rule): a block whose
+                            //   layer window equals its activity duration (winEnd-winStart == dMin)
+                            //   has NO leeway → the window-bounded branch below pins it
+                            //   (latestStart == winStart == earliestStart) so it never moves. Only
+                            //   a layer window WIDER than the activity grants room to slide. This
+                            //   applies uniformly — custom anchors included; we do NOT drop an
+                            //   anchor's window. To let an anchor shift, widen its layer window.
                             var earliestStart, latestStart;
                             if (!movable) {
                                 earliestStart = b.startMin; latestStart = b.startMin;

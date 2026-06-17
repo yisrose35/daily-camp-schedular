@@ -470,18 +470,22 @@ function buildLayers(cfg) {
       //   Main to 35 min so the fillable total is NOT a multiple of 10 → an
       //   unavoidable 5-min remainder (proves the gap is an off-grid wall artifact,
       //   not a solver failure).
-      const anchor = (name, room, s, e) => ({
-        grade, type: 'custom', name, customActivity: name, customField: room,
+      // FIELD-LESS anchors (customField:null → name used as pseudo-field), exactly
+      //   like the user's real Davening / Morning Activity / Main Activity. Each
+      //   layer window EQUALS its duration (tight) → by the movability rule the
+      //   tiler must keep it FIXED at its configured time (never nudged to chase a
+      //   sliver). Grid-aligned so a gapless day is still arithmetically possible.
+      const anchor = (name, s, e) => ({
+        grade, type: 'custom', name, customActivity: name, customField: null,
         customBunks: bunks.slice(), periodMin: e - s, durationMin: e - s, durationMax: e - s,
         startMin: s, endMin: e, qty: 1, op: '=',
         customSharing: { capacity: 99, allowedGrades: ['Auto', 'Chair'] },
       });
       var _lunchS = cfg.smoothOffGrid ? HM(12, 25) : HM(12, 20);
       var _mainS  = cfg.smoothOffGrid ? HM(14, 25) : HM(14, 20);
-      var _gr = grade; // grade-specific anchor rooms → no cross-grade room contention
-      layers.push(anchor('Davening', 'Shul ' + _gr, HM(9, 0), HM(9, 20)));
-      layers.push(anchor('Morning Activity', 'Pavilion ' + _gr, HM(9, 20), HM(10, 0)));
-      layers.push(anchor('Main Activity', 'Main Hall ' + _gr, _mainS, HM(15, 0)));
+      layers.push(anchor('Davening', HM(9, 0), HM(9, 20)));
+      layers.push(anchor('Morning Activity', HM(9, 20), HM(10, 0)));
+      layers.push(anchor('Main Activity', _mainS, HM(15, 0)));
       layers.push({                                                          // lunch wall
         grade, type: 'lunch', name: 'lunch', event: 'lunch',
         periodMin: 20, durationMin: 20, durationMax: 20,
@@ -1649,11 +1653,24 @@ test('auto scheduler builds a fully GAPLESS sportless day when walls are grid-al
   const { results } = await runScenario('SMOOTH-DAY ALIGNED (sportless, mixed-dur specials, grid walls)', {
     smooth: true, requireNoSports: true, skipGapCheck: true,
   });
-  const bad = Object.entries(results)
-    .filter(([b, r]) => r.grade === 'Auto')
-    .filter(([b, r]) => r.gapMin !== 0)
+  const auto = Object.entries(results).filter(([b, r]) => r.grade === 'Auto');
+  const bad = auto.filter(([b, r]) => r.gapMin !== 0)
     .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   assert.deepEqual(bad, [], 'grid-aligned walls must yield a gapless day:\n  ' + bad.join('\n  '));
+
+  // The field-less, tight-window anchors must stay PINNED at their configured
+  //   times (movability == layer-window slack; window == duration → no move).
+  const ANCHORS = { 'davening': [HM(9,0), HM(9,20)], 'morning activity': [HM(9,20), HM(10,0)], 'main activity': [HM(14,20), HM(15,0)] };
+  const drifted = [];
+  for (const [bunk, r] of auto) {
+    for (const [name, [s, e]] of Object.entries(ANCHORS)) {
+      const hits = (r.entries || []).filter(x => String(x.act).toLowerCase() === name);
+      if (!hits.length) { drifted.push(`${bunk}: missing ${name}`); continue; }
+      if (!hits.some(x => x.startMin === s && x.endMin === e))
+        drifted.push(`${bunk}: ${name} at ${hits.map(x => fmt(x.startMin)+'-'+fmt(x.endMin)).join(',')} (want ${fmt(s)}-${fmt(e)})`);
+    }
+  }
+  assert.deepEqual(drifted, [], 'tight-window (field-less) anchors must stay fixed at their configured times:\n  ' + drifted.join('\n  '));
 });
 
 test('auto scheduler keeps a pinned lunch at its configured time (never nudges it)', async (t) => {
