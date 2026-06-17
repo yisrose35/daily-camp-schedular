@@ -28246,6 +28246,102 @@
             try { console.log('[SLIVER-ABSORB] absorbed=' + _sabAbsorbed + ' filler=' + _sabByFiller + ' sport=' + _sabBySport + ' special=' + _sabBySpecial + ' swim=' + _sabBySwim + ' edge=' + _sabByEdge + ' soft=' + _sabBySoft); } catch (_e) {}
         } catch (_e6865) { try { warn('[STEP 6.865 SLIVER-ABSORB] error: ' + (_e6865 && _e6865.message)); } catch (_x) {} }
 
+        // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.866 — SPORT-DURATION INVARIANT (final guarantee)
+        // ═══════════════════════════════════════════════════════════════════
+        //   The rule: a sport with a configured duration must NEVER be shown at
+        //   a length that isn't one of its allowed durations. The mid-pipeline
+        //   gates try to honor that, but this is the belt-and-suspenders pass on
+        //   the FINISHED grid — it catches any cut a placement engine slipped
+        //   through (the live Trench-40-cut-to-30 report). For each placed sport
+        //   whose slot length isn't a configured duration, we DROP the cut sport
+        //   and refill the slot with a length-appropriate sport (unset, or one
+        //   whose config allows this exact length) on a free field — keeping the
+        //   day smooth; if none fits, the slot is left Free rather than show a
+        //   cut sport. Also logs whether the engine actually SEES configured
+        //   sport durations, so a data-path gap (UI saved but engine can't read)
+        //   is visible in the console.
+        try {
+            var _siGS = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
+            var _siFields = (_siGS.app1 && _siGS.app1.fields) || _siGS.fields || [];
+            var _siSpecialRooms = {}; ((_siGS.app1 && _siGS.app1.specialActivities) || []).forEach(function (s) { if (s && s.location) _siSpecialRooms[String(s.location).toLowerCase().trim()] = 1; });
+            var _siSportFields = _siFields.filter(function (f) { return f && f.name && f.available !== false && !_siSpecialRooms[String(f.name).toLowerCase().trim()] && Array.isArray(f.activities) && f.activities.length && !(f.timeRules && f.timeRules.enabled); });
+            var _siB2G = {}; Object.keys(window.divisions || {}).forEach(function (g) { (((window.divisions[g]) || {}).bunks || []).forEach(function (b) { _siB2G[String(b)] = g; }); });
+            var _siNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+            // Count how many sports the engine can see a configured duration for —
+            // a 0 here when the user HAS set durations means a data-path problem.
+            var _siConfiguredCount = 0;
+            try {
+                var _siMeta = (_siGS.app1 && _siGS.app1.sportMetaData) || (window.getSportMetaData ? window.getSportMetaData() : null) || window.sportMetaData || {};
+                Object.keys(_siMeta).forEach(function (k) { if (getSportDurations(k, _siGS).length) _siConfiguredCount++; });
+            } catch (_eCnt) {}
+            var _siChecked = 0, _siViolations = 0, _siRefilled = 0, _siFreed = 0;
+            var _siSa = window.scheduleAssignments || {};
+            // field occupancy from the final grid (for refill collision checks)
+            var _siOcc = {};
+            Object.keys(_siSa).forEach(function (b) {
+                (_siSa[b] || []).forEach(function (e) {
+                    if (!e || e.continuation) return;
+                    var fl = _siNorm(e.field || e._specialLocation); if (!fl || fl === 'free') return;
+                    var s = e._startMin, en = e._endMin; if (s == null || en == null) return;
+                    (_siOcc[fl] = _siOcc[fl] || []).push({ s: s, e: en });
+                });
+            });
+            var _siFieldFree = function (fl, s, e) { var arr = _siOcc[fl] || []; for (var i = 0; i < arr.length; i++) { if (arr[i].s < e && arr[i].e > s) return false; } return true; };
+            Object.keys(_siSa).forEach(function (b) {
+                var g = _siB2G[String(b)]; if (!g) return;
+                var slots = _siSa[b]; if (!Array.isArray(slots)) return;
+                // today's activities for no-repeat on refill
+                var done = {};
+                slots.forEach(function (e) { if (e && !e.continuation) { var a = e._activity || e.sport; if (a && a !== 'Free') done[_siNorm(a)] = 1; } });
+                slots.forEach(function (e, idx) {
+                    if (!e || e.continuation) return;
+                    if (e._pinned || e._league || e._isTrip || e._trip || e._autoSpecial || e._isChinuch || e._isRotationEvent) return;
+                    var sport = e.sport || e._activity; if (!sport || _siNorm(e.field) === 'free') return;
+                    var durs = null; try { durs = getSportDurations(sport, _siGS); } catch (_eD) { durs = null; }
+                    if (!durs || !durs.length) return;        // unset sport → may be any length
+                    _siChecked++;
+                    var len = (e._endMin != null && e._startMin != null) ? (e._endMin - e._startMin) : null;
+                    if (len == null || durs.indexOf(len) !== -1) return;   // already a valid length
+                    _siViolations++;
+                    // The configured sport is cut — drop it. Try to refill this exact
+                    // slot with a length-appropriate sport on a free field (smooth),
+                    // else leave Free (never show the cut sport).
+                    delete done[_siNorm(sport)];
+                    var s = e._startMin, en = e._endMin, replaced = null;
+                    for (var fi = 0; fi < _siSportFields.length && !replaced; fi++) {
+                        var f = _siSportFields[fi], fl = _siNorm(f.name);
+                        if (!_siFieldFree(fl, s, en)) continue;
+                        // access gate
+                        var ar = f.accessRestrictions;
+                        if (ar && ar.enabled) { var dvs = ar.divisions || {}; if (Object.keys(dvs).length && !dvs[g] && !dvs[String(g)]) continue; }
+                        for (var ai = 0; ai < f.activities.length; ai++) {
+                            var c = f.activities[ai]; if (!c || done[_siNorm(c)]) continue;
+                            if (_siNorm(c) === _siNorm(sport)) continue;     // don't re-pick the cut sport
+                            var cd = null; try { cd = getSportDurations(c, _siGS); } catch (_ec) { cd = null; }
+                            if (cd && cd.length && cd.indexOf(len) === -1) continue;   // candidate also length-locked elsewhere
+                            if (typeof _validateWritePlacement === 'function' && _validateWritePlacement(f.name, c, g, b, s, en) !== null) continue;
+                            replaced = { field: f.name, act: c }; break;
+                        }
+                    }
+                    if (replaced) {
+                        slots[idx] = { field: replaced.field, sport: replaced.act, _activity: replaced.act, _startMin: s, _endMin: en, _autoMode: true, _durInvariantRefill: true, continuation: false };
+                        (_siOcc[_siNorm(replaced.field)] = _siOcc[_siNorm(replaced.field)] || []).push({ s: s, e: en });
+                        done[_siNorm(replaced.act)] = 1; _siRefilled++;
+                    } else {
+                        slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: s, _endMin: en, _autoMode: true, _fixed: true, _source: 'dur-invariant-free', continuation: false };
+                        _siFreed++;
+                    }
+                });
+            });
+            if (_siViolations > 0) {
+                log('  📏 [STEP 6.866 SPORT-DURATION INVARIANT] ' + _siViolations + ' cut sport(s) corrected (' + _siRefilled + ' refilled with a fitting sport, ' + _siFreed + ' left Free) — checked ' + _siChecked + ' configured-sport placement(s).');
+            } else {
+                log('[STEP 6.866 SPORT-DURATION INVARIANT] ✅ no cut sports (checked ' + _siChecked + ' configured-sport placement(s); engine sees durations for ' + _siConfiguredCount + ' sport(s)).');
+            }
+            try { console.log('[DUR-INVARIANT] configuredSports=' + _siConfiguredCount + ' checked=' + _siChecked + ' violations=' + _siViolations + ' refilled=' + _siRefilled + ' freed=' + _siFreed); } catch (_e) {}
+        } catch (_e6866) { try { warn('[STEP 6.866 SPORT-DURATION INVARIANT] error: ' + (_e6866 && _e6866.message)); } catch (_x) {} }
+
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.87 — OFF-GRID EDGE-CLIP (cover the TRUE division boundary)
