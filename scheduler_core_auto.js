@@ -23608,7 +23608,62 @@
         //   allowed, so adding one more bunk cannot violate exclusive-facility
         //   rules — safe to do AFTER the 4.5/4.95/4.995 validators have run.
         //   Skips specials the bunk already has (no duplicates). Returns name|null.
-        var _pickSharableFiller = function (_grade, _bunk, _durMin, _excludeLc) {
+        // ── Placement gate for filler specials (source-side twin of FN-54) ──
+        //   A filler must never SEED an over-capacity or a late-join stagger that the
+        //   end-of-pipeline backstop (FN-54) would then have to demote back to Free —
+        //   that round-trip is exactly what leaves the day with avoidable Free holes.
+        //   Resolve cap/shareType from the special's OWN sharableWith (the auto-
+        //   validator's source, so engine + gate + report agree), then check the live
+        //   scheduleAssignments at the target window before committing the pick.
+        var _fbgCache = null;
+        var _fillerBunkGrade = function (b) {
+            if (!_fbgCache) {
+                _fbgCache = {};
+                try { allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (x) { _fbgCache[String(x)] = g; }); }); } catch (_e) {}
+            }
+            return _fbgCache[String(b)];
+        };
+        var _fillerShareInfo = function (name) {
+            var t = 'not_sharable', cap = 1;
+            try {
+                var cfg = (typeof getSpecialConfig === 'function') ? getSpecialConfig(name, globalSettings) : null;
+                var sw = (cfg && cfg.sharableWith) || {};
+                t = sw.type || sw.shareType || 'not_sharable';
+                if (t === 'custom' && !(Array.isArray(sw.divisions) && sw.divisions.length)) t = 'same_division';
+                if (t === 'all') t = 'same_division';
+                cap = parseInt(sw.capacity) || (t === 'not_sharable' ? 1 : 2);
+            } catch (_e) {}
+            return { type: t, cap: cap };
+        };
+        var _fillerCrossDivOK = function (t) { return t === 'cross_division' || t === 'any_division' || t === 'custom'; };
+        var _fillerSpecialPlaceableAt = function (name, grade, st, en) {
+            if (st == null || en == null) return true;       // no window → cannot gate, allow
+            var info = _fillerShareInfo(name);
+            var nlc = String(name).toLowerCase().trim();
+            var sa = window.scheduleAssignments || {};
+            var concSameGrade = 0;
+            var bunks = Object.keys(sa);
+            for (var bi = 0; bi < bunks.length; bi++) {
+                var slots = sa[bunks[bi]]; if (!Array.isArray(slots)) continue;
+                var g2 = _fillerBunkGrade(bunks[bi]);
+                for (var si = 0; si < slots.length; si++) {
+                    var e = slots[si];
+                    if (!e || e.continuation) continue;
+                    var enm = String(e._assignedSpecial || e._activity || e.event || '').toLowerCase().trim();
+                    if (enm !== nlc) continue;
+                    var es = e._startMin != null ? e._startMin : e.startMin;
+                    var ee = e._endMin != null ? e._endMin : e.endMin;
+                    if (es == null || ee == null) continue;
+                    if (!(ee > st && es < en)) continue;        // no overlap with the target window
+                    if (g2 === grade) concSameGrade++;          // capacity is per (special, grade)
+                    if (es !== st) {                            // different start → a late join
+                        if (g2 === grade || !_fillerCrossDivOK(info.type)) return false;
+                    }
+                }
+            }
+            return (concSameGrade + 1) <= info.cap;             // room for this bunk too?
+        };
+        var _pickSharableFiller = function (_grade, _bunk, _durMin, _excludeLc, _st, _en) {
             if (!_durMin || _durMin < 5 || typeof todaysSpecials === 'undefined' || !todaysSpecials) return null;
             var _best = null, _bestDur = 0;
             for (var _pf = 0; _pf < todaysSpecials.length; _pf++) {
@@ -23629,6 +23684,10 @@
                 var _d = 0;
                 try { _d = getSpecialDuration(_sp.name, activityProperties, globalSettings) || _sp.defaultDuration || _sp.duration || _sp.durationMin || _sp.periodMin || 0; } catch (_eD) {}
                 if (_d <= 0 || _d > _durMin) continue;
+                // ★ Source-side capacity/stagger gate: skip a special that is already at
+                //   capacity (its own grade) or would land as a late join at this window.
+                //   Falls through to the next-longest placeable special instead of Free.
+                if (_grade && _st != null && _en != null && !_fillerSpecialPlaceableAt(_sp.name, _grade, _st, _en)) continue;
                 if (_d > _bestDur) { _best = _sp.name; _bestDur = _d; }
             }
             return _best;
@@ -25450,7 +25509,7 @@
                                 var bGrade = bunkGradeP[bk.bunk];
                                 var exMap = {};
                                 (sa[bk.bunk] || []).forEach(function (s2) { var n = s2 && (s2._activity || s2.sport); if (n) exMap[String(n).toLowerCase()] = true; });
-                                var filler = _pickSharableFiller(bGrade, bk.bunk, dur, exMap);
+                                var filler = _pickSharableFiller(bGrade, bk.bunk, dur, exMap, st, en);
                                 if (!filler) { relOk = false; break; }
                                 relPlan.push({ bunk: bk.bunk, idx: bIdx, prev: sa[bk.bunk][bIdx], filler: filler });
                             }
@@ -25708,7 +25767,7 @@
                                 var _exMap38 = {};
                                 playedToday.forEach(function (n) { _exMap38[String(n).toLowerCase()] = true; });
                                 _fnm38 = (typeof _pickSharableFiller === 'function')
-                                    ? _pickSharableFiller(grade, aBunk, (en - st), _exMap38) : null;
+                                    ? _pickSharableFiller(grade, aBunk, (en - st), _exMap38, st, en) : null;
                             } catch (_eF38) {}
                             if (_fnm38) {
                                 aSlots[aIdx] = {
