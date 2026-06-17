@@ -18642,10 +18642,16 @@
                 //   they become window-movable below.
                 var _TILER_HARD_FIXED = new Set([
                     'swim', 'change', 'pre-change', 'post-change', 'davening',
-                    'lunch', 'snacks', 'dismissal',
+                    'snacks',
                     'league', 'specialty_league',
                     'rotation_event', 'scheduled_activity', 'trip'
                 ]);
+                // Lunch / dismissal are SNAP walls: not free-sliding (they must stay
+                //   near their configured time) but allowed a small nudge so the tiler
+                //   can abut them to a neighbour and let a sub-piece remainder flow past
+                //   to the day's end instead of stranding it mid-day before the wall.
+                var _TILER_SNAP_WALL = new Set(['lunch', 'dismissal']);
+                var _TILER_SNAP_TOL = 20; // minutes a snap-wall may be nudged each way
                 allGrades.forEach(function (grade) {
                     // ★ Only analyze grades that actually reach the generator. No-layer
                     //   grades are blanked at STEP 2.7, so tiling them wastes effort and
@@ -18752,9 +18758,11 @@
                             //   additionally gets its tight window dropped (below) so it can
                             //   slide across the region to abut a neighbour.
                             var isWindowMovable = (t === 'custom');
+                            var isSnapWall = _TILER_SNAP_WALL.has(t);
                             var movable = isSnack ? !isChange
-                                        : ((isSpecialBlk || isWindowMovable) ? !isHardFixed
-                                                                             : (!isHardFixed && !isPinned));
+                                        : (isSnapWall ? true
+                                          : ((isSpecialBlk || isWindowMovable) ? !isHardFixed
+                                                                               : (!isHardFixed && !isPinned)));
                             var resizable = movable && (dMax > dMin);
 
                             // Start-time window: a movable piece may slide anywhere inside
@@ -18782,6 +18790,10 @@
                             var earliestStart, latestStart;
                             if (!movable) {
                                 earliestStart = b.startMin; latestStart = b.startMin;
+                            } else if (isSnapWall) {
+                                // Bounded nudge around the configured time — never a free slide.
+                                earliestStart = Math.max(0, b.startMin - _TILER_SNAP_TOL);
+                                latestStart = b.startMin + _TILER_SNAP_TOL;
                             } else if (winStart != null && winEnd != null) {
                                 earliestStart = winStart;
                                 latestStart = Math.max(winStart, winEnd - dMin);
