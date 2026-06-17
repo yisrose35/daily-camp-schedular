@@ -23879,8 +23879,18 @@
                         // sport of the same type first, then any movable sport.
                         var prev = i > 0 ? tl[i - 1] : null;
                         var next = i < tl.length - 1 ? tl[i + 1] : null;
-                        var prevIsSport = prev && /sport/i.test(String(prev.type || '')) && !prev._classification && !prev._fixed;
-                        var nextIsSport = next && /sport/i.test(String(next.type || '')) && !next._classification && !next._fixed;
+                        // A configured-duration sport must keep its exact length —
+                        // never extend it to swallow a sub-floor neighbour.
+                        var _499DurLocked = function (M) {
+                            try {
+                                if (M && M._durLockedSport) return true;
+                                var nm = M && (M.event || M._activity || M._assignedSport);
+                                return !!(nm && typeof getSportDurations === 'function' &&
+                                          getSportDurations(nm, globalSettings).length);
+                            } catch (_e) { return false; }
+                        };
+                        var prevIsSport = prev && /sport/i.test(String(prev.type || '')) && !prev._classification && !prev._fixed && !_499DurLocked(prev);
+                        var nextIsSport = next && /sport/i.test(String(next.type || '')) && !next._classification && !next._fixed && !_499DurLocked(next);
                         // Absorb into right neighbour by sliding its start left (preferred —
                         // keeps the user-facing schedule contiguous on the left edge).
                         if (nextIsSport && (next.startMin === blk.endMin)) {
@@ -26464,9 +26474,20 @@
                 var _E = function (s, i) { return (s && s._endMin != null) ? s._endMin : (pbs[i] && pbs[i].endMin); };
                 // a neighbour is absorbable if it's a real, flexible, placed SPORT
                 //   (not a fixed/pinned anchor, trip, league, chinuch, special, etc.)
+                //   A configured-duration sport is duration-locked and must keep its
+                //   exact length, so it is never grown to absorb a Free seam.
+                var _absDurLocked = function (M) {
+                    try {
+                        if (M && M._durLockedSport) return true;
+                        var nm = M && (M.sport || M._activity);
+                        return !!(nm && typeof getSportDurations === 'function' &&
+                                  getSportDurations(nm, globalSettings).length);
+                    } catch (_e) { return false; }
+                };
                 var _eligNb = function (M) {
                     return M && !M.continuation && M.field && M.field !== 'Free' && M.sport &&
                         !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch || M._bunkOverride || M._isPrep || M._autoSpecial) &&
+                        !_absDurLocked(M) &&
                         !_ANCHOR_ABS.test(String(M._activity || ''));
                 };
                 var _gateOK = function (field, act, sport, mergeStart, mergeEnd, gapS, gapE) {
@@ -27505,11 +27526,25 @@
             var _FLEX_WALL_ACT = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|league game|specialty league|chinuch|trip)$/i;
             var _flexNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
             // is M a real, flexible, placed SPORT (not a wall/anchor)?
+            // ★ A sport with a configured duration is duration-locked: per the
+            //   user's rule, an unset sport fills its gap but a CONFIGURED sport
+            //   must stay exactly its length — so it can never be grown to
+            //   absorb a sliver/Free seam here. Check the live config (robust to
+            //   the _durLockedSport flag not surviving every prior pass).
+            var _flexDurLocked = function (M) {
+                try {
+                    if (M && M._durLockedSport) return true;
+                    var nm = M && (M.sport || M._activity);
+                    return !!(nm && typeof getSportDurations === 'function' &&
+                              getSportDurations(nm, globalSettings).length);
+                } catch (_e) { return false; }
+            };
             var _flexElig = function (M) {
                 return M && !M.continuation && M.field && M.field !== 'Free' && M.sport &&
                     !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch ||
                       M._bunkOverride || M._isPrep || M._autoSpecial || M._isRotationEvent ||
                       M._activityLocked || M._staggerReserved || M._intentionalFree) &&
+                    !_flexDurLocked(M) &&
                     !_FLEX_WALL_ACT.test(_flexNorm(M._activity));
             };
             // a slot is a closeable hole if it's Free, OR a sub-dMin leftover sport that is
@@ -27688,11 +27723,23 @@
                     s._source !== 'bunk-delete-override' && s._endMin > s._startMin;
             };
             // A block is a flexible sport (extendable) — same predicate spirit as 6.86.
+            // A configured-duration sport must keep its exact length — never
+            // stretch it over a sliver (the user's rule: only UNSET sports flex
+            // to fill space). Check live config, robust to flag propagation.
+            var _sabDurLocked = function (M) {
+                try {
+                    if (M && M._durLockedSport) return true;
+                    var nm = M && (M.sport || M._activity);
+                    return !!(nm && typeof getSportDurations === 'function' &&
+                              getSportDurations(nm, globalSettings).length);
+                } catch (_e) { return false; }
+            };
             var _sabSportElig = function (M) {
                 return M && M.field && _sabNorm(M.field) !== 'free' && M.sport &&
                     !(M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch ||
                       M._isPrep || M._autoSpecial || M._isRotationEvent || M._staggerReserved ||
                       M._intentionalFree) &&
+                    !_sabDurLocked(M) &&
                     !_SAB_IMMUNE.test(_sabNorm(M._activity));
             };
             // Catalog of special ROOMS + special NAMES so a special block is
