@@ -2087,9 +2087,10 @@ function renderAutoDivisionTable(divName, bunks) {
     var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
         var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f2f2f2;';
+        // Final column also shows its end time so the day's closing edge is visible.
         var labelTxt = _activityAligned
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
+            : (idx === timeCols.length - 1 ? col.label + ' – ' + minutesToTimeLabel(col.endMin) : col.label);
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
         html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:600;color:#1f1f1f;' + bgStyle + '">' + labelTxt + '</th>';
     });
@@ -2847,10 +2848,12 @@ function renderCombinedAutoTable(divBunks) {
             s += '<th style="position:sticky;left:0;z-index:2;min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
         }
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        timeCols.forEach(function (col) {
+        timeCols.forEach(function (col, idx) {
+            // Label each column by its start; on the final column also show the
+            // end time so the day's closing edge (e.g. 3:00) is visible.
             var labelTxt = _activityAligned
                 ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-                : col.label;
+                : (idx === timeCols.length - 1 ? col.label + ' – ' + minutesToTimeLabel(col.endMin) : col.label);
             s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + labelTxt + '</th>';
         });
         return s + '</tr>';
