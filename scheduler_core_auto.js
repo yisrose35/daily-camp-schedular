@@ -19584,6 +19584,33 @@
                             }
                             return true;
                         }
+                        // ★ CONFIGURED-DURATION SPORT = wall (like a special). A sport
+                        //   the user pinned to a fixed length must be honored exactly,
+                        //   so we preserve it as a wall at its configured duration and
+                        //   let the rest of the period tile around it (the leftover may
+                        //   be a gap, same as a special — the micro-slot/Free passes
+                        //   handle it). Sports WITHOUT a configured duration fall through
+                        //   and are re-carved to fill the period by layer length (the
+                        //   prior behavior). Resize down to the largest configured length
+                        //   that fits the block's current span; if none fits, leave it to
+                        //   be re-carved normally.
+                        if (t === 'sport' || s.sport || s._assignedSport) {
+                            const _spNm = s._assignedSport || s.sport || s.event || s._activity;
+                            let _spCfgD = [];
+                            try { _spCfgD = getSportDurations(_spNm, globalSettings); } catch (_eSpFx) { _spCfgD = []; }
+                            if (_spCfgD && _spCfgD.length) {
+                                const _curLen = s.endMin - s.startMin;
+                                let _useD = null;
+                                for (let _di = _spCfgD.length - 1; _di >= 0; _di--) {
+                                    if (_spCfgD[_di] <= _curLen) { _useD = _spCfgD[_di]; break; }
+                                }
+                                if (_useD == null) return false;     // configured length doesn't fit here → re-carve
+                                if (_useD < _curLen) s.endMin = s.startMin + _useD;
+                                s._durLockedSport = true;
+                                if (crossesBoundary(s)) return false;
+                                return true;
+                            }
+                        }
                         return false;
                     });
 
