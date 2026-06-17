@@ -18339,6 +18339,79 @@
         }
 
         // ═══════════════════════════════════════════════════════════════════
+        // PHASE −0.4 — FIT-MATH SHADOW (per-bunk region budget verdicts)
+        // ═══════════════════════════════════════════════════════════════════
+        // For each layered bunk, split the day into regions bounded by hard walls
+        // and run fitBunkRegion on each: do the region's planned specials (at their
+        // CONFIGURED durations) sum to the region's budget? Reports per-region
+        // fit / slack / over — the "math that makes sure it fits" on the live camp,
+        // surfacing exactly where the day tiles cleanly vs leaves a sliver. Shadow
+        // only; no mutation.
+        try {
+            if (window.PeriodTiler && typeof window.PeriodTiler.fitBunkRegion === 'function') {
+                var _HARDFIT = new Set(['swim', 'change', 'pre-change', 'post-change', 'lunch',
+                    'snacks', 'dismissal', 'league', 'specialty_league', 'davening',
+                    'rotation_event', 'scheduled_activity', 'trip']);
+                var _isHardFit = function (blk) {
+                    var t = String(blk.type || '').toLowerCase();
+                    var nm = String(blk.event || (blk.layer && blk.layer.name) || blk.type || '');
+                    if (_HARDFIT.has(t)) return true;
+                    if (/^(pre[-\s]?change|post[-\s]?change|change)/i.test(nm)) return true;
+                    // a pinned non-special (e.g. Main Activity custom wall) bounds a region
+                    if ((blk._fixed || blk._classification === 'pinned') && t !== 'special') return true;
+                    return false;
+                };
+                var _fitFit = 0, _fitSlack = 0, _fitOver = 0, _fitBunks = 0, _fitSamples = [];
+                allGrades.forEach(function (grade) {
+                    if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(grade)) return;
+                    var _sportsOK = (typeof gradeHasSportLayer === 'function') ? gradeHasSportLayer(grade) : true;
+                    getBunksForGrade(grade, divisions).forEach(function (bunk) {
+                        var tl = (bunkTimelines[bunk] || []).filter(function (b) {
+                            return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin;
+                        }).slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                        if (!tl.length) return;
+                        _fitBunks++;
+                        var i = 0;
+                        while (i < tl.length) {
+                            if (_isHardFit(tl[i])) { i++; continue; }
+                            // maximal run of fillable (non-hard) blocks = one region
+                            var run = [];
+                            while (i < tl.length && !_isHardFit(tl[i])) { run.push(tl[i]); i++; }
+                            var runStart = run[0].startMin, runEnd = run[run.length - 1].endMin;
+                            var due = run.map(function (r) {
+                                var rnm = r.event || (r.layer && r.layer.name) || r.type || '?';
+                                var cfgD = null;
+                                try { cfgD = getSpecialDuration(rnm, activityProperties, globalSettings); } catch (_e) {}
+                                return { name: rnm, dur: (cfgD && cfgD > 0) ? cfgD : (r.endMin - r.startMin), priority: 1 };
+                            });
+                            var fr = window.PeriodTiler.fitBunkRegion({
+                                regionStart: runStart, regionEnd: runEnd, walls: [], due: due,
+                                minSportDMin: 25, sportsAllowed: _sportsOK
+                            });
+                            if (fr.verdict === 'fit') _fitFit++;
+                            else if (fr.verdict === 'slack') _fitSlack++;
+                            else _fitOver++;
+                            if (fr.verdict !== 'fit' && _fitSamples.length < 6) {
+                                _fitSamples.push(bunk + ' @ ' + minutesToTimeLabel(runStart) + '-' + minutesToTimeLabel(runEnd) +
+                                    ': ' + fr.verdict + ' (budget=' + fr.budget + ' due=' + fr.dueTotal +
+                                    (fr.slackMin ? (' slack=' + fr.slackMin) : '') +
+                                    (fr.unplaced.length ? (' over=' + fr.unplaced.join(',')) : '') + ')');
+                            }
+                        }
+                    });
+                });
+                log('[FIT-MATH SHADOW] ' + _fitBunks + ' bunks → regions: ' +
+                    _fitFit + ' fit, ' + _fitSlack + ' slack, ' + _fitOver + ' over');
+                if (_fitSamples.length) {
+                    log('[FIT-MATH SHADOW] sample non-fit regions:');
+                    _fitSamples.forEach(function (s) { log('  ' + s); });
+                }
+            }
+        } catch (_fitErr) {
+            warn('[FIT-MATH SHADOW] error: ' + (_fitErr && _fitErr.message));
+        }
+
+        // ═══════════════════════════════════════════════════════════════════
         // PHASE −1 (shadow) — Day Packer input collection (Commit 1)
         // ═══════════════════════════════════════════════════════════════════
         // Pure read. Surfaces what data a per-bunk full-day planner needs
