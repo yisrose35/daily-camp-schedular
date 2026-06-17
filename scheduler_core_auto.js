@@ -28129,19 +28129,18 @@
                         }
                     }
                     // (4) Neither sport, special, nor swim could take it, but a
-                    //     bounding SOFT TRANSITION wall (Cleanup / Change / pre- or
-                    //     post-change) sits against the sliver. These carry no field
-                    //     and no fixed-clock requirement (unlike lunch / Main / swim /
-                    //     league), so growing one a few minutes over the sliver is free
-                    //     and legal — it just renders slightly longer and stays attached
-                    //     to whatever it bundles with on its far side. This closes the
-                    //     wall-bounded survivors the field-gated rungs above can't:
-                    //     capacity-blocked specials and immune-wall-vs-soft-wall pairs —
-                    //     the user's leeway-induced 5-15min slivers in front of Cleanup/
-                    //     Change. (Inter-period gaps are already excluded at the loop
-                    //     top via coveredByContiguousPeriods, so this never bridges a
-                    //     real transition/lunch dead zone.)
-                    var _SAB_SOFT = /^(cleanup|change|pre-?change|post-?change)$/i;
+                    //     bounding SOFT TRANSITION wall (Cleanup) sits against the
+                    //     sliver. Cleanup is the day's flexible tail — growing it a
+                    //     few minutes is invisible. CHANGE / pre-change / post-change
+                    //     are deliberately EXCLUDED here: the user sets those to a
+                    //     fixed length (e.g. 10 min), and inflating a 10-min change to
+                    //     20 to swallow a leftover is wrong (the live "20-min change"
+                    //     report). A change-adjacent sliver is instead left as its own
+                    //     small gap — the change keeps its configured length.
+                    //     (Inter-period gaps are already excluded at the loop top via
+                    //     coveredByContiguousPeriods, so this never bridges a real
+                    //     transition/lunch dead zone.)
+                    var _SAB_SOFT = /^cleanup$/i;
                     if (Lh && _SAB_SOFT.test(_sabNorm(Lh._activity || Lh.event))) {
                         Lh._endMin = gapE;
                         for (var ksl = L.tail + 1; ksl <= R.head - 1; ksl++) {
