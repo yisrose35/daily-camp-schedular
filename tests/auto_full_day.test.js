@@ -993,6 +993,8 @@ function analyse(sandbox, cfg) {
   Object.entries(sandbox.divisions).forEach(([div, d]) => (d.bunks || []).forEach(b => { bunkDiv[String(b)] = div; }));
 
   const specialNames = new Set(SPECIALS.map(s => s.name.toLowerCase()));
+  // Configured special duration for this scenario (mirrors buildSandbox/buildLayers).
+  const cfgSpecialDur = (cfg.sliver || cfg.sliver2 || cfg.swimWalls || cfg.swimReal) ? 45 : PERIOD;
   // Sport names come from the sandbox's live sportMetaData (the sliver scenario
   // provisions extra sports/fields to match its 14-bunk simultaneous demand).
   const sportNames = new Set(Object.keys(sandbox.sportMetaData || {}).map(s => s.toLowerCase()));
@@ -1013,6 +1015,7 @@ function analyse(sandbox, cfg) {
     let mainCount = 0, specialCount = 0, sportCount = 0, swimCount = 0, lunchCount = 0, morningCount = 0;
     const covered = []; // {s,e}
     const entries = [];
+    const specialOver = []; // configured specials placed LONGER than their config
     slots.forEach((s, i) => {
       if (!s || s.continuation) return;
       const act = s._activity || s.field || '';
@@ -1024,7 +1027,17 @@ function analyse(sandbox, cfg) {
       if (al === 'swim' || String(s.type || '').toLowerCase() === 'swim') swimCount++;
       if (al === 'morning activity') morningCount++;
       if (al === 'main activity') mainCount++;
-      else if (specialNames.has(al)) specialCount++;
+      else if (specialNames.has(al)) {
+        specialCount++;
+        // ★ DURATION LOCK: a configured special must keep its exact duration —
+        //   never stretched a whole grid step (>=5min) to swallow a sliver. A
+        //   sub-grid overrun (<5min) is unavoidable off-grid division-boundary
+        //   snapping (e.g. a division starting at 8:58 on a 5-min grid), not the
+        //   slot-bloat bug, so it is tolerated.
+        if (startMin != null && endMin != null && (endMin - startMin) - cfgSpecialDur >= 5) {
+          specialOver.push(act + ' ' + fmt(startMin) + '-' + fmt(endMin) + ' (' + (endMin - startMin) + 'min > ' + cfgSpecialDur + ')');
+        }
+      }
       else if (sportNames.has(al) || (s.type === 'sport') || s.sport) sportCount++;
       if (startMin != null && endMin != null && !isFree(act)) covered.push({ s: startMin, e: endMin });
     });
@@ -1042,7 +1055,7 @@ function analyse(sandbox, cfg) {
     if (cursor < winEnd) { gapMin += (winEnd - cursor); gaps.push([cursor, winEnd]); }
 
     results[bunk] = {
-      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, morningCount, gapMin, gaps, entries,
+      grade, mainCount, specialCount, sportCount, swimCount, lunchCount, morningCount, gapMin, gaps, entries, specialOver,
       pass: {
         main: mainCount === 1,
         special: specialCount >= 1,
@@ -1050,6 +1063,7 @@ function analyse(sandbox, cfg) {
         swim: swimCount >= 1,
         lunch: lunchCount >= 1,
         nogap: gapMin === 0,
+        specialDur: specialOver.length === 0,
       },
     };
   }
@@ -1160,6 +1174,9 @@ async function runScenario(label, opts) {
     //   bunk (exactly 1) — never displaced by deferred-special recapture.
     if (opts.requireMorningPin && r.morningCount !== 1) failures.push(`${bunk}: Morning Activity count = ${r.morningCount} (want exactly 1 — pinned custom must not be displaced)`);
     if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+    // ★ DURATION LOCK (universal): a configured special is never stretched beyond
+    //   its configured duration — true for every scenario, every camp.
+    if (!r.pass.specialDur) failures.push(`${bunk}: configured special stretched past its duration — ${r.specialOver.join('; ')}`);
   }
 
   // requireSwimReservedBeforeSpecials: assert Phase 2.3 actually pre-placed swim
@@ -1269,9 +1286,15 @@ test('auto scheduler fills a gapless day for all 14 bunks with an off-grid divis
 //       by isFieldAvailable + _validateWritePlacement + coveredByContiguousPeriods.
 // The four criteria are NOT weakened.
 // ---------------------------------------------------------------------------
-test('auto scheduler fills a gapless day with a sub-floor sliver band (flush-placement bug)', async (t) => {
+// NOTE (duration-lock rule): a configured special MUST keep its exact duration,
+// even when that leaves a wall-bounded sliver no flexible neighbour can absorb.
+// Closing this sliver would require stretching the bounding 45-min special — now
+// forbidden. The correct outcome is therefore: special stays 45 (asserted via the
+// universal specialDur check) and the sub-floor sliver remains (skipGapCheck).
+test('auto scheduler keeps special duration over a wall-bounded sliver band (no stretch)', async (t) => {
   await runScenario('SLIVER-BAND (45-min special in a 60-min band + 20-min Main Activity wall, mixed-size periods)', {
     sliver: true,
+    skipGapCheck: true,
   });
 });
 
@@ -1304,9 +1327,14 @@ test('auto scheduler fills a gapless day with a sub-floor sliver band (flush-pla
 // bridging a real dead gap and never stretching an immune wall.
 // The four criteria are NOT weakened.
 // ---------------------------------------------------------------------------
-test('auto scheduler fills a gapless day with a floor-sized period-crossing residual gap', async (t) => {
+// NOTE (duration-lock rule): same as the sliver-band case — the only way to close
+// this floor-sized, period-crossing gap was stretching the bounding 45-min special,
+// which the duration-lock rule forbids. Correct outcome: special stays 45, gap
+// remains (it's a layer-window issue for the user to resolve, not a duration to break).
+test('auto scheduler keeps special duration over a floor-sized period-crossing gap (no stretch)', async (t) => {
   await runScenario('SLIVER-RESIDUAL (25-min gap = sport floor, straddles a period boundary, special|gap|Main wall)', {
     sliver2: true,
+    skipGapCheck: true,
   });
 });
 

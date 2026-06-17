@@ -27369,6 +27369,17 @@
                 if (!isSpecial) return false;
                 // Never stretch an immune-named block even if mis-flagged as special.
                 if (_SAB_IMMUNE.test(act)) return false;
+                // ★ DURATION LOCK: a special with a CONFIGURED duration must keep it
+                //   exactly — never grow it to swallow a sliver (that's how a 20-min
+                //   Shiur ended up in a 25-min slot). Only a special with NO configured
+                //   duration (flexible, falls back to its layer duration) may stretch.
+                var _nm = M._assignedSpecial || M.event || M._activity || M.name;
+                if (_nm) {
+                    try {
+                        var _cd = getSpecialDuration(_nm, activityProperties, globalSettings);
+                        if (_cd && _cd > 0) return false;
+                    } catch (_eCD) { /* unknown name → treat as flexible */ }
+                }
                 return !!(M.field && _sabNorm(M.field) !== 'free');
             };
             // A block is a stretchable SWIM block (LAST-resort, only after sport
