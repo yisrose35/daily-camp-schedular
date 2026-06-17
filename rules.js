@@ -536,11 +536,6 @@ function renderSportsRulesCard(container) {
     const grid = document.getElementById('rules-sport-grid');
     sports.forEach(sport => {
         const m = meta[sport] || {};
-        // Duration: canonical store is `durations[]` (mirrors specials so the
-        // engine resolver is identical); scalar `duration` is kept in sync.
-        const durVal = (Array.isArray(m.durations) && m.durations.length)
-            ? parseInt(m.durations[0], 10)
-            : (parseInt(m.duration, 10) || '');
         const row = document.createElement('div');
         row.className = 'sr-row';
         row.innerHTML = `
@@ -550,9 +545,6 @@ function renderSportsRulesCard(container) {
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="min" value="${m.minPlayers || ''}" placeholder="—" min="1">
                 <span class="sr-label">Max</span>
                 <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="max" value="${m.maxPlayers || ''}" placeholder="∞" min="1">
-                <span class="sr-label">Duration</span>
-                <input type="number" class="rules-input rules-input-num sr-in" data-sport="${escapeHtml(sport)}" data-type="dur" value="${durVal}" placeholder="—" min="5" max="180" step="5" title="Fixed length in minutes. When set, the scheduler keeps this sport to exactly this duration (like a special). Leave blank to use the layer's block size.">
-                <span class="sr-label" style="color:#9CA3AF;">min</span>
             </div>`;
         grid.appendChild(row);
     });
@@ -562,19 +554,8 @@ function renderSportsRulesCard(container) {
         container.querySelectorAll('.sr-in').forEach(inp => {
             const sp = inp.dataset.sport;
             const type = inp.dataset.type;
-            if (!updated[sp]) updated[sp] = {};
-            if (type === 'dur') {
-                const dv = parseInt(inp.value, 10);
-                if (Number.isFinite(dv) && dv > 0) {
-                    updated[sp].durations = [dv];
-                    updated[sp].duration = dv;
-                } else {
-                    updated[sp].durations = [];
-                    updated[sp].duration = null;
-                }
-                return;
-            }
             const v = parseInt(inp.value) || null;
+            if (!updated[sp]) updated[sp] = {};
             if (type === 'min') updated[sp].minPlayers = v;
             else if (type === 'max') updated[sp].maxPlayers = v;
         });

@@ -916,6 +916,9 @@ function renderSportsConfig(container, fac) {
     container.appendChild(section("Activities", summaryActivities(fieldData),
         () => renderActivities(fieldData, allSports)));
 
+    container.appendChild(section("Durations", summaryFieldDurations(fieldData),
+        () => renderFieldDurations(fieldData)));
+
     container.appendChild(section("Access & Restrictions", summaryAccess(fieldData),
         () => renderAccess(fieldData)));
 
@@ -1984,6 +1987,107 @@ function section(title, summary, builder) {
 
 // -- Summaries --
 function summaryActivities(f) { return f.activities?.length ? `${f.activities.length} sports selected` : "No sports selected"; }
+
+// -- Per-sport duration helpers --
+// Duration is a property of the SPORT (Baseball is 60min wherever it's played),
+// stored globally in sportMetaData[name].durations (canonical, mirrors specials)
+// with the scalar .duration kept in sync. The facility editor just surfaces the
+// sports THIS facility hosts so the user can set each one's length in context.
+function getSportDurationValue(sport) {
+    const m = (sportMetaData && sportMetaData[sport]) || {};
+    if (Array.isArray(m.durations) && m.durations.length) return parseInt(m.durations[0], 10) || null;
+    const d = parseInt(m.duration, 10);
+    return d > 0 ? d : null;
+}
+function setSportDurationGlobal(sport, mins) {
+    if (!sportMetaData[sport]) sportMetaData[sport] = {};
+    const v = parseInt(mins, 10);
+    if (Number.isFinite(v) && v > 0) {
+        sportMetaData[sport].durations = [v];
+        sportMetaData[sport].duration = v;
+    } else {
+        sportMetaData[sport].durations = [];
+        sportMetaData[sport].duration = null;
+    }
+    // Persist directly into app1.sportMetaData (the canonical store the engine
+    // reads) so the value can't be clobbered by saveFieldData's stored-meta
+    // merge, then force the cloud flush like every other facilities write.
+    const settings = window.loadGlobalSettings?.() || {};
+    const app1 = settings.app1 || {};
+    if (!app1.sportMetaData) app1.sportMetaData = {};
+    if (!app1.sportMetaData[sport]) app1.sportMetaData[sport] = {};
+    app1.sportMetaData[sport].durations = sportMetaData[sport].durations;
+    app1.sportMetaData[sport].duration = sportMetaData[sport].duration;
+    window.saveGlobalSettings?.("app1", app1);
+    window.forceSyncToCloud?.();
+}
+function summaryFieldDurations(f) {
+    const sports = (f.activities || []).filter(Boolean);
+    if (!sports.length) return "No sports selected";
+    const set = sports.map(s => ({ s, d: getSportDurationValue(s) })).filter(x => x.d);
+    if (!set.length) return "Flexible (uses block size)";
+    const parts = set.slice(0, 3).map(x => `${x.s} ${x.d}m`);
+    const extra = set.length - parts.length;
+    return parts.join(', ') + (extra > 0 ? ` +${extra}` : '');
+}
+function renderFieldDurations(f) {
+    const box = document.createElement("div");
+    const sports = (f.activities || []).filter(Boolean);
+
+    const desc = document.createElement("p");
+    desc.style.cssText = "font-size:0.85rem; color:#6B7280; margin:0 0 12px 0;";
+    desc.textContent = "Set a fixed length for any sport this facility hosts. When set, the auto-scheduler keeps that sport to exactly this duration (like a special). Leave blank to use the layer's block size. This length applies to the sport everywhere it's played.";
+    box.appendChild(desc);
+
+    if (!sports.length) {
+        const empty = document.createElement("div");
+        empty.style.cssText = "font-size:0.85rem; color:#9CA3AF; font-style:italic;";
+        empty.textContent = "No sports selected yet — add sports in the Activities section first.";
+        box.appendChild(empty);
+        return box;
+    }
+
+    const updateSummary = () => {
+        const el = box.closest('.detail-section')?.querySelector('.detail-section-summary');
+        if (el) el.textContent = summaryFieldDurations(f);
+    };
+
+    sports.forEach(sport => {
+        const row = document.createElement("div");
+        row.style.cssText = "display:flex; align-items:center; gap:10px; margin-bottom:8px;";
+
+        const nameEl = document.createElement("span");
+        nameEl.style.cssText = "flex:1; font-size:0.9rem; color:#374151;";
+        nameEl.textContent = sport;
+        row.appendChild(nameEl);
+
+        const input = document.createElement("input");
+        input.type = "number";
+        input.min = "5"; input.max = "180"; input.step = "5";
+        input.placeholder = "—";
+        const cur = getSportDurationValue(sport);
+        input.value = cur != null ? cur : "";
+        input.style.cssText = "width:80px; padding:5px 8px; border:1px solid #D1D5DB; border-radius:6px; text-align:center; font-size:0.85rem;";
+        input.title = "Fixed duration in minutes for " + sport + ". Leave blank to use the layer block size.";
+        input.onchange = () => {
+            const v = parseInt(input.value, 10);
+            const clamped = Number.isFinite(v) && v > 0 ? Math.max(5, Math.min(180, v)) : null;
+            setSportDurationGlobal(sport, clamped);
+            if (clamped != null) input.value = clamped; else input.value = "";
+            updateSummary();
+        };
+        row.appendChild(input);
+
+        const unit = document.createElement("span");
+        unit.style.cssText = "font-size:0.8rem; color:#9CA3AF; width:30px;";
+        unit.textContent = "min";
+        row.appendChild(unit);
+
+        box.appendChild(row);
+    });
+
+    return box;
+}
 function summarySharing(f) {
     const rules = f.sharableWith;
     if (!rules || rules.type === 'not_sharable') return "No sharing (1 bunk only)";
