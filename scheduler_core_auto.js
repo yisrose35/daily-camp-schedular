@@ -18183,9 +18183,17 @@
                     'rotation_event', 'scheduled_activity', 'trip'
                 ]);
                 allGrades.forEach(function (grade) {
-                    var periods = (window.campPeriods && window.campPeriods[grade]) || [];
-                    if (!periods.length) return;
-                    var periodsSorted = periods.slice().sort(function (a, b) { return a.startMin - b.startMin; });
+                    // ★ Only analyze grades that actually reach the generator. No-layer
+                    //   grades are blanked at STEP 2.7, so tiling them wastes effort and
+                    //   reports shifts for blocks that vanish.
+                    if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(grade)) return;
+                    // Bell-schedule periods when defined; otherwise the grade is
+                    //   layer-driven (no campPeriods) and we synthesize a single
+                    //   full-day period per bunk from its block span below — so the
+                    //   tiler still sees layer-driven grades (where most real slivers
+                    //   live) instead of skipping them.
+                    var gradePeriods = ((window.campPeriods && window.campPeriods[grade]) || [])
+                        .slice().sort(function (a, b) { return a.startMin - b.startMin; });
                     getBunksForGrade(grade, divisions).forEach(function (bunk) {
                         var tl = bunkTimelines[bunk] || [];
                         if (!tl.length) return;
@@ -18250,8 +18258,23 @@
                                 isResizable: resizable
                             };
                         });
+                        // Layer-driven grade with no bell-schedule periods: treat the
+                        //   whole occupied day as one period so the tiler can still pack
+                        //   this bunk and surface its real slivers.
+                        var periodsForBunk = gradePeriods;
+                        if (!periodsForBunk.length) {
+                            var _minS = Infinity, _maxE = -Infinity;
+                            tl.forEach(function (b) {
+                                if (b && b.startMin != null && b.endMin != null && b.endMin > b.startMin) {
+                                    if (b.startMin < _minS) _minS = b.startMin;
+                                    if (b.endMin > _maxE) _maxE = b.endMin;
+                                }
+                            });
+                            if (!isFinite(_minS) || !isFinite(_maxE) || _maxE <= _minS) return;
+                            periodsForBunk = [{ startMin: _minS, endMin: _maxE, name: 'FullDay' }];
+                        }
                         var result = window.PeriodTiler.tileBunkDay({
-                            bunk: bunk, grade: grade, periods: periodsSorted,
+                            bunk: bunk, grade: grade, periods: periodsForBunk,
                             inhabitants: inhabitants, minSportDMin: 25
                         });
                         _tilerBunksAnalyzed++;
