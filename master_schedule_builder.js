@@ -621,9 +621,15 @@ function showCopyGradeModal(skeleton, onApply) {
     const sourceDiv = fromSelect.value;
     if (!sourceDiv || selectedTargets.size === 0) return;
 
-    // Get source events
-    const sourceEvents = skeleton.filter(ev => ev.division === sourceDiv);
-    if (sourceEvents.length === 0) { overlay.remove(); showAlert('Source grade has no events to copy.'); return; }
+    // Get source events. ★ Exclude league / specialty-league tiles: leagues are a
+    // camp-level system, not a per-grade layout choice. Silently copying a grade's
+    // league layer into other grades makes the auto builder schedule league games
+    // for grades the user never set up (the "why are there leagues with no league
+    // layer?" surprise from a copied layout). All other layer types — sport,
+    // special, swim, custom — copy as before.
+    const _isLeagueType = (t) => { const x = String(t || '').toLowerCase(); return x === 'league' || x === 'specialty_league'; };
+    const sourceEvents = skeleton.filter(ev => ev.division === sourceDiv && !_isLeagueType(ev.type));
+    if (sourceEvents.length === 0) { overlay.remove(); showAlert('Source grade has no copyable events (league tiles are not copied).'); return; }
 
     // Remove existing events for target divisions
     let updated = skeleton.filter(ev => !selectedTargets.has(ev.division));
