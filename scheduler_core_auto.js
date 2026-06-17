@@ -28260,6 +28260,8 @@
         //   cut sport. Also logs whether the engine actually SEES configured
         //   sport durations, so a data-path gap (UI saved but engine can't read)
         //   is visible in the console.
+        var _enforceSportDurInvariant = function _enforceSportDurInvariant(_durTag) {
+        var _DURLBL = '[STEP ' + (_durTag || '6.866') + ' SPORT-DURATION INVARIANT]';
         try {
             var _siGS = (typeof window.loadGlobalSettings === 'function') ? window.loadGlobalSettings() : (window.globalSettings || {});
             var _siFields = (_siGS.app1 && _siGS.app1.fields) || _siGS.fields || [];
@@ -28334,12 +28336,14 @@
                 });
             });
             if (_siViolations > 0) {
-                log('  📏 [STEP 6.866 SPORT-DURATION INVARIANT] ' + _siViolations + ' cut sport(s) corrected (' + _siRefilled + ' refilled with a fitting sport, ' + _siFreed + ' left Free) — checked ' + _siChecked + ' configured-sport placement(s).');
+                log('  📏 ' + _DURLBL + ' ' + _siViolations + ' cut sport(s) corrected (' + _siRefilled + ' refilled with a fitting sport, ' + _siFreed + ' left Free) — checked ' + _siChecked + ' configured-sport placement(s).');
             } else {
-                log('[STEP 6.866 SPORT-DURATION INVARIANT] ✅ no cut sports (checked ' + _siChecked + ' configured-sport placement(s); engine sees durations for ' + _siConfiguredCount + ' sport(s)).');
+                log(_DURLBL + ' ✅ no cut sports (checked ' + _siChecked + ' configured-sport placement(s); engine sees durations for ' + _siConfiguredCount + ' sport(s)).');
             }
-            try { console.log('[DUR-INVARIANT] configuredSports=' + _siConfiguredCount + ' checked=' + _siChecked + ' violations=' + _siViolations + ' refilled=' + _siRefilled + ' freed=' + _siFreed); } catch (_e) {}
-        } catch (_e6866) { try { warn('[STEP 6.866 SPORT-DURATION INVARIANT] error: ' + (_e6866 && _e6866.message)); } catch (_x) {} }
+            try { console.log('[DUR-INVARIANT ' + (_durTag || '') + '] configuredSports=' + _siConfiguredCount + ' checked=' + _siChecked + ' violations=' + _siViolations + ' refilled=' + _siRefilled + ' freed=' + _siFreed); } catch (_e) {}
+        } catch (_e6866) { try { warn(_DURLBL + ' error: ' + (_e6866 && _e6866.message)); } catch (_x) {} }
+        };
+        _enforceSportDurInvariant('6.866');
 
 
         // ═══════════════════════════════════════════════════════════════════
@@ -29258,6 +29262,15 @@
                 else log('  ✅ [FN-55 LAYER-WINDOW GATE] all activities fall within their grade\'s layer windows');
             })();
         } catch (_eLWG) { try { warn('[FN-55 LAYER-WINDOW GATE] ' + (_eLWG && _eLWG.message)); } catch (_e4) {} }
+
+        // ★ FINAL duration-invariant re-run — the post-gate FQ-REOPT / FN-19/21 /
+        //   FN-54 / FN-55 above can move or swap a configured-duration sport into a
+        //   wrong-length slot (e.g. a 40-min sport dropped into the 30-min swim+change
+        //   orphan) AFTER the mid-pipeline 6.866 pass already cleaned it. Re-running it
+        //   here — as the last sport-mutating step (Day-24 + trip writes below only free
+        //   slots, never create cut sports) — guarantees no configured sport is ever
+        //   shown at a non-configured length in the saved grid.
+        try { if (typeof _enforceSportDurInvariant === 'function') _enforceSportDurInvariant('6.866-final'); } catch (_eDF) {}
 
 
         // ★ Day 24: SPORT POOL + DELETE ENFORCEMENT — runs AFTER STEP 6.5 so
