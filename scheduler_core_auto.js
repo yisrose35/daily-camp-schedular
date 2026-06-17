@@ -502,6 +502,23 @@
         log('[SPORT-GATE] grades with a sport layer: ' +
             (_sportLayerAllGrades ? 'ALL' : (_gradesWithSportLayer.size ? Array.from(_gradesWithSportLayer).join(', ') : 'NONE — sports-free camp')));
 
+        // ★ LAYER-PRESENCE GATE: a grade with NO layers at all must be scheduled
+        //   NOTHING — not sports, not specials. The engine otherwise builds a full
+        //   division-day grid for every grade and fills it (Phase 3 sport engine +
+        //   STEP 4 AutoSolver), which is why a layerless grade (e.g. Soloists in a
+        //   sports-free camp) came out full. FN-55 blanks it post-hoc; this gate
+        //   stops it at the source so those grades are never filled (no wasted work,
+        //   no rotation mis-count). A '_all'-scoped layer enables every grade.
+        const _gradesWithAnyLayer = new Set(
+            (layers || [])
+                .filter(l => l && (l.grade || l.division))
+                .map(l => String(l.grade || l.division))
+        );
+        const _anyLayerAllGrades = (layers || []).some(l => l && !l.grade && !l.division);
+        const gradeHasAnyLayer = (g) => _anyLayerAllGrades || _gradesWithAnyLayer.has(String(g));
+        log('[LAYER-GATE] grades with NO layers (left blank): ' +
+            ((function () { try { return Object.keys(divisions || {}).filter(g => !gradeHasAnyLayer(g)).join(', ') || 'none'; } catch (_e) { return '?'; } })()));
+
         // ★ SPORT-LEAK GATE helper: pick a special to fill a Free slot in a grade
         //   that has NO sport layer. The late "fill every Free with a field sport"
         //   backstops (FN-22, dead-continuation, STEP 6.8, 4.97b) would otherwise
@@ -9429,6 +9446,7 @@
             var fieldDemand = {}; // { "fieldName:timeSlot" → demandCount }
             for (var fd = 0; fd < allBunkIds.length; fd++) {
                 var fdMeta = bunkMeta[allBunkIds[fd]];
+                if (!gradeHasAnyLayer(fdMeta.grade)) continue; // no layers → no fillable demand
                 var fdGaps = findGaps(fdMeta.template, fdMeta.gradeStart, fdMeta.gradeEnd);
                 for (var fg = 0; fg < fdGaps.length; fg++) {
                     var fgStart = fdGaps[fg].start, fgEnd = fdGaps[fg].end;
@@ -10062,6 +10080,7 @@
             allBunkIds.forEach(function(cBunk) {
                 var cMeta = bunkMeta[cBunk];
                 if (!cMeta) return;
+                if (!gradeHasAnyLayer(cMeta.grade)) return; // no layers → no contention demand
                 var cGaps = findGaps(cMeta.template, cMeta.gradeStart, cMeta.gradeEnd);
                 cGaps.forEach(function(cGap) {
                     for (var ct2 = Math.floor(cGap.start / 30) * 30; ct2 < cGap.end; ct2 += 30) {
@@ -10140,6 +10159,7 @@
             allBunkIds.forEach(function(qBunk) {
                 var qMeta = bunkMeta[qBunk];
                 if (!qMeta) return;
+                if (!gradeHasAnyLayer(qMeta.grade)) return; // no layers → schedule nothing for this grade
                 var qGaps = findGaps(qMeta.template, qMeta.gradeStart, qMeta.gradeEnd);
                 qGaps.forEach(function(qGap) {
                     // Split at period boundaries — prevents sport blocks from spanning gaps
@@ -11521,6 +11541,7 @@
                 var fcBunk = allBunkIds[fc];
                 var fcMeta = bunkMeta[fcBunk];
                 if (!fcMeta) continue;
+                if (!gradeHasAnyLayer(fcMeta.grade)) continue; // no layers → schedule nothing
                 var fcTl = bunkTimelines[fcBunk] || [];
                 fcTl.sort(function(a, b) { return a.startMin - b.startMin; });
                 var fcGaps = findGaps(fcTl, fcMeta.gradeStart, fcMeta.gradeEnd);
@@ -21660,7 +21681,7 @@
         window.fieldUsageBySlot = window.buildFieldUsageBySlot ? window.buildFieldUsageBySlot() : {};
 
         // Build solver input blocks (mark LNS-locked blocks)
-        const solverInputBlocks = solverBlocks.map(b => {
+        const solverInputBlocks = solverBlocks.filter(b => gradeHasAnyLayer(b.divName)).map(b => {
             var slotIdx = b.slots ? b.slots[0] : null;
             var isLocked = _lnsLockSet && slotIdx != null && _lnsLockSet[b.bunk + '|' + slotIdx]
                 && window.scheduleAssignments[b.bunk]
@@ -28668,6 +28689,36 @@
                 log('[FN-59] authoritative final save (' + tripWriteCount + ' trip slot(s) in payload)');
             } catch (_eSv) { try { warn('[FN-59] authoritative final save: ' + (_eSv && _eSv.message)); } catch (_e6) {} }
         }
+
+        // ★ STEP 6.95 — FINAL AUTHORITATIVE ROTATION COUNT. STEP 6.9 ran before the
+        //   late demote/blank gates (FN-53/54/55) and the Day-24 + trip writes, so its
+        //   counts credited activities those gates later removed (e.g. a special FN-54
+        //   demoted, or a no-layer-grade fill FN-55 blanked). Re-derive counts from the
+        //   TRUE final grid here — after every mutation — so rotation fairness never
+        //   credits an activity that isn't on the saved schedule. Idempotent: both
+        //   RotationCloud.save and rebuildHistoricalCounts pre-clear/rebuild from scratch,
+        //   so this simply supersedes the earlier 6.9 write.
+        try {
+            const _rcDate2 = currentDate || window.currentScheduleDate || '';
+            if (_rcDate2) {
+                try {
+                    const _DK2 = 'campDailyData_v1';
+                    const _all2 = JSON.parse(localStorage.getItem(_DK2) || '{}');
+                    const _ex2 = _all2[_rcDate2] || {};
+                    _ex2.scheduleAssignments = window.scheduleAssignments || {};
+                    _all2[_rcDate2] = _ex2;
+                    localStorage.setItem(_DK2, JSON.stringify(_all2));
+                } catch (_e695a) { /* non-fatal */ }
+                if (window.RotationCloud?.save) {
+                    try { await window.RotationCloud.save(_rcDate2, window.scheduleAssignments || {}); log('[6.95] ☁️ Rotation counts re-saved from TRUE final grid (post-gate)'); }
+                    catch (_e695b) { warn('[6.95] RotationCloud save: ' + (_e695b && _e695b.message)); }
+                }
+                if (window.SchedulerCoreUtils?.rebuildHistoricalCounts) {
+                    try { window.SchedulerCoreUtils.rebuildHistoricalCounts(true); log('[6.95] 🧮 Rebuilt historicalCounts from TRUE final grid (post-gate)'); }
+                    catch (_e695c) { warn('[6.95] historicalCounts rebuild: ' + (_e695c && _e695c.message)); }
+                }
+            }
+        } catch (_e695) { try { warn('[6.95] final rotation-count error: ' + (_e695 && _e695.message)); } catch (_x) {} }
 
         // Expose for post-run diagnostics
         window._dbgBT = bunkTimelines;
