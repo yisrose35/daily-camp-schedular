@@ -718,18 +718,18 @@ function pcCellInnerHtml(text, type, opts) {
     opts = opts || {};
     var preMin = opts.preChange || 0;
     var postMin = opts.postChange || 0;
-    var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-    var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+    var pillBg = '#ffffff';
+    var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
     if (preMin > 0 || postMin > 0) {
         var html = '<div style="border-radius:5px;overflow:hidden;display:flex;flex-direction:column;">';
         if (preMin > 0) {
-            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #F59E0B;">Change ' + preMin + 'm</div>';
+            html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-bottom:1px solid #000;">Change ' + preMin + 'm</div>';
         }
         html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;text-align:center;flex:1;">';
         html += '<span style="font-size:11px;font-weight:500;">' + escHtml(text) + '</span>';
         html += '</div>';
         if (postMin > 0) {
-            html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #F59E0B;">Change ' + postMin + 'm</div>';
+            html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:600;border-top:1px solid #000;">Change ' + postMin + 'm</div>';
         }
         html += '</div>';
         return html;
@@ -1359,7 +1359,7 @@ function buildMainUI() {
     // Reuses the proven sheet/table/live renderers and the .pc3-item list styling
     // from getStyles(); everything below is new and self-contained (pcx-* classes).
     var chrome = '<style id="pcx-styles">' +
-        '#pc3-root.pc3{background:#e9e3d7;font-family:"DM Sans",system-ui,sans-serif;}' +
+        '#pc3-root.pc3{background:#f4f4f4;font-family:"DM Sans",system-ui,sans-serif;}' +
         /* TOP BAR — branded deep-teal */
         '.pcx-bar{display:flex;align-items:center;gap:16px;padding:16px 24px;background:linear-gradient(180deg,#147D91,#0F5F6E);flex-shrink:0;box-shadow:0 6px 20px -12px rgba(15,95,110,.65);}' +
         '.pcx-brand{flex:1;min-width:0;}' +
@@ -2054,13 +2054,13 @@ function renderAutoDivisionTable(divName, bunks) {
             var range = activityRanges[pId];
             var periodName = range.name || ('Period ' + periodNum);
             var periodTxt = periodName + ' (' + minutesToTimeLabel(range.startMin) + '\u2013' + minutesToTimeLabel(range.endMin) + ')';
-            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:2px solid #0e6b7e;">';
+            html += '<th colspan="' + pSpan + '" data-r="0" data-c="' + (1 + pStart) + '" data-cell-text="' + escHtml(periodTxt) + '" style="text-align:center;background:#000;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border-bottom:none;border-right:1px solid #000;">';
             html += escHtml(periodName);
             html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' \u2013 ' + minutesToTimeLabel(range.endMin) + '</div>';
             html += '</th>';
         } else {
             // Non-period column — just an empty top header cell
-            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#f1f5f9;border-bottom:none;padding:2px;"></th>';
+            html += '<th data-r="0" data-c="' + (1 + ci) + '" style="background:#fff;border-bottom:none;padding:2px;"></th>';
             ci++;
         }
     }
@@ -2077,13 +2077,13 @@ function renderAutoDivisionTable(divName, bunks) {
         : Math.max(36, Math.min(80, 700 / numCols));
     var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
-        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f8fafc;';
+        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#fff;';
         // Activity-aligned mode: show end time so each column header is self-documenting
         var labelTxt = _activityAligned
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
             : col.label;
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#64748b;' + bgStyle + '">' + labelTxt + '</th>';
+        html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:500;color:#000;' + bgStyle + '">' + labelTxt + '</th>';
     });
     html += '</tr>';
     html += '</thead><tbody>';
@@ -2140,8 +2140,8 @@ function renderAutoDivisionTable(divName, bunks) {
                 if (span > 1) html += ' colspan="' + span + '"';
                 html += ' class="cell-' + type + '" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '" data-slot="' + matchAct.slotIdx + '" data-div="' + escHtml(divName) + '"';
                 html += ' title="' + escHtml(displayText + ' (' + durMin + ' min)') + '"';
-                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+                var pillBg = '#ffffff';
+                var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
                 html += ' style="padding:3px;vertical-align:middle;">';
                 // ★ Split-swim change: show Change → Swim → Change subdivisions
                 var splitPre = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
@@ -2150,13 +2150,13 @@ function renderAutoDivisionTable(divName, bunks) {
                     var swimMin = durMin - splitPre - splitPost;
                     html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
                     if (splitPre > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #000;">Change</div>';
                     }
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(actText || displayText) + '</span>';
                     html += '</div>';
                     if (splitPost > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #000;">Change</div>';
                     }
                     html += '</div></td>';
                 } else {
@@ -2409,7 +2409,7 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#b45309;font-style:italic;background:repeating-linear-gradient(45deg,#FEF3C7,#FEF3C7 6px,#FDE68A 6px,#FDE68A 12px);">🚶 Travel</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="Travel" style="color:#000;font-style:italic;background:#f0f0f0;">🚶 Travel</td>';
             html += '<td data-r="' + rowR + '" data-c="2" data-cell-text=""></td>';
             html += '</tr>';
             return;
@@ -2420,9 +2420,9 @@ function renderBunkSheet(bunk) {
             html += '<tr data-block-start="' + slot.startMin + '" data-block-end="' + slot.endMin + '">';
             html += pcRowNum(rowR);
             html += '<th class="row-head" data-r="' + rowR + '" data-c="0" data-cell-text="' + escHtml(slot.label) + '">' + slot.label + '</th>';
-            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#7c3aed;font-style:italic;background:repeating-linear-gradient(45deg,#EDE9FE,#EDE9FE 6px,#DDD6FE 6px,#DDD6FE 12px);">' + escHtml(_prepTxt) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="1" data-cell-text="' + escHtml(_prepTxt) + '" style="color:#000;font-style:italic;background:#f0f0f0;">' + escHtml(_prepTxt) + '</td>';
             var _prepLoc = slot._prepLocation || '';
-            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#7c3aed;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
+            html += '<td data-r="' + rowR + '" data-c="2" data-cell-text="' + escHtml(_prepLoc) + '" style="color:#000;font-style:italic;">' + escHtml(_prepLoc) + '</td>';
             html += '</tr>';
             return;
         }
@@ -2810,7 +2810,7 @@ function renderCombinedAutoTable(divBunks) {
     // ★ Period header row — ONLY when real Bell Schedule defined
     if (hasRealPeriodsC) {
         html += '<tr>';
-        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+        html += '<th class="corner" rowspan="2" style="min-width:80px;width:80px;background:#000;border:1px solid #000;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
         var ci = 0;
         while (ci < numCols) {
             var col = timeCols[ci];
@@ -2820,12 +2820,12 @@ function renderCombinedAutoTable(divBunks) {
                 var pSpan = ci - pStart;
                 var range = activityRanges[pId];
                 var periodName = range.name || ('Period ' + (pId + 1));
-                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#147D91;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #0e6b7e;border-bottom:none;">';
+                html += '<th colspan="' + pSpan + '" style="text-align:center;background:#000;color:#fff;font-size:11px;font-weight:600;padding:6px 4px;border:1px solid #000;border-bottom:none;">';
                 html += escHtml(periodName);
                 html += '<div style="font-size:9px;font-weight:400;opacity:.85;margin-top:2px;">' + minutesToTimeLabel(range.startMin) + ' – ' + minutesToTimeLabel(range.endMin) + '</div>';
                 html += '</th>';
             } else {
-                html += '<th style="background:#f1f5f9;border:1px solid #e2e8f0;border-bottom:none;padding:2px;"></th>';
+                html += '<th style="background:#fff;border:1px solid #000;border-bottom:none;padding:2px;"></th>';
                 ci++;
             }
         }
@@ -2835,15 +2835,15 @@ function renderCombinedAutoTable(divBunks) {
     // Time label row (the ONLY header row when no Bell Schedule)
     html += '<tr>';
     if (!hasRealPeriodsC) {
-        html += '<th class="corner" style="min-width:80px;width:80px;background:#f8fafc;border:1px solid #e2e8f0;font-size:11px;color:#64748b;text-align:center;vertical-align:middle;">Bunk</th>';
+        html += '<th class="corner" style="min-width:80px;width:80px;background:#000;border:1px solid #000;font-size:11px;color:#fff;text-align:center;vertical-align:middle;">Bunk</th>';
     }
     timeCols.forEach(function (col) {
-        var bg = col.periodIdx >= 0 ? '#f0f9ff' : '#f8fafc';
+        var bg = '#fff';
         var labelTxt = _activityAligned
             ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
             : col.label;
         var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:3px 4px;color:#64748b;background:' + bg + ';border:1px solid #e2e8f0;font-weight:500;white-space:nowrap;">' + labelTxt + '</th>';
+        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:3px 4px;color:#000;background:' + bg + ';border:1px solid #000;font-weight:500;white-space:nowrap;">' + labelTxt + '</th>';
     });
     html += '</tr></thead><tbody>';
 
@@ -2855,11 +2855,11 @@ function renderCombinedAutoTable(divBunks) {
         // Division separator row
         if (divName !== lastDiv) {
             lastDiv = divName;
-            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#f1f5f9;padding:4px 12px;font-size:11px;font-weight:700;color:#147D91;border:1px solid #e2e8f0;border-top:2px solid #147D91;">' + escHtml(divName) + '</th></tr>';
+            html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#e5e5e5;padding:5px 12px;font-size:11px;font-weight:700;color:#000;border:1px solid #000;border-top:2px solid #000;text-transform:uppercase;letter-spacing:.5px;">' + escHtml(divName) + '</th></tr>';
         }
 
         html += '<tr>';
-        html += '<th style="position:sticky;left:0;z-index:2;background:#fff;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #e2e8f0;white-space:nowrap;color:#1e293b;">' + escHtml(bunk) + '</th>';
+        html += '<th style="position:sticky;left:0;z-index:2;background:#fff;min-width:80px;padding:4px 8px;font-size:12px;font-weight:600;border:1px solid #000;white-space:nowrap;color:#000;">' + escHtml(bunk) + '</th>';
 
         var acts = bunkActs[bunk] || [];
         var colIdx = 0;
@@ -2882,23 +2882,23 @@ function renderCombinedAutoTable(divBunks) {
                     if (actText && locText && actText === locText) locText = '';
                 }
                 var durMin = matchAct.endMin - matchAct.startMin;
-                var pillBg = type === 'pinned' ? '#FFF8E1' : type === 'league' ? '#EFF6FF' : type === 'free' ? '#F9FAFB' : '#EEF6FF';
-                var pillTx = type === 'pinned' ? '#92400E' : type === 'league' ? '#1E40AF' : type === 'free' ? '#94A3B8' : '#1E3A5F';
+                var pillBg = '#ffffff';
+                var pillTx = type === 'free' ? '#bbbbbb' : '#000000';
                 var displayText = actText || '—';
-                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #e2e8f0;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
+                html += '<td colspan="' + span + '" style="padding:3px;vertical-align:middle;border:1px solid #000;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="' + escHtml(displayText) + '" data-bunk="' + escHtml(bunk) + '">';
                 // ★ Split-swim change: show Change → Swim → Change subdivisions
                 var splitPre2 = matchAct.entry ? (matchAct.entry._splitPreChange || 0) : 0;
                 var splitPost2 = matchAct.entry ? (matchAct.entry._splitPostChange || 0) : 0;
                 if (splitPre2 > 0 || splitPost2 > 0) {
                     html += '<div style="border-radius:5px;overflow:hidden;min-height:38px;display:flex;flex-direction:column;">';
                     if (splitPre2 > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-bottom:1px solid #000;">Change</div>';
                     }
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;flex:1;display:flex;flex-direction:column;justify-content:center;">';
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;">' + escHtml(displayText) + '</span>';
                     html += '</div>';
                     if (splitPost2 > 0) {
-                        html += '<div style="background:#FEF3C7;color:#92400E;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #F59E0B;">Change</div>';
+                        html += '<div style="background:#f0f0f0;color:#000;padding:2px 6px;text-align:center;font-size:10px;font-weight:500;border-top:1px solid #000;">Change</div>';
                     }
                     html += '</div></td>';
                 } else {
@@ -2909,7 +2909,7 @@ function renderCombinedAutoTable(divBunks) {
                 }
                 colIdx = nextCol;
             } else {
-                html += '<td style="padding:3px;border:1px solid #e2e8f0;background:#fafafa;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
+                html += '<td style="padding:3px;border:1px solid #000;background:#fff;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text="—"><div style="min-height:38px;"></div></td>';
                 colIdx++;
             }
         }
