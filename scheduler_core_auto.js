@@ -18422,7 +18422,19 @@
             } catch (_eFS) { warn('[Phase2.35] final snap sweep error (non-fatal): ' + (_eFS && _eFS.message)); }
         }
         const autoSkeleton = [];
+        // ★ LAYER-GATE (SOURCE): a grade with NO layers is not part of the
+        //   generated schedule. STEP 2.7 formalization is the single boundary
+        //   where bunkTimelines become the materialized grid (autoSkeleton →
+        //   divisionTimes → _perBunkSlots → scheduleAssignments). Skipping the
+        //   grade here means it is never materialized: _perBunkSlots[grade] is
+        //   never built, the materialization loop allocates an empty slot array,
+        //   STEP 4.97 / 4.97b bail on `!pbs`, and FN-55 has nothing to blank.
+        //   Earlier phases may have done throwaway work in bunkTimelines for the
+        //   grade, but none of it reaches the output. This supersedes the
+        //   post-hoc FN-55 blank + render suppression for no-layer grades.
+        const _skippedNoLayerGrades = [];
         allGrades.forEach(grade => {
+            if (!gradeHasAnyLayer(grade)) { _skippedNoLayerGrades.push(grade); return; }
             getBunksForGrade(grade, divisions).forEach(bunk => {
                 (bunkTimelines[bunk] || []).forEach(block => {
                     autoSkeleton.push({
@@ -18452,6 +18464,9 @@
 
         window.manualSkeleton = autoSkeleton;
         window._autoSkeleton = autoSkeleton;
+        if (_skippedNoLayerGrades.length)
+            log('[LAYER-GATE] STEP 2.7 did NOT materialize ' + _skippedNoLayerGrades.length +
+                ' grade(s) with no layers (never reaches the generator): ' + _skippedNoLayerGrades.join(', '));
 
         // =====================================================================
         // ★ Day 20 fix #7 v3 DISABLED: post-pass swap was wrong approach.
