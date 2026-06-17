@@ -1155,8 +1155,39 @@ function renderSpecialConfig(container, fac) {
 // =========================================================================
 // GENERAL ACTIVITY CONFIG
 // =========================================================================
+// Shared instructor datalist — used by every per-activity Instructor input.
+// Built lazily so each render of the General config refreshes the suggestions
+// (specials + every general across the camp).
+function _ensureFacInstructorDatalist() {
+    const dlId = 'fac-instructor-list';
+    let dl = document.getElementById(dlId);
+    if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = dlId;
+        document.body.appendChild(dl);
+    }
+    dl.innerHTML = '';
+    const seen = new Set();
+    const pushInstr = (n) => {
+        const v = (typeof n === 'string') ? n.trim() : '';
+        if (!v) return;
+        const k = v.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+    };
+    try {
+        (window.getSpecialInstructors?.() || []).forEach(pushInstr);
+        const _settings = window.loadGlobalSettings?.() || {};
+        (_settings.facilities || []).forEach(f => (f.generalActivities || []).forEach(g => pushInstr(g?.instructor)));
+    } catch {}
+}
+
 function renderGeneralConfig(container, fac) {
     if (!fac.generalActivities) fac.generalActivities = [];
+    _ensureFacInstructorDatalist();
 
     // Quick-push buttons
     const quickLabel = document.createElement("div");
@@ -1228,23 +1259,45 @@ function renderGeneralConfig(container, fac) {
     customRow.appendChild(customBtn);
     container.appendChild(customRow);
 
-    // List existing general activities
+    // List existing general activities — each row carries an expandable
+    // dropdown next to the name with its own Instructor, Sharing Rules, and
+    // Consecutive Bunks config (per-activity, "like specials"). The resolver
+    // (window.getCustomActivitySharingInfo) falls through to facility/field
+    // defaults when an entry is left blank.
     if (fac.generalActivities.length > 0) {
         const listLabel = document.createElement("div");
         listLabel.style.cssText = "font-weight:500; font-size:0.85rem; margin-bottom:8px; color:#374151;";
         listLabel.textContent = "Configured Activities:";
         container.appendChild(listLabel);
 
-        fac.generalActivities.forEach(ga => {
-            const row = document.createElement("div");
-            row.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:10px 12px; background:#FFFBEB; border:1px solid #FDE68A; border-radius:8px; margin-bottom:6px;";
+        const _gaIsAutoModeRow = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+        const _builtinNonConfig = { swim: 1, lunch: 1, snacks: 1, dismissal: 1, dinner: 1 };
 
-            const info = document.createElement("div");
+        fac.generalActivities.forEach(ga => {
+            const actBlock = document.createElement("div");
+            actBlock.style.cssText = "border:1px solid #FDE68A; background:#FFFBEB; border-radius:8px; margin-bottom:6px; overflow:hidden;";
+
+            const row = document.createElement("div");
+            row.style.cssText = "display:flex; align-items:center; gap:8px; padding:10px 12px;";
+
+            // ── Dropdown caret (left of the name) ─────────────────────────
+            //   Toggles the per-activity config panel. Built-in quick types
+            //   (Lunch, Snacks, Dinner, Swim) hide the caret since they don't
+            //   take per-activity overrides.
+            const isBuiltin = _builtinNonConfig[String(ga.quickType || '').toLowerCase()];
+            const caret = document.createElement("button");
+            caret.type = "button";
+            caret.style.cssText = "border:none; background:transparent; cursor:pointer; padding:2px 4px; display:flex; align-items:center; transition:transform 0.18s;";
+            caret.innerHTML = '<svg width="16" height="16" fill="none" stroke="#92400E" stroke-width="2" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7"></path></svg>';
+            caret.title = "Show per-activity config";
+            if (isBuiltin) caret.style.visibility = "hidden";
+            row.appendChild(caret);
+
             const gaLabel = document.createElement("strong");
             gaLabel.textContent = ga.name;
-            gaLabel.style.cursor = "pointer";
+            gaLabel.style.cssText = "cursor:pointer; flex:1;";
             gaLabel.title = "Double click to rename";
-            info.appendChild(gaLabel);
+            row.appendChild(gaLabel);
 
             makeEditable(gaLabel, newName => {
                 if (!newName.trim()) return;
@@ -1276,10 +1329,74 @@ function renderGeneralConfig(container, fac) {
                 saveData();
                 renderDetailPane();
             };
-
-            row.appendChild(info);
             row.appendChild(removeBtn);
-            container.appendChild(row);
+            actBlock.appendChild(row);
+
+            // ── Per-activity config panel (hidden until caret is clicked) ──
+            if (!isBuiltin) {
+                const panel = document.createElement("div");
+                panel.style.cssText = "display:none; padding:12px 14px 14px; border-top:1px solid #FDE68A; background:#FEFCF3;";
+
+                // Instructor sub-section (single input, mirrors the existing
+                // per-activity Instructor input in renderFacilityInstructors).
+                const instrWrap = document.createElement("div");
+                instrWrap.style.cssText = "margin-bottom:14px;";
+                const instrHdr = document.createElement("div");
+                instrHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
+                instrHdr.textContent = "Instructor";
+                instrWrap.appendChild(instrHdr);
+                const instrDesc = document.createElement("div");
+                instrDesc.style.cssText = "font-size:0.74rem; color:#6B7280; margin-bottom:6px;";
+                instrDesc.textContent = "Name the person who runs this activity. Two activities sharing the same instructor — across specials and general — can't be scheduled at the same time.";
+                instrWrap.appendChild(instrDesc);
+                const instrInput = document.createElement("input");
+                instrInput.type = "text";
+                instrInput.placeholder = "No instructor";
+                instrInput.value = (typeof ga.instructor === 'string') ? ga.instructor : '';
+                // Reuse the existing shared datalist from renderFacilityInstructors
+                instrInput.setAttribute('list', 'fac-instructor-list');
+                instrInput.style.cssText = "padding:6px 10px; border:1px solid #D1D5DB; border-radius:6px; font-size:0.85rem; width:100%; max-width:300px; background:#fff;";
+                instrInput.addEventListener('change', () => {
+                    const v = (instrInput.value || '').trim();
+                    if ((ga.instructor || '') === v) return;
+                    ga.instructor = v;
+                    saveData();
+                });
+                instrWrap.appendChild(instrInput);
+                panel.appendChild(instrWrap);
+
+                // Sharing Rules sub-section.
+                const shareWrap = document.createElement("div");
+                shareWrap.style.cssText = "margin-bottom:14px;";
+                const shareHdr = document.createElement("div");
+                shareHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
+                shareHdr.textContent = "Sharing Rules";
+                shareWrap.appendChild(shareHdr);
+                shareWrap.appendChild(renderGaSharing(ga));
+                panel.appendChild(shareWrap);
+
+                // Consecutive Bunks sub-section (auto-mode only, same as today).
+                if (_gaIsAutoModeRow) {
+                    const consecWrap = document.createElement("div");
+                    const consecHdr = document.createElement("div");
+                    consecHdr.style.cssText = "font-size:0.82rem; font-weight:600; color:#374151; margin-bottom:6px;";
+                    consecHdr.textContent = "Consecutive Bunks";
+                    consecWrap.appendChild(consecHdr);
+                    consecWrap.appendChild(renderGaConsec(ga));
+                    panel.appendChild(consecWrap);
+                }
+
+                actBlock.appendChild(panel);
+
+                caret.onclick = () => {
+                    const isOpen = panel.style.display === 'block';
+                    panel.style.display = isOpen ? 'none' : 'block';
+                    caret.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+                    caret.title = isOpen ? "Show per-activity config" : "Hide per-activity config";
+                };
+            }
+
+            container.appendChild(actBlock);
         });
     }
 
@@ -1339,56 +1456,18 @@ function renderGeneralConfig(container, fac) {
     //   facility. Two activities tagged with the same instructor (specials +
     //   general) are mutex at any slot (canBlockFit gate). Listed FIRST per
     //   user preference, before Sharing Rules.
-    container.appendChild(section("Instructor", summaryFacilityInstructors(fac),
-        () => renderFacilityInstructors(fac)));
-
-    // ── PER-ACTIVITY SHARING + CONSECUTIVE ───────────────────────────────
-    // Each general activity at this facility may carry its OWN sharing rule
-    // and consecutive-bunks toggle (like specials do). The facility-level
-    // config below (when shown) is the DEFAULT that any unconfigured general
-    // activity falls back to. Two activities at the same facility (e.g. Main
-    // Activity vs. Morning Activity in Auditorium) can have different rules.
-    const _gaIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
+    // Instructor / Sharing Rules / Consecutive Bunks are now per-activity
+    // (inline dropdown on each "Configured Activities" row above). The only
+    // remaining facility-level sections appear when there are NO general
+    // activities yet — they let the user pre-configure facility defaults
+    // that any future general activity will fall back to via the resolver.
     const _gas = Array.isArray(fac.generalActivities) ? fac.generalActivities.filter(g => g && g.name) : [];
-
     if (_gas.length === 0) {
-        // No general activities yet — show the facility-level sections so the
-        // user can pre-configure a default before adding activities.
+        const _gaIsAutoMode = (window.getCampBuilderMode?.() === 'auto') || (window._daBuilderMode === 'auto');
         container.appendChild(section("Sharing Rules (facility default)", summaryGeneralSharing(fieldData),
             () => renderGeneralSharing(fieldData)));
         if (_gaIsAutoMode) {
             container.appendChild(section("Consecutive Bunks (facility default)", summaryGeneralConsec(fieldData),
-                () => renderGeneralConsec(fieldData, fac, app1)));
-        }
-    } else if (_gas.length === 1) {
-        // Single activity — bind the existing sections directly to the ga
-        // entry (no name suffix; UX matches the prior single-activity look).
-        const onlyGa = _gas[0];
-        container.appendChild(section("Sharing Rules", summaryGaSharing(onlyGa),
-            () => renderGaSharing(onlyGa)));
-        if (_gaIsAutoMode) {
-            container.appendChild(section("Consecutive Bunks", summaryGaConsec(onlyGa),
-                () => renderGaConsec(onlyGa)));
-        }
-    } else {
-        // 2+ activities — render PER-ACTIVITY sections so each can have its
-        // own rule (the user's "like specials" intent: Main vs. Morning
-        // Activity at the same Auditorium can differ).
-        _gas.forEach(ga => {
-            container.appendChild(section("Sharing Rules — " + ga.name, summaryGaSharing(ga),
-                () => renderGaSharing(ga)));
-            if (_gaIsAutoMode) {
-                container.appendChild(section("Consecutive Bunks — " + ga.name, summaryGaConsec(ga),
-                    () => renderGaConsec(ga)));
-            }
-        });
-        // Also keep the facility-level default available (collapsed,
-        // expandable) — when a ga has no per-activity config, the resolver
-        // falls through to this. Hidden until the user clicks; non-disruptive.
-        container.appendChild(section("Facility Sharing default", summaryGeneralSharing(fieldData),
-            () => renderGeneralSharing(fieldData)));
-        if (_gaIsAutoMode) {
-            container.appendChild(section("Facility Consecutive default", summaryGeneralConsec(fieldData),
                 () => renderGeneralConsec(fieldData, fac, app1)));
         }
     }
