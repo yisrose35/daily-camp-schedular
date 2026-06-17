@@ -294,7 +294,7 @@ var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
 //   page reloads. Defaults bias toward "looks good on paper out-of-the-box".
-var _activityAligned = true;   // true → columns sized by activity duration (no fixed grid)
+var _activityAligned = false;  // false → uniform fixed time-increment columns (honors _timeIncrement)
 var _hideDurations = false;    // hide the "50m" duration line under activity titles
 var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
 var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
@@ -324,6 +324,14 @@ function el(id) { return document.getElementById(id); }
 function escHtml(s) { return window.CampUtils.escapeHtml(s); }  // → campistry_utils.js (canonical; now also escapes quotes → closes attr-context gap)
 function parseTimeToMinutes(t) { return window.CampUtils.parseTimeToMinutes(t); }  // → campistry_utils.js (canonical superset; handles num/Date/am-pm, harness-proven)
 function minutesToTimeLabel(mins) { return window.CampUtils.minutesToTimeLabel(mins); }  // → campistry_utils.js (canonical; identical for valid input)
+// Compact spreadsheet-style time tag: 10:50 → "1050", 11:00 → "11", 1:30 PM → "130".
+// No colon, no AM/PM, drop the minutes when they're :00.
+function shortTimeLabel(mins) {
+    var m = ((mins % 60) + 60) % 60;
+    var h = Math.floor(mins / 60);
+    var h12 = h % 12; if (h12 === 0) h12 = 12;
+    return '' + h12 + (m === 0 ? '' : (m < 10 ? '0' + m : '' + m));
+}
 function naturalSort(a, b) {
     return String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: 'base' });
 }
@@ -1455,8 +1463,7 @@ function buildMainUI() {
                 '</div>' +
             '</div>' +
             '<button class="pcx-btn pcx-primary" onclick="window._pc3Print()">' + ICO.print + ' Print</button>' +
-            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFocus()" title="Focus mode — just the schedule">' + ICO.grid + '</button>' +
-            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFullscreen()" title="Fullscreen">' + ICO.expand + '</button>' +
+            '<button class="pcx-iconbtn" onclick="window._pc3ToggleFocus()" title="Focus mode — just the schedule">' + ICO.expand + '</button>' +
         '</div>' +
     '</div>' +
 
@@ -1486,6 +1493,14 @@ function buildMainUI() {
                 '<label class="pcx-opt"><input type="checkbox" id="pc3-show-date"' + (t.showDate !== false ? ' checked' : '') + '>Show date</label>' +
                 '<label class="pcx-opt"><input type="checkbox" id="pc3-combined"' + (t.layoutMode === 'all-bunks' ? ' checked' : '') + '>Combine all bunks</label>' +
                 '<label class="pcx-opt"><input type="checkbox" id="pc3-hide-matchups"' + (t.hideLeagueMatchups ? ' checked' : '') + '>Hide league matchups</label>' +
+                '<div class="pcx-paper" style="margin-top:8px;">' +
+                    '<label class="pcx-label" style="margin:0 0 4px;display:block;">Time increment</label>' +
+                    '<select id="pc3-time-increment">' +
+                        [10, 15, 20, 25, 30, 40, 45, 60].map(function (n) {
+                            return '<option value="' + n + '"' + (_timeIncrement === n ? ' selected' : '') + '>' + n + ' min</option>';
+                        }).join('') +
+                    '</select>' +
+                '</div>' +
                 '<div class="pcx-paper">' +
                     '<select id="pc3-orientation"><option value="landscape"' + (t.orientation === 'landscape' ? ' selected' : '') + '>Landscape</option><option value="portrait"' + (t.orientation === 'portrait' ? ' selected' : '') + '>Portrait</option></select>' +
                     '<select id="pc3-paper-size"><option value="letter"' + (t.paperSize === 'letter' ? ' selected' : '') + '>Letter</option><option value="a4"' + (t.paperSize === 'a4' ? ' selected' : '') + '>A4</option><option value="legal"' + (t.paperSize === 'legal' ? ' selected' : '') + '>Legal</option></select>' +
@@ -2079,12 +2094,10 @@ function renderAutoDivisionTable(divName, bunks) {
         : Math.max(36, Math.min(80, 700 / numCols));
     var hdrRowAttr = hasRealPeriods ? '1' : '0';
     timeCols.forEach(function (col, idx) {
-        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#fff;';
-        // Activity-aligned mode: show end time so each column header is self-documenting
-        var labelTxt = _activityAligned
-            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
-        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
+        var bgStyle = col.periodIdx >= 0 ? '' : 'background:#f2f2f2;';
+        // Compact spreadsheet tag (1050, 11, 1110 …)
+        var labelTxt = shortTimeLabel(col.startMin);
+        var fSize = inc <= 10 ? 9 : 10;
         html += '<th data-r="' + hdrRowAttr + '" data-c="' + (1 + idx) + '" data-cell-text="' + escHtml(labelTxt) + '" style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;white-space:nowrap;padding:3px 4px;text-align:center;font-weight:600;color:#1f1f1f;' + bgStyle + '">' + labelTxt + '</th>';
     });
     html += '</tr>';
@@ -2834,30 +2847,34 @@ function renderCombinedAutoTable(divBunks) {
         html += '</tr>';
     }
 
-    // Time label row (the ONLY header row when no Bell Schedule)
-    html += '<tr>';
-    if (!hasRealPeriodsC) {
-        html += '<th class="corner" style="min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
+    // Reusable compact time-ruler row (1050, 11, 1110 …) — shown in the header
+    // and repeated under each division/grade band so every section is labelled.
+    function rulerRowHtml(withLeadCell) {
+        var s = '<tr>';
+        if (withLeadCell) {
+            s += '<th style="position:sticky;left:0;z-index:2;min-width:80px;width:80px;background:#e6e6e6;border:1px solid #b0b0b0;font-size:12px;font-weight:600;color:#1f1f1f;text-align:center;vertical-align:middle;">Bunk</th>';
+        }
+        var fSize = inc <= 10 ? 9 : 10;
+        timeCols.forEach(function (col) {
+            s += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:4px 4px;color:#1f1f1f;background:#f2f2f2;border:1px solid #b0b0b0;font-weight:600;white-space:nowrap;">' + shortTimeLabel(col.startMin) + '</th>';
+        });
+        return s + '</tr>';
     }
-    timeCols.forEach(function (col) {
-        var bg = '#f2f2f2';
-        var labelTxt = _activityAligned
-            ? (col.label + ' – ' + minutesToTimeLabel(col.endMin))
-            : col.label;
-        var fSize = _activityAligned ? 10 : (inc <= 10 ? 8 : 9);
-        html += '<th style="min-width:' + colW + 'px;width:' + colW + 'px;font-size:' + fSize + 'px;text-align:center;padding:3px 4px;color:#000;background:' + bg + ';border:1px solid #000;font-weight:500;white-space:nowrap;">' + labelTxt + '</th>';
-    });
-    html += '</tr></thead><tbody>';
+
+    // Time label row (the ONLY header row when no Bell Schedule)
+    html += rulerRowHtml(!hasRealPeriodsC);
+    html += '</thead><tbody>';
 
     // One row per bunk, with division label injected between divisions
     var lastDiv = null;
     divBunks.forEach(function (item, bunkIdx) {
         var bunk = item.bunk, divName = item.div;
 
-        // Division separator row
+        // Division separator row + its own time ruler
         if (divName !== lastDiv) {
             lastDiv = divName;
             html += '<tr><th colspan="' + (1 + numCols) + '" style="background:#d9e1f2;padding:5px 12px;font-size:12px;font-weight:700;color:#1f3864;border:1px solid #b0b0b0;text-transform:none;letter-spacing:0;">' + escHtml(divName) + '</th></tr>';
+            html += rulerRowHtml(true);
         }
 
         html += '<tr>';
@@ -4317,6 +4334,9 @@ function buildExcelRows(item) {
         rows.push([formatDisplayDate(dateStr) + '  ·  ' + mode + ' Builder']);
         rows.push([]); // spacer
 
+        // Build the schedule in time-row orientation, then transpose so the
+        // sheet matches the website: time across the top (X), bunks down (Y).
+        var grid = [];
         if (isAutoMode()) {
             // ★★★ AUTO MODE: Per-bunk schedule with unified time axis ★★★
             // Build unified time axis from all bunks' slots
@@ -4330,7 +4350,7 @@ function buildExcelRows(item) {
             var timeSlots = Object.values(timeSet).sort(function (a, b) { return a.startMin - b.startMin; });
 
             // Header row
-            rows.push(['Time'].concat(bunks));
+            grid.push(['Time'].concat(bunks));
 
             // Data rows
             timeSlots.forEach(function (ts) {
@@ -4369,7 +4389,7 @@ function buildExcelRows(item) {
                     }
                 }
 
-                var row = [ts.label];
+                var row = [shortTimeLabel(ts.startMin)];
                 if (isLeagueRow && !_currentTemplate.hideLeagueMatchups) {
                     // League row: same text in every bunk column
                     var leagueText = leagueLabel;
@@ -4391,15 +4411,15 @@ function buildExcelRows(item) {
                         row.push(text);
                     });
                 }
-                rows.push(row);
+                grid.push(row);
             });
         } else {
             // ★★★ MANUAL MODE: Skeleton-based slot grid ★★★
             var blocks = buildDivisionBlocks(item);
-            rows.push(['Time'].concat(bunks));
+            grid.push(['Time'].concat(bunks));
 
             blocks.forEach(function (eb) {
-                var row = [eb.label];
+                var row = [shortTimeLabel(eb.startMin)];
                 if (eb.isLeague) {
                     // League row: put the event name + matchups in each bunk cell
                     var matchups = buildLeagueMatchups(eb, item);
@@ -4415,7 +4435,18 @@ function buildExcelRows(item) {
                         row.push(text);
                     });
                 }
-                rows.push(row);
+                grid.push(row);
+            });
+        }
+
+        // ─── Transpose: time on the X axis, bunks on the Y axis ───
+        if (grid.length > 1) {
+            var timeLabels = grid.slice(1).map(function (r) { return r[0]; });
+            rows.push(['Bunk'].concat(timeLabels));
+            bunks.forEach(function (bk, bi) {
+                var line = [bk];
+                for (var ri = 1; ri < grid.length; ri++) line.push(grid[ri][bi + 1] || '');
+                rows.push(line);
             });
         }
 
@@ -4659,6 +4690,7 @@ function bindAll() {
     var incSel = el('pc3-time-increment');
     if (incSel) incSel.addEventListener('change', function () {
         _timeIncrement = parseInt(this.value) || 15;
+        _activityAligned = false; // increment only matters with uniform columns
         try { localStorage.setItem('campistry_pc3_timeIncrement', String(_timeIncrement)); } catch (e) {}
         liveRefresh();
     });
@@ -4810,7 +4842,7 @@ function bindAll() {
         if (!e.ctrlKey && !e.metaKey && !e.altKey && !inField && printActive) {
             if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); window._pc3ShowShortcuts(); return; }
             if (e.key === 'l' || e.key === 'L') { e.preventDefault(); var lb = el('pc3-live-btn'); if (lb) lb.click(); return; }
-            if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFullscreen(); return; }
+            if (e.key === 'f' || e.key === 'F') { e.preventDefault(); window._pc3ToggleFocus(); return; }
         }
         if (e.key === 'Escape') {
             // Exit focus mode first if it's on
@@ -4874,7 +4906,9 @@ function initPrintCenter() {
 
     // Restore saved time increment + new Print Center 2.0 toggles
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
-    try { var savedAA = localStorage.getItem('campistry_pc3_activityAligned'); if (savedAA !== null) _activityAligned = savedAA === '1'; } catch (e) {}
+    // Uniform fixed-increment columns are the standard layout now (so the
+    // increment selector is meaningful). Don't resurrect the old activity-aligned pref.
+    _activityAligned = false;
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
     try { var savedHG = localStorage.getItem('campistry_pc3_highlightGaps'); if (savedHG !== null) _highlightGaps = savedHG === '1'; } catch (e) {}
