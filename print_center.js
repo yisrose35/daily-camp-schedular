@@ -1848,16 +1848,36 @@ function renderDivisionSheet(divName) {
 }
 
 // Returns absolutely-positioned vertical tick lines at each _timeIncrement boundary that
-// falls inside (startMin, endMin). The parent div must have position:relative.
-function pcInnerDividers(startMin, endMin) {
+// falls inside an activity cell. The parent div must have position:relative.
+//
+// Bricks-in-a-mold: each bunk's activities are different "bricks", but they all sit in
+// the SAME time mold. Columns are uniform PIXEL width (not time-proportional), so a line
+// must be positioned in column-space, not raw-time-space — that way the same clock minute
+// lands at the same x for every bunk, and the sub-period lines stack into one mold.
+function pcInnerDividers(timeCols, colIdx, span) {
     var inc = _timeIncrement;
-    var dur = endMin - startMin;
-    if (!inc || dur <= inc) return '';
+    if (!inc || span < 1) return '';
+    var startMin = timeCols[colIdx].startMin;
+    var endMin = timeCols[colIdx + span - 1].endMin;
+    if (endMin - startMin <= inc) return '';
     var first = (Math.floor(startMin / inc) + 1) * inc;
     if (first >= endMin) return '';
     var lines = '';
-    for (var b = first; b < endMin; b += inc) {
-        var pct = ((b - startMin) / dur * 100).toFixed(2);
+    for (var m = first; m < endMin; m += inc) {
+        // Locate the sub-column (within this cell's span) that contains minute m,
+        // then express m as a fraction of the uniform column width.
+        var jLocal = -1, frac = 0;
+        for (var k = 0; k < span; k++) {
+            var c = timeCols[colIdx + k];
+            if (m >= c.startMin && m < c.endMin) {
+                jLocal = k;
+                frac = (m - c.startMin) / (c.endMin - c.startMin);
+                break;
+            }
+            if (m === c.startMin) { jLocal = k; frac = 0; break; }
+        }
+        if (jLocal < 0) continue;
+        var pct = ((jLocal + frac) / span * 100).toFixed(2);
         lines += '<div style="position:absolute;top:0;bottom:0;left:' + pct + '%;width:1px;background:rgba(198,198,198,0.9);pointer-events:none;"></div>';
     }
     return lines;
@@ -2185,7 +2205,7 @@ function renderAutoDivisionTable(divName, bunks) {
                     html += '</div></td>';
                 } else {
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
-                    html += pcInnerDividers(matchAct.startMin, matchAct.endMin);
+                    html += pcInnerDividers(timeCols, colIdx, span);
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(actText || displayText) + '</span>';
                     // ★ Day 22.5+: duration line tagged with .pc3-dur so CSS toggle can hide it without re-render
                     if (durMin > inc) html += '<span class="pc3-dur" style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
@@ -2933,7 +2953,7 @@ function renderCombinedAutoTable(divBunks) {
                     html += '</div></td>';
                 } else {
                     html += '<div style="background:' + pillBg + ';color:' + pillTx + ';padding:3px 6px;min-height:38px;display:flex;flex-direction:column;justify-content:center;overflow:hidden;position:relative;">';
-                    html += pcInnerDividers(matchAct.startMin, matchAct.endMin);
+                    html += pcInnerDividers(timeCols, colIdx, span);
                     html += '<span style="font-size:11px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block;position:relative;">' + escHtml(displayText) + '</span>';
                     if (durMin > inc) html += '<span style="font-size:9px;opacity:.65;margin-top:1px;position:relative;">' + durMin + 'm</span>';
                     html += '</div></td>';
