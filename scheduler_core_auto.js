@@ -28457,7 +28457,7 @@
                 var _siMeta = (_siGS.app1 && _siGS.app1.sportMetaData) || (window.getSportMetaData ? window.getSportMetaData() : null) || window.sportMetaData || {};
                 Object.keys(_siMeta).forEach(function (k) { if (getSportDurations(k, _siGS).length) _siConfiguredCount++; });
             } catch (_eCnt) {}
-            var _siChecked = 0, _siViolations = 0, _siRefilled = 0, _siFreed = 0;
+            var _siChecked = 0, _siViolations = 0, _siRefilled = 0, _siFreed = 0, _siSportless = 0;
             var _siSa = window.scheduleAssignments || {};
             // field occupancy from the final grid (for refill collision checks)
             var _siOcc = {};
@@ -28480,6 +28480,20 @@
                     if (!e || e.continuation) return;
                     if (e._pinned || e._league || e._isTrip || e._trip || e._autoSpecial || e._isChinuch || e._isRotationEvent) return;
                     var sport = e.sport || e._activity; if (!sport || _siNorm(e.field) === 'free') return;
+                    // ★ SPORTLESS ENFORCEMENT: a grade with NO sport layer must never
+                    //   show a field-catalog sport. If this open slot holds a sport
+                    //   (anything that isn't a configured special) in a sportless
+                    //   grade, blank it to Free — regardless of which upstream pass
+                    //   placed it. This runs as the final mutation, so it sticks.
+                    if (typeof gradeHasSportLayer === 'function' && !gradeHasSportLayer(g)) {
+                        var _isCfgSpecial = false;
+                        try { _isCfgSpecial = !!getSpecialConfig(sport, _siGS); } catch (_eCS) {}
+                        if (!_isCfgSpecial) {
+                            slots[idx] = { field: 'Free', sport: null, _activity: 'Free', _startMin: e._startMin, _endMin: e._endMin, _autoMode: true, _fixed: true, _source: 'sportless-free', continuation: false };
+                            _siSportless++;
+                            return;
+                        }
+                    }
                     var durs = null; try { durs = getSportDurations(sport, _siGS); } catch (_eD) { durs = null; }
                     if (!durs || !durs.length) return;        // unset sport → may be any length
                     _siChecked++;
@@ -28516,12 +28530,14 @@
                     }
                 });
             });
-            if (_siViolations > 0) {
-                log('  📏 ' + _DURLBL + ' ' + _siViolations + ' cut sport(s) corrected (' + _siRefilled + ' refilled with a fitting sport, ' + _siFreed + ' left Free) — checked ' + _siChecked + ' configured-sport placement(s).');
+            if (_siViolations > 0 || _siSportless > 0) {
+                log('  📏 ' + _DURLBL + ' ' + _siViolations + ' cut sport(s) corrected (' + _siRefilled + ' refilled with a fitting sport, ' + _siFreed + ' left Free)' +
+                    (_siSportless > 0 ? (' + ' + _siSportless + ' catalog sport(s) blanked to Free in sportless grade(s)') : '') +
+                    ' — checked ' + _siChecked + ' configured-sport placement(s).');
             } else {
                 log(_DURLBL + ' ✅ no cut sports (checked ' + _siChecked + ' configured-sport placement(s); engine sees durations for ' + _siConfiguredCount + ' sport(s)).');
             }
-            try { console.log('[DUR-INVARIANT ' + (_durTag || '') + '] configuredSports=' + _siConfiguredCount + ' checked=' + _siChecked + ' violations=' + _siViolations + ' refilled=' + _siRefilled + ' freed=' + _siFreed); } catch (_e) {}
+            try { console.log('[DUR-INVARIANT ' + (_durTag || '') + '] configuredSports=' + _siConfiguredCount + ' checked=' + _siChecked + ' violations=' + _siViolations + ' refilled=' + _siRefilled + ' freed=' + _siFreed + ' sportlessBlanked=' + _siSportless); } catch (_e) {}
         } catch (_e6866) { try { warn(_DURLBL + ' error: ' + (_e6866 && _e6866.message)); } catch (_x) {} }
         };
         _enforceSportDurInvariant('6.866');
