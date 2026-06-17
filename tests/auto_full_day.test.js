@@ -104,7 +104,7 @@ function campConfig(opts) {
       autoStart: HM(9, 0),  autoEnd: HM(15, 0),
       chairStart: HM(9, 0), chairEnd: HM(15, 0),
       autoStartStr: '9:00', autoEndStr: '15:00',
-      smooth: true, noSports: true,
+      smooth: true, smoothOffGrid: !!opts.smoothOffGrid, noSports: true,
     };
   }
   if (opts.swimReal) {
@@ -1656,19 +1656,21 @@ test('auto scheduler builds a fully GAPLESS sportless day when walls are grid-al
   assert.deepEqual(bad, [], 'grid-aligned walls must yield a gapless day:\n  ' + bad.join('\n  '));
 });
 
-test('auto scheduler smooths even an OFF-GRID wall layout (lunch-snap + region tiling)', async (t) => {
-  // Stronger result: with a fine-grained catalog (10-min specials) plus the
-  //   lunch-snap + region-tiling changes, the solver closes the would-be 5-min
-  //   remainder from an off-grid lunch (:25) + 35-min Main too — the dead time is
-  //   absorbed/relocated rather than stranded mid-day. Asserts the modeled grade
-  //   stays gapless; the duration-lock (no-stretch) invariant is enforced by
-  //   runScenario's universal specialDur check.
-  const { results } = await runScenario('SMOOTH-DAY OFF-GRID (lunch :25, Main 35min)', {
-    smooth: true, smoothOffGrid: true, requireNoSports: true, skipGapCheck: true,
+test('auto scheduler keeps a pinned lunch at its configured time (never nudges it)', async (t) => {
+  // Regression guard: a pinned lunch must NOT be moved by the tiler to swallow a
+  //   sliver. (A prior "snap wall" change nudged lunch off its configured 12:20
+  //   start — the user reported lunch had moved.) lunch is a hard-fixed wall:
+  //   every bunk's lunch block must sit exactly at its configured 12:20-12:40.
+  const { results } = await runScenario('SMOOTH-DAY (pinned-lunch position guard)', {
+    smooth: true, requireNoSports: true, skipGapCheck: true,
   });
-  const bad = Object.entries(results)
-    .filter(([b, r]) => r.grade === 'Auto')
-    .filter(([b, r]) => r.gapMin !== 0)
-    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
-  assert.deepEqual(bad, [], 'off-grid walls should still be smoothed to a gapless day:\n  ' + bad.join('\n  '));
+  const LUNCH_S = HM(12, 20), LUNCH_E = HM(12, 40);
+  const moved = [];
+  for (const [bunk, r] of Object.entries(results)) {
+    const lunch = (r.entries || []).filter(e => String(e.act).toLowerCase() === 'lunch');
+    if (!lunch.length) { moved.push(`${bunk}: no lunch block`); continue; }
+    const ok = lunch.some(e => e.startMin === LUNCH_S && e.endMin === LUNCH_E);
+    if (!ok) moved.push(`${bunk}: lunch at ${lunch.map(e => fmt(e.startMin) + '-' + fmt(e.endMin)).join(',')} (want 12:20-12:40)`);
+  }
+  assert.deepEqual(moved, [], 'pinned lunch must stay at its configured time:\n  ' + moved.join('\n  '));
 });
