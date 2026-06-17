@@ -294,7 +294,7 @@ var _timeIncrement = 15; // minutes: 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 
 // ★ Day 22.5+ Print Center reinvention — activity-aligned columns, per-bunk page breaks,
 //   content toggles. These are persisted via localStorage so the user's setup survives
 //   page reloads. Defaults bias toward "looks good on paper out-of-the-box".
-var _activityAligned = false;  // false → uniform fixed time-increment columns (honors _timeIncrement)
+var _activityAligned = true;   // true → columns sized by activity duration (default); false → uniform fixed increments
 var _hideDurations = false;    // hide the "50m" duration line under activity titles
 var _hideLocations = false;    // hide "vs Bunk Name" / "(Location)" supplementary text
 var _pageBreakPerBunk = true;  // print: each bunk on its own page in Bunks view
@@ -2034,11 +2034,6 @@ function renderAutoDivisionTable(divName, bunks) {
             timeCols.push({ startMin: t, endMin: colEnd, label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
     }
-    // Trailing day-end tick: a final column whose label is the closing time
-    // (e.g. 3:00), so the schedule visibly reaches the end of day.
-    if (timeCols.length) {
-        timeCols.push({ startMin: dayEnd, endMin: dayEnd, label: minutesToTimeLabel(dayEnd), periodIdx: -1, isEnd: true });
-    }
     var numCols = timeCols.length;
 
     // ─── 4. Render table ─────
@@ -2113,13 +2108,6 @@ function renderAutoDivisionTable(divName, bunks) {
         while (colIdx < numCols) {
             var colStart = timeCols[colIdx].startMin;
             var colEnd = timeCols[colIdx].endMin;
-
-            // Trailing day-end tick — blank cell under the closing-time column
-            if (timeCols[colIdx].isEnd) {
-                html += '<td class="cell-free" data-r="' + rowR + '" data-c="' + (1 + colIdx) + '" data-cell-text="" style="background:#f7f7f7;"></td>';
-                colIdx++;
-                continue;
-            }
 
             // Find which bunk activity covers this time column
             var matchAct = null;
@@ -2817,10 +2805,6 @@ function renderCombinedAutoTable(divBunks) {
             timeCols.push({ startMin: t, endMin: Math.min(t + inc, dayEnd), label: minutesToTimeLabel(t), periodIdx: pIdx });
         }
     }
-    // Trailing day-end tick (e.g. 3:00) so the schedule visibly reaches the day end.
-    if (timeCols.length) {
-        timeCols.push({ startMin: dayEnd, endMin: dayEnd, label: minutesToTimeLabel(dayEnd), periodIdx: -1, isEnd: true });
-    }
     var numCols = timeCols.length;
     var colW = _activityAligned
         ? Math.max(80, Math.min(160, 1000 / Math.max(1, numCols)))
@@ -2895,12 +2879,6 @@ function renderCombinedAutoTable(divBunks) {
         while (colIdx < numCols) {
             var colStart = timeCols[colIdx].startMin;
             var colEnd2 = timeCols[colIdx].endMin;
-            // Trailing day-end tick — blank cell under the closing-time column
-            if (timeCols[colIdx].isEnd) {
-                html += '<td style="padding:3px;border:1px solid #c6c6c6;background:#f7f7f7;" data-r="' + (2+bunkIdx) + '" data-c="' + (1+colIdx) + '" data-cell-text=""><div style="min-height:38px;"></div></td>';
-                colIdx++;
-                continue;
-            }
             var matchAct = null;
             for (var ai = 0; ai < acts.length; ai++) {
                 if (acts[ai].startMin < colEnd2 && acts[ai].endMin > colStart) { matchAct = acts[ai]; break; }
@@ -4922,9 +4900,9 @@ function initPrintCenter() {
 
     // Restore saved time increment + new Print Center 2.0 toggles
     try { var savedInc = localStorage.getItem('campistry_pc3_timeIncrement'); if (savedInc) _timeIncrement = parseInt(savedInc) || 15; } catch (e) {}
-    // Uniform fixed-increment columns are the standard layout now (so the
-    // increment selector is meaningful). Don't resurrect the old activity-aligned pref.
-    _activityAligned = false;
+    // Columns are activity-aligned by default (each activity sized to its real
+    // duration); the increment picker switches to uniform fixed columns on demand.
+    _activityAligned = true;
     try { var savedHD = localStorage.getItem('campistry_pc3_hideDurations'); if (savedHD !== null) _hideDurations = savedHD === '1'; } catch (e) {}
     try { var savedHL = localStorage.getItem('campistry_pc3_hideLocations'); if (savedHL !== null) _hideLocations = savedHL === '1'; } catch (e) {}
     try { var savedHG = localStorage.getItem('campistry_pc3_highlightGaps'); if (savedHG !== null) _highlightGaps = savedHG === '1'; } catch (e) {}
