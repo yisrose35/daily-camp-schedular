@@ -8729,6 +8729,22 @@
                             sWinStart = Math.max(mrc.start, sWinStart);
                             sWinEnd = Math.min(mrc.end, sWinEnd);
                         }
+                        // ★ SWIM CHANGE ENVELOPE (mirror of Phase 2.3 @ ~15081): in a
+                        //   period-less camp the pre-change is laid immediately before swim
+                        //   by computeSwimChangeAnchors' no-periods branch, which (unlike the
+                        //   bell-schedule branch) has NO day-start floor. If swim is allowed to
+                        //   open flush at the grade day start, its Change spills before the day
+                        //   begins (live: swim 9:10, 15-min Change → 8:55, day start 9:00).
+                        //   Reserve the pre-change pad so swim's earliest start is
+                        //   gradeStart + preChange — but only when the swim still fits its
+                        //   window (tight windows fall back to prior behavior so swim stays
+                        //   placeable). Gated to no-periods camps; bell-schedule camps already
+                        //   walk the change into the previous period correctly.
+                        var _swHasPeriods = !!(window.campPeriods && window.campPeriods[grade] && window.campPeriods[grade].length);
+                        var _swPreEnv = (swimLayer.preChangeMin > 0) ? swimLayer.preChangeMin : 0;
+                        if (_swPreEnv > 0 && !_swHasPeriods && (gradeStart + _swPreEnv + sc.dMin) <= sWinEnd) {
+                            sWinStart = Math.max(sWinStart, gradeStart + _swPreEnv);
+                        }
                         needs.push({ type: 'swim', event: swimLayer.event || 'Swim', layer: swimLayer,
                             dMin: sc.dMin, dMax: sc.dMax, windowStart: sWinStart, windowEnd: sWinEnd,
                             _activityLocked: true, _source: 'need' });
