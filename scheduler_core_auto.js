@@ -14945,11 +14945,152 @@
                     var lc = String(fieldName).toLowerCase();
                     (_p14FieldUse[lc] = _p14FieldUse[lc] || []).push({ start: s, end: e, grade: grade });
                 };
+                // ═══════════════════════════════════════════════════════════════
+                // STEP 1.45 — SYNC SHARED CROSS-DIVISION CUSTOM LAYERS
+                //   A custom layer (no connect-to) that is SHARED cross-division across
+                //   ≥2 grades (e.g. "Morning Breakout (Exclusive)" for 3rd/4th/5th) must
+                //   run as ONE joint session: all participating grades/bunks at the SAME
+                //   time in the shared room. The normal per-bunk Phase-1.4/Phase-3 path
+                //   places each grade independently → they land at different times, collide
+                //   in the shared room at misaligned starts (cross-division / staggered-
+                //   sharing violations) and the later grades get dropped. This pass finds
+                //   ONE common slot free for EVERY participating bunk and pins them all
+                //   there (committed wall, like Phase 1.4). All-or-nothing: if no common
+                //   slot exists it changes nothing and the normal path runs (no regression).
+                //   KILL SWITCH: globalSettings.app1.syncSharedCustom ('off'|false → skip).
+                // ═══════════════════════════════════════════════════════════════
+                var _syncHandled = {};
+                try {
+                    var _syncOff = false;
+                    try { var _sf = (globalSettings && globalSettings.app1 && globalSettings.app1.syncSharedCustom); if (_sf === 'off' || _sf === false) _syncOff = true; } catch (_e) {}
+                    if (!_syncOff) {
+                        var _syncGroups = {};
+                        allGrades.forEach(function (grade) {
+                            (layersByGrade[grade] || []).forEach(function (cl) {
+                                if ((cl.type || '').toLowerCase() !== 'custom') return;
+                                if (cl._classification === 'pinned') return;   // Phase 0 hard-pin
+                                if (cl.adjacentTo) return;                     // connect-to → Phase 2.4
+                                var _nmS = String(cl.customActivity || cl.event || '').toLowerCase().trim();
+                                if (!_nmS) return;
+                                if ((window.__cbGeneralNamesLow || []).indexOf(_nmS) >= 0) return;
+                                var _fldS = cl.customField || null;
+                                var _info = null; try { _info = getCustomActivitySharingInfo(cl.customActivity || cl.event, _fldS, cl.customSharing, globalSettings); } catch (_e) {}
+                                // Only EXPLICIT cross-division sharing qualifies (user listed the
+                                //   co-occupying grades → shareType 'cross_division'). not_sharable /
+                                //   same_division / default 'all' never force a synchronized session.
+                                if (!_info || _info.shareType !== 'cross_division') return;
+                                var _keyS = _nmS + '||' + String(_fldS || '').toLowerCase();
+                                if (!_syncGroups[_keyS]) _syncGroups[_keyS] = { act: cl.customActivity || cl.event || 'Custom', field: _fldS, dur: (cl.durationMin || cl.periodMin || 30), info: _info, entries: [] };
+                                _syncGroups[_keyS].entries.push({ grade: grade, cl: cl });
+                            });
+                        });
+                        var _syncRoomLedger = [];   // {field,s,e,act} of joint sessions placed here — prevents two DIFFERENT activities sharing one room at the same time
+                        Object.keys(_syncGroups).forEach(function (_keyS) {
+                            var g = _syncGroups[_keyS];
+                            var _gradeSet = {}; g.entries.forEach(function (en) { _gradeSet[String(en.grade)] = 1; });
+                            var _gradeList = Object.keys(_gradeSet);
+                            if (_gradeList.length < 2) return;   // single grade → normal path handles it
+                            // every participating-grade PAIR must be allowed to co-occupy, else a joint
+                            //   session would be illegal — verify with EACH grade's OWN sharing config
+                            //   (configs can be asymmetric). Skip the group if any pair fails.
+                            var _pairsOk = true;
+                            g.entries.forEach(function (en) {
+                                if (!_pairsOk) return;
+                                var _gi2 = null; try { _gi2 = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                var _ap = (_gi2 && _gi2.allowedPairs) || {};
+                                var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
+                                if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
+                            });
+                            if (!_pairsOk) return;
+                            // consensus DURATION — a joint session has ONE length. If the participating
+                            //   layers disagree, skip the group (a single slot can't satisfy all).
+                            var _durList = g.entries.map(function (en) { return (en.cl.durationMin || en.cl.periodMin || 30); });
+                            var _durS = _durList[0];
+                            for (var _di = 1; _di < _durList.length; _di++) { if (_durList[_di] !== _durS) { _durS = null; break; } }
+                            if (_durS == null) return;
+                            // strictest (MIN) room capacity across every participating grade's own config
+                            var _capS = Infinity;
+                            g.entries.forEach(function (en) {
+                                var _ci = null; try { _ci = getCustomActivitySharingInfo(g.act, g.field, en.cl.customSharing, globalSettings); } catch (_e) {}
+                                var _c = (_ci && _ci.capacity) ? _ci.capacity : Infinity;
+                                if (_c < _capS) _capS = _c;
+                            });
+                            // participating bunks + common window (∩ of grade days ∩ layer windows)
+                            var _parts = [], _winS = -Infinity, _winE = Infinity;
+                            g.entries.forEach(function (en) {
+                                var _gd = divisions[en.grade] || divisions[String(en.grade)] || {};
+                                var _gsS = parseTimeToMinutes(_gd.startTime) || 540, _geS = parseTimeToMinutes(_gd.endTime) || 960;
+                                _winS = Math.max(_winS, Math.max(en.cl.startMin || 0, _gsS));
+                                _winE = Math.min(_winE, Math.min(en.cl.endMin || 1440, _geS));
+                                var _allBS = getBunksForGrade(en.grade, divisions);
+                                var _tbS = (en.cl.customBunks && en.cl.customBunks.length > 0) ? _allBS.filter(function (b) { return en.cl.customBunks.includes(String(b)); }) : _allBS;
+                                _tbS.forEach(function (b) { _parts.push({ bunk: b, grade: en.grade, cl: en.cl }); });
+                            });
+                            if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) return;
+                            if (isFinite(_capS) && _parts.length > _capS) return;   // can't all fit the room at once
+                            // ALL-OR-NOTHING: if ANY participating bunk ALREADY has this activity (e.g. a
+                            //   Phase-0 pin), abort the whole group — a partial sync would re-stagger the rest.
+                            var _actLow = String(g.act).toLowerCase().trim();
+                            for (var _qi = 0; _qi < _parts.length; _qi++) {
+                                var _qtl = bunkTimelines[_parts[_qi].bunk] || [];
+                                if (_qtl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _actLow; })) return;
+                            }
+                            // earliest common slot: free for EVERY participating bunk's committed walls,
+                            //   not overlapping any participating grade's planned SWIM band (swim is pinned
+                            //   later in Phase 2.3 — must not be blocked), the room holds no non-participating
+                            //   grade and no DIFFERENT joint activity.
+                            var _fldLow = g.field ? String(g.field).toLowerCase() : null;
+                            var _slotS = null;
+                            for (var _s = _winS; _s + _durS <= _winE; _s += 5) {
+                                var _e = _s + _durS, _ok = true;
+                                for (var _pi = 0; _pi < _parts.length && _ok; _pi++) {
+                                    var _tl = bunkTimelines[_parts[_pi].bunk] || [];
+                                    for (var _bi = 0; _bi < _tl.length; _bi++) {
+                                        var _blk = _tl[_bi];
+                                        if (!_blk || !(_blk._committed || _blk._fixed || _blk._classification === 'pinned')) continue;
+                                        if (_blk.startMin < _e && _blk.endMin > _s) { _ok = false; break; }
+                                    }
+                                }
+                                if (_ok) {
+                                    for (var _gj = 0; _gj < _gradeList.length && _ok; _gj++) {
+                                        var _swB = staggerPlan && staggerPlan[_gradeList[_gj]] && staggerPlan[_gradeList[_gj]].typeBands && staggerPlan[_gradeList[_gj]].typeBands.swim;
+                                        if (_swB && _s < _swB.end && _e > _swB.start) _ok = false;
+                                    }
+                                }
+                                if (_ok && _fldLow) {
+                                    var _usedS = _p14FieldUse[_fldLow] || [];
+                                    for (var _ui = 0; _ui < _usedS.length && _ok; _ui++) { var _u = _usedS[_ui]; if (_u.start < _e && _u.end > _s && !_gradeSet[String(_u.grade)]) _ok = false; }
+                                    for (var _ri = 0; _ri < _syncRoomLedger.length && _ok; _ri++) { var _r = _syncRoomLedger[_ri]; if (_r.field === _fldLow && _r.act !== _actLow && _r.s < _e && _r.e > _s) _ok = false; }
+                                }
+                                if (_ok) { _slotS = _s; break; }
+                            }
+                            if (_slotS == null) return;   // no common slot → normal per-bunk path (no change)
+                            var _e2S = _slotS + _durS;
+                            _parts.forEach(function (p) {
+                                var _tl = bunkTimelines[p.bunk] || (bunkTimelines[p.bunk] = []);
+                                _tl.push({
+                                    startMin: _slotS, endMin: _e2S,
+                                    type: 'custom', event: g.act, layer: p.cl, field: g.field || null,
+                                    _activity: g.act, _customActivity: p.cl.customActivity || g.act, _customField: g.field || null,
+                                    _classification: 'pinned', _committed: true, _fixed: true,
+                                    _activityLocked: true, _source: 'phase1.45-sync-shared-custom'
+                                });
+                                if (typeof ensureTimelineIntegrity === 'function') { try { ensureTimelineIntegrity(p.bunk); } catch (_eti) {} }
+                                _p14RecordField(g.field, p.grade, _slotS, _e2S);
+                                _p14Count++;
+                            });
+                            if (_fldLow) _syncRoomLedger.push({ field: _fldLow, s: _slotS, e: _e2S, act: _actLow });
+                            _syncHandled[_keyS] = true;
+                            log('[Phase1.45] ★ SYNC shared custom "' + g.act + '" → one joint session for ' + _parts.length + ' bunk(s) across ' + _gradeList.length + ' grades at ' + _slotS + '-' + _e2S);
+                        });
+                    }
+                } catch (_e145) { try { warn('[Phase1.45] sync-shared-custom error (skipped, non-fatal): ' + (_e145 && _e145.message)); } catch (_x) {} }
                 allGrades.forEach(function (grade) {
                     (layersByGrade[grade] || []).forEach(function (cl) {
                         if ((cl.type || '').toLowerCase() !== 'custom') return;
                         if (cl._classification === 'pinned') return;
                         if (cl.adjacentTo) return;
+                        if (_syncHandled[String(cl.customActivity || cl.event || '').toLowerCase().trim() + '||' + String(cl.customField || '').toLowerCase()]) return;
                         var _nm = String(cl.customActivity || cl.event || '').toLowerCase().trim();
                         if (!_nm) return;
                         if ((window.__cbGeneralNamesLow || []).indexOf(_nm) >= 0) return;
