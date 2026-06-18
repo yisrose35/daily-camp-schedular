@@ -613,7 +613,14 @@
                     // ★★★ v17.7: Store time range AND split tile flag for proper tracking ★★★
                     _startMin: block.startTime,
                     _endMin: block.endTime,
-                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false
+                    _fromSplitTile: isSplitTileBlock || pick._fromSplitTile || false,
+                    // ★ Persist the pinned flag so downstream capacity sweeps (STEP 7.55
+                    //   + the daily_adjustments capacity-repair gate) can protect pinned
+                    //   whole-division events (Learning Groups, Snacks, etc.). Without this
+                    //   the flag was dropped here, so a custom-named pinned period not in the
+                    //   sweep's skip-list was treated as a cap-1 room and demoted to Free for
+                    //   all-but-one bunk — breaking the full-division cell merge.
+                    _pinned: pick._pinned || false
                 };
                 if (_specFeat) {
                     // part label on every slot (so continuations also display it)
