@@ -19256,169 +19256,165 @@
                 if ((b._fixed || b._classification === 'pinned') && t !== 'special') return true;
                 return false;
             };
-            // "junk" = a placeholder the greedy perfection-fill minted to mask a
-            //   gap; drop it so its minutes become honest, compactible slack.
+            // "junk" = fillable dead time, not a real activity: a perfection-fill
+            //   placeholder, a Free block, or a reserved sport/slot (which is dead
+            //   in a sportless grade). Drop it so its minutes become honest budget
+            //   the duration-first packer can re-fill with real specials.
             var _fitIsJunk = function (b) {
                 if (b && b._source === 'perfection-fill') return true;
+                var t = _fitNorm(b.type);
+                if (t === 'slot' || t === 'sport') return true;
                 var nm = _fitNorm(_fitNm(b));
                 return nm === 'free' || nm === '';
             };
             var _fitIsGuarded = function (nm) { try { return !!getSpecialConfig(nm, globalSettings); } catch (_e) { return false; } };
 
-            if (_fitMathApplyOn && _fitHasEngine) {
-                // Cross-bunk occupancy of guarded (shared/cap-limited) specials at
-                //   their CURRENT positions — across ALL layered grades, so a
-                //   sportless-grade move/fill can't breach capacity against a
-                //   sport-grade special either.
+            if (_fitMathApplyOn && _fitHasEngine && typeof window.PeriodTiler.packBunkDay === 'function') {
+                // Types whose time is externally fixed — pinned at their current
+                //   position regardless of any layer window (swim envelope moves as
+                //   a unit and stays put here; leagues/trips/rotation events are
+                //   externally timed). Everything else's movability is derived from
+                //   its layer-window slack.
+                var _PINNED_T = new Set(['swim', 'change', 'pre-change', 'post-change',
+                    'league', 'specialty_league', 'rotation_event', 'trip', 'scheduled_activity']);
+                // Cross-bunk occupancy of guarded (shared/cap-limited) specials.
                 var _fitOcc = {};
-                var _fitOccAdd = function (nm, g, ns, ne, ref) {
-                    var key = _fitNorm(nm);
-                    (_fitOcc[key] || (_fitOcc[key] = [])).push({ s: ns, e: ne, grade: g, ref: ref || null });
-                };
+                var _fitOccAdd = function (nm, g, ns, ne, ref) { var key = _fitNorm(nm); (_fitOcc[key] || (_fitOcc[key] = [])).push({ s: ns, e: ne, grade: g, ref: ref || null }); };
                 allGrades.forEach(function (g) {
                     if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(g)) return;
                     getBunksForGrade(g, divisions).forEach(function (bk) {
                         (bunkTimelines[bk] || []).forEach(function (b) {
                             if (!b || b.startMin == null || b.endMin == null || b.endMin <= b.startMin) return;
-                            var nm = _fitNm(b);
-                            if (_fitIsJunk(b) || !_fitIsGuarded(nm)) return;
+                            var nm = _fitNm(b); if (_fitIsJunk(b) || !_fitIsGuarded(nm)) return;
                             _fitOccAdd(nm, g, b.startMin, b.endMin, b);
                         });
                     });
                 });
-                var _fitMoveSafe = function (nm, grade, ref, ns, ne) {
+                // May special `nm` (grade) occupy [ns,ne]? Enforces capacity,
+                //   same_division, AND same-start sharing (a sharable special may
+                //   only co-occupy if it starts at the SAME minute — no staggered
+                //   joins, which the validator rejects).
+                var _fitSafeAt = function (nm, grade, ref, ns, ne) {
                     var arr = _fitOcc[_fitNorm(nm)] || [];
-                    var info; try { info = getSpecialSharingInfo(nm, activityProperties, globalSettings); }
-                    catch (_e) { info = { shareType: 'not_sharable', capacity: 1 }; }
-                    var cap = info.capacity || (info.shareType === 'not_sharable' ? 1 : 2);
-                    var overlaps = 0, crossGrade = false;
+                    var info; try { info = getSpecialSharingInfo(nm, activityProperties, globalSettings); } catch (_e) { info = { shareType: 'not_sharable', capacity: 1 }; }
+                    var cap = info.capacity || (info.shareType === 'not_sharable' ? 1 : 2), sameStart = 1;
                     for (var i = 0; i < arr.length; i++) {
                         var o = arr[i]; if (o.ref === ref) continue;
-                        if (ns < o.e - 0.0001 && ne > o.s + 0.0001) { overlaps++; if (o.grade !== grade) crossGrade = true; }
+                        if (ns < o.e - 0.0001 && ne > o.s + 0.0001) {
+                            if (info.shareType === 'not_sharable') return false;
+                            if (info.shareType === 'same_division' && o.grade !== grade) return false;
+                            if (Math.abs(o.s - ns) > 0.0001) return false;   // staggered start — not a true shared session
+                            sameStart++;
+                        }
                     }
-                    if (info.shareType === 'not_sharable') return overlaps === 0;
-                    if (info.shareType === 'same_division' && crossGrade) return false;
-                    return (overlaps + 1) <= cap;
+                    return sameStart <= cap;
                 };
 
-                var _fitMoved = 0, _fitFilled = 0, _fitFilledMin = 0, _fitJunk = 0,
-                    _fitBunksTouched = 0, _fitRolledBack = 0, _fitSlackMin = 0, _fitRegions = 0, _fitFillSamples = [];
+                var _fitMoved = 0, _fitFilled = 0, _fitFilledMin = 0, _fitJunk = 0, _fitDropped = 0,
+                    _fitResidual = 0, _fitBunksTouched = 0, _fitFillSamples = [];
 
                 allGrades.forEach(function (grade) {
                     if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(grade)) return;
-                    // FIT-MATH owns the SPORTLESS layered grades only.
+                    // FIT-MATH owns the SPORTLESS layered grades; sport grades keep
+                    //   the PeriodTiler path so sports own their slack.
                     if (typeof gradeHasSportLayer === 'function' && gradeHasSportLayer(grade)) return;
-                    var divName = grade;
                     getBunksForGrade(grade, divisions).forEach(function (bunk) {
                         var live = (bunkTimelines[bunk] || []).filter(function (b) {
                             return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin;
                         });
                         if (!live.length) return;
-                        var junk = live.filter(_fitIsJunk);
+                        // Full-day span (incl. junk, so dropped sport/Free time is re-fillable budget).
+                        var daySpanStart = live[0].startMin, daySpanEnd = live[0].endMin;
+                        live.forEach(function (b) { if (b.startMin < daySpanStart) daySpanStart = b.startMin; if (b.endMin > daySpanEnd) daySpanEnd = b.endMin; });
+                        // Don't let this bunk's own (stale, pre-pack) positions count against itself.
+                        var liveSet = new Set(live);
+                        Object.keys(_fitOcc).forEach(function (k) { _fitOcc[k] = _fitOcc[k].filter(function (e) { return !liveSet.has(e.ref); }); });
+
+                        var junkN = live.filter(_fitIsJunk).length;
                         var kept = live.filter(function (b) { return !_fitIsJunk(b); });
-                        if (!kept.length) { if (junk.length) { bunkTimelines[bunk] = []; _fitJunk += junk.length; } return; }
-                        var sorted = kept.slice().sort(function (a, b) { return a.startMin - b.startMin; });
-                        var dayS = sorted[0].startMin, dayE = sorted[0].endMin;
-                        sorted.forEach(function (b) { if (b.startMin < dayS) dayS = b.startMin; if (b.endMin > dayE) dayE = b.endMin; });
-                        var walls = sorted.filter(_fitIsWall);
-                        // Regions = the spans BETWEEN walls, within [dayS,dayE].
-                        var regions = [], cur = dayS;
-                        walls.forEach(function (w) { if (w.startMin > cur) regions.push({ s: cur, e: w.startMin }); if (w.endMin > cur) cur = w.endMin; });
-                        if (cur < dayE) regions.push({ s: cur, e: dayE });
-                        if (!regions.length) { if (junk.length) { bunkTimelines[bunk] = sorted; _fitJunk += junk.length; } return; }
-                        // Assign each fillable real block to a region by ORIGINAL start.
-                        var regFill = regions.map(function (R) {
-                            return { R: R, fill: sorted.filter(function (b) { return !_fitIsWall(b) && b.startMin >= R.s && b.startMin < R.e; }) };
-                        });
-                        // Snapshot for rollback.
-                        var snap = sorted.map(function (b) { return { b: b, s: b.startMin, e: b.endMin }; });
-                        var occTouched = [], newBlocks = [];
-                        var usedNames = {}; sorted.forEach(function (b) { usedNames[_fitNorm(_fitNm(b))] = true; });
-                        var mMoved = 0, mFilled = 0, mFilledMin = 0, mSlack = 0;
+                        if (!kept.length) { bunkTimelines[bunk] = []; _fitJunk += junkN; return; }
 
-                        regFill.forEach(function (rf) {
-                            var R = rf.R, fill = rf.fill;
-                            _fitRegions++;
-                            var pos = R.s;
-                            // (1) COMPACT existing reals flush from region start.
-                            for (var fi = 0; fi < fill.length; fi++) {
-                                var b = fill[fi], dur = b.endMin - b.startMin;
-                                if (pos + dur > R.e) { pos = Math.max(pos, b.endMin); continue; }
-                                var nm = _fitNm(b), ns = pos, ne = pos + dur, guarded = _fitIsGuarded(nm);
-                                if (ns !== b.startMin && guarded && !_fitMoveSafe(nm, grade, b, ns, ne)) {
-                                    var found = false;
-                                    for (var c = ns; c + dur <= R.e; c += 5) { if (_fitMoveSafe(nm, grade, b, c, c + dur)) { ns = c; ne = c + dur; found = true; break; } }
-                                    if (!found) { pos = Math.max(pos, b.endMin); continue; }
-                                }
-                                if (ns !== b.startMin) {
-                                    b.startMin = ns; b.endMin = ne; mMoved++;
-                                    if (guarded) {
-                                        var key = _fitNorm(nm), arr = _fitOcc[key] || (_fitOcc[key] = []), ent = null;
-                                        for (var j = 0; j < arr.length; j++) { if (arr[j].ref === b) { ent = arr[j]; break; } }
-                                        if (!ent) { ent = { s: ns, e: ne, grade: grade, ref: b }; arr.push(ent); }
-                                        occTouched.push({ entry: ent, s: ent.s, e: ent.e }); ent.s = ns; ent.e = ne;
-                                    }
-                                }
-                                pos = ne;
+                        // Classify: type 'special' → movable filler; everything else
+                        //   → anchor whose movability comes from its window slack.
+                        var anchors = [], existSpecs = [], idMap = {}, idc = 0, usedSet = {};
+                        kept.forEach(function (b) {
+                            var nm = _fitNm(b), t = _fitNorm(b.type), dur = b.endMin - b.startMin; if (dur <= 0) return;
+                            usedSet[_fitNorm(nm)] = 1;
+                            var id = 'B' + (idc++); idMap[id] = b;
+                            if (t === 'special') { existSpecs.push({ id: id, name: nm, dur: dur, score: 0 }); return; }
+                            var winS, winE, pinned;
+                            if (_PINNED_T.has(t)) { winS = b.startMin; winE = b.endMin; pinned = true; }
+                            else {
+                                winS = (b.layer && b.layer.startMin != null) ? b.layer.startMin : b.startMin;
+                                winE = (b.layer && b.layer.endMin != null) ? b.layer.endMin : b.endMin;
+                                winS = Math.max(winS, daySpanStart); winE = Math.min(winE, daySpanEnd);
+                                if (winE - winS < dur) { winS = b.startMin; winE = b.startMin + dur; }   // unusable window → pin at current
+                                pinned = (winE - winS - dur) <= 0;
                             }
-                            // (2) FILL the trailing slack with eligible specials (duration-first).
-                            var slack = R.e - pos, guardLoop = 0;
-                            while (slack >= 10 && guardLoop++ < 30) {
-                                var best = null;
-                                for (var si = 0; si < todaysSpecials.length; si++) {
-                                    var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
-                                    if (usedNames[_fitNorm(sp.name)]) continue;            // no same-day repeat
-                                    var d; try { d = getSpecialDuration(sp.name, activityProperties, globalSettings); } catch (_e) { d = null; }
-                                    if (!d || d <= 0 || d > slack) continue;
-                                    if (!isSpecialAvailableForBunk(sp.name, divName, bunk, globalSettings)) continue;
-                                    var lim; try { lim = (window.RotationEngine && window.RotationEngine.calculateLimitScore) ? window.RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, divName) : 0; } catch (_e) { lim = 0; }
-                                    if (!isFinite(lim)) continue;                          // hard-blocked (freq/maxUsage/availDays/cohort)
-                                    if (!_fitMoveSafe(sp.name, grade, null, pos, pos + d)) continue;  // capacity / same_division
-                                    var rot; try { rot = (window.RotationEngine && window.RotationEngine.calculateRotationScore) ? window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: sp.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties: activityProperties }) : 0; } catch (_e) { rot = 0; }
-                                    var exact = (d === slack) ? 1 : 0;
-                                    if (!best || exact > best.exact || (exact === best.exact && d > best.dur) || (exact === best.exact && d === best.dur && rot < best.rot)) best = { name: sp.name, dur: d, exact: exact, rot: rot };
-                                }
-                                if (!best) break;
-                                var nb = {
-                                    startMin: pos, endMin: pos + best.dur, type: 'special', event: best.name, layer: null,
-                                    _classification: 'pinned', _committed: true, _fixed: true, _gradeWide: false,
-                                    _activityLocked: true, _noBacktrack: false, _assignedSpecial: best.name,
-                                    _specialLocation: (getLocationForSpecial(best.name, activityProperties, globalSettings) || null),
-                                    _specialDuration: best.dur, _isSpecialLocation: true, _source: 'fit-fill'
-                                };
-                                newBlocks.push(nb);
-                                usedNames[_fitNorm(best.name)] = true;
-                                try { registerSpecialUsage(best.name, grade, pos, pos + best.dur); } catch (_e) {}
-                                _fitOccAdd(best.name, grade, pos, pos + best.dur, nb);
-                                if (_fitFillSamples.length < 6) _fitFillSamples.push(bunk + ' ' + best.name + ' ' + minutesToTimeLabel(pos) + '-' + minutesToTimeLabel(pos + best.dur));
-                                mFilled++; mFilledMin += best.dur; pos += best.dur; slack = R.e - pos;
-                            }
-                            mSlack += Math.max(0, R.e - pos);
+                            anchors.push({ id: id, name: nm, dur: dur, winStart: winS, winEnd: winE, pinned: pinned, kind: t });
                         });
 
-                        // Commit: kept (compacted) + newBlocks, junk dropped.
-                        var merged = kept.concat(newBlocks).sort(function (a, b) { return a.startMin - b.startMin; });
-                        var clash = false;
-                        for (var k = 1; k < merged.length; k++) { if (merged[k].startMin < merged[k - 1].endMin - 0.0001) { clash = true; break; } }
-                        if (clash) {
-                            snap.forEach(function (o) { o.b.startMin = o.s; o.b.endMin = o.e; });
-                            occTouched.forEach(function (o) { o.entry.s = o.s; o.entry.e = o.e; });
-                            newBlocks.forEach(function (nb) { var arr = _fitOcc[_fitNorm(nb.event)]; if (arr) { var ix = arr.findIndex(function (x) { return x.ref === nb; }); if (ix >= 0) arr.splice(ix, 1); } });
-                            if (junk.length) { bunkTimelines[bunk] = kept.slice().sort(function (a, b) { return a.startMin - b.startMin; }); _fitJunk += junk.length; }
-                            _fitRolledBack++;
-                            return;
+                        // Eligible pool: today-available specials this bunk doesn't already have,
+                        //   accessible + rotation-permitted; scored by rotation fairness.
+                        var pool = [];
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
+                            if (usedSet[_fitNorm(sp.name)]) continue;
+                            var d; try { d = getSpecialDuration(sp.name, activityProperties, globalSettings); } catch (_e) { d = null; }
+                            if (!d || d <= 0) continue;
+                            if (!isSpecialAvailableForBunk(sp.name, grade, bunk, globalSettings)) continue;
+                            var lim; try { lim = (window.RotationEngine && window.RotationEngine.calculateLimitScore) ? window.RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, grade) : 0; } catch (_e) { lim = 0; }
+                            if (!isFinite(lim)) continue;
+                            var rot; try { rot = (window.RotationEngine && window.RotationEngine.calculateRotationScore) ? window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: sp.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties: activityProperties }) : 0; } catch (_e) { rot = 0; }
+                            pool.push({ name: sp.name, dur: d, score: rot });
                         }
-                        bunkTimelines[bunk] = merged;
-                        if (junk.length) _fitJunk += junk.length;
-                        _fitMoved += mMoved; _fitFilled += mFilled; _fitFilledMin += mFilledMin; _fitSlackMin += mSlack;
-                        if (mMoved || mFilled || junk.length) _fitBunksTouched++;
+
+                        var res;
+                        try { res = window.PeriodTiler.packBunkDay({ dayStart: daySpanStart, dayEnd: daySpanEnd, minFill: 10, anchors: anchors, existingSpecials: existSpecs, pool: pool }); }
+                        catch (_eP) { return; }
+                        if (!res || !res.placements) return;
+
+                        // Apply: rebuild the timeline from the packing. Specials that
+                        //   would breach cross-bunk capacity/sharing are dropped (an
+                        //   honest gap) rather than written as a violation.
+                        var newTL = [], localFill = 0, localFillMin = 0, localMoved = 0;
+                        res.placements.forEach(function (p) {
+                            if (p.anchor) {
+                                var ab = idMap[p.id]; if (!ab) return;
+                                if (ab.startMin !== p.start) localMoved++;
+                                ab.startMin = p.start; ab.endMin = p.start + p.dur; newTL.push(ab);
+                                return;
+                            }
+                            var nm = p.name, guarded = _fitIsGuarded(nm), eb = (p.id != null) ? idMap[p.id] : null;
+                            if (guarded && !_fitSafeAt(nm, grade, eb, p.start, p.start + p.dur)) return;
+                            var nb;
+                            if (eb) { if (eb.startMin !== p.start) localMoved++; eb.startMin = p.start; eb.endMin = p.start + p.dur; nb = eb; }
+                            else {
+                                nb = {
+                                    startMin: p.start, endMin: p.start + p.dur, type: 'special', event: nm, layer: null,
+                                    _classification: 'pinned', _committed: true, _fixed: true, _gradeWide: false,
+                                    _activityLocked: true, _noBacktrack: false, _assignedSpecial: nm,
+                                    _specialLocation: (getLocationForSpecial(nm, activityProperties, globalSettings) || null),
+                                    _specialDuration: p.dur, _isSpecialLocation: true, _source: 'fit-fill'
+                                };
+                                try { registerSpecialUsage(nm, grade, p.start, p.start + p.dur); } catch (_e) {}
+                                localFill++; localFillMin += p.dur;
+                                if (_fitFillSamples.length < 8) _fitFillSamples.push(bunk + ' ' + nm + ' ' + minutesToTimeLabel(p.start) + '-' + minutesToTimeLabel(p.start + p.dur));
+                            }
+                            newTL.push(nb);
+                            if (guarded) _fitOccAdd(nm, grade, p.start, p.start + p.dur, nb);
+                        });
+                        newTL.sort(function (a, b) { return a.startMin - b.startMin; });
+                        bunkTimelines[bunk] = newTL;
+                        _fitJunk += junkN; _fitDropped += (res.dropped ? res.dropped.length : 0); _fitResidual += (res.residualMin || 0);
+                        _fitMoved += localMoved; _fitFilled += localFill; _fitFilledMin += localFillMin; _fitBunksTouched++;
                         try { ensureTimelineIntegrity(bunk); } catch (_e) {}
                     });
                 });
-                log('[FIT-MATH APPLY] ' + _fitBunksTouched + ' bunk(s): compacted ' + _fitMoved +
-                    ' block(s), filled ' + _fitFilled + ' slot(s) (' + Math.round(_fitFilledMin) + ' min), dropped ' +
-                    _fitJunk + ' filler placeholder(s); ' + _fitRegions + ' region(s); ' + Math.round(_fitSlackMin) +
-                    ' min residual slack' + (_fitRolledBack ? (' — ' + _fitRolledBack + ' bunk(s) rolled back (overlap guard)') : '') + '.');
+                log('[FIT-MATH APPLY] ' + _fitBunksTouched + ' bunk(s): moved ' + _fitMoved +
+                    ', filled ' + _fitFilled + ' slot(s) (' + Math.round(_fitFilledMin) + ' min), dropped ' +
+                    _fitDropped + ' wasteful filler(s) + ' + _fitJunk + ' placeholder(s); residual ' +
+                    Math.round(_fitResidual) + ' min.');
                 if (_fitFillSamples.length) { log('[FIT-MATH APPLY] sample fills:'); _fitFillSamples.forEach(function (s) { log('  ' + s); }); }
             } else if (_fitHasEngine) {
                 // ── Legacy SHADOW verdicts (kill-switch: fitMathApply='off'/'shadow') ──

@@ -542,11 +542,105 @@
     };
   }
 
+  // ─────────────────────────────────────────────────────────────
+  // packBunkDay — whole-day duration-first packer (the user's "math" model)
+  //
+  // Movability is DERIVED, never hardcoded: each anchor carries its configured
+  // window [winStart,winEnd]; slack = winEnd - winStart - dur. slack<=0 ⇒ PINNED
+  // (a fixed checkpoint: swim/Main Activity in a tight-window camp); slack>0 ⇒
+  // it slides to abut its neighbour (lunch/Davening/Morning Activity). The same
+  // rule fits ANY camp — widen a layer's window and that piece becomes slidable.
+  //
+  // The packer sweeps left from dayStart: it abuts pieces with no gaps, slides
+  // each anchor as early as its window allows, and FILLS the run before each
+  // anchor (and the tail) from a candidate pool of specials chosen by best-fit
+  // (exact-to-target first, then largest, then most-rotation-due). Existing
+  // specials are preferred (already rotation-validated); a wasteful small filler
+  // that isn't needed for an exact landing is simply not chosen → dropped. The
+  // only leftover is the sub-smallest-activity remainder, which lands against
+  // the next PINNED checkpoint (e.g. the 5 min before a pinned Main Activity).
+  //
+  // INPUT:
+  //   { dayStart, dayEnd, minFill = 10,
+  //     anchors:          [{ id, name, dur, winStart, winEnd, pinned, kind }],
+  //     existingSpecials: [{ id, name, dur, score }],   // currently placed; kept-preferred
+  //     pool:             [{ name, dur, score }] }       // eligible specials to ADD
+  // OUTPUT:
+  //   { placements: [{ name, start, end, dur, kind, anchor?, pinned?, fromPool?, id? }],
+  //     dropped: [name...], added: [name...], residualMin }
+  // ─────────────────────────────────────────────────────────────
+  function packBunkDay(input) {
+    var dayStart = input.dayStart, dayEnd = input.dayEnd;
+    var minFill = (input.minFill != null) ? input.minFill : 10;
+    var anchors = (input.anchors || []).slice().sort(function (a, b) {
+      var as = (a.winStart != null ? a.winStart : dayStart), bs = (b.winStart != null ? b.winStart : dayStart);
+      return (as - bs) || (a.dur - b.dur);
+    });
+    var _k = function (s) { return String(s == null ? '' : s).toLowerCase().trim(); };
+
+    // Candidate specials: existing first (preferred), then pool; dedup by name.
+    var cand = [], seen = {};
+    (input.existingSpecials || []).forEach(function (s) { var k = _k(s.name); if (!seen[k] && s.dur > 0) { seen[k] = 1; cand.push({ name: s.name, dur: s.dur, score: s.score || 0, existing: true, id: s.id }); } });
+    (input.pool || []).forEach(function (s) { var k = _k(s.name); if (!seen[k] && s.dur > 0) { seen[k] = 1; cand.push({ name: s.name, dur: s.dur, score: s.score || 0, existing: false }); } });
+
+    var used = {};
+    // Fill specials forward from `cursor` toward `targetEnd` (don't overshoot it
+    // by choice), never letting a piece run past `hardEnd`. Best-fit per step.
+    function takeFill(targetEnd, hardEnd, cursor) {
+      var out = [], guard = 0;
+      while (guard++ < 80) {
+        if (cursor >= targetEnd) break;
+        var spaceHard = hardEnd - cursor;
+        if (spaceHard < minFill) break;
+        var need = targetEnd - cursor;
+        var avail = cand.filter(function (c) { return !used[_k(c.name)] && c.dur <= spaceHard; });
+        if (!avail.length) break;
+        avail.sort(function (a, b) {
+          var ae = (a.dur === need) ? 1 : 0, be = (b.dur === need) ? 1 : 0;   // exact landing first
+          if (ae !== be) return be - ae;
+          if (a.dur !== b.dur) return b.dur - a.dur;                          // then largest
+          return (a.score || 0) - (b.score || 0);                            // then most-due
+        });
+        var pick = avail[0];
+        used[_k(pick.name)] = 1; out.push(pick); cursor += pick.dur;
+      }
+      return { fills: out, cursor: cursor };
+    }
+
+    var placements = [], cursor = dayStart, residual = 0;
+    function emitFills(fills) {
+      fills.forEach(function (f) {
+        placements.push({ name: f.name, start: cursor, end: cursor + f.dur, dur: f.dur, kind: 'special', fromPool: !f.existing, id: f.id });
+        cursor += f.dur;
+      });
+    }
+
+    for (var i = 0; i < anchors.length; i++) {
+      var A = anchors[i];
+      var ws = (A.winStart != null) ? A.winStart : dayStart;
+      var we = (A.winEnd != null) ? A.winEnd : dayEnd;
+      var latest = Math.max(ws, we - A.dur);
+      if (cursor < ws) { var r = takeFill(ws, latest, cursor); emitFills(r.fills); }
+      if (cursor < ws) { residual += (ws - cursor); cursor = ws; }   // unfillable gap before the anchor
+      if (cursor > latest) cursor = latest;
+      placements.push({ name: A.name, start: cursor, end: cursor + A.dur, dur: A.dur, kind: A.kind || 'anchor', anchor: true, pinned: !!A.pinned, id: A.id });
+      cursor = cursor + A.dur;
+    }
+    var t = takeFill(dayEnd, dayEnd, cursor); emitFills(t.fills);
+    if (cursor < dayEnd) residual += (dayEnd - cursor);
+
+    var dropped = (input.existingSpecials || []).filter(function (s) { return !used[_k(s.name)]; }).map(function (s) { return s.name; });
+    var added = placements.filter(function (p) { return p.fromPool; }).map(function (p) { return p.name; });
+    placements.sort(function (a, b) { return a.start - b.start; });
+    return { placements: placements, dropped: dropped, added: added, residualMin: residual };
+  }
+
   // Expose API
   var api = {
     tileBunkDay: tileBunkDay,
     tilePeriod: tilePeriod,
     fitBunkRegion: fitBunkRegion,
+    packBunkDay: packBunkDay,
     _smokeTest: _smokeTest
   };
   if (typeof window !== 'undefined') {
