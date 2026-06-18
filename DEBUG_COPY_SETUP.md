@@ -14,6 +14,10 @@ original camp is only ever **read** — never written.
      and grants `yisrose35@gmail.com` super-admin.
    - To change the owner account, edit the email in **two places**: the
      `allowed_email` in the trigger (step 6) and the grant `WHERE` (step 7).
+2b. Run `migrations/011_super_admin_camp_create_bypass.sql`.
+   - The `camps` INSERT trigger normally requires the owner to have a valid
+     access code in their signup metadata. This lets super-admins create camps
+     (debug copies) without one; normal signups still require a valid code.
 3. Verify: `SELECT * FROM public.super_admins;` should list exactly your account.
 
 ## Who can be super-admin
