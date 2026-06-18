@@ -28364,6 +28364,108 @@
                 (_rcMissingNoSlot > 0 ? ', ' + _rcMissingNoSlot + ' had no reclaimable in-window slot' : ''));
         } catch (_e684) { try { warn('[STEP 6.84 REQ-CUSTOM] error: ' + (_e684 && _e684.message)); } catch (_x) {} }
 
+        // ★ STEP 6.84b — REQUIRED-DAILY-SPECIAL ENSURE (exact-frequency workshops)
+        //   A special with an exact WEEKLY frequency that works out to >=1/day (e.g.
+        //   5x/week with a 5-day camp week = once/day) must appear once per day for
+        //   every eligible bunk. The planner's special demand is layer-derived, so a
+        //   camp built from custom layers distributes 0 specials and the late fill pads
+        //   with repeated short activities instead of these workshops. This MIRRORS
+        //   STEP 6.84: for each missing required-daily special, relabel ONE reclaimable
+        //   SAME-DURATION in-window slot IN PLACE (geometry untouched → no new gaps),
+        //   preferring to reclaim a DUPLICATE special so a duplicate is removed in the
+        //   same move; field-gated by isFieldAvailable so a workshop room is never
+        //   over-booked. Kill switch: globalSettings.app1.requireDailySpecials='off'.
+        try {
+            var _rdsOn = !(globalSettings && globalSettings.app1 &&
+                (globalSettings.app1.requireDailySpecials === false ||
+                 String(globalSettings.app1.requireDailySpecials).toLowerCase() === 'off'));
+            var _rdsDPW = parseInt(globalSettings && globalSettings.app1 && globalSettings.app1.campDaysPerWeek) || 5;
+            if (_rdsOn && typeof todaysSpecials !== 'undefined' && todaysSpecials && todaysSpecials.length) {
+                var _rdsList = [];
+                todaysSpecials.forEach(function (sp) {
+                    var nm = sp && sp.name; if (!nm) return;
+                    var cfg = null; try { cfg = getSpecialConfig(nm, globalSettings); } catch (_e) {}
+                    if (!cfg) return;
+                    if (String(cfg.exactFrequencyPeriod || '1week').toLowerCase().indexOf('week') < 0) return; // only weekly maps to per-day
+                    var dur = getSpecialDuration(nm, activityProperties, globalSettings) || sp.defaultDuration || sp.duration || 0;
+                    if (dur <= 0) return;
+                    _rdsList.push({ name: nm, nameLow: String(nm).toLowerCase().trim(), dur: dur,
+                        loc: cfg.location || null, exBase: parseInt(cfg.exactFrequency) || 0,
+                        perGrade: cfg.exactFrequencyPerGrade || {} });
+                });
+                if (_rdsList.length) {
+                    var _rdsReqLow = {}; _rdsList.forEach(function (r) { _rdsReqLow[r.nameLow] = 1; });
+                    var _rdsWallRe = /^(swim|change|pre-change|post-change|lunch|cleanup|dismissal|snack|snacks|shiur|davening|main activity|league game|specialty league|chinuch|trip)$/i;
+                    var _rdsEnsured = 0, _rdsNoSlot = 0;
+                    allGrades.forEach(function (grade) {
+                        var _gd = divisions[grade] || divisions[String(grade)] || {};
+                        var gs2 = parseTimeToMinutes(_gd.startTime) || 540;
+                        var ge2 = parseTimeToMinutes(_gd.endTime) || 960;
+                        var _bunks = getBunksForGrade(grade, divisions);
+                        _rdsList.forEach(function (r) {
+                            var _ex = parseInt(r.perGrade[grade]) || r.exBase || 0;
+                            if (_ex < _rdsDPW) return; // <1/day for this grade → leave to rotation floor
+                            _bunks.forEach(function (bunk) {
+                                var slots = window.scheduleAssignments && window.scheduleAssignments[bunk];
+                                if (!Array.isArray(slots) || !slots.length) return;
+                                if (typeof isSpecialAvailableForBunk === 'function' &&
+                                    !isSpecialAvailableForBunk(r.name, grade, bunk, globalSettings)) return;
+                                if (slots.some(function (s) { return s && !s.continuation &&
+                                    String(s._activity || s.event || '').toLowerCase().trim() === r.nameLow; })) return; // already today
+                                var _cnt = {};
+                                slots.forEach(function (s) {
+                                    if (!s || s.continuation) return;
+                                    var sp2 = s._assignedSpecial || (s.type === 'special' ? (s._activity || s.event) : null);
+                                    if (sp2) { var k = String(sp2).toLowerCase().trim(); _cnt[k] = (_cnt[k] || 0) + 1; }
+                                });
+                                var bestIdx = -1, bestRank = -1;
+                                for (var i = 0; i < slots.length; i++) {
+                                    var s = slots[i];
+                                    if (!s || s.continuation) continue;
+                                    if (slots[i + 1] && slots[i + 1].continuation === true) continue; // multi-slot block
+                                    if (s._startMin == null || s._endMin == null) continue;
+                                    if ((s._endMin - s._startMin) !== r.dur) continue;          // geometry-preserving: exact duration
+                                    if (s._startMin < gs2 || s._endMin > ge2) continue;
+                                    var act = String(s._activity || s.event || '').toLowerCase().trim();
+                                    if ((s._pinned === true || s._fixed === true) &&
+                                        !(s._constraintDemoted || !act || /^free$/i.test(act))) continue;
+                                    if (_rdsWallRe.test(act)) continue;
+                                    if (typeof _customLayerActivityNames !== 'undefined' && _customLayerActivityNames.has && _customLayerActivityNames.has(act)) continue;
+                                    if (s._league || s._isChinuch || s._isTrip || s._isPrep || s._isRotationEvent || s._bunkOverride) continue;
+                                    if (_rdsReqLow[act]) continue;                              // never rob another required workshop
+                                    if (r.loc && typeof isFieldAvailable === 'function' &&
+                                        !isFieldAvailable(r.loc, s._startMin, s._endMin, bunk, grade, r.name)) continue; // room cap
+                                    var rank;
+                                    if (!act || /^free$/i.test(act)) rank = 2;
+                                    else if (_cnt[act] > 1) rank = 3;                           // duplicate special → reclaim first
+                                    else if (s.sport && !s._assignedSpecial && s.type !== 'special') rank = 1;
+                                    else rank = 0;
+                                    if (rank > bestRank) { bestRank = rank; bestIdx = i; }
+                                    if (bestRank === 3) break;
+                                }
+                                if (bestIdx < 0) { _rdsNoSlot++; return; }
+                                var tgt = slots[bestIdx];
+                                slots[bestIdx] = Object.assign({}, tgt, {
+                                    _activity: r.name, event: r.name, type: 'special',
+                                    field: r.loc || tgt.field || null, sport: null,
+                                    _assignedSpecial: r.name, _autoSpecial: true,
+                                    _isSpecialLocation: !!r.loc, _specialLocation: r.loc || null,
+                                    _customActivity: null, _customField: null,
+                                    _source: 'step6.84b-required-daily-special'
+                                });
+                                try { if (r.loc && typeof claimField === 'function') claimField(r.loc, tgt._startMin, tgt._endMin, bunk, grade, r.name); } catch (_e) {}
+                                _rdsEnsured++;
+                                log('[STEP 6.84b REQ-DAILY] placed "' + r.name + '" for ' + bunk + ' @ ' +
+                                    tgt._startMin + '-' + tgt._endMin + ' (reclaimed ' + (tgt._activity || tgt.sport || 'Free') + ')');
+                            });
+                        });
+                    });
+                    log('[STEP 6.84b REQ-DAILY] ' + _rdsList.length + ' daily-required special(s) → ensured ' +
+                        _rdsEnsured + ' block(s)' + (_rdsNoSlot ? ', ' + _rdsNoSlot + ' had no reclaimable same-duration slot' : ''));
+                }
+            }
+        } catch (_e684b) { try { warn('[STEP 6.84b REQ-DAILY] error: ' + (_e684b && _e684b.message)); } catch (_x) {} }
+
         // ★ STEP 6.85 — SPACING-RULE ENFORCEMENT SWEEP (FINAL, runs LAST among placement
         //   passes). The main solver path gates spacing via isCandidateAllowed({mode:'auto'}),
         //   but coverage/recapture fill passes (phase4.9-recapture, the 4.97b / FN-22 /
