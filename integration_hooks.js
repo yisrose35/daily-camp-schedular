@@ -165,7 +165,16 @@
                      window.CampistryDB?.getRole?.() ||
                      localStorage.getItem('campistry_role') ||
                      'viewer';
-        return role === 'owner' || role === 'admin';
+        // ★ LG-2: schedulers may now write camp_state_kv (leagues / league
+        //   history / config). Previously owner/admin only, so a scheduler's
+        //   saves were dropped here and never reached cloud while the league
+        //   code logged "saved to cloud". Requires migration 009 (scheduler
+        //   INSERT/UPDATE on camp_state_kv) to actually land — until then the
+        //   upsert is caught (non-fatal) by executeBatchSync. Viewers stay
+        //   read-only. NOTE: camp_state_kv writes are whole-key/last-writer-wins
+        //   (no merge except app1/campistryMe fetch-merge), so a scheduler with a
+        //   stale in-memory copy can overwrite another writer's value for a key.
+        return role === 'owner' || role === 'admin' || role === 'scheduler';
     }
 
     function _canReadCampState() {
@@ -1051,6 +1060,16 @@
                 if (result?.target === 'plan-limit') {
                     log('[VERIFIED SAVE] Blocked by plan limit:', result.error?.message || result.error);
                     showNotification(result.error?.message || 'Schedule limit reached. Upgrade for unlimited.', 'warning');
+                    return result;
+                }
+
+                // ★ The empty-save guard intentionally rejected a wipe-shaped payload
+                //   (e.g. a resource-override sync firing on tab-focus before the
+                //   schedule re-bundles). It returns success:true with target
+                //   'wipe-blocked-*' and is NOT a failure — don't log an error, don't
+                //   retry (a retry just re-blocks → console spam), don't toast.
+                if (result?.target && String(result.target).indexOf('wipe-blocked') === 0) {
+                    log('[VERIFIED SAVE] Skipped wipe-shaped payload (empty-save guard):', result.target);
                     return result;
                 }
 
@@ -1959,6 +1978,7 @@
     let _lastHydrationHash = null;          // content hash: skip if cloud unchanged
     const HYDRATION_THROTTLE_MS = 10000;    // 10s — cloud doesn't change faster than this in practice
     let _campStateDebounceTimer = null;
+    let _campStateRemoteKeys = null;        // ★ LG-8: keys changed remotely, drained after re-hydrate
     let _campStateSubscribed = false;
     let _campStateReconnectTimer = null;
     let _campStateReconnectAttempts = 0;
@@ -1994,12 +2014,34 @@
                         log('camp_state change ignored (self echo)');
                         return;
                     }
+                    // ★ LG-8: remember WHICH key changed so we can notify the
+                    //   in-memory module stores after re-hydrating. leagues.js,
+                    //   specialty_leagues.js and special_activities.js each register a
+                    //   key-filtered 'campistry-remote-change' listener to refresh
+                    //   their store — but nothing ever dispatched that event, so a
+                    //   focused tab kept a STALE store and its next whole-key save
+                    //   clobbered the remote edit (no merge). Accumulate across the
+                    //   debounced burst.
+                    var _ck = (payload && payload.new && payload.new.key) ||
+                              (payload && payload.old && payload.old.key) || null;
+                    if (_ck) { (_campStateRemoteKeys || (_campStateRemoteKeys = new Set())).add(_ck); }
                     // Debounce — bulk edits in Me arrive as a rapid burst.
                     if (_campStateDebounceTimer) clearTimeout(_campStateDebounceTimer);
                     _campStateDebounceTimer = setTimeout(async function () {
                         _campStateDebounceTimer = null;
                         log('camp_state remote change — re-hydrating');
                         await hydrateFromCloud();
+                        // ★ LG-8: _localCache is fresh now — tell the in-memory stores
+                        //   which keys changed so they pull the new value. Their
+                        //   refreshFromStorage has its own just-saved protection
+                        //   window, so this can't clobber a local edit in flight.
+                        try {
+                            var _keys = _campStateRemoteKeys ? Array.from(_campStateRemoteKeys) : [];
+                            _campStateRemoteKeys = null;
+                            for (var _i = 0; _i < _keys.length; _i++) {
+                                window.dispatchEvent(new CustomEvent('campistry-remote-change', { detail: { key: _keys[_i] } }));
+                            }
+                        } catch (_e) { /* non-fatal */ }
                     }, 200);
                 })
                 .subscribe(function (status) {

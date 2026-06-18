@@ -24,7 +24,12 @@
     const SMART_TILE_HISTORY_KEY = "smartTileHistory_v1";
     const SMART_TILE_SPECIAL_HISTORY_KEY = "smartTileSpecialHistory_v1";
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
-    const SPECIALTY_LEAGUE_HISTORY_KEY = "specialtyLeagueHistory_v1";
+    // ★ LG-3: must match the engine's actual backup key
+    //   (scheduler_core_specialty_leagues.js SPECIALTY_HISTORY_KEY). The old value
+    //   "specialtyLeagueHistory_v1" was missing the "camp" prefix, so New Half /
+    //   Erase All / backup / export all operated on a phantom key — the real
+    //   specialty history was never cleared (stale rounds resurrected) or backed up.
+    const SPECIALTY_LEAGUE_HISTORY_KEY = "campSpecialtyLeagueHistory_v1";
     const LEGACY_GLOBAL_SETTINGS_KEY = "campGlobalSettings_v1";
     const LEGACY_GLOBAL_REGISTRY_KEY = "campistry_global_registry";
 
@@ -282,9 +287,27 @@ all[date].updated_at = new Date().toISOString();
             window.currentDailyData = all[date];
             // 🟢 UNIFIED SAVING: Delegate to Bridge (Same way as Divisions)
             // 'daily_schedules' is the special key the bridge uses to bundle/unbundle this data
+            // ★ Only push the bundle when this date has a MATERIALIZED schedule (≥1 real
+            //   activity). An empty/preview payload — e.g. a resource-override sync firing
+            //   on tab-focus before the schedule re-bundles (loadCurrentOverrides), or a
+            //   future-date note — is rejected by the empty-save guard (all-empty-preview),
+            //   which spammed the console and triggered verified-save retries. Per-date
+            //   resource overrides still persist via the app1 mirror below; clearing a real
+            //   day goes through delete, not an empty save — so skipping here loses nothing.
+            var _saReal = false, _saScan = all[date] && all[date].scheduleAssignments;
+            if (_saScan && typeof _saScan === 'object') {
+                for (var _bk in _saScan) {
+                    var _sl = _saScan[_bk];
+                    if (_sl && typeof _sl === 'object') { for (var _sk in _sl) { if (_sl[_sk]) { _saReal = true; break; } } }
+                    else if (_sl) { _saReal = true; }
+                    if (_saReal) break;
+                }
+            }
             if (typeof window.saveGlobalSettings === 'function') {
-                console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
-                window.saveGlobalSettings('daily_schedules', all);
+                if (_saReal) {
+                    console.log("☁️ Saving daily data via Bridge (Unified Flow)...");
+                    window.saveGlobalSettings('daily_schedules', all);
+                }
             } else {
                 // Fallback if bridge is missing
                 console.warn("⚠️ Bridge not found, falling back to local save");
@@ -1280,8 +1303,17 @@ all[date].updated_at = new Date().toISOString();
         // ═══════════════════════════════════════════════════════════════
         // CLEAN LEAGUE HISTORY for the deleted date (regular + specialty)
         // ═══════════════════════════════════════════════════════════════
-        window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
-        window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        // ★ LG-5: cleanupDateFromHistory is UNSCOPED — it rolls back EVERY league's
+        //   gameLog / teamSports / matchupHistory / gamesPerDate for the date. That
+        //   is correct only for an owner/admin full-day delete. A SCHEDULER deleted
+        //   just their own divisions' bunks, so running this would destroy other
+        //   schedulers'/the owner's league results for that date. Skip it for
+        //   schedulers — their own leagues' history is reconciled by the day-reset
+        //   (rollbackDayRecords) the next time they regenerate the date.
+        if (role !== 'scheduler') {
+            window.SchedulerCoreLeagues?.cleanupDateFromHistory?.(dateKey);
+            window.SchedulerCoreSpecialtyLeagues?.cleanupDateFromHistory?.(dateKey);
+        }
 
         // ═══════════════════════════════════════════════════════════════
         // REBUILD ROTATION COUNTS after delete
@@ -1854,11 +1886,20 @@ all[date].updated_at = new Date().toISOString();
             }
             
             const currentState = window.loadGlobalSettings?.() || {};
-            
+
+            // ★ Quota: do NOT duplicate the full multi-date schedule cache
+            //   (campDailyData_v1, ~700KB) into the auto-save snapshot. It was the
+            //   single biggest blob and the #1 cause of the auto-save quota trip —
+            //   the snapshot roughly DOUBLED localStorage. The schedule is already
+            //   persisted canonically in campDailyData_v1 (local) AND in the cloud
+            //   (daily_schedules, authoritative); restoreAutoSave reloads the page,
+            //   so the cloud rehydrates the schedule. The snapshot now carries only
+            //   settings + histories — the point-in-time rollback that isn't
+            //   otherwise recoverable. (Full backups still capture the schedule via
+            //   a separate campDailyData_v1 entry — see the backup keys list.)
             const snapshot = {
                 timestamp: Date.now(),
                 [UNIFIED_CACHE_KEY]: JSON.stringify(currentState),
-                [DAILY_DATA_KEY]: localStorage.getItem(DAILY_DATA_KEY),
                 [ROTATION_HISTORY_KEY]: localStorage.getItem(ROTATION_HISTORY_KEY),
                 [LEAGUE_HISTORY_KEY]: localStorage.getItem(LEAGUE_HISTORY_KEY),
                 [SPECIALTY_LEAGUE_HISTORY_KEY]: localStorage.getItem(SPECIALTY_LEAGUE_HISTORY_KEY),
@@ -1922,7 +1963,10 @@ all[date].updated_at = new Date().toISOString();
                 if (typeof window.setCloudState === 'function') {
                     const state = JSON.parse(snap[UNIFIED_CACHE_KEY]);
                     
-                    // Inject schedules if present in snapshot, so they sync too
+                    // ★ Schedules are no longer stored in the snapshot (see
+                    //   performAutoSave) — they live in campDailyData_v1 + the cloud.
+                    //   Older snapshots may still carry it, so honor it when present;
+                    //   otherwise the reload below rehydrates the schedule from cloud.
                     if (snap[DAILY_DATA_KEY]) {
                         state.daily_schedules = JSON.parse(snap[DAILY_DATA_KEY]);
                     }

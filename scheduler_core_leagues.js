@@ -25,37 +25,46 @@
     const LEAGUE_HISTORY_KEY = "campLeagueHistory_v2";
 
     function loadLeagueHistory() {
+        const EMPTY = () => ({
+            teamSports: {}, matchupHistory: {}, gamesPerDate: {},
+            offCampusCounts: {}, gameLog: {}
+        });
         try {
-            // ★ First try to load from cloud-synced global settings
+            // Cloud-synced copy (hydrated into global settings)
             const global = window.loadGlobalSettings?.() || {};
-            if (global.leagueHistory && Object.keys(global.leagueHistory).length > 0) {
-                const history = global.leagueHistory;
-                // Ensure all fields exist
-                history.teamSports = history.teamSports || {};
-                history.matchupHistory = history.matchupHistory || {};
-                history.gamesPerDate = history.gamesPerDate || {};
-                history.offCampusCounts = history.offCampusCounts || {};// ★ NEW: tracks games per date per league
-                history.gameLog = history.gameLog || {};
+            const cloud = (global.leagueHistory && Object.keys(global.leagueHistory).length > 0)
+                ? global.leagueHistory : null;
+
+            // localStorage backup
+            let local = null;
+            try {
+                const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
+                if (raw) local = JSON.parse(raw);
+            } catch (_) {}
+
+            // ★ LG-7: when BOTH stores have data, prefer the FRESHER by _savedAt
+            //   (stamped in saveLeagueHistory). A stale cloud row — e.g. an offline
+            //   local save that hasn't synced yet — must not shadow newer local
+            //   history at generation time, which made the game counter "reset".
+            //   Falls back to cloud when timestamps are absent (legacy) or equal.
+            let history;
+            if (cloud && local) {
+                const ct = Number(cloud._savedAt) || 0;
+                const lt = Number(local._savedAt) || 0;
+                history = (lt > ct) ? local : cloud;
+                console.log(`[RegularLeagues] ✅ Loaded history (${history === local ? 'local is newer' : 'cloud'})`);
+            } else if (cloud) {
+                history = cloud;
                 console.log("[RegularLeagues] ✅ Loaded history from cloud");
-                return history;
-            }
-            
-            // Fallback to localStorage
-            const raw = localStorage.getItem(LEAGUE_HISTORY_KEY);
-            if (!raw) return {
-                teamSports: {},
-                matchupHistory: {},
-                gamesPerDate: {},
-                offCampusCounts: {},
-                gameLog: {}
-            };
-
-            const history = JSON.parse(raw);
-
-            // Migrate from old roundCounters/dayStartRound if present (must run before defaults)
-            if (history.roundCounters && !history.gamesPerDate) {
-                console.log("[RegularLeagues] Migrating old history format...");
-                history.gamesPerDate = {};
+            } else if (local) {
+                history = local;
+                // Migrate from old roundCounters/dayStartRound if present
+                if (history.roundCounters && !history.gamesPerDate) {
+                    console.log("[RegularLeagues] Migrating old history format...");
+                    history.gamesPerDate = {};
+                }
+            } else {
+                return EMPTY();
             }
 
             // Fill defaults for missing fields
@@ -64,32 +73,38 @@
             history.gamesPerDate = history.gamesPerDate || {};
             history.offCampusCounts = history.offCampusCounts || {};
             history.gameLog = history.gameLog || {};
-
             return history;
         } catch (e) {
             console.error("Failed to load league history:", e);
-            return {
-                teamSports: {},
-                matchupHistory: {},
-                gamesPerDate: {},
-                offCampusCounts: {},
-                gameLog: {}
-            };
+            return EMPTY();
         }
     }
 
     function saveLeagueHistory(history) {
-        try {
-            // Save to localStorage as backup
-            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
-            
-            // ★ CRITICAL: Also save to cloud via global settings
-            if (typeof window.saveGlobalSettings === 'function') {
+        // ★ LG-7: stamp this save so loadLeagueHistory can pick the fresher of
+        //   cloud vs the campLeagueHistory_v2 backup. Same value lands in both
+        //   stores; the store written later in a given session wins on reload.
+        try { if (history && typeof history === 'object') history._savedAt = Date.now(); } catch (_) {}
+        // ★ Cloud save FIRST and in its OWN try — a full localStorage (quota) must
+        //   NEVER block the cloud write. Previously both writes shared one try block
+        //   with localStorage.setItem first, so a QuotaExceededError on the backup
+        //   skipped saveGlobalSettings entirely → that day's games never synced to
+        //   cloud → the next cold start hydrated the stale cloud row and the game
+        //   counter "reset" (works in-session, resets next day). The cloud is the
+        //   authoritative cross-session store, so it must not depend on localStorage.
+        if (typeof window.saveGlobalSettings === 'function') {
+            try {
                 window.saveGlobalSettings('leagueHistory', history);
                 console.log("[RegularLeagues] ✅ History saved to cloud");
+            } catch (e) {
+                console.error("Failed to save league history to cloud:", e);
             }
+        }
+        // localStorage backup — best-effort; a quota failure here is non-fatal.
+        try {
+            localStorage.setItem(LEAGUE_HISTORY_KEY, JSON.stringify(history));
         } catch (e) {
-            console.error("Failed to save league history:", e);
+            console.warn("League history localStorage backup skipped (quota?):", e);
         }
     }
 

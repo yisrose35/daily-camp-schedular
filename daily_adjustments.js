@@ -2640,6 +2640,9 @@ function renderEventTile(ev, top, height) {
       const _lbl = _pre === _post ? _pre + 'm' : _pre + 'm / ' + _post + 'm';
       content += `<div style="font-size:9px;font-weight:600;color:#155e75;background:#cffafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">CHANGE ${_lbl}</div>`;
     }
+    if (ev.type === 'split' && ev.group1Bunks?.length) {
+      content += `<div style="font-size:9px;font-weight:600;color:#1e40af;background:#dbeafe;display:inline-block;padding:1px 5px;border-radius:4px;margin-top:2px;">custom groups</div>`;
+    }
   }
 
   // Travel strips (off-campus). Prefer stamped values; fall back to live zone lookup (manual = deduct mode).
@@ -3089,6 +3092,7 @@ function addDropListeners(gridEl) {
             if (main1Input) main1Input.addEventListener('input', checkSwim);
             if (main2Input) main2Input.addEventListener('input', checkSwim);
             checkSwim();
+            _daBuildSplitBunkPicker(overlay, divName, null);
           }
         });
         if (!result || !result.startTime || !result.endTime || !result.main1 || !result.main2) return;
@@ -3113,7 +3117,8 @@ function addDropListeners(gridEl) {
           ],
           isNightActivity: isNightActivity,
           _preChangeMin: splitPreChange || undefined,
-          _postChangeMin: splitPostChange || undefined
+          _postChangeMin: splitPostChange || undefined,
+          group1Bunks: result.group1Bunks ? JSON.parse(result.group1Bunks) : null
         };
 
         console.log('[SPLIT TILE] Created split tile for ' + divName + ':', newEvent.subEvents, (splitPreChange || splitPostChange) ? '(change: ' + splitPreChange + 'pre/' + splitPostChange + 'post)' : '');
@@ -3793,6 +3798,68 @@ function _showTileActionBar(tileEl) {
 }
 
 
+function _daBuildSplitBunkPicker(overlay, divName, existingGroup1) {
+  const sortNum = (arr) => [...arr].sort((a, b) => {
+    const nA = parseInt(a.match(/\d+/)?.[0] || 0);
+    const nB = parseInt(b.match(/\d+/)?.[0] || 0);
+    return nA - nB || a.localeCompare(b);
+  });
+  const allBunks = sortNum(((window.divisions || {})[divName]?.bunks || []).map(String));
+  if (allBunks.length === 0) return;
+
+  const half = Math.ceil(allBunks.length / 2);
+  const g1Set = new Set(
+    existingGroup1?.length
+      ? sortNum(existingGroup1.map(String).filter(b => allBunks.includes(b)))
+      : allBunks.slice(0, half)
+  );
+  const g2Set = new Set(allBunks.filter(b => !g1Set.has(b)));
+
+  const pickerWrap = document.createElement('div');
+  pickerWrap.style.cssText = 'margin-top:12px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;';
+  pickerWrap.innerHTML =
+    '<div style="font-size:11px;font-weight:600;color:#374151;margin-bottom:8px;">Bunk Groups'
+    + '<span style="font-size:10px;font-weight:400;color:#64748b;"> — click a bunk to move it</span></div>'
+    + '<div style="display:flex;gap:12px;">'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#1e40af;margin-bottom:4px;">● Group 1 → starts at Main 1</div>'
+    + '<div id="split-g1-panel" style="min-height:32px;background:#eff6ff;border:1px dashed #93c5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '<div style="flex:1;"><div style="font-size:11px;font-weight:600;color:#7c3aed;margin-bottom:4px;">● Group 2 → starts at Main 2</div>'
+    + '<div id="split-g2-panel" style="min-height:32px;background:#f5f3ff;border:1px dashed #c4b5fd;border-radius:6px;padding:4px;display:flex;flex-wrap:wrap;gap:4px;align-content:flex-start;"></div></div>'
+    + '</div>';
+
+  const hiddenInput = document.createElement('input');
+  hiddenInput.type = 'hidden';
+  hiddenInput.setAttribute('data-field', 'group1Bunks');
+  pickerWrap.appendChild(hiddenInput);
+
+  const updateHidden = () => { hiddenInput.value = JSON.stringify(sortNum([...g1Set])); };
+
+  const renderChips = () => {
+    const p1 = pickerWrap.querySelector('#split-g1-panel');
+    const p2 = pickerWrap.querySelector('#split-g2-panel');
+    p1.innerHTML = ''; p2.innerHTML = '';
+    const makeChip = (bunk, inG1) => {
+      const c = document.createElement('span');
+      c.textContent = bunk;
+      c.title = 'Click to move to Group ' + (inG1 ? '2' : '1');
+      c.style.cssText = 'cursor:pointer;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:500;user-select:none;'
+        + (inG1 ? 'background:#dbeafe;border:1px solid #93c5fd;color:#1e40af;' : 'background:#ede9fe;border:1px solid #c4b5fd;color:#7c3aed;');
+      c.addEventListener('click', () => {
+        if (inG1) { g1Set.delete(bunk); g2Set.add(bunk); }
+        else { g2Set.delete(bunk); g1Set.add(bunk); }
+        updateHidden(); renderChips();
+      });
+      return c;
+    };
+    sortNum([...g1Set]).forEach(b => p1.appendChild(makeChip(b, true)));
+    sortNum([...g2Set]).forEach(b => p2.appendChild(makeChip(b, false)));
+  };
+
+  const fieldsContainer = overlay.querySelector('.da-modal-fields-container') || overlay.querySelector('[class*="fields"]') || overlay.querySelector('[class*="body"]');
+  if (fieldsContainer) fieldsContainer.appendChild(pickerWrap);
+  updateHidden(); renderChips();
+}
+
 async function editTile(id) {
   const ev = dailyOverrideSkeleton.find(e => e.id === id);
   if (!ev) return;
@@ -3822,6 +3889,8 @@ async function editTile(id) {
 
   } else if (ev.type === 'split') {
     const [m1 = '', m2 = ''] = ev.event.split(' / ');
+    const _editDivName = ev.division;
+    const _editExistingG1 = ev.group1Bunks || null;
     const result = await daShowModal({
       title: 'Edit Split Tile',
       fields: [
@@ -3853,6 +3922,7 @@ async function editTile(id) {
         if (main1Input) main1Input.addEventListener('input', checkSwim);
         if (main2Input) main2Input.addEventListener('input', checkSwim);
         checkSwim();
+        _daBuildSplitBunkPicker(overlay, _editDivName, _editExistingG1);
       }
     });
     if (!result || !result.main1 || !result.main2) return;
@@ -3861,6 +3931,7 @@ async function editTile(id) {
     ev.startTime = result.startTime; ev.endTime = result.endTime;
     ev.event = `${result.main1} / ${result.main2}`;
     ev.subEvents = [{ ...event1, event: event1.event || result.main1 }, { ...event2, event: event2.event || result.main2 }];
+    ev.group1Bunks = result.group1Bunks ? JSON.parse(result.group1Bunks) : null;
 
     // Update swim change for split tiles
     const editSplitHasSwim = result.main1.toLowerCase().trim().includes('swim') || result.main2.toLowerCase().trim().includes('swim');
@@ -4150,6 +4221,38 @@ let tmpl = assignments[today] || assignments['Default'];
  console.log('[DailyAdj] Auto layers loaded:', Object.keys(daAutoLayers).length, 'grades');
 }
 
+// ★ Bound the per-date app1 maps so they can't grow without limit. These maps
+//   (dailySkeletons / dailyAutoLayers / dailyResourcesByDate / dailyColumnOrders
+//   + their Ts twins) had NO cap, so every date ever touched piled up here — and
+//   because app1 is cloud-synced AND rides along in every config save, that bloat
+//   exhausted the ~5 MB localStorage quota (which then silently dropped OTHER
+//   saves, e.g. the league history cloud write → "counter resets next day").
+//   Keep a generous window around today: ~3 months back (older generated schedules
+//   still live authoritatively in daily_schedules) and ~18 months forward (covers
+//   pre-camp / next-season setup) — and NEVER prune the date currently being saved.
+function _pruneOldDailyDateMaps(app1, keepKey) {
+  try {
+    if (!app1 || typeof app1 !== 'object') return;
+    var KEEP_PAST_DAYS = 90, KEEP_FUTURE_DAYS = 540;
+    var now = new Date();
+    var lo = new Date(now.getTime() - KEEP_PAST_DAYS * 86400000).toISOString().slice(0, 10);
+    var hi = new Date(now.getTime() + KEEP_FUTURE_DAYS * 86400000).toISOString().slice(0, 10);
+    var DATE = /^\d{4}-\d{2}-\d{2}$/;
+    var maps = ['dailySkeletons', 'dailySkeletonsTs', 'dailyAutoLayers', 'dailyAutoLayersTs',
+                'dailyResourcesByDate', 'dailyColumnOrders', 'dailyTripsByDate'];
+    var pruned = 0;
+    maps.forEach(function (m) {
+      var map = app1[m];
+      if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+      Object.keys(map).forEach(function (k) {
+        if (k === keepKey) return;                 // never drop the date being saved
+        if (DATE.test(k) && (k < lo || k > hi)) { delete map[k]; pruned++; }
+      });
+    });
+    if (pruned > 0) console.log('[DailyAdj] 🧹 Pruned ' + pruned + ' stale per-date app1 entr(ies) (kept ' + lo + '..' + hi + ')');
+  } catch (e) { console.warn('[DailyAdj] daily-map prune skipped:', e); }
+}
+
 function saveDAAutoLayers() {
   if (!window.AccessControl?.canEdit?.()) {
     console.warn('[DailyAdj] Save blocked - insufficient permissions');
@@ -4168,6 +4271,7 @@ function saveDAAutoLayers() {
     if (!masterSettings.app1.dailyAutoLayersTs) masterSettings.app1.dailyAutoLayersTs = {};
     masterSettings.app1.dailyAutoLayers[dateKey] = JSON.parse(JSON.stringify(daAutoLayers || {}));
     masterSettings.app1.dailyAutoLayersTs[dateKey] = _savedAtTs;   // ★ #10
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     window.saveGlobalSettings?.('app1', masterSettings.app1);
     window.forceSyncToCloud?.();
   } catch (e) { console.error('[DailyAdj] Failed to save auto layers to cloud:', e); }
@@ -4309,6 +4413,7 @@ function saveDailySkeleton() {
     masterSettings.app1.dailySkeletonsTs[dateKey] = _skelTs;   // ★ #10 (manual twin)
     if (!masterSettings.app1.dailyColumnOrders) masterSettings.app1.dailyColumnOrders = {};
     masterSettings.app1.dailyColumnOrders[dateKey] = getColumnOrder();
+    _pruneOldDailyDateMaps(masterSettings.app1, dateKey);
     if (typeof window.saveGlobalSettings === 'function') {
       window.saveGlobalSettings('app1', masterSettings.app1);
     }

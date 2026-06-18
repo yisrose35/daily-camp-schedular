@@ -412,7 +412,13 @@
 
             // ★ Save via saveGlobalSettings (handles batching + cloud sync)
             window.saveGlobalSettings?.('leaguesByName', cleanData);
-            
+            // ★ LG-1: stamp a cloud-side updated_at next to the local
+            //   campistryGlobalSettings.updated_at so loadLeaguesData can pick the
+            //   FRESHER source by time, not by whichever holds MORE leagues (a stale
+            //   local mirror with more leagues used to win and re-push deleted
+            //   leagues back to the cloud).
+            window.saveGlobalSettings?.('leaguesByName_updatedAt', new Date().toISOString());
+
             console.log("[LEAGUES] Data saved to cloud");
             
             // ★ Clear flag after protection window to prevent stale refresh
@@ -464,12 +470,14 @@
             // Source 1: localStorage directly (most recent local writes)
             let fromLS = {};
             let fromLSCount = 0;
+            let fromLSUpdatedAt = 0;
             try {
                 const lsRaw = localStorage.getItem('campistryGlobalSettings');
                 if (lsRaw) {
                     const lsData = JSON.parse(lsRaw);
                     fromLS = lsData?.leaguesByName || {};
                     fromLSCount = countValidLeagues(fromLS);
+                    fromLSUpdatedAt = Date.parse(lsData?.updated_at || '') || 0; // ★ LG-1
                 }
             } catch (lsErr) {
                 console.log("[LEAGUES] localStorage read failed:", lsErr);
@@ -479,7 +487,8 @@
             const global = window.loadGlobalSettings?.() || {};
             const fromGlobal = global.leaguesByName || {};
             const fromGlobalCount = countValidLeagues(fromGlobal);
-            
+            const fromGlobalUpdatedAt = Date.parse(global.leaguesByName_updatedAt || '') || 0; // ★ LG-1
+
             // Source 3: app1 nested structure (legacy)
             const fromApp1 = global.app1?.leaguesByName || {};
             const fromApp1Count = countValidLeagues(fromApp1);
@@ -501,8 +510,22 @@
                     source = 'app1 (fallback)';
                 }
             } else {
-                // Outside protection window - use the best source (allows cross-device sync)
-                if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
+                // Outside protection window. ★ LG-1: prefer the FRESHER source by
+                //   timestamp, NOT whichever holds MORE leagues — a stale
+                //   campistryGlobalSettings mirror (a device that hasn't re-saved
+                //   since a deletion elsewhere) must not overwrite fresher cloud data
+                //   and re-push the deleted leagues back to the cloud.
+                if (fromLSUpdatedAt && fromGlobalUpdatedAt && fromLSUpdatedAt !== fromGlobalUpdatedAt
+                    && fromLSCount > 0 && fromGlobalCount > 0) {
+                    if (fromGlobalUpdatedAt > fromLSUpdatedAt) {
+                        loadedData = deepClone(fromGlobal);
+                        source = 'global (newer)';
+                    } else {
+                        loadedData = deepClone(fromLS);
+                        source = 'localStorage (newer)';
+                    }
+                } else if (fromGlobalCount >= fromLSCount && fromGlobalCount >= fromApp1Count && fromGlobalCount > 0) {
+                    // No usable timestamps (legacy data) — fall back to count-based selection.
                     loadedData = deepClone(fromGlobal);
                     source = 'global';
                 } else if (fromLSCount >= fromApp1Count && fromLSCount > 0) {
