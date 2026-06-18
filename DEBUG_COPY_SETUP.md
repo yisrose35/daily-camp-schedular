@@ -11,10 +11,22 @@ original camp is only ever **read** — never written.
    - It creates `super_admins` + `active_camp_selection`, adds **read-only**
      super-admin SELECT policies on the camp tables, redefines
      `get_user_camp_id()` / `get_user_role()` (a backward-compatible superset),
-     and grants `yisrose24@gmail.com` super-admin.
-   - If your platform-owner email differs, edit the email in **step 6** of the
-     migration before running it.
-3. Verify: `SELECT * FROM public.super_admins;` should list your user.
+     and grants `yisrose35@gmail.com` super-admin.
+   - To change the owner account, edit the email in **two places**: the
+     `allowed_email` in the trigger (step 6) and the grant `WHERE` (step 7).
+3. Verify: `SELECT * FROM public.super_admins;` should list exactly your account.
+
+## Who can be super-admin
+
+Locked to a single account by design:
+
+- `super_admins` has RLS on with **no** insert/update/delete policy, so no
+  logged-in user can grant themselves super-admin through the app or API — there
+  is no "become super-admin" path anywhere in the UI.
+- A database trigger (`enforce_single_super_admin`) rejects any row whose user
+  isn't `yisrose35@gmail.com` — even a service-role/SQL-editor insert. Adding a
+  second super-admin is impossible without first explicitly dropping that
+  trigger.
 
 ## Using it
 

@@ -184,16 +184,55 @@ BEGIN
     END LOOP;
 END $$;
 
--- ─── 6. Grant the platform owner super-admin (EDIT the email if needed) ─────
+-- ─── 6. HARD-LOCK super_admins to a single account ────────────────────────
+-- Defense in depth. RLS already blocks every app/API user (no write policy),
+-- so the only way to add a row is the SQL editor (service role). This trigger
+-- goes further: it rejects ANY insert/update — even from the service role —
+-- whose user does not have the allowed email. So a second super-admin cannot
+-- be created by accident or otherwise without first explicitly dropping this
+-- trigger. To change the owner account, update the email in ONE place below.
+CREATE OR REPLACE FUNCTION public.enforce_single_super_admin()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_catalog
+AS $$
+DECLARE
+    allowed_email   text := 'yisrose35@gmail.com';   -- ← the ONLY super-admin
+    candidate_email text;
+BEGIN
+    SELECT lower(u.email) INTO candidate_email
+      FROM auth.users u WHERE u.id = NEW.user_id;
+
+    IF candidate_email IS DISTINCT FROM lower(allowed_email) THEN
+        RAISE EXCEPTION 'super_admins is locked to % only (got user %)',
+            allowed_email, COALESCE(candidate_email, '<unknown>');
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_enforce_single_super_admin ON public.super_admins;
+CREATE TRIGGER trg_enforce_single_super_admin
+    BEFORE INSERT OR UPDATE ON public.super_admins
+    FOR EACH ROW EXECUTE FUNCTION public.enforce_single_super_admin();
+
+-- ─── 7. Grant the platform owner super-admin ────────────────────────────────
 -- Runs in the SQL editor as the postgres role, so it can read auth.users.
+-- The trigger above validates this insert; if the email below isn't a real
+-- registered user yet, the SELECT yields no row and nothing is inserted —
+-- re-run this statement after that account has signed in once.
 INSERT INTO public.super_admins (user_id, note)
 SELECT id, 'platform owner'
   FROM auth.users
- WHERE lower(email) = lower('yisrose24@gmail.com')
+ WHERE lower(email) = lower('yisrose35@gmail.com')
 ON CONFLICT (user_id) DO NOTHING;
 
--- ─── 7. Sanity checks (run manually) ───────────────────────────────────────
---   SELECT * FROM public.super_admins;
+-- ─── 8. Sanity checks (run manually) ───────────────────────────────────────
+--   SELECT * FROM public.super_admins;        -- exactly one row, your account
+--   -- Prove the lock works (this MUST raise an exception):
+--   --   INSERT INTO public.super_admins (user_id)
+--   --   SELECT id FROM auth.users WHERE email <> 'yisrose35@gmail.com' LIMIT 1;
 --   SELECT polname, cmd FROM pg_policies WHERE polname = 'super_admin_read_all';
 --   -- As the owner, after selecting a copy:
 --   --   SELECT public.get_user_camp_id();  -- should equal the copy's id
