@@ -36,6 +36,24 @@
         try { console.log.apply(console, ['🧬 [CampClone]'].concat([].slice.call(arguments))); } catch (_) {}
     }
 
+    function newUuid() {
+        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+        // RFC4122 v4 fallback
+        return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+            var r = (Math.random() * 16) | 0, v = c === 'x' ? r : (r & 0x3) | 0x8;
+            return v.toString(16);
+        });
+    }
+
+    // IDs of the debug copies registered to the current super-admin.
+    async function myCopyIds() {
+        try {
+            var res = await sb().from('debug_copies').select('copy_camp_id').eq('super_admin_id', DB().getUserId());
+            if (res.error) return [];
+            return (res.data || []).map(function (r) { return r.copy_camp_id; });
+        } catch (_) { return []; }
+    }
+
     // ─── Generic paginated read of every row for a camp ──────────────────────
     async function fetchAll(table, campId, orderCol) {
         var out = [];
@@ -109,14 +127,17 @@
         var rot = await fetchAll('rotation_counts', sourceId);
         log('Read source:', { kv: kv.length, sched: sched.length, rot: rot.length });
 
-        // 2. Create the sandbox camp (owned by me).
-        //    The camps table has an INSERT trigger that rejects camps without a
-        //    valid plan ("an access code is required…"). A debug copy is an
-        //    internal sandbox, so stamp it as a non-expiring active camp.
+        // 2. Create the sandbox camp. Its owner is its OWN id (not my uid), so
+        //    it never collides with my real camp in owner lookups and doesn't
+        //    trip the camps_owner unique constraint. The access-code INSERT
+        //    trigger is bypassed for super-admins (migration 011); stamp it as
+        //    a non-expiring active camp so trial limits don't apply.
         progress('Creating sandbox camp…');
+        var copyId = newUuid();
         var cres = await sb().from('camps')
             .insert([{
-                owner: userId,
+                id: copyId,
+                owner: copyId,
                 name: copyName,
                 address: '',
                 plan_status: 'active',
@@ -126,10 +147,19 @@
             .select()
             .single();
         if (cres.error) throw cres.error;
-        var copyId = cres.data.id;
+        copyId = cres.data.id;
         log('Created copy camp', copyId, copyName);
 
-        // 3. Switch our active camp to the copy so RLS scopes writes to it.
+        // 2b. Register it as my debug copy — this is the entitlement that lets
+        //     me join it and that scopes deletes/membership to copies only.
+        progress('Registering debug copy…');
+        var reg = await sb().from('debug_copies').insert({
+            copy_camp_id: copyId, super_admin_id: userId, source_camp_id: sourceId
+        });
+        if (reg.error) throw reg.error;
+
+        // 3. Switch into the copy (join it as a team-member owner) so RLS
+        //    scopes writes to it and every page loads it as the active camp.
         progress('Switching into the copy…');
         await DB().setActiveCamp(copyId);
 
@@ -175,24 +205,25 @@
         await DB().clearActiveCamp();
     }
 
-    // ─── Delete a sandbox copy (and only a sandbox copy) ──────────────────────
+    // ─── Delete a sandbox copy (and only a registered debug copy) ─────────────
     async function deleteCopy(campId) {
         var userId = DB().getUserId();
-        if (!campId || campId === userId) throw new Error('Refusing to delete your real camp.');
-        // Verify it is a copy we own.
-        var cres = await sb().from('camps').select('id,name,owner').eq('id', campId).maybeSingle();
-        var camp = cres.data;
-        if (!camp || camp.owner !== userId) throw new Error('Not a camp you own.');
-        if (String(camp.name || '').indexOf('[COPY]') !== 0) {
-            throw new Error('Only [COPY] sandbox camps can be deleted here.');
+        var copies = await myCopyIds();
+        if (!campId || copies.indexOf(campId) < 0) {
+            throw new Error('Not one of your debug copies.');
         }
-        // Scope to the copy so RLS allows deleting its rows.
+        // Join the copy so RLS (camp_id = get_user_camp_id) allows deleting its
+        // data rows.
         await DB().setActiveCamp(campId);
         await sb().from('rotation_counts').delete().eq('camp_id', campId);
         await sb().from('daily_schedules').delete().eq('camp_id', campId);
         await sb().from('camp_state_kv').delete().eq('camp_id', campId);
+        // Drop my membership for the copy before unregistering it (the leave
+        // helper keys off debug_copies, so order matters).
+        try { await sb().from('camp_users').delete().eq('user_id', userId).eq('camp_id', campId); } catch (_) {}
         var del = await sb().from('camps').delete().eq('id', campId);
-        // Whether or not the camps-row delete is permitted by RLS, leave the copy.
+        await sb().from('debug_copies').delete().eq('copy_camp_id', campId);
+        // Back to my real camp.
         await DB().clearActiveCamp();
         if (del.error) {
             throw new Error('Data cleared, but camp row could not be deleted: ' + del.error.message);
@@ -272,6 +303,7 @@
         var listEl = section.querySelector('#dcList');
         var searchEl = section.querySelector('#dcSearch');
         var allCamps = [];
+        var copySet = {};   // { copyCampId: true }
 
         function setStatus(msg, isErr) {
             statusEl.textContent = msg || '';
@@ -288,14 +320,14 @@
                 })
                 .forEach(function (c) {
                     var isActive = c.id === activeCampId;
-                    var isMine = c.owner === userId;
-                    var isCopy = String(c.name || '').indexOf('[COPY]') === 0;
+                    var isReal = c.owner === userId;       // my real camp
+                    var isCopy = !!copySet[c.id];           // a debug copy of mine
                     var row = el('div', null);
                     row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid ' +
                         (isActive ? '#10b981' : 'var(--slate-200)') + ';border-radius:10px;background:' +
                         (isActive ? '#ecfdf5' : '#fff') + ';';
                     var label = (c.name || '(unnamed)');
-                    var meta = (isMine ? 'yours' : 'owner ' + String(c.owner || '').slice(0, 8)) +
+                    var meta = (isReal ? 'your camp' : (isCopy ? 'debug copy' : 'owner ' + String(c.owner || '').slice(0, 8))) +
                                (c.plan_status ? ' · ' + c.plan_status : '') +
                                (isActive ? ' · ACTIVE' : '');
                     row.appendChild(el('div', { style: 'flex:1;min-width:0;' },
@@ -305,16 +337,20 @@
 
                     var btns = el('div', { style: 'display:flex;gap:6px;flex-shrink:0;' });
 
-                    if (isMine) {
+                    if (isCopy) {
                         if (!isActive) {
                             var sw = el('button', { class: 'btn-secondary', style: 'padding:6px 10px;font-size:0.78rem;' }, 'Switch');
                             sw.onclick = function () { doSwitch(c.id); };
                             btns.appendChild(sw);
                         }
-                        if (isCopy) {
-                            var del = el('button', { style: 'padding:6px 10px;font-size:0.78rem;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:8px;cursor:pointer;' }, 'Delete');
-                            del.onclick = function () { doDelete(c.id, label); };
-                            btns.appendChild(del);
+                        var del = el('button', { style: 'padding:6px 10px;font-size:0.78rem;border:1px solid #fecaca;background:#fff;color:#dc2626;border-radius:8px;cursor:pointer;' }, 'Delete');
+                        del.onclick = function () { doDelete(c.id, label); };
+                        btns.appendChild(del);
+                    } else if (isReal) {
+                        if (!isActive) {
+                            var rt = el('button', { class: 'btn-secondary', style: 'padding:6px 10px;font-size:0.78rem;' }, 'Switch back');
+                            rt.onclick = function () { doReturn(); };
+                            btns.appendChild(rt);
                         }
                     } else {
                         var cp = el('button', { class: 'btn-primary', style: 'padding:6px 10px;font-size:0.78rem;' }, 'Make a copy');
@@ -331,13 +367,23 @@
 
         function load() {
             setStatus('Loading camps…');
-            listCamps().then(function (camps) {
-                allCamps = camps;
-                setStatus(camps.length + ' camp(s).');
+            Promise.all([listCamps(), myCopyIds()]).then(function (r) {
+                allCamps = r[0];
+                copySet = {};
+                (r[1] || []).forEach(function (id) { copySet[id] = true; });
+                setStatus(allCamps.length + ' camp(s).');
                 draw();
             }).catch(function (e) {
-                setStatus('Could not load camps: ' + (e && e.message) + ' (is migration 010 applied?)', true);
+                setStatus('Could not load camps: ' + (e && e.message) + ' (are migrations 010–012 applied?)', true);
             });
+        }
+
+        function doReturn() {
+            setStatus('Switching back to your camp…');
+            disableAll(true);
+            returnToMyCamp().then(function () {
+                setTimeout(function () { window.location.reload(); }, 600);
+            }).catch(function (e) { disableAll(false); setStatus('❌ ' + (e && e.message), true); });
         }
 
         function doClone(id, name) {

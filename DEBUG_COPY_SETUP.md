@@ -18,6 +18,12 @@ original camp is only ever **read** — never written.
    - The `camps` INSERT trigger normally requires the owner to have a valid
      access code in their signup metadata. This lets super-admins create camps
      (debug copies) without one; normal signups still require a valid code.
+2c. Run `migrations/012_debug_copies.sql`.
+   - Adds the `debug_copies` registry and the super-admin policies that let you
+     create a copy, join it (to "switch in"), and delete it. A debug copy is a
+     real camp you join as a team-member owner — that's how it loads correctly
+     across Me / Flow / generation, since every page resolves the active camp
+     from team membership first.
 3. Verify: `SELECT * FROM public.super_admins;` should list exactly your account.
 
 ## Who can be super-admin
