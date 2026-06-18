@@ -28451,18 +28451,22 @@
                 var _rkSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
                 var _rkCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
 
-                // (grade → normName → widest [ws,we]) layer windows from the snapshot
-                var _rkWin = {};
+                // (grade → normName → widest [ws,we]) layer windows. Prefer the in-scope
+                // bunkTimelines (live during this run); fall back to the window snapshot.
+                var _rkWin = {}, _rkBtKeys = 0, _rkBtLayered = 0, _rkLunchWin = null;
                 try {
-                    var _bt = window._bunkTimelines || {};
+                    var _bt = (typeof bunkTimelines !== 'undefined' && bunkTimelines && Object.keys(bunkTimelines).length) ? bunkTimelines : (window._bunkTimelines || {});
+                    _rkBtKeys = Object.keys(_bt).length;
                     Object.keys(_bt).forEach(function (bk) {
                         var g = _rkGradeOf[String(bk)]; if (!g) return;
                         (_bt[bk] || []).forEach(function (blk) {
                             if (!blk || !blk.layer || blk.layer.startMin == null || blk.layer.endMin == null) return;
+                            _rkBtLayered++;
                             var nm = _rkNorm(blk.event || blk.layer.name || blk.type); if (!nm) return;
                             _rkWin[g] = _rkWin[g] || {};
                             var cur = _rkWin[g][nm], w = { ws: blk.layer.startMin, we: blk.layer.endMin };
                             if (!cur || (w.we - w.ws) > (cur.we - cur.ws)) _rkWin[g][nm] = w;
+                            if (nm === 'lunch' && !_rkLunchWin) _rkLunchWin = w;
                         });
                     });
                 } catch (_eWin) {}
@@ -28475,6 +28479,7 @@
                 });
 
                 var _rkBunks = 0, _rkSpans = 0, _rkRolled = 0;
+                var _rkRegions = 0, _rkNoMov = 0, _rkNoGap = 0, _rkCoalesced = 0, _rkPackAbort = 0, _rkPeekFail = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                     var slots = window.scheduleAssignments[bunk];
                     if (!Array.isArray(slots) || !slots.length) return;
@@ -28541,13 +28546,15 @@
                     var bunkChanged = false, run = [], runStart = null;
                     var processSpan = function (spUnits, S, E) {
                         if (E <= S || !spUnits.length) return;
+                        _rkRegions++;
                         var movs = spUnits.filter(function (u) { return u.kind === 'movable'; });
                         var gaps = spUnits.filter(function (u) { return u.kind === 'gap'; });
-                        if (!movs.length || !gaps.length) return;          // nothing to slide / nothing to gather
+                        if (!gaps.length) { _rkNoGap++; return; }            // nothing to gather
+                        if (!movs.length) { _rkNoMov++; return; }            // nothing movable to slide
                         // already coalesced? (no gap precedes the last movable) → leave to 6.863
                         var lastMovOrd = -1, firstGapOrd = 1e9, ord = 0;
                         spUnits.forEach(function (u) { if (u.kind === 'movable') lastMovOrd = ord; if (u.kind === 'gap' && ord < firstGapOrd) firstGapOrd = ord; ord++; });
-                        if (firstGapOrd > lastMovOrd) return;
+                        if (firstGapOrd > lastMovOrd) { _rkCoalesced++; return; }
                         // left-pack movables (tight, window-clamped); abort if any can't pack tight
                         var cursor = S, ok = true, plan = [];
                         for (var mi = 0; mi < movs.length; mi++) {
@@ -28557,11 +28564,11 @@
                             if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.name, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
                             plan.push({ M: M, ns: ns }); cursor = ns + M.dur;
                         }
-                        if (!ok) return;
+                        if (!ok) { _rkPackAbort++; return; }
                         var gapStart = cursor;
                         if (E - gapStart <= 5) return;
                         var gapWidths = []; gaps.forEach(function (gp) { gp.cells.forEach(function (cx) { gapWidths.push(slots[cx]._endMin - slots[cx]._startMin); }); });
-                        if (!_rkPeek(gapWidths, gapStart)) return;          // not fillable → don't reshuffle
+                        if (!_rkPeek(gapWidths, gapStart)) { _rkPeekFail++; return; }          // not fillable → don't reshuffle
 
                         // APPLY permutation: [movables in plan order][gaps in order], cells re-timed
                         var subCells = []; spUnits.forEach(function (u) { u.cells.forEach(function (cx) { subCells.push(cx); }); });
@@ -28605,6 +28612,7 @@
                     }
                 });
 
+                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' noGap=' + _rkNoGap + ' noMov=' + _rkNoMov + ' coalesced=' + _rkCoalesced + ' packAbort=' + _rkPackAbort + ' peekFail=' + _rkPeekFail + ' | spans=' + _rkSpans + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
                 if (_rkSpans > 0 || _rkRolled > 0) {
                     log('[STEP 6.862 REGION-COMPACT] ✅ lined up gaps in ' + _rkSpans + ' sub-span(s) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + ' → 6.863 fills the openings. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
