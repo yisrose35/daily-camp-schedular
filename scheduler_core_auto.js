@@ -18672,22 +18672,6 @@
         warnings.length = 0;
         bestWarnings.forEach(w => warnings.push(w));
 
-        // ★ FIT-MATH APPLY kill-switch (default ON). The duration-first region
-        //   tiler at PHASE −0.4 below COMPACTS the already-selected activities
-        //   flush against their walls and FILLS the residual region budget with
-        //   eligible specials — so a SPORTLESS layered grade's day tiles cleanly
-        //   (no mid-region floats, dead time pooled/filled at region edges). This
-        //   is the user's "decide the durations that sum to the region" model.
-        //   Set globalSettings.app1.fitMathApply = 'off' to revert to the legacy
-        //   greedy path (PeriodTiler shift-apply + FIT-MATH shadow verdicts).
-        var _fitMathApplyOn = (function () {
-            try {
-                var v = (globalSettings && globalSettings.app1 && globalSettings.app1.fitMathApply);
-                if (v === 'off' || v === false || v === 'shadow') return false;
-                return true;
-            } catch (_e) { return true; }
-        })();
-
         // ═══════════════════════════════════════════════════════════════════
         // PHASE −0.5 — PeriodTiler SHADOW MODE
         // ═══════════════════════════════════════════════════════════════════
@@ -18999,13 +18983,7 @@
                                 _tilerSampleSlivers.push({ bunk: bunk, sliver: s });
                             });
                         }
-                        // When FIT-MATH APPLY is on it OWNS the sportless layered
-                        //   grades (it compacts + fills them below), so don't also
-                        //   let the PeriodTiler shift-apply mutate them — that would
-                        //   be a redundant second mutation of the same bunk. Sport
-                        //   grades stay on the PeriodTiler path (sports own slack).
-                        var _fitOwnsGrade = _fitMathApplyOn && (typeof gradeHasSportLayer === 'function') && !gradeHasSportLayer(grade);
-                        if (_tilerApplyMode && !_fitOwnsGrade && result.shifts && result.shifts.length) {
+                        if (_tilerApplyMode && result.shifts && result.shifts.length) {
                             _tilerApplyQueue.push({ bunk: bunk, grade: grade, tl: tl, shifts: result.shifts });
                         }
                     });
@@ -19218,210 +19196,28 @@
         }
 
         // ═══════════════════════════════════════════════════════════════════
-        // PHASE −0.4 — FIT-MATH APPLY (duration-first region tiler)  ★ default ON
+        // PHASE −0.4 — FIT-MATH SHADOW (per-bunk region budget verdicts)
         // ═══════════════════════════════════════════════════════════════════
-        // The user's model: a region between two immovable WALLS (swim/change/
-        // lunch/davening/custom anchors/league) is tiled by deciding the activity
-        // DURATIONS that sum to it. We do exactly that on the SPORTLESS layered
-        // grades, in two steps per region:
-        //   (1) COMPACT — left-pack the already-selected activities flush from the
-        //       region start at their CONFIGURED durations (never resized), so
-        //       nothing floats with dead space on both sides (S3); the greedy
-        //       "perfection-fill"/Free placeholders are DROPPED — their minutes
-        //       become honest, fillable slack.
-        //   (2) FILL — pour eligible specials (today-available, accessible, not a
-        //       same-day repeat, rotation-permitted, capacity-safe) into the
-        //       trailing slack, preferring an EXACT-fit duration then the largest
-        //       that fits, so the region budget is consumed (S2/S8 — "fill to the
-        //       best ability"). Any unavoidable remainder is ONE block at the
-        //       region edge, never a mid-region float.
-        // Walls keep their configured time (S7). Shared/cap-limited specials are
-        // guarded cross-bunk; any per-bunk overlap rolls that bunk back. The
-        // downstream gates (STEP 4.5 / FN-15/19/21/54/55) re-validate everything,
-        // so an over-eager fill self-heals to Free rather than corrupting the day.
-        // Sport grades stay on the PeriodTiler path (sports own their slack).
-        // Kill-switch: globalSettings.app1.fitMathApply = 'off'.
+        // For each layered bunk, split the day into regions bounded by hard walls
+        // and run fitBunkRegion on each: do the region's planned specials (at their
+        // CONFIGURED durations) sum to the region's budget? Reports per-region
+        // fit / slack / over — the "math that makes sure it fits" on the live camp,
+        // surfacing exactly where the day tiles cleanly vs leaves a sliver. Shadow
+        // only; no mutation.
         try {
-            var _fitHasEngine = window.PeriodTiler && typeof window.PeriodTiler.fitBunkRegion === 'function';
-            var _FITWALL = new Set(['swim', 'change', 'pre-change', 'post-change', 'lunch',
-                'snacks', 'dismissal', 'league', 'specialty_league', 'davening',
-                'rotation_event', 'scheduled_activity', 'trip']);
-            var _fitNm = function (b) { return b.event || (b.layer && b.layer.name) || b.type || ''; };
-            var _fitNorm = function (s) { return String(s == null ? '' : s).toLowerCase().trim(); };
-            var _fitIsWall = function (b) {
-                var t = _fitNorm(b.type);
-                if (_FITWALL.has(t)) return true;
-                if (/^(pre[-\s]?change|post[-\s]?change|change)/i.test(_fitNm(b))) return true;
-                // a pinned non-special (Main/Morning Activity custom wall) bounds a region
-                if ((b._fixed || b._classification === 'pinned') && t !== 'special') return true;
-                return false;
-            };
-            // "junk" = a placeholder the greedy perfection-fill minted to mask a
-            //   gap; drop it so its minutes become honest, compactible slack.
-            var _fitIsJunk = function (b) {
-                if (b && b._source === 'perfection-fill') return true;
-                var nm = _fitNorm(_fitNm(b));
-                return nm === 'free' || nm === '';
-            };
-            var _fitIsGuarded = function (nm) { try { return !!getSpecialConfig(nm, globalSettings); } catch (_e) { return false; } };
-
-            if (_fitMathApplyOn && _fitHasEngine) {
-                // Cross-bunk occupancy of guarded (shared/cap-limited) specials at
-                //   their CURRENT positions — across ALL layered grades, so a
-                //   sportless-grade move/fill can't breach capacity against a
-                //   sport-grade special either.
-                var _fitOcc = {};
-                var _fitOccAdd = function (nm, g, ns, ne, ref) {
-                    var key = _fitNorm(nm);
-                    (_fitOcc[key] || (_fitOcc[key] = [])).push({ s: ns, e: ne, grade: g, ref: ref || null });
+            if (window.PeriodTiler && typeof window.PeriodTiler.fitBunkRegion === 'function') {
+                var _HARDFIT = new Set(['swim', 'change', 'pre-change', 'post-change', 'lunch',
+                    'snacks', 'dismissal', 'league', 'specialty_league', 'davening',
+                    'rotation_event', 'scheduled_activity', 'trip']);
+                var _isHardFit = function (blk) {
+                    var t = String(blk.type || '').toLowerCase();
+                    var nm = String(blk.event || (blk.layer && blk.layer.name) || blk.type || '');
+                    if (_HARDFIT.has(t)) return true;
+                    if (/^(pre[-\s]?change|post[-\s]?change|change)/i.test(nm)) return true;
+                    // a pinned non-special (e.g. Main Activity custom wall) bounds a region
+                    if ((blk._fixed || blk._classification === 'pinned') && t !== 'special') return true;
+                    return false;
                 };
-                allGrades.forEach(function (g) {
-                    if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(g)) return;
-                    getBunksForGrade(g, divisions).forEach(function (bk) {
-                        (bunkTimelines[bk] || []).forEach(function (b) {
-                            if (!b || b.startMin == null || b.endMin == null || b.endMin <= b.startMin) return;
-                            var nm = _fitNm(b);
-                            if (_fitIsJunk(b) || !_fitIsGuarded(nm)) return;
-                            _fitOccAdd(nm, g, b.startMin, b.endMin, b);
-                        });
-                    });
-                });
-                var _fitMoveSafe = function (nm, grade, ref, ns, ne) {
-                    var arr = _fitOcc[_fitNorm(nm)] || [];
-                    var info; try { info = getSpecialSharingInfo(nm, activityProperties, globalSettings); }
-                    catch (_e) { info = { shareType: 'not_sharable', capacity: 1 }; }
-                    var cap = info.capacity || (info.shareType === 'not_sharable' ? 1 : 2);
-                    var overlaps = 0, crossGrade = false;
-                    for (var i = 0; i < arr.length; i++) {
-                        var o = arr[i]; if (o.ref === ref) continue;
-                        if (ns < o.e - 0.0001 && ne > o.s + 0.0001) { overlaps++; if (o.grade !== grade) crossGrade = true; }
-                    }
-                    if (info.shareType === 'not_sharable') return overlaps === 0;
-                    if (info.shareType === 'same_division' && crossGrade) return false;
-                    return (overlaps + 1) <= cap;
-                };
-
-                var _fitMoved = 0, _fitFilled = 0, _fitFilledMin = 0, _fitJunk = 0,
-                    _fitBunksTouched = 0, _fitRolledBack = 0, _fitSlackMin = 0, _fitRegions = 0, _fitFillSamples = [];
-
-                allGrades.forEach(function (grade) {
-                    if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(grade)) return;
-                    // FIT-MATH owns the SPORTLESS layered grades only.
-                    if (typeof gradeHasSportLayer === 'function' && gradeHasSportLayer(grade)) return;
-                    var divName = grade;
-                    getBunksForGrade(grade, divisions).forEach(function (bunk) {
-                        var live = (bunkTimelines[bunk] || []).filter(function (b) {
-                            return b && b.startMin != null && b.endMin != null && b.endMin > b.startMin;
-                        });
-                        if (!live.length) return;
-                        var junk = live.filter(_fitIsJunk);
-                        var kept = live.filter(function (b) { return !_fitIsJunk(b); });
-                        if (!kept.length) { if (junk.length) { bunkTimelines[bunk] = []; _fitJunk += junk.length; } return; }
-                        var sorted = kept.slice().sort(function (a, b) { return a.startMin - b.startMin; });
-                        var dayS = sorted[0].startMin, dayE = sorted[0].endMin;
-                        sorted.forEach(function (b) { if (b.startMin < dayS) dayS = b.startMin; if (b.endMin > dayE) dayE = b.endMin; });
-                        var walls = sorted.filter(_fitIsWall);
-                        // Regions = the spans BETWEEN walls, within [dayS,dayE].
-                        var regions = [], cur = dayS;
-                        walls.forEach(function (w) { if (w.startMin > cur) regions.push({ s: cur, e: w.startMin }); if (w.endMin > cur) cur = w.endMin; });
-                        if (cur < dayE) regions.push({ s: cur, e: dayE });
-                        if (!regions.length) { if (junk.length) { bunkTimelines[bunk] = sorted; _fitJunk += junk.length; } return; }
-                        // Assign each fillable real block to a region by ORIGINAL start.
-                        var regFill = regions.map(function (R) {
-                            return { R: R, fill: sorted.filter(function (b) { return !_fitIsWall(b) && b.startMin >= R.s && b.startMin < R.e; }) };
-                        });
-                        // Snapshot for rollback.
-                        var snap = sorted.map(function (b) { return { b: b, s: b.startMin, e: b.endMin }; });
-                        var occTouched = [], newBlocks = [];
-                        var usedNames = {}; sorted.forEach(function (b) { usedNames[_fitNorm(_fitNm(b))] = true; });
-                        var mMoved = 0, mFilled = 0, mFilledMin = 0, mSlack = 0;
-
-                        regFill.forEach(function (rf) {
-                            var R = rf.R, fill = rf.fill;
-                            _fitRegions++;
-                            var pos = R.s;
-                            // (1) COMPACT existing reals flush from region start.
-                            for (var fi = 0; fi < fill.length; fi++) {
-                                var b = fill[fi], dur = b.endMin - b.startMin;
-                                if (pos + dur > R.e) { pos = Math.max(pos, b.endMin); continue; }
-                                var nm = _fitNm(b), ns = pos, ne = pos + dur, guarded = _fitIsGuarded(nm);
-                                if (ns !== b.startMin && guarded && !_fitMoveSafe(nm, grade, b, ns, ne)) {
-                                    var found = false;
-                                    for (var c = ns; c + dur <= R.e; c += 5) { if (_fitMoveSafe(nm, grade, b, c, c + dur)) { ns = c; ne = c + dur; found = true; break; } }
-                                    if (!found) { pos = Math.max(pos, b.endMin); continue; }
-                                }
-                                if (ns !== b.startMin) {
-                                    b.startMin = ns; b.endMin = ne; mMoved++;
-                                    if (guarded) {
-                                        var key = _fitNorm(nm), arr = _fitOcc[key] || (_fitOcc[key] = []), ent = null;
-                                        for (var j = 0; j < arr.length; j++) { if (arr[j].ref === b) { ent = arr[j]; break; } }
-                                        if (!ent) { ent = { s: ns, e: ne, grade: grade, ref: b }; arr.push(ent); }
-                                        occTouched.push({ entry: ent, s: ent.s, e: ent.e }); ent.s = ns; ent.e = ne;
-                                    }
-                                }
-                                pos = ne;
-                            }
-                            // (2) FILL the trailing slack with eligible specials (duration-first).
-                            var slack = R.e - pos, guardLoop = 0;
-                            while (slack >= 10 && guardLoop++ < 30) {
-                                var best = null;
-                                for (var si = 0; si < todaysSpecials.length; si++) {
-                                    var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
-                                    if (usedNames[_fitNorm(sp.name)]) continue;            // no same-day repeat
-                                    var d; try { d = getSpecialDuration(sp.name, activityProperties, globalSettings); } catch (_e) { d = null; }
-                                    if (!d || d <= 0 || d > slack) continue;
-                                    if (!isSpecialAvailableForBunk(sp.name, divName, bunk, globalSettings)) continue;
-                                    var lim; try { lim = (window.RotationEngine && window.RotationEngine.calculateLimitScore) ? window.RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, divName) : 0; } catch (_e) { lim = 0; }
-                                    if (!isFinite(lim)) continue;                          // hard-blocked (freq/maxUsage/availDays/cohort)
-                                    if (!_fitMoveSafe(sp.name, grade, null, pos, pos + d)) continue;  // capacity / same_division
-                                    var rot; try { rot = (window.RotationEngine && window.RotationEngine.calculateRotationScore) ? window.RotationEngine.calculateRotationScore({ bunkName: bunk, activityName: sp.name, divisionName: grade, beforeSlotIndex: 0, allActivities: null, activityProperties: activityProperties }) : 0; } catch (_e) { rot = 0; }
-                                    var exact = (d === slack) ? 1 : 0;
-                                    if (!best || exact > best.exact || (exact === best.exact && d > best.dur) || (exact === best.exact && d === best.dur && rot < best.rot)) best = { name: sp.name, dur: d, exact: exact, rot: rot };
-                                }
-                                if (!best) break;
-                                var nb = {
-                                    startMin: pos, endMin: pos + best.dur, type: 'special', event: best.name, layer: null,
-                                    _classification: 'pinned', _committed: true, _fixed: true, _gradeWide: false,
-                                    _activityLocked: true, _noBacktrack: false, _assignedSpecial: best.name,
-                                    _specialLocation: (getLocationForSpecial(best.name, activityProperties, globalSettings) || null),
-                                    _specialDuration: best.dur, _isSpecialLocation: true, _source: 'fit-fill'
-                                };
-                                newBlocks.push(nb);
-                                usedNames[_fitNorm(best.name)] = true;
-                                try { registerSpecialUsage(best.name, grade, pos, pos + best.dur); } catch (_e) {}
-                                _fitOccAdd(best.name, grade, pos, pos + best.dur, nb);
-                                if (_fitFillSamples.length < 6) _fitFillSamples.push(bunk + ' ' + best.name + ' ' + minutesToTimeLabel(pos) + '-' + minutesToTimeLabel(pos + best.dur));
-                                mFilled++; mFilledMin += best.dur; pos += best.dur; slack = R.e - pos;
-                            }
-                            mSlack += Math.max(0, R.e - pos);
-                        });
-
-                        // Commit: kept (compacted) + newBlocks, junk dropped.
-                        var merged = kept.concat(newBlocks).sort(function (a, b) { return a.startMin - b.startMin; });
-                        var clash = false;
-                        for (var k = 1; k < merged.length; k++) { if (merged[k].startMin < merged[k - 1].endMin - 0.0001) { clash = true; break; } }
-                        if (clash) {
-                            snap.forEach(function (o) { o.b.startMin = o.s; o.b.endMin = o.e; });
-                            occTouched.forEach(function (o) { o.entry.s = o.s; o.entry.e = o.e; });
-                            newBlocks.forEach(function (nb) { var arr = _fitOcc[_fitNorm(nb.event)]; if (arr) { var ix = arr.findIndex(function (x) { return x.ref === nb; }); if (ix >= 0) arr.splice(ix, 1); } });
-                            if (junk.length) { bunkTimelines[bunk] = kept.slice().sort(function (a, b) { return a.startMin - b.startMin; }); _fitJunk += junk.length; }
-                            _fitRolledBack++;
-                            return;
-                        }
-                        bunkTimelines[bunk] = merged;
-                        if (junk.length) _fitJunk += junk.length;
-                        _fitMoved += mMoved; _fitFilled += mFilled; _fitFilledMin += mFilledMin; _fitSlackMin += mSlack;
-                        if (mMoved || mFilled || junk.length) _fitBunksTouched++;
-                        try { ensureTimelineIntegrity(bunk); } catch (_e) {}
-                    });
-                });
-                log('[FIT-MATH APPLY] ' + _fitBunksTouched + ' bunk(s): compacted ' + _fitMoved +
-                    ' block(s), filled ' + _fitFilled + ' slot(s) (' + Math.round(_fitFilledMin) + ' min), dropped ' +
-                    _fitJunk + ' filler placeholder(s); ' + _fitRegions + ' region(s); ' + Math.round(_fitSlackMin) +
-                    ' min residual slack' + (_fitRolledBack ? (' — ' + _fitRolledBack + ' bunk(s) rolled back (overlap guard)') : '') + '.');
-                if (_fitFillSamples.length) { log('[FIT-MATH APPLY] sample fills:'); _fitFillSamples.forEach(function (s) { log('  ' + s); }); }
-            } else if (_fitHasEngine) {
-                // ── Legacy SHADOW verdicts (kill-switch: fitMathApply='off'/'shadow') ──
                 var _fitFit = 0, _fitSlack = 0, _fitOver = 0, _fitBunks = 0, _fitSamples = [];
                 allGrades.forEach(function (grade) {
                     if (typeof gradeHasAnyLayer === 'function' && !gradeHasAnyLayer(grade)) return;
@@ -19434,9 +19230,10 @@
                         _fitBunks++;
                         var i = 0;
                         while (i < tl.length) {
-                            if (_fitIsWall(tl[i])) { i++; continue; }
+                            if (_isHardFit(tl[i])) { i++; continue; }
+                            // maximal run of fillable (non-hard) blocks = one region
                             var run = [];
-                            while (i < tl.length && !_fitIsWall(tl[i])) { run.push(tl[i]); i++; }
+                            while (i < tl.length && !_isHardFit(tl[i])) { run.push(tl[i]); i++; }
                             var runStart = run[0].startMin, runEnd = run[run.length - 1].endMin;
                             var due = run.map(function (r) {
                                 var rnm = r.event || (r.layer && r.layer.name) || r.type || '?';
@@ -19468,7 +19265,7 @@
                 }
             }
         } catch (_fitErr) {
-            warn('[FIT-MATH APPLY] error: ' + (_fitErr && _fitErr.message));
+            warn('[FIT-MATH SHADOW] error: ' + (_fitErr && _fitErr.message));
         }
 
         // ═══════════════════════════════════════════════════════════════════
