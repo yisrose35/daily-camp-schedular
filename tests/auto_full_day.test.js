@@ -998,6 +998,9 @@ function buildSandbox(opts) {
       sportMetaData,
       disabledFields,
       divisions,
+      // opt-in: let STEP 6.865 tier-2 stretch a bounding special over a sub-floor
+      //   sliver (default off — see the "no stretch" tests for the locked default).
+      sliverStretchSpecial: opts.stretchSpecial === true,
     },
     campPeriods,
   };
@@ -1311,8 +1314,11 @@ async function runScenario(label, opts) {
     if (opts.requireMorningPin && r.morningCount !== 1) failures.push(`${bunk}: Morning Activity count = ${r.morningCount} (want exactly 1 — pinned custom must not be displaced)`);
     if (!opts.skipGapCheck && !r.pass.nogap) failures.push(`${bunk}: ${r.gapMin} uncovered min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
     // ★ DURATION LOCK (universal): a configured special is never stretched beyond
-    //   its configured duration — true for every scenario, every camp.
-    if (!r.pass.specialDur) failures.push(`${bunk}: configured special stretched past its duration — ${r.specialOver.join('; ')}`);
+    //   its configured duration — true for every scenario, every camp. EXCEPTION:
+    //   the opt-in sliver-stretch path (globalSettings.app1.sliverStretchSpecial)
+    //   deliberately grows a bounding special over a sub-floor gap; expectStretch
+    //   scenarios assert that growth happened instead of forbidding it.
+    if (!opts.expectStretch && !r.pass.specialDur) failures.push(`${bunk}: configured special stretched past its duration — ${r.specialOver.join('; ')}`);
   }
 
   // requireSwimReservedBeforeSpecials: assert Phase 2.3 actually pre-placed swim
@@ -1433,6 +1439,22 @@ test('auto scheduler keeps special duration over a wall-bounded sliver band (no 
     sliver: true,
     skipGapCheck: true,
   });
+});
+
+// Opt-in counterpart: with globalSettings.app1.sliverStretchSpecial = true, the
+// SAME wall-bounded sliver is closed by growing the bounding special over the gap
+// (the only engine lever in a sportless / no-short-filler camp). Proves the new
+// tier-2 path fires ONLY when the flag is on; the test above proves it stays off
+// by default.
+test('auto scheduler stretches a bounding special to close a sub-floor sliver when sliverStretchSpecial is on', async (t) => {
+  const { results } = await runScenario('SLIVER-BAND (stretch ON — opt-in)', {
+    sliver: true,
+    stretchSpecial: true,
+    expectStretch: true,
+    skipGapCheck: true,
+  });
+  const anyStretched = Object.values(results).some(r => !r.pass.specialDur);
+  assert.ok(anyStretched, 'with sliverStretchSpecial=on, a bounding special should be stretched to absorb the sub-floor sliver');
 });
 
 // ---------------------------------------------------------------------------

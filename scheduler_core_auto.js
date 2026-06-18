@@ -29321,7 +29321,7 @@
             // A block is a stretchable SPECIAL (last resort). Specials carry
             // _autoSpecial / _isSpecialLocation / type 'special', OR live in a
             // registered special room, OR are named after a configured special.
-            var _sabSpecialElig = function (M) {
+            var _sabSpecialElig = function (M, _allowStretch) {
                 if (!M) return false;
                 var t = _sabNorm(M.type);
                 var fld = _sabNorm(M.field || M._specialLocation);
@@ -29336,8 +29336,12 @@
                 //   exactly — never grow it to swallow a sliver (that's how a 20-min
                 //   Shiur ended up in a 25-min slot). Only a special with NO configured
                 //   duration (flexible, falls back to its layer duration) may stretch.
+                //   EXCEPTION: when _allowStretch is set (caller passes true ONLY for a
+                //   sub-floor gap < floor, with the kill switch on), a configured special
+                //   MAY grow by exactly that gap — the only way to close a 15-20min hole
+                //   bounded by a special + wall in a sportless camp with no short filler.
                 var _nm = M._assignedSpecial || M.event || M._activity || M.name;
-                if (_nm) {
+                if (_nm && !_allowStretch) {
                     try {
                         var _cd = getSpecialDuration(_nm, activityProperties, globalSettings);
                         if (_cd && _cd > 0) return false;
@@ -29489,6 +29493,16 @@
                 return null;
             };
             var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0, _sabByFiller = 0;
+            // ★ SLIVER-STRETCH (opt-in): allow tier-2 to grow a bounding special (even one
+            //   with a CONFIGURED duration) by EXACTLY a sub-floor gap, so a 15-20min hole
+            //   between a special and a wall (sportless camp, no short filler) gets covered
+            //   instead of left Free. Stamped _sliverAbsorbed; bounded to gapDur; field-gated.
+            //   OFF by default — keeping a configured special at its exact length is a
+            //   deliberate, tested invariant (a stretched Shiur would render longer). Turn on
+            //   per-camp with globalSettings.app1.sliverStretchSpecial = true (or 'on').
+            var _sliverStretchOn = !!(globalSettings && globalSettings.app1 &&
+                (globalSettings.app1.sliverStretchSpecial === true ||
+                 String(globalSettings.app1.sliverStretchSpecial).toLowerCase() === 'on'));
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
@@ -29596,7 +29610,7 @@
                     // (2) Both neighbours are walls (or non-stretchable). Stretch the
                     //     bounding SPECIAL over the sliver — a slightly longer special
                     //     beats a Free hole. Try LEFT special forward, then RIGHT back.
-                    if (_sabSpecialElig(Lh)) {
+                    if (_sabSpecialElig(Lh, _sliverStretchOn && gapDur > 0 && gapDur < floor)) {
                         var sActL = Lh._activity || Lh.event;
                         var sFieldL = Lh.field || Lh._specialLocation;
                         if (sFieldL && _sabNorm(sFieldL) !== 'free' &&
@@ -29613,7 +29627,7 @@
                             _sabAbsorbed++; _sabBySpecial++; continue;
                         }
                     }
-                    if (_sabSpecialElig(Rh)) {
+                    if (_sabSpecialElig(Rh, _sliverStretchOn && gapDur > 0 && gapDur < floor)) {
                         var sActR = Rh._activity || Rh.event;
                         var sFieldR = Rh.field || Rh._specialLocation;
                         if (sFieldR && _sabNorm(sFieldR) !== 'free' &&
