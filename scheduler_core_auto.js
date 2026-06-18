@@ -28711,8 +28711,15 @@
                             var hard = _RC_WALL.test(nm) || !!(c._fixed || c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
                             var spDur = _rcSpecialDur(rawNm);
                             var isSpecial = !hard && spDur > 0;
-                            var shared = isSpecial && ((_rcShared[nm + '@' + s] || 0) > 1);
-                            kind = (isSpecial && !shared) ? 'movspecial' : 'wall';
+                            // A configured special is ALWAYS a replaceable run member — even a
+                            // SHARED one (same activity in ≥2 bunks at this start). Dissolving it
+                            // here only removes THIS bunk's copy; the co-occupying bunk keeps its
+                            // session (just smaller), so there is no staggered/desync violation.
+                            // (Earlier this excluded shared specials and that was the bug: when the
+                            // optimizer shared Slush/Ice Cream/VR, the run gap│Slush│gap split into
+                            // two unfillable slivers and 6.863 filled nothing. MOVING a shared
+                            // special would desync — that guard stays in 6.862; REPLACING does not.)
+                            kind = isSpecial ? 'movspecial' : 'wall';
                         }
                         units.push({ kind: kind, head: head, tail: tail, s: s, e: e, dur: e - s });
                         i = tail + 1;
