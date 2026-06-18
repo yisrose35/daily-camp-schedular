@@ -1079,6 +1079,51 @@
         }
 
         const divisions = window.divisions || (globalSettings.app1 && globalSettings.app1.divisions) || {};
+
+        // ★ BELL-GRID DAY COVERAGE. A bell schedule defines structure WITHIN the
+        //   camp day — it must never SHRINK the day. When a grade's periods don't
+        //   reach the grade's day start/end (a stale or partial bell schedule — e.g.
+        //   periods only from 10:50 while the camp day + morning layers start at
+        //   9:00), the pre-/post-grid time was treated as a dead zone: the morning
+        //   never materialized, so specials got scattered there with dead space
+        //   around them (Arts & Crafts floating 10:00-10:20 between a 9:50 wall and a
+        //   10:35 change). Extend the grid with synthetic leading/trailing periods
+        //   spanning the uncovered day so that time gets duration-first tiled (packed
+        //   flush + filled) like everything else. We CLONE per grade — never mutate
+        //   the user's saved campPeriods — and we only ADD coverage (never drop a
+        //   real period or a genuine inter-period gap).
+        try {
+            if (window.campPeriods && Object.keys(window.campPeriods).length) {
+                var _cpExtended = {};
+                Object.keys(window.campPeriods).forEach(function (_g) {
+                    var _ps = (window.campPeriods[_g] || []).slice()
+                        .sort(function (a, b) { return a.startMin - b.startMin; });
+                    if (!_ps.length) { _cpExtended[_g] = window.campPeriods[_g]; return; }
+                    var _dv = divisions[_g] || divisions[String(_g)] || {};
+                    var _ds = parseTimeToMinutes(_dv.startTime);
+                    var _de = parseTimeToMinutes(_dv.endTime);
+                    var _out = _ps.map(function (p) {
+                        return { startMin: p.startMin, endMin: p.endMin, name: p.name, id: p.id };
+                    });
+                    var _firstS = _ps[0].startMin, _lastE = _ps[_ps.length - 1].endMin;
+                    var _added = false;
+                    if (_ds != null && _ds < _firstS) {
+                        _out.unshift({ startMin: _ds, endMin: _firstS, name: 'Morning', _synthetic: true });
+                        _added = true;
+                    }
+                    if (_de != null && _de > _lastE) {
+                        _out.push({ startMin: _lastE, endMin: _de, name: 'Evening', _synthetic: true });
+                        _added = true;
+                    }
+                    _cpExtended[_g] = _out;
+                    if (_added) log('[STEP 1] Bell grid for "' + _g + '" extended to camp day ' +
+                        '(' + (_ds != null ? _ds : '?') + '-' + (_de != null ? _de : '?') + ') — ' +
+                        'synthetic morning/evening period(s) added so pre/post-grid time tiles, not dead-zones.');
+                });
+                window.campPeriods = _cpExtended;
+            }
+        } catch (_eCpExt) { try { warn('[STEP 1] bell-grid day-coverage extend skipped: ' + (_eCpExt && _eCpExt.message)); } catch (_x) {} }
+
         const activityProperties = window.activityProperties || {};
         const dailyData = window.loadCurrentDailyData ? window.loadCurrentDailyData() : {};
         if (window.isRainyDay === undefined)

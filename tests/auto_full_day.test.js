@@ -105,6 +105,7 @@ function campConfig(opts) {
       chairStart: HM(9, 0), chairEnd: HM(15, 0),
       autoStartStr: '9:00', autoEndStr: '15:00',
       smooth: true, smoothOffGrid: !!opts.smoothOffGrid, noSports: true,
+      smoothPartialBell: !!opts.smoothPartialBell,
     };
   }
   if (opts.swimReal) {
@@ -851,6 +852,13 @@ function buildSandbox(opts) {
   } : cfg.sliver ? {
     Auto:  sliverPeriods(),
     Chair: sliverPeriods(),
+  } : (cfg.smooth && cfg.smoothPartialBell) ? {
+    // PARTIAL bell schedule: periods cover only the afternoon (10:50→day end),
+    // while the camp day + morning layers start at 9:00. Reproduces a stale/
+    // partial bell grid. Without the day-coverage extension the pre-10:50 morning
+    // is a dead zone (left empty); with it, a synthetic morning period tiles it.
+    Auto:  [{ startMin: HM(10, 50), endMin: HM(15, 0) }],
+    Chair: [{ startMin: HM(10, 50), endMin: HM(15, 0) }],
   } : cfg.smooth ? {
     // layer-driven (no bell periods) → the tiler region-splits on walls.
     Auto:  [],
@@ -1730,6 +1738,26 @@ test('auto scheduler coalesces the off-grid remainder into one small sliver (fie
     .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
   assert.deepEqual(fragmented, [], 'off-grid day must coalesce to one small sliver per bunk — ' +
     'fragmentation here means field-less anchors are wrongly pinned again:\n  ' + fragmented.join('\n  '));
+});
+
+test('auto scheduler tiles the pre-bell-grid morning (a bell schedule never shrinks the day)', async (t) => {
+  // REGRESSION GUARD for the "activity floating with dead space on both sides"
+  //   report (Minors 2: Arts & Crafts 10:00-10:20, dead 9:50-10:00 and
+  //   10:20-10:35). Root cause: a stale/partial bell schedule that covers only
+  //   the afternoon (10:50→end) dead-zoned the 9:00-10:50 morning, so the morning
+  //   never reached the duration-first region tiler — a special got scattered
+  //   there with gaps around it. The day-coverage extension adds a synthetic
+  //   morning period so the pre-grid morning is tiled flush + filled like any
+  //   other region. Aligned {10,20,40} catalog + grid-aligned walls ⇒ the morning
+  //   tiles to ZERO gap. Without the fix the 10:00-10:50 morning is ~50 dead min.
+  const { results } = await runScenario('SMOOTH-DAY PARTIAL-BELL (afternoon-only grid; morning must still tile)', {
+    smooth: true, smoothPartialBell: true, requireNoSports: true, skipGapCheck: true,
+  });
+  const auto = Object.entries(results).filter(([b, r]) => r.grade === 'Auto');
+  const bad = auto.filter(([b, r]) => r.gapMin !== 0)
+    .map(([b, r]) => `${b}:${r.gapMin}min (${r.gaps.map(g => fmt(g[0]) + '-' + fmt(g[1])).join(',')})`);
+  assert.deepEqual(bad, [], 'a partial (afternoon-only) bell schedule must not dead-zone the ' +
+    'morning — the pre-grid morning must tile to zero gap:\n  ' + bad.join('\n  '));
 });
 
 test('auto scheduler keeps a pinned lunch at its configured time (never nudges it)', async (t) => {
