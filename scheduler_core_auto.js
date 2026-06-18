@@ -28406,6 +28406,220 @@
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
+        //   activity)                       [KILL SWITCH + per-bunk rollback]
+        // ───────────────────────────────────────────────────────────────────
+        // The day still ends with scattered sub-floor slivers because nothing
+        // this late looks at a WHOLE wall-bounded run and fills it as a unit.
+        // A run like  Davening │ Free(15) │ Slush(10) │ Free(15) │ Activity  is
+        // really ONE contiguous 40-min opening between two walls — the little
+        // Free gaps and the tiny Slush should become a single 40-min activity
+        // ("a 40-min activity could have gone there"). This pass finds each
+        // maximal run of {Free + solo movable specials} bounded by walls, then
+        // greedily tiles it left-to-right with the LONGEST eligible specials —
+        // and applies only when that raises the run's filled minutes.
+        //
+        // GRID-SAFE: it never adds/removes cells or moves a cell boundary. Every
+        // placement ends on an EXISTING cell boundary (it accumulates whole grid
+        // cells to hit a special's exact duration; if no whole-cell run matches a
+        // duration, that length is skipped), so it only re-labels cells in place
+        // via 6.864's head/continuation idiom — the slot count never changes.
+        // Walls (swim/change/lunch/davening/league/trip/chinuch + custom anchors
+        // like Main/Morning Activity + sports + SHARED specials) bound the runs
+        // and never move, so co-occupied/shared sessions can't desync. Per-bunk
+        // deep clone + validate(no-overlap, coverage-not-reduced) + rollback, so a
+        // bad write can only ever degrade to "no change". A <5-min remainder that
+        // no activity fits is left as one tail (acceptable).
+        //
+        // KILL SWITCH: globalSettings.app1.sliverCoalesce (shared with 6.864)
+        //   'off' | false → skip  |  'shadow' → log only  |  else → ON (default)
+        // To remove the feature: delete this whole try{...}catch block.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _rcMode = 'apply';
+            try {
+                var _rcF = (globalSettings && globalSettings.app1 && globalSettings.app1.sliverCoalesce);
+                if (_rcF === 'off' || _rcF === false) _rcMode = 'off';
+                else if (_rcF === 'shadow') _rcMode = 'shadow';
+                else _rcMode = 'apply';
+            } catch (_eRcFlag) { _rcMode = 'apply'; }
+
+            if (_rcMode !== 'off') {
+                var _rcNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _rcFmt = function (m) { if (m == null || isNaN(m)) return '?'; var h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'pm' : 'am', hh = ((h + 11) % 12) + 1; return hh + ':' + String(mm).padStart(2, '0') + ap; };
+                // Run-BOUNDARY activities — never dissolved; they bound the runs.
+                //   Custom anchors (main/morning activity) ARE walls here: REGION-FILL
+                //   does not move them (it fills the run beside them). Floating anchors
+                //   is a later, separately-gated step.
+                var _RC_WALL = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|morning activity|league game|specialty league|chinuch|trip|davening)$/i;
+                var _rcGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _rcGradeOf[String(b)] = g; }); });
+                var _rcCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+                var _rcSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+
+                // ── global shared-session map: (normName @ startMin) → count ──
+                //   A special present in ≥2 bunks at the same start is a shared session;
+                //   we treat it as a wall so dissolving it can't desync the other bunk.
+                var _rcShared = {};
+                Object.keys(window.scheduleAssignments || {}).forEach(function (b) {
+                    var arr = window.scheduleAssignments[b]; if (!Array.isArray(arr)) return;
+                    arr.forEach(function (s) {
+                        if (!s || s.continuation || _rcNorm(s.field) === 'free' || s._startMin == null) return;
+                        var nm = _rcNorm(s._assignedSpecial || s._activity || s.event); if (!nm) return;
+                        var k = nm + '@' + s._startMin; _rcShared[k] = (_rcShared[k] || 0) + 1;
+                    });
+                });
+
+                var _rcFilled = 0, _rcReclaimed = 0, _rcBunkCnt = 0, _rcRolled = 0, _rcRuns = 0;
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    var g = _rcGradeOf[String(bunk)]; if (!g) return;
+
+                    var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
+                    var _bunkChanged = 0, _bunkReclaim = 0;
+
+                    var _headOf = function (j) { var h = j; while (h > 0 && slots[h] && slots[h].continuation === true) h--; return h; };
+                    var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
+                    var _buildHeads = function () {
+                        var hs = [];
+                        for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rcCell(c) || _rcNorm(c.field) === 'free') continue; if (_headOf(i) !== i) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); }
+                        hs.sort(function (a, b) { return a.s - b.s; });
+                        return hs;
+                    };
+
+                    // ── build ordered units (each real block + each Free cell) ──
+                    var units = [], i = 0;
+                    while (i < slots.length) {
+                        var c = slots[i];
+                        if (!_rcCell(c)) { i++; continue; }
+                        if (c.continuation) { i++; continue; }
+                        var head = i, tail = _tailOf(i), s = c._startMin, e = slots[tail]._endMin;
+                        var isFree = (_rcNorm(c.field) === 'free' || _rcNorm(c._activity) === 'free');
+                        var kind;
+                        if (isFree) { kind = 'free'; }
+                        else {
+                            var rawNm = c._assignedSpecial || c._activity || c.event;
+                            var nm = _rcNorm(rawNm);
+                            var hard = _RC_WALL.test(nm) || !!(c._fixed || c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
+                            var spDur = _rcSpecialDur(rawNm);
+                            var isSpecial = !hard && spDur > 0;
+                            var shared = isSpecial && ((_rcShared[nm + '@' + s] || 0) > 1);
+                            kind = (isSpecial && !shared) ? 'movspecial' : 'wall';
+                        }
+                        units.push({ kind: kind, head: head, tail: tail, s: s, e: e, dur: e - s });
+                        i = tail + 1;
+                    }
+
+                    // ── group into wall-bounded runs of {free | movspecial} ──
+                    var runs = [], cur = [];
+                    units.forEach(function (u) {
+                        if (u.kind === 'wall') { if (cur.length) { runs.push(cur); cur = []; } }
+                        else cur.push(u);
+                    });
+                    if (cur.length) runs.push(cur);
+
+                    var todaySet = new Set();
+                    units.forEach(function (u) { if (u.kind === 'movspecial' || u.kind === 'wall') { var c2 = slots[u.head]; var n = _rcNorm(c2._assignedSpecial || c2._activity || c2.event); if (n && n !== 'free') todaySet.add(n); } });
+
+                    runs.forEach(function (run) {
+                        // cell list across the run (contiguous grid cells), each {idx,s,e,w}
+                        var first = run[0], last = run[run.length - 1];
+                        var cellList = [];
+                        for (var k = first.head; k <= last.tail; k++) { if (_rcCell(slots[k])) cellList.push({ idx: k, s: slots[k]._startMin, e: slots[k]._endMin, w: slots[k]._endMin - slots[k]._startMin }); }
+                        if (cellList.length < 1) return;
+                        // verify contiguous tiling
+                        var contig = true;
+                        for (var z = 1; z < cellList.length; z++) { if (cellList[z].s !== cellList[z - 1].e) { contig = false; break; } }
+                        if (!contig) return;
+                        var span = cellList[cellList.length - 1].e - cellList[0].s;
+                        if (span < 10) return;
+                        var currentReal = 0; run.forEach(function (u) { if (u.kind === 'movspecial') currentReal += u.dur; });
+
+                        // ── greedy left-to-right fill on existing cell boundaries ──
+                        var picks = [], used = new Set(), p = 0;
+                        while (p < cellList.length) {
+                            var startS = cellList[p].s, bestPick = null, bestDur = 0;
+                            if (typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials)) {
+                                for (var si = 0; si < todaysSpecials.length; si++) {
+                                    var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
+                                    var nmL = _rcNorm(sp.name);
+                                    if (todaySet.has(nmL) || used.has(nmL)) continue;
+                                    var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                                    if (!durs.length) { var d1 = _rcSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
+                                    for (var dj = 0; dj < durs.length; dj++) {
+                                        var d = durs[dj]; if (d <= bestDur) continue;
+                                        // d must equal a whole-cell prefix-sum from p
+                                        var acc = 0, jj = p; while (jj < cellList.length && acc < d) { acc += cellList[jj].w; jj++; }
+                                        if (acc !== d) continue;
+                                        var ns = startS, ne = startS + d;
+                                        try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
+                                        try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
+                                        try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, ns, ne)) continue; } catch (_e) { continue; }
+                                        var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(sp.name); } catch (_e) {}
+                                        bestPick = { name: sp.name, dur: d, loc: loc || sp.name, a: p, b: jj - 1 }; bestDur = d;
+                                    }
+                                }
+                            }
+                            if (bestPick) { picks.push(bestPick); used.add(_rcNorm(bestPick.name)); p = bestPick.b + 1; }
+                            else p++;   // leave this cell Free, advance
+                        }
+
+                        var newReal = picks.reduce(function (s2, q) { return s2 + q.dur; }, 0);
+                        if (newReal <= currentReal) return;   // no net gain → leave run untouched
+
+                        if (_rcMode === 'shadow') {
+                            _rcRuns++; _bunkChanged++; _bunkReclaim += (newReal - currentReal);
+                            picks.forEach(function (q) { todaySet.add(_rcNorm(q.name)); });
+                            return;
+                        }
+
+                        // ── APPLY: relabel run cells (picks → special; rest → Free) ──
+                        var inPick = {};
+                        picks.forEach(function (q) {
+                            var ns = cellList[q.a].s, ne = cellList[q.b].e;
+                            for (var r = q.a; r <= q.b; r++) {
+                                var idx = cellList[r].idx, isHead = (r === q.a);
+                                inPick[idx] = true;
+                                slots[idx] = isHead
+                                    ? { field: q.loc, sport: null, _activity: q.name, type: 'special', _autoSpecial: true, _assignedSpecial: q.name, _specialLocation: q.loc, _startMin: ns, _endMin: ne, _autoMode: true, _regionFilled: true, _final: true, continuation: false }
+                                    : { field: q.loc, _activity: q.name, type: 'special', continuation: true, _startMin: cellList[r].s, _endMin: cellList[r].e, _autoMode: true, _regionFilled: true, _specialLocation: q.loc };
+                            }
+                            try { if (typeof claimField === 'function') claimField(q.loc, ns, ne, bunk, g, q.name); } catch (_e) {}
+                            todaySet.add(_rcNorm(q.name));
+                        });
+                        for (var rr = 0; rr < cellList.length; rr++) {
+                            var cidx = cellList[rr].idx; if (inPick[cidx]) continue;
+                            slots[cidx] = { field: 'Free', sport: null, _activity: 'Free', continuation: false, _startMin: cellList[rr].s, _endMin: cellList[rr].e, _autoMode: true };
+                        }
+                        _rcRuns++; _bunkChanged++; _bunkReclaim += (newReal - currentReal);
+                    });
+
+                    if (_rcMode === 'shadow') { if (_bunkChanged) { _rcBunkCnt++; _rcReclaimed += _bunkReclaim; } return; }
+
+                    if (_bunkChanged) {
+                        var _ok = true;
+                        var _vh = _buildHeads();
+                        for (var vi = 0; vi + 1 < _vh.length && _ok; vi++) { if (_vh[vi + 1].s < _vh[vi].e) _ok = false; }
+                        if (_ok) {
+                            var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rcNorm(s2.field) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; };
+                            if (_cov(slots) < _cov(_clone)) _ok = false;
+                        }
+                        if (!_ok) { window.scheduleAssignments[bunk] = _clone; _rcRolled++; }
+                        else { _rcFilled += _bunkChanged; _rcReclaimed += _bunkReclaim; _rcBunkCnt++; }
+                    }
+                });
+
+                if (_rcMode === 'shadow') {
+                    log('[STEP 6.863 REGION-FILL] SHADOW: would fill ' + _rcRuns + ' run(s) across ' + _rcBunkCnt + ' bunk(s), reclaiming ~' + _rcReclaimed + ' min. (globalSettings.app1.sliverCoalesce=\'apply\' to enable, \'off\' to disable)');
+                } else {
+                    log('[STEP 6.863 REGION-FILL] ✅ filled ' + _rcRuns + ' wall-bounded run(s) across ' + _rcBunkCnt + ' bunk(s), reclaimed ~' + _rcReclaimed + ' min' + (_rcRolled ? ' (' + _rcRolled + ' bunk(s) rolled back on validation)' : '') + '. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+                }
+            }
+        } catch (_rc863Err) { try { warn('[STEP 6.863 REGION-FILL] skipped (error: ' + (_rc863Err && _rc863Err.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.864 — SLIVER-COALESCE (combine a special + its dead sliver
         //   into ONE longer activity)  [KILL SWITCH + per-bunk rollback]
         // ───────────────────────────────────────────────────────────────────
