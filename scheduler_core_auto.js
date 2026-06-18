@@ -29493,18 +29493,15 @@
                 return null;
             };
             var _sabAbsorbed = 0, _sabBySport = 0, _sabBySpecial = 0, _sabBySwim = 0, _sabByEdge = 0, _sabBySoft = 0, _sabByFiller = 0;
-            // ★ SLIVER-STRETCH: allow tier-2 to grow a bounding special (even one with a
-            //   CONFIGURED duration) by EXACTLY a sub-floor gap, so a 15-20min hole between
-            //   a special and a wall (sportless camp, no short filler) gets covered instead
-            //   of left Free. Stamped _sliverAbsorbed; bounded to gapDur; field-gated; only
-            //   fires for gaps < floor (25) that border a special and that no sport/filler
-            //   can take. ON by default (the only engine lever that closes these holes in a
-            //   sportless / 40min-only-special camp). A stretched special renders slightly
-            //   longer; set globalSettings.app1.sliverStretchSpecial = false (or 'off') to
-            //   keep every configured special at its exact length and leave the hole instead.
-            var _sliverStretchOn = !(globalSettings && globalSettings.app1 &&
-                (globalSettings.app1.sliverStretchSpecial === false ||
-                 String(globalSettings.app1.sliverStretchSpecial).toLowerCase() === 'off'));
+            // ★ SLIVER-STRETCH (opt-in, default OFF): allow tier-2 to grow a bounding
+            //   special by EXACTLY a sub-floor gap. Reverted to OFF after a live regen
+            //   showed the default-on stretch interacting badly with later gates (FN-54
+            //   demotions of the now-longer special) and producing render artifacts. Keep
+            //   the capability behind an explicit opt-in while the interaction is fixed:
+            //   set globalSettings.app1.sliverStretchSpecial = true (or 'on') to enable.
+            var _sliverStretchOn = !!(globalSettings && globalSettings.app1 &&
+                (globalSettings.app1.sliverStretchSpecial === true ||
+                 String(globalSettings.app1.sliverStretchSpecial).toLowerCase() === 'on'));
             Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                 var slots = window.scheduleAssignments[bunk];
                 if (!Array.isArray(slots)) return;
