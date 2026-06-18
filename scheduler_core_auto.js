@@ -28406,6 +28406,181 @@
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.864 — SLIVER-COALESCE (combine a special + its dead sliver
+        //   into ONE longer activity)  [KILL SWITCH + per-bunk rollback]
+        // ───────────────────────────────────────────────────────────────────
+        // Where 6.865 REFUSES to stretch a configured-duration special, this
+        // earlier pass instead REPLACES a bounding special with a LONGER
+        // eligible special that spans [special ∪ adjacent sub-floor sliver] —
+        // the user's "combine and put it in a longer one". Strict-gated
+        // (availability + rotation-finite + capacity/same-start sharing via
+        // canUseSpecialAtTime + no same-day repeat), in-place via 6.865's
+        // proven overwrite idiom. SAFE: each bunk is deep-cloned first and
+        // RESTORED verbatim if the result fails validation, so a bad write can
+        // only ever degrade to "no change", never a corrupted bunk.
+        //
+        // KILL SWITCH: globalSettings.app1.sliverCoalesce
+        //   'off' | false  → skip entirely (delete-equivalent)
+        //   'shadow'       → log what it WOULD do, mutate nothing
+        //   'apply' | else → ON (default). Set to 'off' to disable instantly.
+        // To remove the feature: delete this whole try{...}catch block.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _scMode = 'apply';
+            try {
+                var _scF = (globalSettings && globalSettings.app1 && globalSettings.app1.sliverCoalesce);
+                if (_scF === 'off' || _scF === false) _scMode = 'off';
+                else if (_scF === 'shadow') _scMode = 'shadow';
+                else _scMode = 'apply';
+            } catch (_eScFlag) { _scMode = 'apply'; }
+
+            if (_scMode !== 'off') {
+                var _scNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _scFmtT = function (m) { if (m == null || isNaN(m)) return '?'; var h = Math.floor(m / 60), mm = m % 60, ap = h >= 12 ? 'pm' : 'am', hh = ((h + 11) % 12) + 1; return hh + ':' + String(mm).padStart(2, '0') + ap; };
+                // Blocks that must NOT be touched/replaced (walls + routine anchors).
+                var _SC_WALL = /^(swim|change|pre-change|post-change|lunch|snack|snacks|dismissal|cleanup|free|main activity|league game|specialty league|chinuch|trip|davening|morning activity|main activity)$/i;
+                var _scGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _scGradeOf[String(b)] = g; }); });
+                var _scReal = function (s) { return s && !s.continuation && s._startMin != null && s._endMin != null && _scNorm(s.field) !== 'free' && s._endMin > s._startMin; };
+                var _scFloor = function (bunk) { var sl = (typeof shoppingLists !== 'undefined') ? shoppingLists[bunk] : null; var d = (sl && sl.sports && sl.sports.constraints && sl.sports.constraints.dMin) || 25; return Math.max(d, (TYPE_FLOORS && TYPE_FLOORS.sport) || 25); };
+                // A replaceable special: a non-wall, non-pinned block whose activity is a configured special.
+                var _scIsSpecial = function (M) {
+                    if (!M) return false;
+                    if (_SC_WALL.test(_scNorm(M._activity || M.event))) return false;
+                    if (M._fixed || M._pinned || M._isTrip || M._trip || M._league || M._isChinuch || M._isRotationEvent || M._staggerReserved) return false;
+                    var nm = M._assignedSpecial || M._activity || M.event;
+                    try { return !!(nm && typeof getSpecialDuration === 'function' && getSpecialDuration(nm, activityProperties, globalSettings) > 0); } catch (_e) { return false; }
+                };
+                // Pick the LONGEST eligible DIFFERENT special that fits [s,e] and is
+                // strictly longer than the old special (so it genuinely reclaims dead time).
+                var _scPickLonger = function (bunk, grade, s, e, oldName, oldDur, todaySet) {
+                    try {
+                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return null;
+                        var span = e - s, oldL = _scNorm(oldName), best = null, bestDur = oldDur;
+                        for (var i = 0; i < todaysSpecials.length; i++) {
+                            var sp = todaysSpecials[i]; if (!sp || !sp.name) continue;
+                            var nm = sp.name, nmL = _scNorm(nm);
+                            if (nmL === oldL) continue;                       // must be a DIFFERENT activity
+                            if (todaySet && todaySet.has(nmL)) continue;      // no same-day repeat
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(nm, activityProperties, globalSettings) || []) : []; } catch (_e) { durs = []; }
+                            if (!durs.length) { try { var d1 = getSpecialDuration(nm, activityProperties, globalSettings); if (d1 > 0) durs = [d1]; } catch (_e) {} }
+                            var fit = -1; for (var k = 0; k < durs.length; k++) { var d = durs[k]; if (d <= span && d > fit) fit = d; }
+                            if (fit <= bestDur) continue;                     // must beat the old special's length
+                            var ne = s + fit;
+                            try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(nm, grade, bunk, globalSettings)) continue; } catch (_e) {}
+                            try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, nm, activityProperties, grade))) continue; } catch (_e) {}
+                            try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(nm, grade, s, ne)) continue; } catch (_e) { continue; }
+                            var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(nm); } catch (_e) {}
+                            best = { name: nm, dur: fit, loc: loc || nm }; bestDur = fit;
+                        }
+                        return best;
+                    } catch (_e) { return null; }
+                };
+
+                var _scReplaced = 0, _scReclaimed = 0, _scBunkCnt = 0, _scRolled = 0;
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    var g = _scGradeOf[String(bunk)]; if (!g) return;
+                    var floor = _scFloor(bunk);
+                    var _gObj = divisions[g] || divisions[String(g)] || {};
+                    var _gStart = parseTimeToMinutes(_gObj.startTime) || 540;
+                    var _gEnd = parseTimeToMinutes(_gObj.endTime) || 960;
+
+                    // ── snapshot for rollback ──
+                    var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
+                    var _bunkChanged = 0, _bunkReclaim = 0;
+
+                    var _headOf = function (j) { var h = j; while (h > 0 && slots[h] && slots[h].continuation === true) h--; return h; };
+                    var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
+                    var _buildHeads = function () {
+                        var hs = [];
+                        for (var i = 0; i < slots.length; i++) { if (!_scReal(slots[i])) continue; if (_headOf(i) !== i) continue; hs.push({ head: i, tail: _tailOf(i), s: slots[i]._startMin, e: slots[_tailOf(i)]._endMin }); }
+                        hs.sort(function (a, b) { return a.s - b.s; });
+                        return hs;
+                    };
+                    var heads = _buildHeads();
+                    var todaySet = new Set();
+                    heads.forEach(function (h) { var n = _scNorm(slots[h.head]._assignedSpecial || slots[h.head]._activity || slots[h.head].event); if (n) todaySet.add(n); });
+
+                    for (var hi = 0; hi + 1 < heads.length; hi++) {
+                        var L = heads[hi], R = heads[hi + 1];
+                        var gapS = L.e, gapE = R.s; if (gapE <= gapS) continue;
+                        var gapDur = gapE - gapS; if (gapDur >= floor) continue;     // only sub-floor slivers
+                        if (typeof coveredByContiguousPeriods === 'function' && !coveredByContiguousPeriods(gapS, gapE, g)) continue;
+                        var Lh = slots[L.head], Rh = slots[R.head];
+                        var attempts = [];
+                        if (_scIsSpecial(Lh)) attempts.push({ side: 'L', s: L.s, e: gapE, old: (Lh._assignedSpecial || Lh._activity || Lh.event), oldDur: (Lh._endMin - Lh._startMin) });
+                        if (_scIsSpecial(Rh)) attempts.push({ side: 'R', s: gapS, e: R.e, old: (Rh._assignedSpecial || Rh._activity || Rh.event), oldDur: (Rh._endMin - Rh._startMin) });
+                        for (var ai = 0; ai < attempts.length; ai++) {
+                            var T = attempts[ai];
+                            var pick = _scPickLonger(bunk, g, T.s, T.e, T.old, T.oldDur, todaySet);
+                            if (!pick) continue;
+                            var ns = T.s, ne = T.s + pick.dur;             // new longer special, left-anchored in the combined span
+                            if (ne > _gEnd || ns < _gStart) continue;
+                            if (_scMode === 'shadow') {
+                                log('[STEP 6.864 SLIVER-COALESCE SHADOW] ' + bunk + ': would combine ' + T.old + '(' + T.oldDur + 'm)+' + gapDur + 'm gap → ' + pick.name + ' ' + pick.dur + 'm @ ' + _scFmtT(ns) + '-' + _scFmtT(ne));
+                                _scReplaced++; _bunkReclaim += (pick.dur - T.oldDur); _bunkChanged++;
+                                todaySet.add(_scNorm(pick.name)); todaySet.delete(_scNorm(T.old));
+                                break;
+                            }
+                            // ── APPLY in place (mirrors 6.865 idiom) ──
+                            if (T.side === 'L') {
+                                slots[L.head] = { field: pick.loc, sport: null, _activity: pick.name, type: 'special', _autoSpecial: true, _assignedSpecial: pick.name, _specialLocation: pick.loc, _startMin: ns, _endMin: ne, _autoMode: true, _sliverCoalesced: true, _final: true, continuation: false };
+                                for (var kl = L.head + 1; kl <= R.head - 1; kl++) {
+                                    var _within = (slots[kl] && slots[kl]._startMin != null) ? (slots[kl]._startMin < ne) : true;
+                                    slots[kl] = _within
+                                        ? { field: pick.loc, _activity: pick.name, type: 'special', continuation: true, _startMin: (slots[kl] ? slots[kl]._startMin : ns), _endMin: (slots[kl] ? slots[kl]._endMin : ne), _autoMode: true, _sliverCoalesced: true, _specialLocation: pick.loc }
+                                        : { field: 'Free', sport: null, _activity: 'Free', continuation: false, _startMin: (slots[kl] ? slots[kl]._startMin : ne), _endMin: (slots[kl] ? slots[kl]._endMin : gapE), _autoMode: true };
+                                }
+                            } else {
+                                // side R: pull the (replaced) special's start back over the gap
+                                slots[R.head] = { field: pick.loc, sport: null, _activity: pick.name, type: 'special', _autoSpecial: true, _assignedSpecial: pick.name, _specialLocation: pick.loc, _startMin: ns, _endMin: (ns + pick.dur), _autoMode: true, _sliverCoalesced: true, _final: true, continuation: false };
+                                for (var kr = L.tail + 1; kr <= R.head - 1; kr++) {
+                                    slots[kr] = { field: pick.loc, _activity: pick.name, type: 'special', continuation: true, _startMin: (slots[kr] ? slots[kr]._startMin : ns), _endMin: (slots[kr] ? slots[kr]._endMin : ne), _autoMode: true, _sliverCoalesced: true, _specialLocation: pick.loc };
+                                }
+                            }
+                            try { if (typeof claimField === 'function') claimField(pick.loc, ns, ns + pick.dur, bunk, g, pick.name); } catch (_e) {}
+                            todaySet.add(_scNorm(pick.name)); todaySet.delete(_scNorm(T.old));
+                            _bunkChanged++; _bunkReclaim += (pick.dur - T.oldDur);
+                            heads = _buildHeads();                          // re-derive after mutation
+                            break;
+                        }
+                    }
+
+                    if (_scMode === 'shadow') { if (_bunkChanged) { _scBunkCnt++; _scReclaimed += _bunkReclaim; } return; }
+
+                    if (_bunkChanged) {
+                        // ── validate: no overlaps, coverage not reduced, coalesced blocks in-day ──
+                        var _ok = true;
+                        var _vh = _buildHeads();
+                        for (var vi = 0; vi + 1 < _vh.length && _ok; vi++) { if (_vh[vi + 1].s < _vh[vi].e) _ok = false; }
+                        if (_ok) {
+                            for (var vj = 0; vj < _vh.length && _ok; vj++) {
+                                var _b = slots[_vh[vj].head];
+                                if (_b && _b._sliverCoalesced && (_b._startMin < _gStart || _b._endMin > _gEnd)) _ok = false;
+                            }
+                        }
+                        // coverage (real, non-free minutes) must not drop
+                        if (_ok) {
+                            var _cov = function (arr) { var c = 0; for (var z = 0; z < arr.length; z++) { var s2 = arr[z]; if (s2 && !s2.continuation && _scNorm(s2.field) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c += (s2._endMin - s2._startMin); } return c; };
+                            if (_cov(slots) < _cov(_clone)) _ok = false;
+                        }
+                        if (!_ok) { window.scheduleAssignments[bunk] = _clone; _scRolled++; }
+                        else { _scReplaced += _bunkChanged; _scReclaimed += _bunkReclaim; _scBunkCnt++; }
+                    }
+                });
+
+                if (_scMode === 'shadow') {
+                    log('[STEP 6.864 SLIVER-COALESCE] SHADOW: would combine ' + _scReplaced + ' special(s) into a longer activity across ' + _scBunkCnt + ' bunk(s), reclaiming ~' + _scReclaimed + ' min. (set globalSettings.app1.sliverCoalesce=\'apply\' to enable, \'off\' to disable)');
+                } else {
+                    log('[STEP 6.864 SLIVER-COALESCE] ✅ combined ' + _scReplaced + ' special(s) into a longer activity across ' + _scBunkCnt + ' bunk(s), reclaimed ~' + _scReclaimed + ' min' + (_scRolled ? ' (' + _scRolled + ' bunk(s) rolled back on validation)' : '') + '. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+                }
+            }
+        } catch (_sc864Err) { try { warn('[STEP 6.864 SLIVER-COALESCE] skipped (error: ' + (_sc864Err && _sc864Err.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.865 — WALL-BOUNDED SLIVER ABSORB (last-resort gap closer)
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.86 closes Free gaps that have an EXTENDABLE SPORT neighbour. But
