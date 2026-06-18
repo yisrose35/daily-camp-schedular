@@ -424,6 +424,7 @@
     function getCustomActivitySharingInfo(activityName, fieldName, layerOverride, gs) {
         gs = gs || globalSettings;
         var out = { shareType: 'not_sharable', capacity: 1, allowedDivisions: [], allowedPairs: {}, consecutiveBunks: false, instructor: '', source: 'default' };
+        var _layerCapExplicit = false;   // did the layer itself carry a usable capacity number?
 
         // (1) Per-layer override — translate { capacity, allowedGrades } → sharableWith.
         if (layerOverride && (layerOverride.capacity != null || Array.isArray(layerOverride.allowedGrades))) {
@@ -435,6 +436,7 @@
                 }
             }
             var lcCap = parseInt(layerOverride.capacity);
+            _layerCapExplicit = (layerOverride.capacity != null && isFinite(lcCap) && lcCap >= 1);
             if (!isFinite(lcCap) || lcCap < 1) lcCap = 1;
             out.shareType = (lcCap > 1 || grades.length > 1) ? (grades.length > 1 ? 'cross_division' : 'same_division') : 'not_sharable';
             out.capacity = lcCap;
@@ -497,6 +499,22 @@
                 out.source = 'field';
             }
             if (!out.consecutiveBunks && fld.consecutiveBunks === true) out.consecutiveBunks = true;
+        }
+        // (4) Cross-division layer sharing with NO explicit capacity on the layer.
+        //     Branch (1) defaults capacity to 1 and stamps source='layer', which then
+        //     blocks tiers (2)/(3) from supplying the room's real capacity. But a
+        //     cross_division layer whose whole purpose is to run several grades together
+        //     in one room (e.g. a shared "Morning Breakout" across 3rd/4th/5th) must NOT
+        //     be throttled to a single bunk — cap 1 silently forces a staggered, per-bunk
+        //     placement and drops grades. When the layer turned on cross-division sharing
+        //     but typed no capacity number, resolve the real room capacity from the
+        //     per-activity / field config; if none is configured, fall back to a generous
+        //     value so the joint session can hold the whole group.
+        if (out.source === 'layer' && !_layerCapExplicit && out.shareType === 'cross_division' && (!isFinite(out.capacity) || out.capacity <= 1)) {
+            var _roomCap = 0;
+            if (ga && ga.sharableWith && parseInt(ga.sharableWith.capacity) > _roomCap) _roomCap = parseInt(ga.sharableWith.capacity);
+            if (fld && fld.sharableWith && parseInt(fld.sharableWith.capacity) > _roomCap) _roomCap = parseInt(fld.sharableWith.capacity);
+            out.capacity = _roomCap > 1 ? _roomCap : 99;   // 99 = "fits the whole group" when no room cap configured
         }
         return out;
     }

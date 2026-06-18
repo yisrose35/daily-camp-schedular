@@ -214,6 +214,23 @@ describe('getCustomActivitySharingInfo — per-layer override tier', () => {
         assert.strictEqual(r.allowedPairs['Minors|Prop'], true);
     });
 
+    it('layer override.allowedGrades with NO capacity → resolves room capacity, never 1', () => {
+        // Sharing turned on across 3 grades but no capacity number typed on the layer.
+        // Must NOT default to 1 (cap 1 silently forces a staggered, per-bunk placement
+        // and drops grades). Resolve the real room capacity from the per-activity config.
+        const r = resolve('Morning Activity', 'Auditorium', { allowedGrades: ['Harmony', 'Prop', 'Minors'] }, gs);
+        assert.strictEqual(r.source, 'layer');
+        assert.strictEqual(r.shareType, 'cross_division');
+        assert.strictEqual(r.capacity, 4);   // pulled from ga sharableWith.capacity, NOT defaulted to 1
+    });
+
+    it('layer cross-division, no capacity AND no configured room cap → generous fallback (not 1)', () => {
+        const gsNoCap = { app1: { fields: [{ name: 'Gym', sharableWith: { type: 'not_sharable', capacity: 1 } }] }, facilities: [] };
+        const r = resolve('Whatever', 'Gym', { allowedGrades: ['A', 'B', 'C'] }, gsNoCap);
+        assert.strictEqual(r.shareType, 'cross_division');
+        assert.ok(r.capacity > 1, 'cross-division shared layer must not be throttled to capacity 1');
+    });
+
     it('layer override only sets sharing; consecutive still falls through to ga', () => {
         const gsConsec = { ...gs, facilities: [{ ...gs.facilities[0], generalActivities: [{ ...gs.facilities[0].generalActivities[0], consecutiveBunks: true }] }] };
         const r = resolve('Morning Activity', 'Auditorium', { capacity: 2, allowedGrades: ['Harmony'] }, gsConsec);
