@@ -3050,11 +3050,20 @@
         }
 
         // Returns true when [start, end) falls entirely within a bell-schedule dead zone
-        // (i.e., between periods — no period overlaps this interval).
+        // — a genuine gap BETWEEN two periods (e.g. a lunch band the user left between
+        // periods). Time BEFORE the first period or AFTER the last period is NOT a dead
+        // zone: the camp day (division times + layer walls like Davening/swim) extends
+        // beyond the bell grid, and that time must stay schedulable. Treating the whole
+        // pre-first-period morning as "dead" is what left a stale/partial bell schedule
+        // (one the user never set up) blanking the 9:00–10:50 morning. Only an interval
+        // with a period BOTH before and after it is a true dead zone.
         function isInDeadZone(start, end, grade) {
             var periods = window.campPeriods && window.campPeriods[grade];
             if (!periods || !periods.length) return false;
-            return !periods.some(function(p) { return p.startMin < end && p.endMin > start; });
+            if (periods.some(function(p) { return p.startMin < end && p.endMin > start; })) return false; // overlaps a period
+            var hasBefore = periods.some(function(p) { return p.endMin <= start; });
+            var hasAfter  = periods.some(function(p) { return p.startMin >= end; });
+            return hasBefore && hasAfter; // interior inter-period gap only
         }
 
         // Returns true when extending a block whose current range is [blkStart, blkEnd]

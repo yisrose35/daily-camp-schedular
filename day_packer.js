@@ -273,12 +273,35 @@
     return out;
   }
 
+  // The camp DAY span for a grade — NOT the bell-period envelope. A bell
+  // schedule defines structure WITHIN the day; it must never shrink the day.
+  // The true day is the union of the bell periods AND the bunk's pinned walls
+  // (Davening / swim / lunch / Main Activity …) — so morning time that sits
+  // before the first bell period (the user's 9:00–10:50 with Davening + swim)
+  // stays schedulable instead of being clamped away. Falls back to the whole
+  // day [0,1440] when nothing is known.
+  function _dayBounds(periods, pinned) {
+    var s = Infinity, e = -Infinity;
+    (periods || []).forEach(function (p) {
+      if (p.startMin < s) s = p.startMin;
+      if (p.endMin   > e) e = p.endMin;
+    });
+    (pinned || []).forEach(function (p) {
+      if (p.startMin < s) s = p.startMin;
+      if (p.endMin   > e) e = p.endMin;
+    });
+    if (!isFinite(s) || !isFinite(e) || e <= s) return { start: 0, end: 1440 };
+    return { start: s, end: e };
+  }
+
   // Effective time window for a special on a specific bunk's grade.
-  // Window = intersection of (special.windowStart/End if set) AND (grade's
-  // schedulable day from periods[0].startMin to periods[last].endMin).
-  function _specialWindow(spec, periods) {
-    var dayStart = periods.length ? periods[0].startMin : 0;
-    var dayEnd   = periods.length ? periods[periods.length - 1].endMin : 1440;
+  // Window = intersection of (special.windowStart/End if set) AND the camp DAY
+  // (NOT the bell-period envelope — see _dayBounds). Clamping to the bell
+  // envelope was chopping off the pre-first-period morning, so layer-covered
+  // morning time went unfilled even though the special's own window allowed it.
+  function _specialWindow(spec, bounds) {
+    var dayStart = bounds ? bounds.start : 0;
+    var dayEnd   = bounds ? bounds.end   : 1440;
     var ws = (typeof spec.windowStart === 'number') ? spec.windowStart : dayStart;
     var we = (typeof spec.windowEnd   === 'number') ? spec.windowEnd   : dayEnd;
     return { start: Math.max(ws, dayStart), end: Math.min(we, dayEnd) };
@@ -373,13 +396,15 @@
 
     // FREE-GAME — every configured special this bunk is allowed to receive
     var allSpecials = _allConfiguredSpecials(opts);
+    // Camp DAY bounds = periods ∪ pinned walls (never just the bell envelope).
+    var _bounds = _dayBounds(periods, pinned);
     var freeGame = [];
     allSpecials.forEach(function (sp) {
       if (!sp || !sp.name) return;
       if (!_specialAccessibleByBunk(sp, grade, bunk)) return;
       var durs = _specialDurations(sp);
       if (durs.min <= 0) return;
-      var win = _specialWindow(sp, periods);
+      var win = _specialWindow(sp, _bounds);
       if (win.end - win.start < durs.min) return; // window too small for any duration
       var _subRaw = (typeof sp.subcategory === 'string') ? sp.subcategory.trim() : '';
       var _subKey = _subRaw ? _subRaw.toLowerCase() : 'regular';
