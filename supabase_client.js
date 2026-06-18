@@ -682,11 +682,14 @@
             // camp_users.email is NOT NULL — use the super-admin's own email.
             const myEmail = (_session && _session.user && _session.user.email) ||
                             localStorage.getItem('campistry_user_email') || 'super-admin@campistry.local';
+            // role must satisfy camp_users_role_check; 'owner' is not a valid
+            // camp_users role (owners live in camps.owner). 'admin' grants full
+            // write access (create/edit/generate) — enough to debug the copy.
             const { error } = await _client.from('camp_users').insert({
                 camp_id: campId,
                 user_id: _userId,
                 email: myEmail,
-                role: 'owner',
+                role: 'admin',
                 accepted_at: new Date().toISOString()
             });
             if (error) throw error;
