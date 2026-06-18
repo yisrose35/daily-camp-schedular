@@ -19874,6 +19874,42 @@
                 const key = grade + '_' + gapStart + '_' + gapEnd;
                 if (segDursCache[key] !== undefined) return segDursCache[key];
                 const floor = computeFloorForGap(grade, gapStart, gapEnd);
+                // ★ DURATION-FIRST TILING (aligned-duration camps). When the fillable
+                //   durations "line up" — the smallest divides every other (e.g. {10,20,40}
+                //   → unit 10, or {20,40} → unit 20) — filling a wall-bounded region is pure
+                //   bin-packing on that unit: cover the largest multiple of the unit that
+                //   fits (largest pieces first; a 40 is one 40 here, identity-assignment may
+                //   later split it into 2×20 if no 40-min special is free) and leave only the
+                //   sub-unit remainder (dur % unit) as ONE small gap. Coverage is GUARANTEED
+                //   and never depends on which special lands where. Camps whose durations do
+                //   NOT line up (a 25- or 45-min activity) fall through to the general packer
+                //   unchanged. This is the "how many minutes between walls, fill them" model.
+                try {
+                    const _cands = buildCandidatesForGap(grade, gapStart, gapEnd);
+                    const _denoms = _cands.map(c => c.durationMin).filter(d => d > 0);
+                    if (_denoms.length) {
+                        const _unit = Math.min.apply(null, _denoms);
+                        const _aligned = _unit > 0 && _denoms.every(d => d % _unit === 0);
+                        if (_aligned && dur >= _unit && dur >= floor) {
+                            const _coverable = dur - (dur % _unit); // leftover < _unit → one small gap
+                            if (_coverable >= _unit) {
+                                const _big2small = Array.from(new Set(_denoms)).sort((a, b) => b - a);
+                                const _segs = [];
+                                let _rem = _coverable;
+                                while (_rem >= _unit) {
+                                    let _d = _unit;
+                                    for (let _i = 0; _i < _big2small.length; _i++) {
+                                        if (_big2small[_i] <= _rem) { _d = _big2small[_i]; break; }
+                                    }
+                                    _segs.push(_d);
+                                    _rem -= _d;
+                                }
+                                segDursCache[key] = _segs;
+                                return _segs;
+                            }
+                        }
+                    }
+                } catch (_eAlign) { /* not aligned / no candidates — use the general packer */ }
                 // Sub-floor or non-step gaps are dropped: emitting a slot
                 // shorter than the layer's minimum would let the solver place
                 // an undersized activity. Better to leave the time empty.
