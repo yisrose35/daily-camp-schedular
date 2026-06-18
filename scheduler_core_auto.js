@@ -28944,6 +28944,175 @@
             }
         } catch (_e6862) { try { warn('[STEP 6.862 GAP-CONSOLIDATE] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
 
+        // STEP 6.862b — WORKSHOP-RECLAIM: turn [Sports/Sport 2 filler + trailing gap]
+        // ───────────────────────────────────────────────────────────────────
+        //   into a 40-min workshop in a FREE cap-1 workshop room. Root cause: the
+        //   Phase-3 cursor filler halves a 40-min window into a 20-min generic sport +
+        //   20-min uncovered gap (~line 10788), and 6.862 treats that sport-filler as a
+        //   FIXED region boundary, so the wasted [filler+gap] span is never reclaimed.
+        //   This pass classifies ONLY the generic fillers "Sports"/"Sport 2" as
+        //   RECLAIMABLE free space, so a wall-bounded region containing one becomes a
+        //   contiguous opening; it then greedily places the longest eligible workshop(s)
+        //   there. It REUSES 6.862's exact materialize → validate → rollback primitive
+        //   (grid-safe: zip groups → drop covered free/filler cells → add fresh slot+cell
+        //   → sort → validate equal-length + no-overlap + coverage-up → per-bunk rollback).
+        //   Frequency / availability / cap-1 room are honored by the picker + claimField.
+        //   Additive, kill-switched (globalSettings.app1.workshopReclaim='off'), no-op when
+        //   nothing matches. Runs before STEP 6.9 so rotation counts reflect the swap.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _wrOff = false;
+            try { var _wrF = (globalSettings && globalSettings.app1 && globalSettings.app1.workshopReclaim); if (_wrF === 'off' || _wrF === false || _wrF === 'shadow') _wrOff = true; } catch (_e) {}
+            if (!_wrOff && typeof todaysSpecials !== 'undefined' && Array.isArray(todaysSpecials) && todaysSpecials.length) {
+                var _wrNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _WR_WALL = /^(swim|change|pre-change|post-change|davening|league game|specialty league|chinuch|trip|snack|snacks|dismissal|cleanup|lunch|shiur|main activity|morning breakout)$/i;
+                var _wrFillerRe = /^(sports|sport 2)$/i;   // ONLY the generic sportless fillers are reclaimable
+                var _wrGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _wrGradeOf[String(b)] = g; }); });
+                var _wrLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
+                var _wrSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+                var _wrCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+                var _wrIsHard = function (cc, nm) { return _WR_WALL.test(nm) || !!(cc._isTrip || cc._trip || cc._league || cc._isChinuch || cc._isRotationEvent || cc._staggerReserved || cc._fixed || cc._pinned) || cc.type === 'custom'; };
+                var _wrFilled = 0, _wrBunks = 0, _wrRolled = 0;
+
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    var g = _wrGradeOf[String(bunk)]; if (!g) return;
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(bunk)])
+                            || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(bunk)]);
+                    if (!Array.isArray(pbs) || pbs.length !== slots.length) return;   // need an aligned slot grid
+                    var gs = parseTimeToMinutes(divisions[g] && divisions[g].startTime);
+                    var ge = parseTimeToMinutes(divisions[g] && divisions[g].endTime);
+
+                    var blocks = [], todaySet = new Set();
+                    for (var i = 0; i < slots.length; i++) {
+                        var c = slots[i];
+                        if (!_wrCell(c) || c.continuation) continue;
+                        var tail = i; while (tail + 1 < slots.length && slots[tail + 1] && slots[tail + 1].continuation === true) tail++;
+                        var s0 = c._startMin, e0 = slots[tail]._endMin;
+                        var rawNm = c._assignedSpecial || c._activity || c.event, nm = _wrNorm(rawNm);
+                        var isFreeC = (!nm || nm === 'free');
+                        var reclaimable = !isFreeC && !_wrIsHard(c, nm) && _wrFillerRe.test(nm);
+                        if (!isFreeC && !reclaimable) todaySet.add(nm);   // real content → no-repeat for the picker
+                        blocks.push({ s: s0, e: e0, nm: nm, reclaimable: reclaimable, free: isFreeC });
+                        i = tail;
+                    }
+                    if (!blocks.length) return;
+                    blocks.sort(function (a, b) { return a.s - b.s; });
+                    if (gs == null || isNaN(gs)) gs = blocks[0].s;
+                    if (ge == null || isNaN(ge)) ge = blocks[blocks.length - 1].e;
+
+                    // regions bounded by NON-reclaimable, non-free blocks (walls / anchors / real specials).
+                    // Reclaimable fillers + Free + uncovered time form the region interior.
+                    var regions = [], leftWall = gs, curHas = false;
+                    blocks.forEach(function (b) {
+                        if (!b.reclaimable && !b.free) { regions.push({ L: leftWall, R: b.s, has: curHas }); curHas = false; leftWall = Math.max(leftWall, b.e); }
+                        else if (b.reclaimable) curHas = true;
+                    });
+                    regions.push({ L: leftWall, R: ge, has: curHas });
+
+                    // longest eligible workshop fitting [startMin, startMin+dur], room free (cap-1)
+                    var _wrPick = function (startMin, cap) {
+                        var best = null;
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
+                            var nmL = _wrNorm(sp.name); if (todaySet.has(nmL) || _wrFillerRe.test(nmL)) continue;
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                            if (!durs.length) { var d1 = _wrSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
+                            for (var dj = 0; dj < durs.length; dj++) {
+                                var d = durs[dj]; if (d <= 0 || d > cap) continue;
+                                if (best && d <= best.dur) continue;
+                                try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
+                                try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
+                                try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, startMin, startMin + d)) continue; } catch (_e) { continue; }
+                                var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(sp.name); } catch (_e) {}
+                                try { if (loc && typeof isFieldAvailable === 'function' && !isFieldAvailable(loc, startMin, startMin + d, bunk, g, sp.name)) continue; } catch (_e) {}
+                                best = { name: sp.name, dur: d, loc: loc || sp.name };
+                            }
+                        }
+                        return best;
+                    };
+
+                    var fillPlan = [];
+                    regions.forEach(function (region) {
+                        if (!region.has) return;                 // only reclaim regions that hold a Sports/Sport 2 filler
+                        if (region.R - region.L < 20) return;
+                        var cursor = region.L, guard = 12;
+                        while (cursor < region.R && guard-- > 0) {
+                            var pick = _wrPick(cursor, region.R - cursor);
+                            if (!pick) break;
+                            fillPlan.push({ start: cursor, end: cursor + pick.dur, name: pick.name, loc: pick.loc });
+                            todaySet.add(_wrNorm(pick.name));
+                            cursor += pick.dur;
+                        }
+                    });
+                    if (!fillPlan.length) return;
+
+                    var _cloneSlots, _clonePbs;
+                    try { _cloneSlots = JSON.parse(JSON.stringify(slots)); _clonePbs = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return; }
+                    var fillRanges = fillPlan.map(function (f) { return { s: f.start, e: f.end }; });
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _wrNorm(cc.field) === 'free' || _wrNorm(cc._activity) === 'free' || _wrNorm(cc.event) === 'free'); };
+                    var _isReclaimCell = function (cc) { if (!cc || cc._startMin == null) return false; var nm = _wrNorm(cc._assignedSpecial || cc._activity || cc.event); return !_wrIsHard(cc, nm) && _wrFillerRe.test(nm); };
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        var st = (cc && cc._startMin != null) ? cc._startMin : (ss && ss.startMin != null ? ss.startMin : null);
+                        var en = (cc && cc._endMin != null) ? cc._endMin : (ss && ss.endMin != null ? ss.endMin : null);
+                        if (st != null && en != null && (_isFreeCell(cc) || _isReclaimCell(cc))) {
+                            var drop = fillRanges.some(function (r) { return Math.max(r.s, st) < Math.min(r.e, en); });
+                            if (drop) continue;   // a workshop fill covers this filler/empty time
+                        }
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    fillPlan.forEach(function (f) {
+                        var cell = { field: f.loc, sport: null, _activity: f.name, type: 'special', _autoSpecial: true, _assignedSpecial: f.name, _specialLocation: f.loc, _startMin: f.start, _endMin: f.end, _autoMode: true, _workshopReclaim: true, _final: true, continuation: false };
+                        var slot = { startMin: f.start, endMin: f.end, startTime: _wrLabel(f.start), endTime: _wrLabel(f.end), event: f.name, type: 'special', _bunk: bunk, _autoGenerated: true, _injected: true };
+                        groups.push({ key: f.start, cells: [{ cell: cell, slot: slot }] });
+                    });
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var newSlots = [], newPbs = [];
+                    groups.forEach(function (grp) { grp.cells.forEach(function (pc) { newSlots.push(pc.cell); newPbs.push(pc.slot); }); });
+                    newPbs.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+
+                    var _ok = (newSlots.length === newPbs.length);
+                    if (_ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) {
+                            var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return;
+                            var a = null, b = null;
+                            grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (a == null || cl._startMin < a) a = cl._startMin; if (b == null || cl._endMin > b) b = cl._endMin; } });
+                            if (a != null && b != null && b > a) occ.push({ s: a, e: b });
+                        });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && _ok; vi++) { if (occ[vi + 1].s < occ[vi].e) _ok = false; }
+                    }
+                    if (_ok) {
+                        var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _wrNorm(s2.field) !== 'free' && _wrNorm(s2._activity) !== 'free' && _wrNorm(s2.event) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; };
+                        if (_cov(newSlots) <= _cov(_cloneSlots)) _ok = false;
+                    }
+                    if (!_ok) {
+                        window.scheduleAssignments[bunk] = _cloneSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = _clonePbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = _clonePbs;
+                        _wrRolled++;
+                    } else {
+                        window.scheduleAssignments[bunk] = newSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = newPbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = newPbs;
+                        fillPlan.forEach(function (f) { try { if (typeof claimField === 'function') claimField(f.loc, f.start, f.end, bunk, g, f.name); } catch (_e) {} });
+                        _wrBunks++; _wrFilled += fillPlan.length;
+                    }
+                });
+                if (_wrBunks > 0 || _wrRolled > 0) {
+                    log('[STEP 6.862b WORKSHOP-RECLAIM] ✅ placed ' + _wrFilled + ' workshop(s) over reclaimed Sports/gap span(s) across ' + _wrBunks + ' bunk(s)' + (_wrRolled ? ' (' + _wrRolled + ' rolled back)' : '') + '. [kill switch: globalSettings.app1.workshopReclaim=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_e) {}
+                }
+            }
+        } catch (_e6862b) { try { warn('[STEP 6.862b WORKSHOP-RECLAIM] skipped (error: ' + (_e6862b && _e6862b.message) + ')'); } catch (_e) {} }
+
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
         //   activity)                       [KILL SWITCH + per-bunk rollback]
