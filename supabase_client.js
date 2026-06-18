@@ -49,7 +49,12 @@
             USER_ID: 'campistry_user_id',
             AUTH_USER_ID: 'campistry_auth_user_id',
             ROLE: 'campistry_role',
-            IS_TEAM_MEMBER: 'campistry_is_team_member'
+            IS_TEAM_MEMBER: 'campistry_is_team_member',
+            // Debug-copy feature: which camp the user has explicitly switched
+            // into (their own camp or a debug copy). UI hint only — the server
+            // enforces entitlement via active_camp_selection + get_user_camp_id().
+            ACTIVE_CAMP_ID: 'campistry_active_camp_id',
+            IS_SUPER_ADMIN: 'campistry_is_super_admin'
         },
 
         // Debug mode - set to true to see detailed logs
@@ -213,6 +218,68 @@
         // Always verify from database (cached values might be stale)
         try {
             // =================================================================
+            // ⭐ STEP 0: Honor an explicit ACTIVE-CAMP SELECTION (debug-copy
+            //    feature). A super-admin can clone another camp into a sandbox
+            //    camp they own and "switch into" it; switching writes a row to
+            //    active_camp_selection. We honor it here ONLY if the user is
+            //    genuinely entitled to that camp (owns it, or accepted member),
+            //    mirroring the server-side get_user_camp_id() entitlement check.
+            //    This keeps client and server scoped to the SAME camp.
+            // =================================================================
+            try {
+                const { data: sel } = await _client
+                    .from('active_camp_selection')
+                    .select('camp_id')
+                    .eq('user_id', _userId)
+                    .maybeSingle();
+                const selCampId = sel && sel.camp_id;
+                if (selCampId) {
+                    // (a) Does the user OWN the selected camp?
+                    const { data: ownedSel } = await _client
+                        .from('camps')
+                        .select('id, name')
+                        .eq('id', selCampId)
+                        .eq('owner', _userId)
+                        .maybeSingle();
+                    if (ownedSel) {
+                        _campId = ownedSel.id;
+                        _role = 'owner';
+                        _isTeamMember = false;
+                        _roleVerifiedFromDB = true;
+                        cacheValues();
+                        log('✅ Active-camp selection honored (owned):', _campId);
+                        return;
+                    }
+                    // (b) Is the user an accepted MEMBER of the selected camp?
+                    const { data: memberSel } = await _client
+                        .from('camp_users')
+                        .select('camp_id, role, name, subdivision_ids, assigned_divisions, accepted_at')
+                        .eq('user_id', _userId)
+                        .eq('camp_id', selCampId)
+                        .not('accepted_at', 'is', null)
+                        .limit(1);
+                    const ms = (Array.isArray(memberSel) && memberSel.length > 0) ? memberSel[0] : null;
+                    if (ms) {
+                        _campId = ms.camp_id;
+                        _role = ms.role || 'viewer';
+                        _isTeamMember = true;
+                        _roleVerifiedFromDB = true;
+                        cacheValues();
+                        window._campistryMembership = Object.freeze(ms);
+                        log('✅ Active-camp selection honored (member):', _campId);
+                        return;
+                    }
+                    // Selection is stale / not entitled — fall through to normal
+                    // detection. The server ignores it too, so they stay in sync.
+                    log('⚠️ Active-camp selection not entitled, ignoring:', selCampId);
+                }
+            } catch (selErr) {
+                // active_camp_selection table may not exist yet (migration 010
+                // not applied). That's fine — behave exactly as before.
+                log('Active-camp selection check skipped:', selErr && selErr.message);
+            }
+
+            // =================================================================
             // ⭐ STEP 1: Check if user is a TEAM MEMBER first (HIGHEST PRIORITY)
             // This ensures invited users get their correct assigned role
             // =================================================================
@@ -292,13 +359,20 @@
             // =================================================================
             // ⭐ STEP 3: Check if user is a CAMP OWNER (only if not a team member)
             // =================================================================
-            const { data: ownedCamp, error: ownerError } = await _client
+            // A user may own MULTIPLE camps once debug copies exist. Resolve
+            // deterministically: prefer the camp whose id == uid (signup
+            // convention = the user's "real" camp). Copies are only entered
+            // via the explicit active-camp selection handled in STEP 0.
+            const { data: ownedCamps, error: ownerError } = await _client
                 .from('camps')
                 .select('id, name')
-                .eq('owner', _userId)
-                .maybeSingle();
+                .eq('owner', _userId);
 
-            if (!ownerError && ownedCamp) {
+            const ownedCamp = (!ownerError && Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                ? (ownedCamps.find(c => c.id === _userId) || ownedCamps[0])
+                : null;
+
+            if (ownedCamp) {
                 _campId = ownedCamp.id;
                 _role = 'owner';
                 _isTeamMember = false;
@@ -582,6 +656,86 @@
     }
 
     // =========================================================================
+    // DEBUG-COPY / ACTIVE-CAMP SWITCHING
+    // =========================================================================
+
+    // Is the current user on the platform super-admin allow-list? Cached for
+    // the session. Returns false (fail-closed) if the table/policy is absent.
+    async function checkSuperAdmin() {
+        try {
+            if (!_userId) return false;
+            const { data, error } = await _client
+                .from('super_admins')
+                .select('user_id')
+                .eq('user_id', _userId)
+                .maybeSingle();
+            const isSA = !error && !!data;
+            try { localStorage.setItem(CONFIG.CACHE_KEYS.IS_SUPER_ADMIN, String(isSA)); } catch (_) {}
+            return isSA;
+        } catch (_) {
+            return false;
+        }
+    }
+
+    function isSuperAdmin() {
+        // Synchronous UI hint from cache; call checkSuperAdmin() for the
+        // authoritative answer. Never used for a security decision (RLS is).
+        return localStorage.getItem(CONFIG.CACHE_KEYS.IS_SUPER_ADMIN) === 'true';
+    }
+
+    // Purge the camp-scoped local caches so a camp switch loads the target
+    // camp fresh from cloud instead of showing the previous camp's data.
+    function purgeCampDataCaches() {
+        const dataKeys = [
+            'campGlobalSettings_v1', 'campistryGlobalSettings', 'CAMPISTRY_LOCAL_CACHE',
+            'campDailyData_v1', 'campGlobalRegistry_v1', 'campistry_settings_camp_id'
+        ];
+        try { dataKeys.forEach(k => localStorage.removeItem(k)); } catch (_) {}
+        // Date-keyed layer / skeleton caches.
+        try {
+            for (let i = localStorage.length - 1; i >= 0; i--) {
+                const k = localStorage.key(i);
+                if (k && (k.indexOf('campAutoLayers_') === 0 ||
+                          k.indexOf('campManualSkeleton_') === 0)) {
+                    localStorage.removeItem(k);
+                }
+            }
+        } catch (_) {}
+        // The big IndexedDB warm cache.
+        try { if (window.LocalCacheIDB && window.LocalCacheIDB.clear) window.LocalCacheIDB.clear(); } catch (_) {}
+    }
+
+    // Switch the active camp to `campId`. Writes the server-side selection
+    // (so RLS scopes to it), purges local caches, and re-detects. Caller is
+    // responsible for reloading the page afterwards. Entitlement is enforced
+    // by RLS + get_user_camp_id(); a camp the user can't access is ignored.
+    async function setActiveCamp(campId) {
+        if (!campId) throw new Error('setActiveCamp: campId required');
+        if (!_userId) throw new Error('setActiveCamp: not authenticated');
+        const { error } = await _client
+            .from('active_camp_selection')
+            .upsert({ user_id: _userId, camp_id: campId, updated_at: new Date().toISOString() },
+                    { onConflict: 'user_id' });
+        if (error) throw error;
+        try { localStorage.setItem(CONFIG.CACHE_KEYS.ACTIVE_CAMP_ID, campId); } catch (_) {}
+        purgeCampDataCaches();
+        return await refresh();
+    }
+
+    // Clear the active-camp selection → fall back to the user's default camp
+    // (their real owned camp / most-recent membership).
+    async function clearActiveCamp() {
+        if (_userId) {
+            try {
+                await _client.from('active_camp_selection').delete().eq('user_id', _userId);
+            } catch (_) {}
+        }
+        try { localStorage.removeItem(CONFIG.CACHE_KEYS.ACTIVE_CAMP_ID); } catch (_) {}
+        purgeCampDataCaches();
+        return await refresh();
+    }
+
+    // =========================================================================
     // EXPORT
     // =========================================================================
 
@@ -607,7 +761,13 @@
         isAdmin,
         isTeamMember,
         isAuthenticated,
-        
+
+        // Debug-copy / active-camp switching
+        checkSuperAdmin,
+        isSuperAdmin,
+        setActiveCamp,
+        clearActiveCamp,
+
         // Auth listeners
         onAuthChange,
         
