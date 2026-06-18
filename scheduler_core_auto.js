@@ -28406,6 +28406,213 @@
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
+        // STEP 6.862 — REGION-COMPACT (slide staggered/windowed pieces so the
+        //   gaps line up, then 6.863 fills) [KILL SWITCH + per-bunk rollback]
+        // ───────────────────────────────────────────────────────────────────
+        // 6.863 only fills a run whose slack already sits together. Most leftover
+        // gaps are SEPARATED by a movable piece — a STAGGERED lunch (each bunk may
+        // lunch at its own time), a field-less Activity anchor, or a wide-window
+        // special. Per the user: "lunch is staggered … pull it closer … push the
+        // afternoon specials later … that lines the gaps up and opens a hole to
+        // fill." This pass LEFT-PACKS the movable pieces inside each hard-wall-
+        // bounded sub-span, which coalesces the scattered gaps into ONE opening at
+        // the sub-span's end; 6.863 (next) then fills it.
+        //
+        // MOVABLE = a piece whose layer WINDOW is wider than its duration (real
+        //   slide room, read from the window._bunkTimelines snapshot) AND is not
+        //   shared with another bunk (no co-occupancy desync). A PINNED lunch
+        //   (window == duration) is therefore NOT movable — the regression guard
+        //   "keeps a pinned lunch at its configured time" stays green.
+        //
+        // GRID-SAFE: a sub-span's existing cells are PERMUTED (movable blocks in
+        //   order, then the gaps), each cell keeping its width + content, re-timed
+        //   contiguously — slot count never changes (no split/splice). A moved
+        //   special is re-checked with canUseSpecialAtTime; field-ed non-specials
+        //   stay fixed (no field-conflict risk). Each piece's shift is capped
+        //   (regionCompactMaxShift, default 60) and clamped to its window; a
+        //   sub-span that can't pack tight within windows is left untouched.
+        //   Per-bunk deep clone + validate; committed ONLY when the gathered gap
+        //   is actually fillable (peek) — so a reshuffle that buys nothing is
+        //   rolled back (no churn).
+        //
+        // KILL SWITCH: globalSettings.app1.sliverCoalesce (shared with 6.863/4)
+        //   'off' | false → skip   |  else → ON (default).
+        // To remove the feature: delete this whole try{...}catch block.
+        // ═══════════════════════════════════════════════════════════════════
+        try {
+            var _rkOff = false;
+            try { var _rkF = (globalSettings && globalSettings.app1 && globalSettings.app1.sliverCoalesce); if (_rkF === 'off' || _rkF === false || _rkF === 'shadow') _rkOff = true; } catch (_e) {}
+            if (!_rkOff) {
+                var _rkNorm = function (v) { return String(v == null ? '' : v).toLowerCase().trim(); };
+                var _rkMax = 60; try { var _mx = globalSettings && globalSettings.app1 && globalSettings.app1.regionCompactMaxShift; if (_mx > 0) _rkMax = _mx; } catch (_e) {}
+                var _RK_WALL = /^(swim|change|pre-change|post-change|davening|league game|specialty league|chinuch|trip|snack|snacks|dismissal|cleanup)$/i;
+                var _rkGradeOf = {};
+                allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _rkGradeOf[String(b)] = g; }); });
+                var _rkSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
+                var _rkCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+
+                // (grade → normName → widest [ws,we]) layer windows from the snapshot
+                var _rkWin = {};
+                try {
+                    var _bt = window._bunkTimelines || {};
+                    Object.keys(_bt).forEach(function (bk) {
+                        var g = _rkGradeOf[String(bk)]; if (!g) return;
+                        (_bt[bk] || []).forEach(function (blk) {
+                            if (!blk || !blk.layer || blk.layer.startMin == null || blk.layer.endMin == null) return;
+                            var nm = _rkNorm(blk.event || blk.layer.name || blk.type); if (!nm) return;
+                            _rkWin[g] = _rkWin[g] || {};
+                            var cur = _rkWin[g][nm], w = { ws: blk.layer.startMin, we: blk.layer.endMin };
+                            if (!cur || (w.we - w.ws) > (cur.we - cur.ws)) _rkWin[g][nm] = w;
+                        });
+                    });
+                } catch (_eWin) {}
+
+                // shared-session map — a special running in ≥2 bunks at the same start is NOT movable
+                var _rkShared = {};
+                Object.keys(window.scheduleAssignments || {}).forEach(function (b) {
+                    var arr = window.scheduleAssignments[b]; if (!Array.isArray(arr)) return;
+                    arr.forEach(function (s) { if (!s || s.continuation || _rkNorm(s.field) === 'free' || s._startMin == null) return; var nm = _rkNorm(s._assignedSpecial || s._activity || s.event); if (nm) { var k = nm + '@' + s._startMin; _rkShared[k] = (_rkShared[k] || 0) + 1; } });
+                });
+
+                var _rkBunks = 0, _rkSpans = 0, _rkRolled = 0;
+                Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
+                    var slots = window.scheduleAssignments[bunk];
+                    if (!Array.isArray(slots) || !slots.length) return;
+                    var g = _rkGradeOf[String(bunk)]; if (!g) return;
+                    var winG = _rkWin[g] || {};
+                    var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
+
+                    var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
+                    var _buildHeads = function () { var hs = []; for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rkCell(c) || _rkNorm(c.field) === 'free') continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); } hs.sort(function (a, b) { return a.s - b.s; }); return hs; };
+
+                    // build ordered units (block head+conts, or a Free cell)
+                    var units = [], i = 0;
+                    while (i < slots.length) {
+                        var c = slots[i];
+                        if (!_rkCell(c)) { i++; continue; }
+                        if (c.continuation) { i++; continue; }
+                        var head = i, tail = _tailOf(i), cells = []; for (var z = head; z <= tail; z++) cells.push(z);
+                        var s = c._startMin, e = slots[tail]._endMin;
+                        var isFree = (_rkNorm(c.field) === 'free' || _rkNorm(c._activity) === 'free');
+                        var rawNm = c._assignedSpecial || c._activity || c.event, nm = _rkNorm(rawNm);
+                        var kind, isSpec = _rkSpecialDur(rawNm) > 0;
+                        if (isFree) kind = 'gap';
+                        else {
+                            var hard = _RK_WALL.test(nm) || !!(c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
+                            if (hard) kind = 'fixed';
+                            else {
+                                var w = winG[nm];
+                                var hasSlack = !!(w && (w.we - w.ws) > (e - s) + 1);
+                                var shared = ((_rkShared[nm + '@' + s] || 0) > 1);
+                                var isAnchor = (c.type === 'custom');
+                                var fieldless = (!c.field || _rkNorm(c.field) === nm);
+                                kind = (hasSlack && !shared && (isSpec || isAnchor || fieldless)) ? 'movable' : 'fixed';
+                            }
+                        }
+                        units.push({ kind: kind, cells: cells, s: s, e: e, dur: e - s, name: nm, isSpec: isSpec, win: winG[nm] || null });
+                        i = tail + 1;
+                    }
+
+                    var todaySet = new Set();
+                    units.forEach(function (u) { if (u.kind !== 'gap' && u.name && u.name !== 'free') todaySet.add(u.name); });
+
+                    // PEEK: is a contiguous span of `cellWidths` (gap) fillable by an eligible special?
+                    var _rkPeek = function (cellWidths, startMin) {
+                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return false;
+                        for (var si = 0; si < todaysSpecials.length; si++) {
+                            var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
+                            var nmL = _rkNorm(sp.name); if (todaySet.has(nmL)) continue;
+                            var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
+                            if (!durs.length) { var d1 = _rkSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
+                            for (var dj = 0; dj < durs.length; dj++) {
+                                var d = durs[dj]; if (d <= 0) continue;
+                                var acc = 0, ok2 = false; for (var ci = 0; ci < cellWidths.length; ci++) { acc += cellWidths[ci]; if (acc === d) { ok2 = true; break; } if (acc > d) break; }
+                                if (!ok2) continue;
+                                try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
+                                try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
+                                try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, startMin, startMin + d)) continue; } catch (_e) { continue; }
+                                return true;
+                            }
+                        }
+                        return false;
+                    };
+
+                    // walk units; fixed/wall units bound sub-spans of {movable|gap}
+                    var bunkChanged = false, run = [], runStart = null;
+                    var processSpan = function (spUnits, S, E) {
+                        if (E <= S || !spUnits.length) return;
+                        var movs = spUnits.filter(function (u) { return u.kind === 'movable'; });
+                        var gaps = spUnits.filter(function (u) { return u.kind === 'gap'; });
+                        if (!movs.length || !gaps.length) return;          // nothing to slide / nothing to gather
+                        // already coalesced? (no gap precedes the last movable) → leave to 6.863
+                        var lastMovOrd = -1, firstGapOrd = 1e9, ord = 0;
+                        spUnits.forEach(function (u) { if (u.kind === 'movable') lastMovOrd = ord; if (u.kind === 'gap' && ord < firstGapOrd) firstGapOrd = ord; ord++; });
+                        if (firstGapOrd > lastMovOrd) return;
+                        // left-pack movables (tight, window-clamped); abort if any can't pack tight
+                        var cursor = S, ok = true, plan = [];
+                        for (var mi = 0; mi < movs.length; mi++) {
+                            var M = movs[mi], ns = cursor;
+                            if (M.win) { if (cursor < M.win.ws) { ok = false; break; } if (cursor + M.dur > M.win.we) { ok = false; break; } }
+                            if (Math.abs(M.s - ns) > _rkMax) { ok = false; break; }
+                            if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.name, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
+                            plan.push({ M: M, ns: ns }); cursor = ns + M.dur;
+                        }
+                        if (!ok) return;
+                        var gapStart = cursor;
+                        if (E - gapStart <= 5) return;
+                        var gapWidths = []; gaps.forEach(function (gp) { gp.cells.forEach(function (cx) { gapWidths.push(slots[cx]._endMin - slots[cx]._startMin); }); });
+                        if (!_rkPeek(gapWidths, gapStart)) return;          // not fillable → don't reshuffle
+
+                        // APPLY permutation: [movables in plan order][gaps in order], cells re-timed
+                        var subCells = []; spUnits.forEach(function (u) { u.cells.forEach(function (cx) { subCells.push(cx); }); });
+                        subCells.sort(function (a, b) { return a - b; });
+                        var ordered = plan.map(function (p) { return { u: p.M, ns: p.ns }; });
+                        var gc = gapStart; gaps.forEach(function (gp) { ordered.push({ u: gp, ns: gc }); gc += gp.dur; });
+                        var p = 0;
+                        ordered.forEach(function (o) {
+                            var u = o.u, base = o.ns, t = base;
+                            for (var k = 0; k < u.cells.length; k++) {
+                                var orig = slots[u.cells[k]], wdt = orig._endMin - orig._startMin, phys = subCells[p++], isHead = (k === 0);
+                                if (u.kind === 'gap') {
+                                    slots[phys] = { field: 'Free', sport: null, _activity: 'Free', continuation: false, _startMin: t, _endMin: t + wdt, _autoMode: true };
+                                } else {
+                                    var nc = JSON.parse(JSON.stringify(orig));
+                                    nc.continuation = !isHead;
+                                    nc._startMin = isHead ? base : t;
+                                    nc._endMin = isHead ? (base + u.dur) : (t + wdt);
+                                    nc._regionMoved = true;
+                                    slots[phys] = nc;
+                                }
+                                t += wdt;
+                            }
+                        });
+                        plan.forEach(function (p2) { if (p2.M.isSpec && p2.ns !== p2.M.s) { try { var loc = slots[subCells[0]] && slots[subCells[0]]._specialLocation; if (typeof claimField === 'function') claimField(loc || p2.M.name, p2.ns, p2.ns + p2.M.dur, bunk, g, p2.M.name); } catch (_e) {} } });
+                        bunkChanged = true; _rkSpans++;
+                    };
+
+                    units.forEach(function (u) {
+                        if (u.kind === 'fixed') { if (run.length) { processSpan(run, runStart, u.s); } run = []; runStart = null; }
+                        else { if (!run.length) runStart = u.s; run.push(u); }
+                    });
+                    if (run.length) { var _de = (divisions[g] && parseTimeToMinutes(divisions[g].endTime)) || (slots.length ? slots[slots.length - 1]._endMin : null); if (_de != null) processSpan(run, runStart, _de); }
+
+                    if (bunkChanged) {
+                        var _ok = true, _vh = _buildHeads();
+                        for (var vi = 0; vi + 1 < _vh.length && _ok; vi++) { if (_vh[vi + 1].s < _vh[vi].e) _ok = false; }
+                        if (_ok) { var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rkNorm(s2.field) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; }; if (_cov(slots) < _cov(_clone)) _ok = false; }
+                        if (!_ok) { window.scheduleAssignments[bunk] = _clone; _rkRolled++; }
+                        else { _rkBunks++; }
+                    }
+                });
+
+                if (_rkSpans > 0 || _rkRolled > 0) {
+                    log('[STEP 6.862 REGION-COMPACT] ✅ lined up gaps in ' + _rkSpans + ' sub-span(s) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + ' → 6.863 fills the openings. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
+                    try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
+                }
+            }
+        } catch (_e6862) { try { warn('[STEP 6.862 REGION-COMPACT] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
+
+        // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
         //   activity)                       [KILL SWITCH + per-bunk rollback]
         // ───────────────────────────────────────────────────────────────────
