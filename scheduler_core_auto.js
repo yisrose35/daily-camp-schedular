@@ -14985,6 +14985,7 @@
                             });
                         });
                         var _syncRoomLedger = [];   // {field,s,e,act} of joint sessions placed here — prevents two DIFFERENT activities sharing one room at the same time
+                        try { log('[Phase1.45-DIAG] groups=' + Object.keys(_syncGroups).length + (Object.keys(_syncGroups).length ? ': ' + Object.keys(_syncGroups).map(function (k) { var gg = _syncGroups[k]; var gset = {}; gg.entries.forEach(function (e) { gset[String(e.grade)] = 1; }); return '"' + gg.act + '"(grades=' + Object.keys(gset).length + ',share=' + (gg.info && gg.info.shareType) + ',dur=' + gg.dur + ',field=' + (gg.field || 'none') + ')'; }).join(' | ') : ' — NO custom layers resolved to cross_division sharing (check that the layer lists ≥2 allowed grades)')); } catch (_eDg) {}
                         Object.keys(_syncGroups).forEach(function (_keyS) {
                             var g = _syncGroups[_keyS];
                             var _gradeSet = {}; g.entries.forEach(function (en) { _gradeSet[String(en.grade)] = 1; });
@@ -15001,13 +15002,13 @@
                                 var _rest = _gradeList.filter(function (x) { return String(x) !== String(en.grade); });
                                 if (!isCrossDivAllowed(en.grade, _rest, _ap)) _pairsOk = false;
                             });
-                            if (!_pairsOk) return;
+                            if (!_pairsOk) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: participating grades not all allowed to co-occupy (allowedPairs)'); } catch (_e) {} return; }
                             // consensus DURATION — a joint session has ONE length. If the participating
                             //   layers disagree, skip the group (a single slot can't satisfy all).
                             var _durList = g.entries.map(function (en) { return (en.cl.durationMin || en.cl.periodMin || 30); });
                             var _durS = _durList[0];
                             for (var _di = 1; _di < _durList.length; _di++) { if (_durList[_di] !== _durS) { _durS = null; break; } }
-                            if (_durS == null) return;
+                            if (_durS == null) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: duration mismatch (' + _durList.join('/') + ')'); } catch (_e) {} return; }
                             // strictest (MIN) room capacity across every participating grade's own config
                             var _capS = Infinity;
                             g.entries.forEach(function (en) {
@@ -15026,15 +15027,17 @@
                                 var _tbS = (en.cl.customBunks && en.cl.customBunks.length > 0) ? _allBS.filter(function (b) { return en.cl.customBunks.includes(String(b)); }) : _allBS;
                                 _tbS.forEach(function (b) { _parts.push({ bunk: b, grade: en.grade, cl: en.cl }); });
                             });
-                            if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) return;
-                            if (isFinite(_capS) && _parts.length > _capS) return;   // can't all fit the room at once
+                            if (!_parts.length || !(isFinite(_winS) && isFinite(_winE)) || _winE - _winS < _durS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: no common window (win ' + _winS + '-' + _winE + ' < dur ' + _durS + ', parts ' + _parts.length + ')'); } catch (_e) {} return; }
+                            if (isFinite(_capS) && _parts.length > _capS) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: ' + _parts.length + ' bunks > capacity ' + _capS); } catch (_e) {} return; }   // can't all fit the room at once
                             // ALL-OR-NOTHING: if ANY participating bunk ALREADY has this activity (e.g. a
                             //   Phase-0 pin), abort the whole group — a partial sync would re-stagger the rest.
                             var _actLow = String(g.act).toLowerCase().trim();
+                            var _alreadyHas = false;
                             for (var _qi = 0; _qi < _parts.length; _qi++) {
                                 var _qtl = bunkTimelines[_parts[_qi].bunk] || [];
-                                if (_qtl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _actLow; })) return;
+                                if (_qtl.some(function (b) { return b && String(b._activity || b.event || '').toLowerCase().trim() === _actLow; })) { _alreadyHas = true; break; }
                             }
+                            if (_alreadyHas) { try { log('[Phase1.45-DIAG] "' + g.act + '" skip: already placed on a participating bunk (e.g. Phase-0 pin)'); } catch (_e) {} return; }
                             // earliest common slot: free for EVERY participating bunk's committed walls,
                             //   not overlapping any participating grade's planned SWIM band (swim is pinned
                             //   later in Phase 2.3 — must not be blocked), the room holds no non-participating
@@ -15064,7 +15067,7 @@
                                 }
                                 if (_ok) { _slotS = _s; break; }
                             }
-                            if (_slotS == null) return;   // no common slot → normal per-bunk path (no change)
+                            if (_slotS == null) { try { log('[Phase1.45-DIAG] "' + g.act + '" qualified (' + _parts.length + ' bunks, dur ' + _durS + ', win ' + _winS + '-' + _winE + ') but NO common slot free for all bunks while avoiding swim bands — left to per-bunk path'); } catch (_e) {} return; }   // no common slot → normal per-bunk path (no change)
                             var _e2S = _slotS + _durS;
                             _parts.forEach(function (p) {
                                 var _tl = bunkTimelines[p.bunk] || (bunkTimelines[p.bunk] = []);
