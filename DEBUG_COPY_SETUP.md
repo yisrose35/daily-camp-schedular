@@ -24,6 +24,11 @@ original camp is only ever **read** — never written.
      real camp you join as a team-member owner — that's how it loads correctly
      across Me / Flow / generation, since every page resolves the active camp
      from team membership first.
+2d. Run `migrations/013_drop_camps_owner_unique.sql`.
+   - `camps.owner` has a FK to a real user, so a copy must be owned by your
+     account — but a UNIQUE constraint allowed only one camp per owner. This
+     drops that unique constraint (keeping the FK) so you can own your real
+     camp plus debug copies.
 3. Verify: `SELECT * FROM public.super_admins;` should list exactly your account.
 
 ## Who can be super-admin

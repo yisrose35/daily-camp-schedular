@@ -127,9 +127,10 @@
         var rot = await fetchAll('rotation_counts', sourceId);
         log('Read source:', { kv: kv.length, sched: sched.length, rot: rot.length });
 
-        // 2. Create the sandbox camp. Its owner is its OWN id (not my uid), so
-        //    it never collides with my real camp in owner lookups and doesn't
-        //    trip the camps_owner unique constraint. The access-code INSERT
+        // 2. Create the sandbox camp. owner = my uid (camps.owner has an FK to
+        //    auth.users, so it must be a real user); a fresh id keeps it
+        //    distinct from my real camp. The camps_owner UNIQUE constraint is
+        //    dropped in migration 013 so I can own both. The access-code INSERT
         //    trigger is bypassed for super-admins (migration 011); stamp it as
         //    a non-expiring active camp so trial limits don't apply.
         progress('Creating sandbox camp…');
@@ -137,7 +138,7 @@
         var cres = await sb().from('camps')
             .insert([{
                 id: copyId,
-                owner: copyId,
+                owner: userId,
                 name: copyName,
                 address: '',
                 plan_status: 'active',
@@ -320,8 +321,8 @@
                 })
                 .forEach(function (c) {
                     var isActive = c.id === activeCampId;
-                    var isReal = c.owner === userId;       // my real camp
                     var isCopy = !!copySet[c.id];           // a debug copy of mine
+                    var isReal = (c.owner === userId) && !isCopy;  // my real camp
                     var row = el('div', null);
                     row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid ' +
                         (isActive ? '#10b981' : 'var(--slate-200)') + ';border-radius:10px;background:' +

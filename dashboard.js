@@ -713,14 +713,17 @@
         // If we're an owner and don't have camp data yet, try to fetch it again
         if (!campData && !isTeamMember) {
             try {
-                const { data: camps, error } = await window.supabase
+                // Multi-camp owners: fetch all, prefer the real camp (id==uid).
+                const { data: campsList, error } = await window.supabase
                     .from('camps')
                     .select('*')
-                    .eq('owner', currentUser.id)
-                    .maybeSingle();
-                
+                    .eq('owner', currentUser.id);
+                const camps = (Array.isArray(campsList) && campsList.length > 0)
+                    ? (campsList.find(c => c.id === currentUser.id) || campsList[0])
+                    : null;
+
                 console.log('📊 Secondary camp fetch:', { camps, error });
-                
+
                 if (camps && !error) {
                     campData = camps;
                     campName = camps.name || null;
