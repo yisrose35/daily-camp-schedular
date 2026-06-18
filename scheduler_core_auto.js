@@ -514,12 +514,21 @@
         if (!cfg) return true;
         if (!isRainy && cfg.rainyDayOnly) return false;
         if (isRainy && cfg.availableOnRainyDay === false) return false;
+        // Day names come in BOTH long ("Thursday") and short ("Thu") forms — the UI
+        // saves availableDays as short codes while the engine's dayName is long. Match
+        // on a canonical 3-letter key so either form works (else a short-coded special
+        // is judged unavailable EVERY day → todaysSpecials goes empty → blank schedule).
+        const _dayKey = d => String(d == null ? '' : d).toLowerCase().slice(0, 3);
         if (Array.isArray(cfg.availableDays) && cfg.availableDays.length > 0)
-            return cfg.availableDays.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+            return cfg.availableDays.map(_dayKey).includes(_dayKey(dayName));
         if (cfg.dayAvailability) {
             const da = cfg.dayAvailability;
-            if (typeof da === 'object' && !Array.isArray(da)) return da[dayName] !== false;
-            if (Array.isArray(da)) return da.map(d => d.toLowerCase()).includes(dayName.toLowerCase());
+            if (typeof da === 'object' && !Array.isArray(da)) {
+                if (da[dayName] !== undefined) return da[dayName] !== false;
+                const _k = Object.keys(da).find(k => _dayKey(k) === _dayKey(dayName));
+                return _k ? da[_k] !== false : true;
+            }
+            if (Array.isArray(da)) return da.map(_dayKey).includes(_dayKey(dayName));
         }
         return true;
     }
