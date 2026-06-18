@@ -28479,7 +28479,7 @@
                 });
 
                 var _rkBunks = 0, _rkSpans = 0, _rkRolled = 0;
-                var _rkRegions = 0, _rkNoMov = 0, _rkNoGap = 0, _rkCoalesced = 0, _rkPackAbort = 0, _rkPeekFail = 0;
+                var _rkRegions = 0, _rkNoMov = 0, _rkNoGap = 0, _rkCoalesced = 0, _rkPackAbort = 0, _rkPeekFail = 0, _rkGapU = 0, _rkMovU = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                     var slots = window.scheduleAssignments[bunk];
                     if (!Array.isArray(slots) || !slots.length) return;
@@ -28488,7 +28488,7 @@
                     var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
 
                     var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
-                    var _buildHeads = function () { var hs = []; for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rkCell(c) || _rkNorm(c.field) === 'free') continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); } hs.sort(function (a, b) { return a.s - b.s; }); return hs; };
+                    var _buildHeads = function () { var hs = []; for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rkCell(c)) continue; var _hnm = _rkNorm(c._assignedSpecial || c._activity || c.event); if (!_hnm || _hnm === 'free' || _rkNorm(c.field) === 'free' || c._isPlaceholder || c._synthetic) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); } hs.sort(function (a, b) { return a.s - b.s; }); return hs; };
 
                     // build ordered units (block head+conts, or a Free cell)
                     var units = [], i = 0;
@@ -28498,8 +28498,12 @@
                         if (c.continuation) { i++; continue; }
                         var head = i, tail = _tailOf(i), cells = []; for (var z = head; z <= tail; z++) cells.push(z);
                         var s = c._startMin, e = slots[tail]._endMin;
-                        var isFree = (_rkNorm(c.field) === 'free' || _rkNorm(c._activity) === 'free');
                         var rawNm = c._assignedSpecial || c._activity || c.event, nm = _rkNorm(rawNm);
+                        // ★ Gap = any empty/filler cell (mirrors the engine's _rgIsFiller):
+                        //   a blank-named slot, a literal "Free", or a synthetic/placeholder
+                        //   "+ Add" cell. The old test only matched the string "free", so the
+                        //   real dashed empty slots were misread as walls → noGap, nothing moved.
+                        var isFree = (!nm || nm === 'free' || _rkNorm(c.field) === 'free' || !!c._isPlaceholder || !!c._synthetic);
                         var kind, isSpec = _rkSpecialDur(rawNm) > 0;
                         if (isFree) kind = 'gap';
                         else {
@@ -28549,6 +28553,7 @@
                         _rkRegions++;
                         var movs = spUnits.filter(function (u) { return u.kind === 'movable'; });
                         var gaps = spUnits.filter(function (u) { return u.kind === 'gap'; });
+                        _rkGapU += gaps.length; _rkMovU += movs.length;       // DIAG: gap/mov units seen
                         if (!gaps.length) { _rkNoGap++; return; }            // nothing to gather
                         if (!movs.length) { _rkNoMov++; return; }            // nothing movable to slide
                         // already coalesced? (no gap precedes the last movable) → leave to 6.863
@@ -28612,7 +28617,7 @@
                     }
                 });
 
-                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' noGap=' + _rkNoGap + ' noMov=' + _rkNoMov + ' coalesced=' + _rkCoalesced + ' packAbort=' + _rkPackAbort + ' peekFail=' + _rkPeekFail + ' | spans=' + _rkSpans + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
+                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' gapU=' + _rkGapU + ' movU=' + _rkMovU + ' noGap=' + _rkNoGap + ' noMov=' + _rkNoMov + ' coalesced=' + _rkCoalesced + ' packAbort=' + _rkPackAbort + ' peekFail=' + _rkPeekFail + ' | spans=' + _rkSpans + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
                 if (_rkSpans > 0 || _rkRolled > 0) {
                     log('[STEP 6.862 REGION-COMPACT] ✅ lined up gaps in ' + _rkSpans + ' sub-span(s) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + ' → 6.863 fills the openings. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
@@ -28698,7 +28703,7 @@
                     var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
                     var _buildHeads = function () {
                         var hs = [];
-                        for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rcCell(c) || _rcNorm(c.field) === 'free') continue; if (_headOf(i) !== i) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); }
+                        for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rcCell(c)) continue; var _hnm = _rcNorm(c._assignedSpecial || c._activity || c.event); if (!_hnm || _hnm === 'free' || _rcNorm(c.field) === 'free' || c._isPlaceholder || c._synthetic) continue; if (_headOf(i) !== i) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); }
                         hs.sort(function (a, b) { return a.s - b.s; });
                         return hs;
                     };
@@ -28710,12 +28715,14 @@
                         if (!_rcCell(c)) { i++; continue; }
                         if (c.continuation) { i++; continue; }
                         var head = i, tail = _tailOf(i), s = c._startMin, e = slots[tail]._endMin;
-                        var isFree = (_rcNorm(c.field) === 'free' || _rcNorm(c._activity) === 'free');
+                        var rawNm = c._assignedSpecial || c._activity || c.event;
+                        var nm = _rcNorm(rawNm);
+                        // ★ Gap = any empty/filler cell (mirrors the engine's _rgIsFiller):
+                        //   blank-named slot, literal "Free", or synthetic/placeholder "+ Add".
+                        var isFree = (!nm || nm === 'free' || _rcNorm(c.field) === 'free' || !!c._isPlaceholder || !!c._synthetic);
                         var kind;
                         if (isFree) { kind = 'free'; }
                         else {
-                            var rawNm = c._assignedSpecial || c._activity || c.event;
-                            var nm = _rcNorm(rawNm);
                             var hard = _RC_WALL.test(nm) || !!(c._fixed || c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
                             var spDur = _rcSpecialDur(rawNm);
                             var isSpecial = !hard && spDur > 0;
