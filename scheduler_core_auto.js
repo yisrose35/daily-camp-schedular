@@ -19977,6 +19977,26 @@
                         const t = String(slot.type || '').toLowerCase();
                         if (!SHIFTABLE_HARD.has(t)) return;
                         if (!crossesBoundary(slot)) return;
+                        // ★ WINDOW GUARD (user invariant: nothing may move a layer out of its
+                        //   configured time). A swim/snacks block may only snap to a bell period
+                        //   that lies INSIDE its layer's window. If no period fits the window —
+                        //   e.g. the Bell Schedule has no period during the morning swim window,
+                        //   or a stale/auto bell schedule doesn't overlap it — we must NOT move
+                        //   the block: it stays at its already-in-window position rather than
+                        //   being dragged to a period outside its window (the bug that put a
+                        //   9–10am swim at 1:30pm). Mirrors the Phase 2.3 candidate filter.
+                        var _wgLayer = (layersByGrade[grade] || []).find(function (l) {
+                            var lt = String(l.type || '').toLowerCase();
+                            return lt === t || (t === 'snacks' && lt === 'snack');
+                        });
+                        var _wgWinS = null, _wgWinE = null;
+                        if (_wgLayer) {
+                            var _wgDiv = divisions[grade] || divisions[String(grade)] || {};
+                            var _wgGS = parseTimeToMinutes(_wgDiv.startTime); if (_wgGS == null) _wgGS = 0;
+                            var _wgGE = parseTimeToMinutes(_wgDiv.endTime);   if (_wgGE == null) _wgGE = 1440;
+                            _wgWinS = Math.max(_wgLayer.startMin != null ? _wgLayer.startMin : 0, _wgGS);
+                            _wgWinE = Math.min(_wgLayer.endMin   != null ? _wgLayer.endMin   : 1440, _wgGE);
+                        }
                         const blockDur = slot.endMin - slot.startMin;
                         const oldSwimStart = slot.startMin, oldSwimEnd = slot.endMin;
                         // Find attached pre/post change blocks (swim only)
@@ -20016,6 +20036,8 @@
                             if (pDur < blockDur) continue;
                             const targetStart = p.startMin;
                             const targetEnd = targetStart + blockDur;
+                            // ★ Never snap the block outside its layer window (see WINDOW GUARD).
+                            if (_wgWinS != null && _wgWinE != null && (targetStart < _wgWinS || targetEnd > _wgWinE)) continue;
                             // Include the full bundle range (change + WS + swim) in
                             // conflict check so we don't shift into a collision.
                             // Order: [pre-change] [WS-before] [swim] [WS-after] [post-change]
