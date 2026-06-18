@@ -110,9 +110,19 @@
         log('Read source:', { kv: kv.length, sched: sched.length, rot: rot.length });
 
         // 2. Create the sandbox camp (owned by me).
+        //    The camps table has an INSERT trigger that rejects camps without a
+        //    valid plan ("an access code is required…"). A debug copy is an
+        //    internal sandbox, so stamp it as a non-expiring active camp.
         progress('Creating sandbox camp…');
         var cres = await sb().from('camps')
-            .insert([{ owner: userId, name: copyName, address: '' }])
+            .insert([{
+                owner: userId,
+                name: copyName,
+                address: '',
+                plan_status: 'active',
+                trial_started_at: null,
+                trial_hours: null
+            }])
             .select()
             .single();
         if (cres.error) throw cres.error;
