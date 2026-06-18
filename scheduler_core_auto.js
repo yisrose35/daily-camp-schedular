@@ -20631,12 +20631,18 @@
                                 anchors = { pre: anchors.pre, post: { startMin: bundleEnd, endMin: _fitEndPW } };
                                 log('[2.78] Post-change fit to ' + (nxt.startMin - bundleEnd) + 'm gap [' + bundleEnd + ',' + _fitEndPW + '] before fixed "' + (nxt.event || nxt.type) + '" at ' + bunk);
                             }
-                        } else if (nxt && nxt._fixed && !nxt._consecutiveBunk) {
-                            // Swim + Change is one atomic unit. A fixed special (or other pinned
-                            // block) is occupying the post-change window — relocate it so Change
-                            // can be placed immediately after swim.
-                            // (Consecutive-bunk walls are exempt — their exact interval IS the
-                            // feature; relocating one breaks the grade's back-to-back run.)
+                        } else if (nxt && nxt._fixed && !nxt._consecutiveBunk &&
+                                   (String(nxt.type || '').toLowerCase() === 'sport' ||
+                                    String(nxt.type || '').toLowerCase() === 'slot')) {
+                            // Swim + Change is one atomic unit — but a Change must NEVER evict a
+                            // LAYER activity from its configured time (user rule: swim+change rides
+                            // as one block; nothing moves a layer out of its time). Only a generic
+                            // sport/slot FILLER may be nudged here. Layer-bound neighbours — custom
+                            // anchors (Davening / Morning / Main Activity), specials, lunch, swim,
+                            // league — are protected: this branch no longer matches them, so the
+                            // change falls through to the shrink-to-fit / pre-side / last-resort
+                            // logic instead of relocating the neighbour. (Previously this moved e.g.
+                            // Davening to the afternoon to fit a post-change — the reported bug.)
                             const specialDur = nxt.endMin - nxt.startMin;
                             const _gapIsIPGS = alreadyFreePost > 0 && _gp278.some((p, pi) =>
                                 pi < _gp278.length - 1 &&
