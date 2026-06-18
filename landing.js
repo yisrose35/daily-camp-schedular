@@ -550,9 +550,15 @@ if (authMode === 'signup' && data?.user && !data?.session) {
                             localStorage.setItem('campistry_role', pendingInvite.role);
                             localStorage.setItem('campistry_is_team_member', 'true');
                         } else {
-                            const { data: ownedCamp } = await supabase
+                            // Multi-camp owners (super-admin debug copies): fetch
+                            // all, pick the real camp (id == uid). Avoid
+                            // .maybeSingle() which throws on >1 row.
+                            const { data: ownedCamps } = await supabase
                                 .from('camps').select('id, name')
-                                .eq('owner', user.id).maybeSingle();
+                                .eq('owner', user.id);
+                            const ownedCamp = (Array.isArray(ownedCamps) && ownedCamps.length > 0)
+                                ? (ownedCamps.find(c => c.id === user.id) || ownedCamps[0])
+                                : null;
 
                             if (ownedCamp) {
                                 localStorage.setItem('campistry_camp_id', ownedCamp.id);
