@@ -28406,37 +28406,43 @@
         } catch (_e686) { try { warn('[STEP 6.86 SPORT-FLEX] error: ' + (_e686 && _e686.message)); } catch (_x) {} }
 
         // ═══════════════════════════════════════════════════════════════════
-        // STEP 6.862 — REGION-COMPACT (slide staggered/windowed pieces so the
-        //   gaps line up, then 6.863 fills) [KILL SWITCH + per-bunk rollback]
+        // STEP 6.862 — GAP-CONSOLIDATE & FILL (time-space) [KILL SWITCH + rollback]
         // ───────────────────────────────────────────────────────────────────
-        // 6.863 only fills a run whose slack already sits together. Most leftover
-        // gaps are SEPARATED by a movable piece — a STAGGERED lunch (each bunk may
-        // lunch at its own time), a field-less Activity anchor, or a wide-window
-        // special. Per the user: "lunch is staggered … pull it closer … push the
-        // afternoon specials later … that lines the gaps up and opens a hole to
-        // fill." This pass LEFT-PACKS the movable pieces inside each hard-wall-
-        // bounded sub-span, which coalesces the scattered gaps into ONE opening at
-        // the sub-span's end; 6.863 (next) then fills it.
+        // Mid-day gaps are NOT cells — they are UNCOVERED TIME between the timed
+        // blocks (the renderer draws a dashed "+ Add" for any minute no block
+        // covers; cf. auto_schedule_grid computeFreeGaps / the [REAL-GAP] verifier).
+        // The earlier cell-based version saw nothing (gapU=0) because there is no
+        // cell to gather. This pass works in TIME-space:
+        //   1. Per bunk, split the day into regions bounded by FIXED blocks (walls
+        //      + any non-movable activity). Inside a region sit MOVABLE blocks (a
+        //      staggered lunch whose layer window is wider than its duration, a
+        //      field-less anchor, a wide-window special) plus the region's slack.
+        //   2. LEFT-PACK the movables against the region's left wall (window-clamped
+        //      + shift-capped). This slides each piece's cell AND its _perBunkSlots
+        //      slot in lockstep, coalescing the scattered slack into ONE contiguous
+        //      opening [packEnd, R].
+        //   3. If that opening fits an eligible special (not-used-today, access,
+        //      rotation-limit, field/time free), MATERIALIZE a slot+cell for it
+        //      (mirror of unified_schedule_system.ensurePerBunkSlotForRange) and
+        //      write the special directly.
+        //   User's case: Minors  shiur│gap10│lunch│icecream│gap15│main  → slide
+        //   lunch+icecream left →  shiur│lunch│icecream│gap25│main  → fill the 25.
         //
-        // MOVABLE = a piece whose layer WINDOW is wider than its duration (real
-        //   slide room, read from the window._bunkTimelines snapshot) AND is not
-        //   shared with another bunk (no co-occupancy desync). A PINNED lunch
-        //   (window == duration) is therefore NOT movable — the regression guard
-        //   "keeps a pinned lunch at its configured time" stays green.
+        // MOVABLE = layer WINDOW wider than the block's duration (real slide room,
+        //   from the live bunkTimelines) AND not shared with another bunk (no
+        //   co-occupancy desync). A PINNED lunch (window == duration) has no slack
+        //   → never moves → the "keeps a pinned lunch at its configured time"
+        //   regression guard stays green.
         //
-        // GRID-SAFE: a sub-span's existing cells are PERMUTED (movable blocks in
-        //   order, then the gaps), each cell keeping its width + content, re-timed
-        //   contiguously — slot count never changes (no split/splice). A moved
-        //   special is re-checked with canUseSpecialAtTime; field-ed non-specials
-        //   stay fixed (no field-conflict risk). Each piece's shift is capped
-        //   (regionCompactMaxShift, default 60) and clamped to its window; a
-        //   sub-span that can't pack tight within windows is left untouched.
-        //   Per-bunk deep clone + validate; committed ONLY when the gathered gap
-        //   is actually fillable (peek) — so a reshuffle that buys nothing is
-        //   rolled back (no churn).
+        // GRID-SAFE: scheduleAssignments[bunk] and _perBunkSlots[grade][bunk] are
+        //   kept index-aligned and time-sorted (zip → modify → sort → unzip). The
+        //   renderer is time-based (positions by _startMin/_endMin), so slid and
+        //   newly-materialized blocks land where their times say. Per-bunk deep
+        //   clone of BOTH arrays + validate(alignment, no head overlap, coverage
+        //   strictly up) + rollback → a bad transform degrades to "no change".
         //
         // KILL SWITCH: globalSettings.app1.sliverCoalesce (shared with 6.863/4)
-        //   'off' | false → skip   |  else → ON (default).
+        //   'off' | false | 'shadow' → skip   |  else → ON (default).
         // To remove the feature: delete this whole try{...}catch block.
         // ═══════════════════════════════════════════════════════════════════
         try {
@@ -28450,9 +28456,9 @@
                 allGrades.forEach(function (g) { getBunksForGrade(g, divisions).forEach(function (b) { _rkGradeOf[String(b)] = g; }); });
                 var _rkSpecialDur = function (nm) { try { return (typeof getSpecialDuration === 'function') ? (getSpecialDuration(nm, activityProperties, globalSettings) || 0) : 0; } catch (_e) { return 0; } };
                 var _rkCell = function (s) { return s && s._startMin != null && s._endMin != null && s._endMin > s._startMin; };
+                var _rkLabel = function (m) { try { return (typeof minutesToTimeLabel === 'function') ? minutesToTimeLabel(m) : String(m); } catch (_e) { return String(m); } };
 
-                // (grade → normName → widest [ws,we]) layer windows. Prefer the in-scope
-                // bunkTimelines (live during this run); fall back to the window snapshot.
+                // (grade → normName → widest [ws,we]) layer windows from the live timelines.
                 var _rkWin = {}, _rkBtKeys = 0, _rkBtLayered = 0, _rkLunchWin = null;
                 try {
                     var _bt = (typeof bunkTimelines !== 'undefined' && bunkTimelines && Object.keys(bunkTimelines).length) ? bunkTimelines : (window._bunkTimelines || {});
@@ -28478,152 +28484,192 @@
                     arr.forEach(function (s) { if (!s || s.continuation || _rkNorm(s.field) === 'free' || s._startMin == null) return; var nm = _rkNorm(s._assignedSpecial || s._activity || s.event); if (nm) { var k = nm + '@' + s._startMin; _rkShared[k] = (_rkShared[k] || 0) + 1; } });
                 });
 
-                var _rkBunks = 0, _rkSpans = 0, _rkRolled = 0;
-                var _rkRegions = 0, _rkNoMov = 0, _rkNoGap = 0, _rkCoalesced = 0, _rkPackAbort = 0, _rkPeekFail = 0, _rkGapU = 0, _rkMovU = 0;
+                var _rkBunks = 0, _rkSlid = 0, _rkFilled = 0, _rkRolled = 0;
+                var _rkRegions = 0, _rkFreeT = 0, _rkSmallGap = 0, _rkPackAbort = 0, _rkNoPick = 0, _rkOpened = 0, _rkMovU = 0;
                 Object.keys(window.scheduleAssignments || {}).forEach(function (bunk) {
                     var slots = window.scheduleAssignments[bunk];
                     if (!Array.isArray(slots) || !slots.length) return;
                     var g = _rkGradeOf[String(bunk)]; if (!g) return;
                     var winG = _rkWin[g] || {};
-                    var _clone; try { _clone = JSON.parse(JSON.stringify(slots)); } catch (_e) { return; }
+                    var pbs = (window._perBunkSlots && window._perBunkSlots[g] && window._perBunkSlots[g][String(bunk)])
+                            || (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots && window.divisionTimes[g]._perBunkSlots[String(bunk)]);
+                    if (!Array.isArray(pbs) || pbs.length !== slots.length) return;   // need an aligned slot grid to stay grid-safe
 
-                    var _tailOf = function (h) { var t = h; while (t + 1 < slots.length && slots[t + 1] && slots[t + 1].continuation === true) t++; return t; };
-                    var _buildHeads = function () { var hs = []; for (var i = 0; i < slots.length; i++) { var c = slots[i]; if (!c || c.continuation || !_rkCell(c)) continue; var _hnm = _rkNorm(c._assignedSpecial || c._activity || c.event); if (!_hnm || _hnm === 'free' || _rkNorm(c.field) === 'free' || c._isPlaceholder || c._synthetic) continue; hs.push({ s: c._startMin, e: slots[_tailOf(i)]._endMin }); } hs.sort(function (a, b) { return a.s - b.s; }); return hs; };
+                    var gs = parseTimeToMinutes(divisions[g] && divisions[g].startTime);
+                    var ge = parseTimeToMinutes(divisions[g] && divisions[g].endTime);
 
-                    // build ordered units (block head+conts, or a Free cell)
-                    var units = [], i = 0;
-                    while (i < slots.length) {
+                    // ── real (timed, head) blocks, classified fixed vs movable. A Free/blank
+                    //    head is uncovered slack (not a block); pure uncovered time has no cell. ──
+                    var blocks = [];
+                    for (var i = 0; i < slots.length; i++) {
                         var c = slots[i];
-                        if (!_rkCell(c)) { i++; continue; }
-                        if (c.continuation) { i++; continue; }
-                        var head = i, tail = _tailOf(i), cells = []; for (var z = head; z <= tail; z++) cells.push(z);
-                        var s = c._startMin, e = slots[tail]._endMin;
+                        if (!_rkCell(c) || c.continuation) continue;
+                        var tail = i; while (tail + 1 < slots.length && slots[tail + 1] && slots[tail + 1].continuation === true) tail++;
+                        var s0 = c._startMin, e0 = slots[tail]._endMin;
                         var rawNm = c._assignedSpecial || c._activity || c.event, nm = _rkNorm(rawNm);
-                        // ★ Gap = any empty/filler cell (mirrors the engine's _rgIsFiller):
-                        //   a blank-named slot, a literal "Free", or a synthetic/placeholder
-                        //   "+ Add" cell. The old test only matched the string "free", so the
-                        //   real dashed empty slots were misread as walls → noGap, nothing moved.
-                        var isFree = (!nm || nm === 'free' || _rkNorm(c.field) === 'free' || !!c._isPlaceholder || !!c._synthetic);
-                        var kind, isSpec = _rkSpecialDur(rawNm) > 0;
-                        if (isFree) kind = 'gap';
-                        else {
-                            var hard = _RK_WALL.test(nm) || !!(c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved);
-                            if (hard) kind = 'fixed';
-                            else {
-                                var w = winG[nm];
-                                var hasSlack = !!(w && (w.we - w.ws) > (e - s) + 1);
-                                var shared = ((_rkShared[nm + '@' + s] || 0) > 1);
-                                var isAnchor = (c.type === 'custom');
-                                var fieldless = (!c.field || _rkNorm(c.field) === nm);
-                                kind = (hasSlack && !shared && (isSpec || isAnchor || fieldless)) ? 'movable' : 'fixed';
-                            }
-                        }
-                        units.push({ kind: kind, cells: cells, s: s, e: e, dur: e - s, name: nm, isSpec: isSpec, win: winG[nm] || null });
-                        i = tail + 1;
+                        if (!nm || nm === 'free') { i = tail; continue; }
+                        var isSpec = _rkSpecialDur(rawNm) > 0;
+                        var hard = _RK_WALL.test(nm) || !!(c._isTrip || c._trip || c._league || c._isChinuch || c._isRotationEvent || c._staggerReserved || c._fixed || c._pinned);
+                        var w = winG[nm];
+                        var hasSlack = !!(w && (w.we - w.ws) > (e0 - s0) + 1);
+                        var shared = ((_rkShared[nm + '@' + s0] || 0) > 1);
+                        var isAnchor = (c.type === 'custom');
+                        var fieldless = (!c.field || _rkNorm(c.field) === nm);
+                        var movable = !hard && hasSlack && !shared && (isSpec || isAnchor || fieldless);
+                        blocks.push({ head: i, tail: tail, s: s0, e: e0, dur: e0 - s0, nm: nm, isSpec: isSpec, win: w || null, kind: movable ? 'movable' : 'fixed' });
+                        i = tail;
                     }
+                    if (!blocks.length) return;
+                    blocks.sort(function (a, b) { return a.s - b.s; });
+                    if (gs == null || isNaN(gs)) gs = blocks[0].s;
+                    if (ge == null || isNaN(ge)) ge = blocks[blocks.length - 1].e;
+
+                    // ── regions bounded by FIXED blocks; movables + uncovered slack live inside ──
+                    var regions = [], curMovs = [], leftWall = gs;
+                    blocks.forEach(function (b) {
+                        if (b.kind === 'fixed') { regions.push({ L: leftWall, R: b.s, movs: curMovs }); curMovs = []; leftWall = Math.max(leftWall, b.e); }
+                        else curMovs.push(b);
+                    });
+                    regions.push({ L: leftWall, R: ge, movs: curMovs });
 
                     var todaySet = new Set();
-                    units.forEach(function (u) { if (u.kind !== 'gap' && u.name && u.name !== 'free') todaySet.add(u.name); });
+                    blocks.forEach(function (b) { if (b.nm && b.nm !== 'free') todaySet.add(b.nm); });
 
-                    // PEEK: is a contiguous span of `cellWidths` (gap) fillable by an eligible special?
-                    var _rkPeek = function (cellWidths, startMin) {
-                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return false;
+                    // longest eligible special that fits [startMin, startMin+dur], dur<=cap
+                    var _rkPick = function (startMin, cap) {
+                        if (typeof todaysSpecials === 'undefined' || !Array.isArray(todaysSpecials)) return null;
+                        var best = null;
                         for (var si = 0; si < todaysSpecials.length; si++) {
                             var sp = todaysSpecials[si]; if (!sp || !sp.name) continue;
                             var nmL = _rkNorm(sp.name); if (todaySet.has(nmL)) continue;
                             var durs = []; try { durs = (typeof getSpecialDurations === 'function') ? (getSpecialDurations(sp.name, activityProperties, globalSettings) || []) : []; } catch (_e) {}
                             if (!durs.length) { var d1 = _rkSpecialDur(sp.name); if (d1 > 0) durs = [d1]; }
                             for (var dj = 0; dj < durs.length; dj++) {
-                                var d = durs[dj]; if (d <= 0) continue;
-                                var acc = 0, ok2 = false; for (var ci = 0; ci < cellWidths.length; ci++) { acc += cellWidths[ci]; if (acc === d) { ok2 = true; break; } if (acc > d) break; }
-                                if (!ok2) continue;
+                                var d = durs[dj]; if (d <= 0 || d > cap) continue;
+                                if (best && d <= best.dur) continue;
                                 try { if (typeof isSpecialAvailableForBunk === 'function' && !isSpecialAvailableForBunk(sp.name, g, bunk, globalSettings)) continue; } catch (_e) {}
                                 try { if (window.RotationEngine && typeof RotationEngine.calculateLimitScore === 'function' && !isFinite(RotationEngine.calculateLimitScore(bunk, sp.name, activityProperties, g))) continue; } catch (_e) {}
                                 try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(sp.name, g, startMin, startMin + d)) continue; } catch (_e) { continue; }
-                                return true;
+                                var loc = sp.location; try { if (!loc && typeof getLocationForSpecial === 'function') loc = getLocationForSpecial(sp.name); } catch (_e) {}
+                                best = { name: sp.name, dur: d, loc: loc || sp.name };
                             }
                         }
-                        return false;
+                        return best;
                     };
 
-                    // walk units; fixed/wall units bound sub-spans of {movable|gap}
-                    var bunkChanged = false, run = [], runStart = null;
-                    var processSpan = function (spUnits, S, E) {
-                        if (E <= S || !spUnits.length) return;
+                    // ── plan per region: left-pack movables, then pick a fill for the opening ──
+                    var slidePlan = [], fillPlan = [];
+                    regions.forEach(function (region) {
                         _rkRegions++;
-                        var movs = spUnits.filter(function (u) { return u.kind === 'movable'; });
-                        var gaps = spUnits.filter(function (u) { return u.kind === 'gap'; });
-                        _rkGapU += gaps.length; _rkMovU += movs.length;       // DIAG: gap/mov units seen
-                        if (!gaps.length) { _rkNoGap++; return; }            // nothing to gather
-                        if (!movs.length) { _rkNoMov++; return; }            // nothing movable to slide
-                        // already coalesced? (no gap precedes the last movable) → leave to 6.863
-                        var lastMovOrd = -1, firstGapOrd = 1e9, ord = 0;
-                        spUnits.forEach(function (u) { if (u.kind === 'movable') lastMovOrd = ord; if (u.kind === 'gap' && ord < firstGapOrd) firstGapOrd = ord; ord++; });
-                        if (firstGapOrd > lastMovOrd) { _rkCoalesced++; return; }
-                        // left-pack movables (tight, window-clamped); abort if any can't pack tight
-                        var cursor = S, ok = true, plan = [];
+                        var L = region.L, R = region.R, movs = region.movs;
+                        if (R - L < 15) return;
+                        var sumMov = 0; movs.forEach(function (m) { sumMov += m.dur; });
+                        var freeTime = (R - L) - sumMov;
+                        if (freeTime > 0) _rkFreeT += freeTime;
+                        if (freeTime < 15) { _rkSmallGap++; return; }
+                        // left-pack movables against L (window-clamped + shift-capped + special re-time legal)
+                        var cursor = L, ok = true, packed = [];
                         for (var mi = 0; mi < movs.length; mi++) {
                             var M = movs[mi], ns = cursor;
-                            if (M.win) { if (cursor < M.win.ws) { ok = false; break; } if (cursor + M.dur > M.win.we) { ok = false; break; } }
+                            if (M.win) { if (ns < M.win.ws) ns = M.win.ws; if (ns + M.dur > M.win.we) { ok = false; break; } }
                             if (Math.abs(M.s - ns) > _rkMax) { ok = false; break; }
-                            if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.name, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
-                            plan.push({ M: M, ns: ns }); cursor = ns + M.dur;
+                            if (M.isSpec && ns !== M.s) { try { if (typeof canUseSpecialAtTime === 'function' && !canUseSpecialAtTime(M.nm, g, ns, ns + M.dur)) { ok = false; break; } } catch (_e) { ok = false; break; } }
+                            packed.push({ M: M, ns: ns }); cursor = Math.max(cursor, ns + M.dur);
                         }
                         if (!ok) { _rkPackAbort++; return; }
-                        var gapStart = cursor;
-                        if (E - gapStart <= 5) return;
-                        var gapWidths = []; gaps.forEach(function (gp) { gp.cells.forEach(function (cx) { gapWidths.push(slots[cx]._endMin - slots[cx]._startMin); }); });
-                        if (!_rkPeek(gapWidths, gapStart)) { _rkPeekFail++; return; }          // not fillable → don't reshuffle
-
-                        // APPLY permutation: [movables in plan order][gaps in order], cells re-timed
-                        var subCells = []; spUnits.forEach(function (u) { u.cells.forEach(function (cx) { subCells.push(cx); }); });
-                        subCells.sort(function (a, b) { return a - b; });
-                        var ordered = plan.map(function (p) { return { u: p.M, ns: p.ns }; });
-                        var gc = gapStart; gaps.forEach(function (gp) { ordered.push({ u: gp, ns: gc }); gc += gp.dur; });
-                        var p = 0;
-                        ordered.forEach(function (o) {
-                            var u = o.u, base = o.ns, t = base;
-                            for (var k = 0; k < u.cells.length; k++) {
-                                var orig = slots[u.cells[k]], wdt = orig._endMin - orig._startMin, phys = subCells[p++], isHead = (k === 0);
-                                if (u.kind === 'gap') {
-                                    slots[phys] = { field: 'Free', sport: null, _activity: 'Free', continuation: false, _startMin: t, _endMin: t + wdt, _autoMode: true };
-                                } else {
-                                    var nc = JSON.parse(JSON.stringify(orig));
-                                    nc.continuation = !isHead;
-                                    nc._startMin = isHead ? base : t;
-                                    nc._endMin = isHead ? (base + u.dur) : (t + wdt);
-                                    nc._regionMoved = true;
-                                    slots[phys] = nc;
-                                }
-                                t += wdt;
-                            }
-                        });
-                        plan.forEach(function (p2) { if (p2.M.isSpec && p2.ns !== p2.M.s) { try { var loc = slots[subCells[0]] && slots[subCells[0]]._specialLocation; if (typeof claimField === 'function') claimField(loc || p2.M.name, p2.ns, p2.ns + p2.M.dur, bunk, g, p2.M.name); } catch (_e) {} } });
-                        bunkChanged = true; _rkSpans++;
-                    };
-
-                    units.forEach(function (u) {
-                        if (u.kind === 'fixed') { if (run.length) { processSpan(run, runStart, u.s); } run = []; runStart = null; }
-                        else { if (!run.length) runStart = u.s; run.push(u); }
+                        var gapStart = cursor, gapDur = R - gapStart;
+                        if (gapDur < 15) { _rkSmallGap++; return; }
+                        _rkOpened++;
+                        var pick = _rkPick(gapStart, gapDur);
+                        if (!pick) { _rkNoPick++; return; }
+                        packed.forEach(function (p) { if (p.ns !== p.M.s) { slidePlan.push({ head: p.M.head, tail: p.M.tail, delta: p.ns - p.M.s }); _rkMovU++; } });
+                        fillPlan.push({ start: gapStart, end: gapStart + pick.dur, name: pick.name, loc: pick.loc });
+                        todaySet.add(_rkNorm(pick.name));
                     });
-                    if (run.length) { var _de = (divisions[g] && parseTimeToMinutes(divisions[g].endTime)) || (slots.length ? slots[slots.length - 1]._endMin : null); if (_de != null) processSpan(run, runStart, _de); }
 
-                    if (bunkChanged) {
-                        var _ok = true, _vh = _buildHeads();
-                        for (var vi = 0; vi + 1 < _vh.length && _ok; vi++) { if (_vh[vi + 1].s < _vh[vi].e) _ok = false; }
-                        if (_ok) { var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rkNorm(s2.field) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; }; if (_cov(slots) < _cov(_clone)) _ok = false; }
-                        if (!_ok) { window.scheduleAssignments[bunk] = _clone; _rkRolled++; }
-                        else { _rkBunks++; }
+                    if (!fillPlan.length) return;   // a slide that opens nothing fillable buys nothing → skip churn
+
+                    // ── APPLY: deep-clone BOTH arrays, mutate, validate, rollback ──
+                    var _cloneSlots, _clonePbs;
+                    try { _cloneSlots = JSON.parse(JSON.stringify(slots)); _clonePbs = JSON.parse(JSON.stringify(pbs)); } catch (_e) { return; }
+
+                    // 1. slides — shift cell + slot times in lockstep (force slot == cell time)
+                    slidePlan.forEach(function (mv) {
+                        for (var k = mv.head; k <= mv.tail; k++) {
+                            if (slots[k]) { slots[k]._startMin += mv.delta; slots[k]._endMin += mv.delta; slots[k]._regionMoved = true; }
+                            if (pbs[k] && slots[k]) { pbs[k].startMin = slots[k]._startMin; pbs[k].endMin = slots[k]._endMin; pbs[k].startTime = _rkLabel(pbs[k].startMin); pbs[k].endTime = _rkLabel(pbs[k].endMin); }
+                        }
+                    });
+
+                    // 2. rebuild as ordered GROUPS — each head keeps its continuation cells as ONE
+                    //    unit so the sort can never separate them. Drop empty slots a fill overlaps
+                    //    (a free cell may carry its emptiness in field, _activity, OR event).
+                    var fillRanges = fillPlan.map(function (f) { return { s: f.start, e: f.end }; });
+                    var _isFreeCell = function (cc) { return (!cc || cc._startMin == null || _rkNorm(cc.field) === 'free' || _rkNorm(cc._activity) === 'free' || _rkNorm(cc.event) === 'free'); };
+                    var groups = [];
+                    for (var pi = 0; pi < slots.length; pi++) {
+                        var cc = slots[pi], ss = pbs[pi];
+                        if (cc && cc.continuation === true && groups.length) { groups[groups.length - 1].cells.push({ cell: cc, slot: ss }); continue; }
+                        if (_isFreeCell(cc) && ss && ss.startMin != null && ss.endMin != null) {
+                            var drop = fillRanges.some(function (r) { return Math.max(r.s, ss.startMin) < Math.min(r.e, ss.endMin); });
+                            if (drop) continue;   // a fill will cover this empty time
+                        }
+                        var key0 = (cc && cc._startMin != null) ? cc._startMin : ((ss && ss.startMin != null) ? ss.startMin : 1e9);
+                        groups.push({ key: key0, cells: [{ cell: cc, slot: ss }] });
+                    }
+                    fillPlan.forEach(function (f) {
+                        var cell = { field: f.loc, sport: null, _activity: f.name, type: 'special', _autoSpecial: true, _assignedSpecial: f.name, _specialLocation: f.loc, _startMin: f.start, _endMin: f.end, _autoMode: true, _regionFilled: true, _final: true, continuation: false };
+                        var slot = { startMin: f.start, endMin: f.end, startTime: _rkLabel(f.start), endTime: _rkLabel(f.end), event: f.name, type: 'special', _bunk: bunk, _autoGenerated: true, _injected: true };
+                        groups.push({ key: f.start, cells: [{ cell: cell, slot: slot }] });
+                    });
+
+                    // 3. sort GROUPS by head time, flatten (head + its continuations stay contiguous)
+                    groups.sort(function (a, b) { return a.key - b.key; });
+                    var newSlots = [], newPbs = [];
+                    groups.forEach(function (grp) { grp.cells.forEach(function (pc) { newSlots.push(pc.cell); newPbs.push(pc.slot); }); });
+                    newPbs.forEach(function (s, idx) { if (s) s.slotIndex = idx; });
+
+                    // 4. validate: equal length, no block-span overlap (true span = head ∪ its
+                    //    continuations, so a fill that hits a continuation tail is caught, and a head
+                    //    whose _endMin already spans its tail is not a false positive), coverage up.
+                    var _ok = (newSlots.length === newPbs.length);
+                    if (_ok) {
+                        var occ = [];
+                        groups.forEach(function (grp) {
+                            var h0 = grp.cells[0].cell; if (_isFreeCell(h0)) return;
+                            var gs2 = null, ge2 = null;
+                            grp.cells.forEach(function (pc) { var cl = pc.cell; if (cl && cl._startMin != null && cl._endMin != null) { if (gs2 == null || cl._startMin < gs2) gs2 = cl._startMin; if (ge2 == null || cl._endMin > ge2) ge2 = cl._endMin; } });
+                            if (gs2 != null && ge2 != null && ge2 > gs2) occ.push({ s: gs2, e: ge2 });
+                        });
+                        occ.sort(function (a, b) { return a.s - b.s; });
+                        for (var vi = 0; vi + 1 < occ.length && _ok; vi++) { if (occ[vi + 1].s < occ[vi].e) _ok = false; }
+                    }
+                    if (_ok) {
+                        var _cov = function (arr) { var c2 = 0; for (var zz = 0; zz < arr.length; zz++) { var s2 = arr[zz]; if (s2 && !s2.continuation && _rkNorm(s2.field) !== 'free' && _rkNorm(s2._activity) !== 'free' && _rkNorm(s2.event) !== 'free' && s2._startMin != null && s2._endMin > s2._startMin) c2 += (s2._endMin - s2._startMin); } return c2; };
+                        if (_cov(newSlots) <= _cov(_cloneSlots)) _ok = false;
+                    }
+
+                    if (!_ok) {
+                        window.scheduleAssignments[bunk] = _cloneSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = _clonePbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = _clonePbs;
+                        _rkRolled++;
+                    } else {
+                        window.scheduleAssignments[bunk] = newSlots;
+                        if (window._perBunkSlots && window._perBunkSlots[g]) window._perBunkSlots[g][String(bunk)] = newPbs;
+                        if (window.divisionTimes && window.divisionTimes[g] && window.divisionTimes[g]._perBunkSlots) window.divisionTimes[g]._perBunkSlots[String(bunk)] = newPbs;
+                        fillPlan.forEach(function (f) { try { if (typeof claimField === 'function') claimField(f.loc, f.start, f.end, bunk, g, f.name); } catch (_e) {} });
+                        _rkBunks++; _rkSlid += slidePlan.length; _rkFilled += fillPlan.length;
                     }
                 });
 
-                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' gapU=' + _rkGapU + ' movU=' + _rkMovU + ' noGap=' + _rkNoGap + ' noMov=' + _rkNoMov + ' coalesced=' + _rkCoalesced + ' packAbort=' + _rkPackAbort + ' peekFail=' + _rkPeekFail + ' | spans=' + _rkSpans + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
-                if (_rkSpans > 0 || _rkRolled > 0) {
-                    log('[STEP 6.862 REGION-COMPACT] ✅ lined up gaps in ' + _rkSpans + ' sub-span(s) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + ' → 6.863 fills the openings. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
+                try { log('[6.862-DIAG] btKeys=' + _rkBtKeys + ' btLayered=' + _rkBtLayered + ' winGrades=' + Object.keys(_rkWin).length + ' lunchWin=' + (_rkLunchWin ? (_rkLunchWin.ws + '-' + _rkLunchWin.we) : 'NONE') + ' | regions=' + _rkRegions + ' freeT=' + _rkFreeT + ' smallGap=' + _rkSmallGap + ' packAbort=' + _rkPackAbort + ' opened=' + _rkOpened + ' noPick=' + _rkNoPick + ' | movU=' + _rkMovU + ' slid=' + _rkSlid + ' filled=' + _rkFilled + ' bunks=' + _rkBunks + ' rolled=' + _rkRolled); } catch (_eD) {}
+                if (_rkBunks > 0 || _rkRolled > 0) {
+                    log('[STEP 6.862 GAP-CONSOLIDATE] ✅ filled ' + _rkFilled + ' opening(s) (slid ' + _rkSlid + ' piece(s)) across ' + _rkBunks + ' bunk(s)' + (_rkRolled ? ' (' + _rkRolled + ' rolled back)' : '') + '. [kill switch: globalSettings.app1.sliverCoalesce=\'off\']');
                     try { window.AutoSegmentModel && window.AutoSegmentModel.rebuildFromAssignments && window.AutoSegmentModel.rebuildFromAssignments(); } catch (_eSeg) {}
                 }
             }
-        } catch (_e6862) { try { warn('[STEP 6.862 REGION-COMPACT] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
+        } catch (_e6862) { try { warn('[STEP 6.862 GAP-CONSOLIDATE] skipped (error: ' + (_e6862 && _e6862.message) + ')'); } catch (_e) {} }
 
         // ═══════════════════════════════════════════════════════════════════
         // STEP 6.863 — REGION-FILL (gather a wall-bounded run's slack into one
