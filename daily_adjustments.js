@@ -8703,7 +8703,7 @@ function init() {
         } catch (_eAL) {}
         const isProt = e => {
             if (!e) return false;
-            if (e._league || e._postEdit || e._isTrip) return true;
+            if (e._league || e._postEdit || e._isTrip || e._pinned) return true;
             // Custom-layer activities + configured specials are user intent — never demote.
             if (e._activityLocked || e.type === 'custom' || e.type === 'special' ||
                 e._isSpecialLocation || e._autoSpecial) return true;
