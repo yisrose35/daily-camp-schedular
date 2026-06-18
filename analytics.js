@@ -1607,13 +1607,19 @@
 
         cont.querySelectorAll('.rotation-adj-input').forEach(inp => {
             inp.onchange = (e) => {
-                // ★★★ CB-79: role-gate this generation-affecting write.
-                // manualUsageOffsets lives in camp_state_kv (owner/admin-write-only
-                // by RLS), so a scheduler's write was silently dropped, and any
-                // non-editor could trigger the whole-offsets-map replacement. Block
-                // non-full-access and revert the typed value.
-                if (window.CloudPermissions?.hasFullAccess?.() === false) {
-                    (window.daShowAlert || window.alert)('Only an owner or admin can adjust rotation offsets.');
+                // ★★★ CB-79 / rotation-adjust role gate.
+                // manualUsageOffsets lives in camp_state_kv. Since LG-2 + migration 009,
+                // schedulers CAN write camp_state_kv (_canWriteCampState allows
+                // owner/admin/scheduler), so they may adjust rotation offsets too. Only
+                // VIEWERS stay blocked — they're read-only and RLS-blocked from
+                // camp_state_kv, so letting a viewer type here would just silently fail
+                // at the cloud. (camp_state_kv writes are whole-key/last-writer-wins, so
+                // concurrent editors can still clobber each other's offsets map.)
+                const _rotRole = window.AccessControl?.getCurrentRole?.() ||
+                                 window.CampistryDB?.getRole?.() ||
+                                 localStorage.getItem('campistry_role') || 'viewer';
+                if (_rotRole === 'viewer') {
+                    (window.daShowAlert || window.alert)('Viewers cannot adjust rotation offsets.');
                     renderRotationTable(divName);
                     return;
                 }
