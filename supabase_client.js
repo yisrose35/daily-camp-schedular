@@ -679,9 +679,13 @@
         await _leaveAllDebugCopies();
         const copies = await _myDebugCopyIds();
         if (copies.indexOf(campId) >= 0) {
+            // camp_users.email is NOT NULL — use the super-admin's own email.
+            const myEmail = (_session && _session.user && _session.user.email) ||
+                            localStorage.getItem('campistry_user_email') || 'super-admin@campistry.local';
             const { error } = await _client.from('camp_users').insert({
                 camp_id: campId,
                 user_id: _userId,
+                email: myEmail,
                 role: 'owner',
                 accepted_at: new Date().toISOString()
             });
