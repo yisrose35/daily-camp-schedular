@@ -17797,6 +17797,31 @@
                                 var sh = _glShareOf(cand);
                                 (_glUsage[sh.key] = _glUsage[sh.key] || []).push({ grade: grade, s: s, e: e });
                             };
+                            // DIAGNOSTIC (upper bound): for a capacity-full miss, could the tile EVER be
+                            // placed somewhere in its layer window — i.e. does any unused subcat activity
+                            // have a capacity-OK slot anywhere in [window]? If NO → the resource is
+                            // SATURATED across the window: no stagger/move can recover it, only config
+                            // (raise capacity / make shareable). If YES → a stagger MIGHT recover it. This
+                            // splits capacity-full into capacity-saturated vs capacity-movable so we know
+                            // how much a restructure pass would actually buy before building it.
+                            var _glCapMovable = function (t, grade, pool, used) {
+                                var sub = _glCanon(t.subcat);
+                                var win = (t._ref && t._ref.window) || [t.startMin, t.endMin];
+                                var w0 = win[0], w1 = win[1];
+                                for (var i = 0; i < pool.length; i++) {
+                                    var c = pool[i];
+                                    if (!c || !c.name || used[String(c.name).toLowerCase()]) continue;
+                                    if (_glCanon(c.subcategory) !== sub) continue;
+                                    var durs = _glSpecialDurs(c.name); if (!durs.length) durs = [t.durationMin];
+                                    for (var di = 0; di < durs.length; di++) {
+                                        var d = durs[di]; if (!(d > 0)) continue;
+                                        for (var x = w0; x + d <= w1; x += 5) {
+                                            if (_glCapFits(c, grade, x, x + d)) return true;
+                                        }
+                                    }
+                                }
+                                return false;
+                            };
                             _glOrder.forEach(function (bunk) {
                                 var res = _glOut.layoutByBunk[bunk]; if (!res || !res.tiles) return;
                                 var grade = (_glPerBunk[bunk] && _glPerBunk[bunk].grade);
@@ -17859,7 +17884,10 @@
                                         var cause = !anySub ? 'no-activity-in-subcat'
                                                   : !anyDur ? ('no-activity-at-' + dur + 'min')
                                                   : !anyFree ? 'pool-exhausted'
-                                                  : 'capacity-full';
+                                                  // capacity-full splits: saturated (no free slot anywhere in the
+                                                  // window → config only) vs movable (free slot exists → a stagger
+                                                  // could recover it).
+                                                  : (_glCapMovable(t, grade, pool, used) ? 'capacity-movable' : 'capacity-saturated');
                                         _glFill.causes[cause] = (_glFill.causes[cause] || 0) + 1;
                                         if (_glFill.missDetail.length < 25) _glFill.missDetail.push(bunk + ' ' + minutesToTimeLabel(t.startMin) + ' ' + (t.subcat || '?') + ' ' + dur + 'min [' + cause + ']');
                                     }
