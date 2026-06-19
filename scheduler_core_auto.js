@@ -17392,7 +17392,8 @@
                     // NO window.globalSettings. window.__usePeriodTiling is a console override for
                     // quick shadow runs without persisting to cloud config.
                     try { _potMode = (typeof window !== 'undefined' && window.__usePeriodTiling) || (globalSettings && globalSettings.app1 && globalSettings.app1.usePeriodTiling) || ''; } catch (_e) {}
-                    if ((_potMode === 'shadow' || _potMode === 'apply') && window.PeriodOrchestrator && window.PeriodPacker && typeof shoppingLists !== 'undefined') {
+                    try { log('[PeriodOrchestrator PROBE] iter0 reached — mode=' + (_potMode || '(none)') + ' orch=' + (typeof window !== 'undefined' && !!window.PeriodOrchestrator) + ' packer=' + (typeof window !== 'undefined' && !!window.PeriodPacker) + ' shoppingLists=' + (typeof shoppingLists) + ' buildFn=' + (typeof buildBunkShoppingList)); } catch (_eP) {}
+                    if ((_potMode === 'shadow' || _potMode === 'apply') && window.PeriodOrchestrator && window.PeriodPacker) {
                         var _potCanon = function (v) { var s = String(v == null ? '' : v).toLowerCase().trim(); return (!s || s === 'regular' || s === 'uncategorized') ? 'uncategorized' : s; };
                         var _potBreak = /break|transition|passing|change/i;
                         // projection-only reservation maps (so the shadow is honest cross-bunk WITHOUT touching real ledgers)
@@ -17404,7 +17405,7 @@
                         allGrades.forEach(function (grade) {
                             var periods = (window.campPeriods && window.campPeriods[grade]) || [];
                             getBunksForGrade(grade, divisions).forEach(function (bunk) {
-                                var sl = shoppingLists[bunk]; if (!sl) return;
+                                var sl = (typeof shoppingLists !== 'undefined' && shoppingLists && shoppingLists[bunk]) ? shoppingLists[bunk] : (typeof buildBunkShoppingList === 'function' ? buildBunkShoppingList(bunk, grade) : null); if (!sl) return;
                                 var occupied = (bunkTimelines[bunk] || []).filter(function (b) { return b && b.startMin != null && b.endMin != null; }).map(function (b) { return { startMin: b.startMin, endMin: b.endMin }; });
                                 var sports = ((sl.sports && sl.sports.priorityList) || []).map(function (sp) {
                                     var durs = []; try { durs = (typeof getSportDurations === 'function') ? (getSportDurations(sp.name, globalSettings) || []) : []; } catch (_e) {}
