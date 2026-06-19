@@ -17453,6 +17453,28 @@
                         var _tilePct = _ps.windowsConsidered ? Math.round(100 * _ps.windowsTiled / _ps.windowsConsidered) : 0;
                         log('═══ [PeriodOrchestrator SHADOW] period-tiling projection (no mutation) ═══');
                         log('  [PeriodOrchestrator SHADOW] ' + _ps.bunks + ' bunks · ' + _ps.windowsConsidered + ' free sub-windows → ' + _ps.windowsTiled + ' would tile wall-to-wall (' + _tilePct + '%) · ' + _ps.bunksFullyTiled + ' bunks fully tiled · ~' + _ps.residualMin + ' residual min left for legacy fill · ' + _ps.segmentsPlaced + ' segments placed');
+                        // WHY do windows fail to tile? aggregate the per-window reason (no module
+                        // change — read the planByBunk the orchestrator already returned). This is
+                        // the breakdown that decides the Phase-B fix: no-packing (exact subset-sum
+                        // impossible → need partial/duration-flex) vs no-valid-packing (cap/cooldown
+                        // gates reject → distribution) vs window-not-granular (wall misalignment).
+                        var _rc = {}, _rm = {}, _samp = [];
+                        try {
+                            Object.keys(_potOut.planByBunk || {}).forEach(function (_bk) {
+                                var _pps = (_potOut.planByBunk[_bk] && _potOut.planByBunk[_bk].periodPlans) || [];
+                                _pps.forEach(function (_P) {
+                                    (_P.windows || []).forEach(function (_w) {
+                                        if (_w.tiled) return;
+                                        var _r = _w.reason || 'unknown';
+                                        _rc[_r] = (_rc[_r] || 0) + 1; _rm[_r] = (_rm[_r] || 0) + (_w.len || 0);
+                                        if (_samp.length < 12) _samp.push(_bk + ' "' + ((_P.period && _P.period.name) || '?') + '" ' + _w.start + '-' + _w.end + ' len=' + _w.len + ' cand=' + (_w.nCand || 0) + ' pack=' + (_w.nPack || 0) + ' → ' + _r);
+                                    });
+                                });
+                            });
+                        } catch (_eHist) {}
+                        var _rk = Object.keys(_rc).sort(function (a, b) { return _rc[b] - _rc[a]; });
+                        log('  [PeriodOrchestrator SHADOW] untiled-window reasons: ' + (_rk.length ? _rk.map(function (k) { return k + '=' + _rc[k] + ' (' + _rm[k] + 'min)'; }).join(', ') : '(none)'));
+                        _samp.forEach(function (_s) { log('    [PeriodOrchestrator SHADOW] untiled: ' + _s); });
                         log('  [PeriodOrchestrator SHADOW] (Phase A: projection only. Flip globalSettings.app1.usePeriodTiling=\'apply\' to commit once this looks right.)');
                     }
                 } catch (_potErr) { try { warn('[PeriodOrchestrator SHADOW] ' + (_potErr && _potErr.message)); } catch (_e) {} }

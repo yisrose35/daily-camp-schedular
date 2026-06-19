@@ -179,15 +179,17 @@
                 var w = windows[wi];
                 var len = w.end - w.start;
                 stats.windowsConsidered++;
-                var rec = { start: w.start, end: w.end, len: len, tiled: false, segments: [], residualMin: len, reason: null };
+                var rec = { start: w.start, end: w.end, len: len, tiled: false, segments: [], residualMin: len, reason: null, nCand: 0, nPack: 0 };
                 if (len % gran !== 0) { rec.reason = 'window-not-granular'; planWindows.push(rec); stats.residualMin += len; continue; }
                 var candidates = buildPeriodCandidates({ len: len, minSegmentMin: minSeg, granularityMin: gran, sports: sports, specials: specials, usedToday: usedToday });
+                rec.nCand = candidates.length;
                 if (!candidates.length) { rec.reason = 'no-candidates'; planWindows.push(rec); stats.residualMin += len; continue; }
 
                 var packings = [];
                 try {
                     packings = packer.pack({ periodLengthMin: len, candidates: candidates, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || [];
                 } catch (e) { rec.reason = 'pack-error:' + (e && e.message); planWindows.push(rec); stats.residualMin += len; continue; }
+                rec.nPack = packings.length;
                 if (!packings.length) { rec.reason = 'no-packing'; planWindows.push(rec); stats.residualMin += len; continue; }
 
                 var chosen = _firstValidPacking(packings, w.start, gates, usedToday);
