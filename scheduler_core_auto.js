@@ -31529,18 +31529,19 @@
                     if (!layers.length || !bunks.length) return;
                     var deliv = {};
                     bunks.forEach(function (b) {
-                        var d = { custom: {}, sub: {}, sport: 0, swim: 0 };
+                        var d = { byName: {}, sub: {}, sport: 0 };
                         var arr = (window.scheduleAssignments && window.scheduleAssignments[b]) || [];
                         arr.forEach(function (s) {
                             if (!s || s.continuation) return;
                             if (s._league || s._leagueGame || s._isTrip || s._isRotationEvent || s._isChinuch) return;
                             var nm = _lfaNorm(s._activity || s.event || s.sport);
                             if (!nm || nm === 'free') return;
-                            if (s.type === 'custom' || s._customActivity) { d.custom[nm] = (d.custom[nm] || 0) + 1; return; }
-                            if (s._assignedSpecial || s.type === 'special') { var sc = (_lfaSubOf[nm] != null) ? _lfaSubOf[nm] : _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; return; }
-                            if (nm === 'swim') { d.swim++; return; }
-                            if (_lfaWall.test(nm)) return;
-                            d.sport++;
+                            // Count by NAME (not by block type): a custom layer is type:'custom'
+                            // named "Cleanup"/"Main Activity"/"Davening", so name-match is the
+                            // only reliable way — type-bucketing + a wall regex falsely zeroed them.
+                            d.byName[nm] = (d.byName[nm] || 0) + 1;
+                            if (s._assignedSpecial || s.type === 'special') { var sc = (_lfaSubOf[nm] != null) ? _lfaSubOf[nm] : _lfaCanon(s.subcategory); d.sub[sc] = (d.sub[sc] || 0) + 1; }
+                            else if (s.sport && s.type !== 'custom') { d.sport++; }   // generic/real sport (not a custom anchor)
                         });
                         deliv[b] = d;
                     });
@@ -31567,9 +31568,9 @@
                         lb.forEach(function (b) {
                             _lfaChecked++;
                             var got = 0;
-                            if (t === 'custom') got = (deliv[b] && deliv[b].custom[_lfaNorm(cl.customActivity || cl.event || cl.name)]) || 0;
+                            if (t === 'custom') got = (deliv[b] && deliv[b].byName[_lfaNorm(cl.customActivity || cl.event || cl.name)]) || 0;
                             else if (t === 'sport' || t === 'sports') got = (deliv[b] && deliv[b].sport) || 0;
-                            else if (t === 'swim') got = (deliv[b] && deliv[b].swim) || 0;
+                            else if (t === 'swim') got = (deliv[b] && deliv[b].byName['swim']) || 0;
                             else if (t === 'special') { var tot = 0; if (deliv[b]) Object.keys(deliv[b].sub).forEach(function (k) { tot += deliv[b].sub[k]; }); got = tot; }
                             else return;
                             if (got < req2) { _lfaShort.push({ g: grade, b: b, lbl: t + '/' + _lfaNorm(cl.customActivity || cl.event || cl.name || t), req: req2, got: got }); _lfaBunksShort[b] = 1; }
