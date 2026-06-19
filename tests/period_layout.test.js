@@ -309,6 +309,43 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.ok(res.stats.residualMin >= 40, 'capped special cannot over-fill the 2nd window — left for legacy fill');
     });
 
+    it('GUARANTEED FILL: a window where BOTH sport and special are spacing-gated still fills with a special (never blank), never a too-close sport', () => {
+        // The live Neranina case behind the "+ Add" blank slots: sports must be
+        // spaced AND the camp also spaces specials. P1 takes a food (sport blocked).
+        // In P2 the sport is blocked (spacing) AND a 2nd food is blocked (too close
+        // to P1's food) → under the old code P2 went BLANK ("all-packings-gated").
+        // The model is "categories repeat, activities don't": the guaranteed-fill
+        // fallback drops the content gate for NON-SPORT tiles only, so a 2nd food
+        // fills P2 (categories repeat freely) while NO sport is ever placed too close.
+        const gate = (block, template) => {
+            if (block.type === 'sport') return false;          // sport always spacing-blocked here
+            if (block.type === 'special') {                    // specials also spaced (40-min cooldown)
+                for (const w of template) {
+                    if (!w || w.type !== 'special') continue;
+                    const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                    const gapAfter  = (block.startMin || 0) - (w.endMin || 0);
+                    if (gapBefore >= 0 && gapBefore < 40) return false;
+                    if (gapAfter  >= 0 && gapAfter  < 40) return false;
+                }
+            }
+            return true;
+        };
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(690, 730, 'P2')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: Infinity }
+            ],
+            gate, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'both windows fill — a spacing-only block never leaves a blank');
+        const foods = tilesOf(res).filter(t => t.subcat === 'food');
+        assert.strictEqual(foods.length, 2, 'the doubly-gated window fell back to a 2nd food (categories repeat)');
+        const sports = tilesOf(res).filter(t => t.kind === 'sport');
+        assert.strictEqual(sports.length, 0, 'a sport is NEVER forced into a spacing-blocked window');
+    });
+
     it('SWIM (set duration, moveable window): a deferred required layer is placed and outranks optional specials', () => {
         // Swim is a fixed-40 demand that may sit anywhere in its window (the manual
         // "set duration, moveable window" case). Even though P1 could fit two special

@@ -17413,22 +17413,21 @@
                         return b.event || b._assignedSpecial || _glTitle(t || 'Activity');
                     };
 
-                    // NO content gate in generic-layout mode. The tiles laid here are
-                    // CATEGORIES (Sport / Special: Food / Special: Uncategorized / …), not
-                    // concrete activities — and the camp's model is "CATEGORIES REPEAT,
-                    // ACTIVITIES DON'T": a single day may hold many Sport tiles and many
-                    // Special: Uncategorized tiles; only the specific activity (Basketball,
-                    // this exact special) must be unique within the day. Activity-level
-                    // rules — same-day-repeat, cooldown, frequency, rotation spacing —
-                    // therefore belong to the FILL step that assigns the concrete activity,
-                    // NOT to this layout step. Running SchedulingRules.isCandidateAllowed on
-                    // generic category tiles mis-reads two identical "Sport" / "Special:
-                    // Uncategorized" labels as a forbidden repeat and gates the whole window
-                    // blank ("all-packings-gated" → the live "+ Add" empty slots). Physical
-                    // facility limits (pool concurrency, shared-field capacity/pairs) ARE
-                    // real even for a category and stay enforced — via _glResourceGate
-                    // below — but the content gate is intentionally null here.
-                    var _glGate = null;
+                    // CONTENT GATE = the camp's configured SPACING rules ONLY.
+                    // window.SchedulingRules.isCandidateAllowed reads
+                    // settings.schedulingRules.cooldowns — pure "don't place X within N
+                    // min of Y" spacing. It does NOT block plain repeats. That matches the
+                    // model exactly: "CATEGORIES REPEAT, ACTIVITIES DON'T" — a day may hold
+                    // many Sport tiles and many Special: Uncategorized tiles (no repeat
+                    // block), but the user's spacing rule (e.g. "no Sport within N min of a
+                    // Sport") MUST still hold so sports aren't clustered. The packer's
+                    // guaranteed-fill fallback turns a window where a sport would be too
+                    // close into a SPECIAL instead — never a blank, never a too-close
+                    // sport. Activity-level uniqueness (no two Basketballs) remains the
+                    // FILL step's job. Physical facility limits stay on _glResourceGate.
+                    var _glGate = (window.SchedulingRules && typeof window.SchedulingRules.isCandidateAllowed === 'function')
+                        ? function (block, template) { try { return window.SchedulingRules.isCandidateAllowed(block, template, { mode: 'auto' }); } catch (_e) { return true; } }
+                        : null;
 
                     // 1) Build per-bunk DEMAND ({pinned, floating}) from the layers.
                     var _glOrder = [], _glPerBunk = {}, _glInjectedSwim = 0, _glInjectedLayer = 0;

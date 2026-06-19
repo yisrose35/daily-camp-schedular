@@ -223,11 +223,16 @@
         // Every laid segment must pass the gate against the `base` tiles PLUS the
         // other segments in this same window (so two tiles in one window are spacing-
         // checked against each other too). `base` defaults to the live `tiles`.
-        function _gatePass(laid, base) {
-            if (!gate && !resourceGate) return true;
-            var baseBlocks = gate ? (base || tiles).map(_toBlock) : null;
+        // `contentGateOff` skips the content (spacing) gate but KEEPS the physical
+        // resourceGate (pool / shared-facility). The guaranteed-fill fallback uses it
+        // so a window never stays blank when only the spacing gate (not a hard
+        // resource) was the blocker.
+        function _gatePass(laid, base, contentGateOff) {
+            var useGate = gate && !contentGateOff;
+            if (!useGate && !resourceGate) return true;
+            var baseBlocks = useGate ? (base || tiles).map(_toBlock) : null;
             for (var i = 0; i < laid.length; i++) {
-                if (gate) {
+                if (useGate) {
                     var block = _toBlock(laid[i]);
                     var template = baseBlocks.concat(laid.slice(0, i).map(_toBlock)).concat(laid.slice(i + 1).map(_toBlock));
                     var ok = true;
@@ -243,10 +248,10 @@
             return true;
         }
         // First packing (best-scored first) whose laid segments all pass the gate.
-        function _pickGated(packings, start, base) {
+        function _pickGated(packings, start, base, contentGateOff) {
             for (var p = 0; p < packings.length; p++) {
                 var laid = _laySegs(packings[p].segments, start);
-                if (_gatePass(laid, base)) return laid;
+                if (_gatePass(laid, base, contentGateOff)) return laid;
             }
             return null;
         }
@@ -294,6 +299,22 @@
                 var spPack = [];
                 if (spCands.length) { try { spPack = packer.pack({ periodLengthMin: len, candidates: spCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { spPack = []; } }
                 laid = _pickGated(spPack, wStart, base);
+            }
+            // GUARANTEED FILL — the day must be wall-to-wall. If every gated packing
+            // failed (the spacing gate, not a hard resource, blocked them), fill with
+            // NON-SPORT tiles and DROP the content gate: the camp's only spacing rule
+            // that matters here is between SPORTS, and we exclude sports in this pass,
+            // so nothing placed can be a "sport too close" violation; categories repeat
+            // freely so a special is always fair game. The physical resourceGate (pool /
+            // shared facility) STILL applies. This turns the old "all-packings-gated"
+            // BLANK ("+ Add" slot) into a real special tile while keeping sports spaced.
+            if (!laid && !excludeKinds) {
+                var nsCands = cands.filter(function (c) { return c.kind !== 'sport'; });
+                if (nsCands.length) {
+                    var nsPack = [];
+                    try { nsPack = packer.pack({ periodLengthMin: len, candidates: nsCands, granularityMin: gran, minSegmentMin: minSeg, allowRepeat: false, maxSegments: maxSegments, topN: topN, scoreFn: scoreFn }) || []; } catch (e) { nsPack = []; }
+                    laid = _pickGated(nsPack, wStart, base, true /* content gate off — specials repeat freely */);
+                }
             }
             if (!laid && outMeta) outMeta.reason = 'all-packings-gated';
             return laid || null;
