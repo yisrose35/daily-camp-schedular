@@ -276,6 +276,55 @@
             periodPlans.push({ period: period, windows: planWindows });
         }
 
+        // ── SWAP REPAIR (only when a gate is active) ──────────────────────────
+        // A window left untiled because its only filler (sport) was spacing-blocked
+        // is NOT abandoned: find an already-placed generic tile of the SAME duration
+        // elsewhere that CAN legally move here, move it in, and drop the blocked
+        // filler (sport) into the slot it vacated (also gate-checked). Same tiles,
+        // positions swapped — "move that over and put the sport in its place".
+        // 1:1, bounded, gate-only (default behavior unchanged).
+        if (gate) {
+            var _resid = [];
+            for (var ppi = 0; ppi < periodPlans.length; ppi++) {
+                var pw = periodPlans[ppi].windows;
+                for (var pwi = 0; pwi < pw.length; pwi++) {
+                    var rr = pw[pwi];
+                    if (!rr.tiled && rr.len >= minSeg && rr.len % gran === 0) _resid.push(rr);
+                }
+            }
+            // the filler kind to drop into the vacated slot (sport, else first non-special demand)
+            var fillerKind = null, fillerName = null;
+            for (var ffi = 0; ffi < floating.length; ffi++) { if (floating[ffi].kind !== 'special') { fillerKind = floating[ffi].kind; fillerName = _label(floating[ffi]); break; } }
+            for (var ridx = 0; ridx < _resid.length && fillerKind; ridx++) {
+                var W2 = _resid[ridx];
+                for (var ti2 = 0; ti2 < tiles.length; ti2++) {
+                    var T = tiles[ti2];
+                    if (!T.generic || T.pinned) continue;
+                    if (T.kind === fillerKind) continue;       // moving a sport in then a sport into its slot = still 2 sports
+                    if (T.durationMin !== W2.len) continue;     // 1:1 exact-duration swap keeps both sides wall-to-wall
+                    if (T.startMin === W2.start) continue;
+                    var Tstart = T.startMin, Tend = T.endMin;
+                    var others = [];
+                    for (var oi = 0; oi < tiles.length; oi++) if (oi !== ti2) others.push(_toBlock(tiles[oi]));
+                    // (1) the mover at the empty window must pass the gate
+                    var movBlock = { type: T.kind, event: T.name, startMin: W2.start, endMin: W2.start + T.durationMin };
+                    if (T.kind === 'special') { movBlock._assignedSpecial = T.name; movBlock._specialLocation = T.name; }
+                    var ok1 = true; try { ok1 = gate(movBlock, others); } catch (e) { ok1 = true; }
+                    if (!ok1) continue;
+                    // (2) the filler in the vacated slot must pass the gate (mover now at W)
+                    var fillBlock = { type: fillerKind, event: fillerName, startMin: Tstart, endMin: Tend };
+                    var ok2 = true; try { ok2 = gate(fillBlock, others.concat([movBlock])); } catch (e) { ok2 = true; }
+                    if (!ok2) continue;
+                    // commit the swap
+                    T.startMin = W2.start; T.endMin = W2.start + T.durationMin;
+                    tiles.push({ kind: fillerKind, subcat: null, name: fillerName, startMin: Tstart, endMin: Tend, durationMin: Tend - Tstart, generic: true, pinned: false });
+                    W2.tiled = true; W2.residualMin = 0; W2.reason = 'swap-repaired';
+                    stats.windowsTiled++; stats.tilesPlaced++; stats.residualMin -= W2.len;
+                    break;
+                }
+            }
+        }
+
         tiles.sort(function (a, b) { return a.startMin - b.startMin; });
         return { tiles: tiles, periodPlans: periodPlans, stats: stats, remaining: remaining };
     }

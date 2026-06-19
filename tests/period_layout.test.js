@@ -156,6 +156,39 @@ describe('PeriodLayout.planBunkLayout — wall-to-wall generic tiling', () => {
         assert.strictEqual(tilesOf(gated).filter(t => t.subcat === 'food').length, 1, 'spacing-blocked window filled by a special');
     });
 
+    it('GATE + SWAP: a window the gate emptied is repaired by moving a placed special in and relocating the sport to a legal slot', () => {
+        const sportGate = (block, template) => {
+            if (block.type !== 'sport') return true;
+            for (const w of template) {
+                if (w.type !== 'sport') continue;
+                const gapBefore = (w.startMin || 0) - (block.endMin || 0);
+                const gapAfter = (block.startMin || 0) - (w.endMin || 0);
+                if (gapBefore >= 0 && gapBefore < 40) return false;
+                if (gapAfter >= 0 && gapAfter < 40) return false;
+            }
+            return true;
+        };
+        // 4 adjacent 40-min periods, 2 cap-1 specials + sport filler. Greedy front-loads
+        // the 2 specials into P1/P2, leaving sports in P3/P4 — and P4's sport is gated
+        // (10/0-min gap to P3). Without repair P4 is empty; the swap moves a special into
+        // P4 and relocates a sport to P1, spacing the two sports 40min apart.
+        const res = Layout.planBunkLayout({
+            bunk: 'B1', grade: 'G',
+            periods: [P(650, 690, 'P1'), P(690, 730, 'P2'), P(730, 770, 'P3'), P(770, 810, 'P4')], pinned: [],
+            floating: [
+                { kind: 'sport', dMin: 10, dMax: 40, window: [650, 945] },
+                { kind: 'special', subcat: 'food', durations: [40], window: [650, 945], qty: 1, cap: 1 },
+                { kind: 'special', subcat: 'theme', durations: [40], window: [650, 945], qty: 1, cap: 1 }
+            ],
+            gate: sportGate, packer: PeriodPacker
+        });
+        assert.strictEqual(res.stats.residualMin, 0, 'swap repair filled the gated window — fully wall-to-wall');
+        const sports = tilesOf(res).filter(t => t.kind === 'sport');
+        assert.strictEqual(sports.length, 2, 'two sports placed (none dropped)');
+        const ss = sports.map(s => [s.startMin, s.endMin]).sort((a, b) => a[0] - b[0]);
+        assert.ok(ss[1][0] - ss[0][1] >= 40, 'the two sports end up >=40min apart after the swap');
+    });
+
     it('GATE + cap: a special used as filler never exceeds its subcategory cap', () => {
         const blockAllSport = (block) => block.type !== 'sport'; // sport always blocked
         const res = Layout.planBunkLayout({
